@@ -55,6 +55,13 @@ export interface NodeSummary {
   state: NodeState;
 }
 
+/** Credential metadata (never the secret value). */
+export interface CredentialSummary {
+  id: string;
+  name: string;
+  kind: string;
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

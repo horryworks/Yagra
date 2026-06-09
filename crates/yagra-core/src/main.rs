@@ -14,6 +14,7 @@ mod api;
 mod config;
 mod repo;
 mod scheduler;
+mod secrets;
 mod sink;
 mod store;
 
@@ -21,12 +22,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alerts::{AlertManager, Notifier};
-use api::ApiState;
+use api::{AdminState, ApiState};
 use axum::routing::get;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use repo::{NodeListing, NodeRepo, StaticNodeList};
+use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use uuid::Uuid;
@@ -90,11 +92,19 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs));
     }
 
+    // Write side (inventory + encrypted credentials), sharing the metadata DB pool.
+    let creds = Arc::new(CredentialStore::from_env(repo.pool()));
+    let admin = Some(Arc::new(AdminState {
+        repo: repo.clone(),
+        creds,
+    }));
+
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
         nodes,
         alerts,
+        admin,
     };
     serve(state, &cfg.api_addr, metrics).await
 }
@@ -116,6 +126,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         store: sink,
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
+        admin: None,
     };
     serve(state, "0.0.0.0:8080", metrics).await
 }
