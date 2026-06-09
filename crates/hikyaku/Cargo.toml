@@ -12,9 +12,18 @@ repository.workspace = true
 yagra-common = { path = "../yagra-common" }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+tracing = { workspace = true }
+# Live NATS bus adapter (ADR-007). Gated so unit tests / lib-only consumers don't
+# pull the TLS stack; the binaries (saihai/banshu) enable it.
+async-nats = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+[features]
+nats = ["dep:async-nats", "dep:futures"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

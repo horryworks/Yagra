@@ -6,11 +6,11 @@
 //! and fail over (ADR-003/009). Counters are reported raw; rates are derived later
 //! (ADR-012).
 
+use futures::stream::{Stream, StreamExt};
 use hikyaku::{Bus, CheckOutcome, CheckSpec, PollJob, PollResult, Sample, BUS_SCHEMA_VERSION};
 use sekisho::Transport;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::broadcast;
 
 /// Execute one job and build its result. Pure given the transport and timestamp, so it
 /// is unit-testable without a clock or a bus.
@@ -62,25 +62,19 @@ fn now_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Run the poll loop: for each job received, execute it and publish the result. Returns
-/// when the job channel closes.
-pub async fn run<B: Bus>(
-    mut jobs: broadcast::Receiver<PollJob>,
-    bus: Arc<B>,
-    transport: Arc<dyn Transport>,
-) {
-    loop {
-        match jobs.recv().await {
-            Ok(job) => {
-                let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
-                if let Err(err) = bus.publish_result(result).await {
-                    tracing::error!(error = %err, "failed to publish poll result");
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                tracing::warn!(skipped, "poller lagged behind; some jobs were dropped");
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
+/// Run the poll loop over a stream of jobs: for each job, execute it and publish the
+/// result. Returns when the stream ends. Stream-generic so the same loop drives both the
+/// in-memory bus (tests / single-process skeleton) and the NATS queue subscription
+/// (production) — pollers stay stateless regardless of the source (ADR-003/009).
+pub async fn run_stream<B, S>(mut jobs: S, bus: Arc<B>, transport: Arc<dyn Transport>)
+where
+    B: Bus,
+    S: Stream<Item = PollJob> + Unpin,
+{
+    while let Some(job) = jobs.next().await {
+        let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+        if let Err(err) = bus.publish_result(result).await {
+            tracing::error!(error = %err, "failed to publish poll result");
         }
     }
 }
@@ -136,12 +130,16 @@ mod tests {
     /// result with samples comes back on the bus — the core⇄poller seam, end to end.
     #[tokio::test]
     async fn job_flows_through_loop_to_result_on_bus() {
+        use tokio_stream::wrappers::BroadcastStream;
+
         let bus = Arc::new(InMemoryBus::new(16));
         let jobs_rx = bus.subscribe_jobs();
         let mut results_rx = bus.subscribe_results();
         let transport: Arc<dyn Transport> = Arc::new(FakeTransport::reachable(5.0));
 
-        tokio::spawn(run(jobs_rx, bus.clone(), transport));
+        // Adapt the broadcast receiver into the generic job stream the loop consumes.
+        let jobs = Box::pin(BroadcastStream::new(jobs_rx).filter_map(|r| async move { r.ok() }));
+        tokio::spawn(run_stream(jobs, bus.clone(), transport));
 
         // Simulate core dispatching a job.
         bus.publish_job(icmp_job()).await.unwrap();

@@ -12,6 +12,10 @@ repository.workspace = true
 yagra-common = { path = "../yagra-common" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+surge-ping = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
