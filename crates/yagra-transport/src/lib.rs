@@ -41,6 +41,18 @@ pub struct SnmpSample {
     pub value: f64,
 }
 
+/// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job). Keys are
+/// the auth/priv passphrases. `security_level` is `noauth` / `auth` / `authpriv`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SnmpV3Params {
+    pub user: String,
+    pub security_level: String,
+    pub auth_protocol: Option<String>,
+    pub auth_key: Option<String>,
+    pub priv_protocol: Option<String>,
+    pub priv_key: Option<String>,
+}
+
 /// Errors performing device I/O.
 #[derive(Debug, Error)]
 pub enum TransportError {
@@ -71,6 +83,17 @@ pub trait Transport: Send + Sync {
         &self,
         target: IpAddr,
         community: &str,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpSample>, TransportError>;
+
+    /// Fetch OIDs via SNMP v3 (USM). The USM crypto path is pending the net-snmp FFI
+    /// decision (ADR-021): the real transport returns `Unimplemented` until then; the
+    /// message + credential plumbing exists so v3 is representable end to end.
+    async fn snmp_v3_get(
+        &self,
+        target: IpAddr,
+        params: &SnmpV3Params,
         oids: &[String],
         timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError>;
@@ -138,6 +161,16 @@ impl Transport for FakeTransport {
         &self,
         _target: IpAddr,
         _community: &str,
+        _oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpSample>, TransportError> {
+        Ok(self.snmp.clone())
+    }
+
+    async fn snmp_v3_get(
+        &self,
+        _target: IpAddr,
+        _params: &SnmpV3Params,
         _oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {

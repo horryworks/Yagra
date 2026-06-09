@@ -63,6 +63,38 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 }
             }
         }
+        CheckSpec::SnmpV3(v3) => {
+            let timeout = Duration::from_millis(u64::from(v3.timeout_ms));
+            let params = yagra_transport::SnmpV3Params {
+                user: v3.user.clone(),
+                security_level: v3.security_level.clone(),
+                auth_protocol: v3.auth_protocol.clone(),
+                auth_key: v3.auth_key.clone(),
+                priv_protocol: v3.priv_protocol.clone(),
+                priv_key: v3.priv_key.clone(),
+            };
+            match transport
+                .snmp_v3_get(job.target, &params, &v3.oids, timeout)
+                .await
+            {
+                Ok(samples) => {
+                    let outcome = if samples.is_empty() {
+                        CheckOutcome::Unreachable
+                    } else {
+                        CheckOutcome::Reachable
+                    };
+                    let mapped = samples
+                        .into_iter()
+                        .map(|s| Sample::gauge(snmp_metric_name(&s.oid), s.value))
+                        .collect();
+                    result(job, at_unix_ms, outcome, mapped)
+                }
+                Err(err) => {
+                    tracing::warn!(job_id = %job.job_id, error = %err, "snmp v3 get failed");
+                    result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
+                }
+            }
+        }
     }
 }
 
