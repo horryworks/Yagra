@@ -18,11 +18,13 @@ mod scheduler;
 mod secrets;
 mod sink;
 mod store;
+mod thresholds;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alerts::{AlertManager, Notifier};
+use alerts::{AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
 use auth::{SessionStore, UserStore};
 use axum::routing::get;
@@ -33,6 +35,7 @@ use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
+use thresholds::ThresholdStore;
 use uuid::Uuid;
 use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult, SnmpCheck};
 
@@ -113,7 +116,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs, snmp));
     }
 
-    // Write side (inventory + encrypted credentials + users), sharing the metadata pool.
+    // Thresholds: snapshot into the alert engine now, then refresh periodically so edits
+    // take effect without a restart.
+    let thresholds = Arc::new(ThresholdStore::new(repo.pool()));
+    alerts.set_config(load_alert_config(&repo, &thresholds).await);
+    {
+        let alerts = alerts.clone();
+        let repo = repo.clone();
+        let thresholds = thresholds.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                alerts.set_config(load_alert_config(&repo, &thresholds).await);
+            }
+        });
+    }
+
+    // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
     let users = Arc::new(UserStore::new(repo.pool()));
     let admin_password =
@@ -123,6 +142,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         repo: repo.clone(),
         creds,
         users,
+        thresholds,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -266,6 +286,28 @@ async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow
     tracing::info!(%addr, "Yagra-core API listening on /api/v1 (+ /metrics)");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Build the alert engine's config snapshot: all thresholds plus per-node metadata
+/// (profile + group tag-values) for scope resolution. Failures degrade to empty rather
+/// than crashing the refresh loop.
+async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> AlertConfig {
+    let rules = thresholds.list_all().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to load thresholds");
+        Vec::new()
+    });
+    let nodes = repo.list_nodes().await.unwrap_or_default();
+    let mut meta = HashMap::new();
+    for node in nodes {
+        meta.insert(
+            node.id,
+            NodeMeta {
+                profile: node.profile.map(|p| p.to_string()),
+                groups: node.tags.into_values().collect(),
+            },
+        );
+    }
+    AlertConfig::new(rules, meta)
 }
 
 /// Connect to NATS with retry so startup ordering doesn't matter.
