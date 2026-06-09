@@ -98,6 +98,20 @@ impl Transport for SurgePingTransport {
     ) -> Result<Vec<crate::SnmpSample>, TransportError> {
         crate::snmp::snmp_get_v2c(target, community, oids, timeout).await
     }
+
+    async fn snmp_v3_get(
+        &self,
+        _target: IpAddr,
+        _params: &crate::SnmpV3Params,
+        _oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<crate::SnmpSample>, TransportError> {
+        // USM (auth/priv) needs a v3 client; `csnmp` is v2c-only. Per ADR-021 this is the
+        // net-snmp FFI fallback point — pending that decision, v3 polling is unimplemented.
+        Err(TransportError::Unimplemented(
+            "SNMP v3 (USM) — pending net-snmp FFI decision (ADR-021)",
+        ))
+    }
 }
 
 /// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply

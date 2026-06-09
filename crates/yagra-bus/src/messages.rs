@@ -85,6 +85,26 @@ impl PollJob {
             credential_ref: None,
         }
     }
+
+    /// A new SNMP v3 poll job for `node` at `target`.
+    #[must_use]
+    pub fn snmp_v3(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3Check,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3(check),
+            interval_secs,
+            credential_ref: None,
+        }
+    }
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
@@ -97,6 +117,8 @@ pub enum CheckSpec {
     Icmp(IcmpCheck),
     /// Scalar SNMP v2c GET of a set of OIDs.
     Snmp(SnmpCheck),
+    /// Scalar SNMP v3 (USM) GET of a set of OIDs.
+    SnmpV3(SnmpV3Check),
     // Http(...) lands in a later phase.
 }
 
@@ -133,6 +155,33 @@ pub struct SnmpCheck {
 
 const fn default_snmp_timeout_ms() -> u32 {
     2000
+}
+
+/// SNMP v3 (USM) check parameters. Auth/priv keys are resolved/decrypted by core and
+/// inlined here (ADR-018/020); the poller never reads the secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3Check {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// OIDs to GET.
+    pub oids: Vec<String>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
 }
 
 /// The result of executing a [`PollJob`], sent back to core.
