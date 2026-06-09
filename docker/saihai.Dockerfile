@@ -2,7 +2,7 @@
 # Multi-stage: build the workspace binary, ship a slim runtime. Stub — flesh out
 # the build cache layers (cargo-chef) once the crate has real dependencies.
 
-FROM rust:1.82-slim AS build
+FROM rust:1.85-slim AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release --bin saihai
