@@ -15,20 +15,19 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 
 | コンポーネント | 役割 | クレート / ディレクトリ |
 |---|---|---|
-| Yagra-core | オーケストレーション、スケジューリング、北向き API | `crates/saihai` |
-| Yagra-poller | ICMP/SNMP/API の実ポーリング（ステートレス・水平スケール） | `crates/banshu` |
-| Yagra-discovery | デバイス探索・分類 | `crates/monomi` |
-| Yagra-alert | 状態判定・ヒステリシス・依存抑制 | `crates/noroshi` |
-| Yagra-bus | ジョブ配信・ポーラ分散 | `crates/hikyaku` |
-| Yagra-transport | ICMP/SNMP/HTTP の抽象化 | `crates/sekisho` |
-| Yagra-topology | 依存関係・マップ | `crates/nawabari` |
+| Yagra-core | オーケストレーション、スケジューリング、北向き API | `crates/yagra-core` |
+| Yagra-poller | ICMP/SNMP/API の実ポーリング（ステートレス・水平スケール） | `crates/yagra-poller` |
+| Yagra-discovery | デバイス探索・分類 | `crates/yagra-discovery` |
+| Yagra-alert | 状態判定・ヒステリシス・依存抑制 | `crates/yagra-alert` |
+| Yagra-bus | ジョブ配信・ポーラ分散 | `crates/yagra-bus` |
+| Yagra-transport | ICMP/SNMP/HTTP の抽象化 | `crates/yagra-transport` |
+| Yagra-topology | 依存関係・マップ | `crates/yagra-topology` |
 | Yagra-web | ダッシュボード・可視化 | `web/` |
 
 共有ライブラリ: `crates/yagra-common`（横断的な型）、`crates/yagra-secrets`
 （資格情報のエンベロープ暗号）。
 
-> クレートのディレクトリ名は当面元の短縮名（`saihai` / `banshu` …）のままですが、上記の
-> 機能名 `Yagra-*` が正本で、クレートのリネームを予定しています。
+> クレートのディレクトリ名は上記の機能名 `Yagra-*` と一致しています（例: `crates/yagra-core`）。
 
 ## 技術スタック
 

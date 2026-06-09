@@ -9,11 +9,11 @@ name: yagra
 
 services:
   # ── Yagra-core — orchestration, scheduling, northbound API ──
-  saihai:
+  core:
     build:
       context: .
-      dockerfile: docker/saihai.Dockerfile
-    image: ghcr.io/horryworks/yagra-saihai:dev
+      dockerfile: docker/yagra-core.Dockerfile
+    image: ghcr.io/horryworks/yagra-core:dev
     depends_on: [postgres, redis, nats, victoriametrics]
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
@@ -26,11 +26,11 @@ services:
     restart: unless-stopped
 
   # ── Yagra-poller — stateless, horizontally scalable ──
-  banshu:
+  poller:
     build:
       context: .
-      dockerfile: docker/banshu.Dockerfile
-    image: ghcr.io/horryworks/yagra-banshu:dev
+      dockerfile: docker/yagra-poller.Dockerfile
+    image: ghcr.io/horryworks/yagra-poller:dev
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
@@ -45,7 +45,7 @@ services:
       context: ./web
       dockerfile: ../docker/web.Dockerfile
     image: ghcr.io/horryworks/yagra-web:dev
-    depends_on: [saihai]
+    depends_on: [core]
     ports:
       - "3000:80"
     restart: unless-stopped

@@ -1,0 +1,27 @@
+[package]
+name = "yagra-poller"
+description = "Yagra-poller — stateless poller worker (ICMP/SNMP/API polling)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "yagra-poller"
+path = "src/main.rs"
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+yagra-transport = { path = "../yagra-transport" }
+yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
+tokio-stream = { workspace = true }

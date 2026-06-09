@@ -2,16 +2,16 @@
 # This is the canonical version source-of-truth for the Rust side
 # (see `### Version Files` in CLAUDE.md). `web/package.json` mirrors it for the frontend.
 #
-# Canonical names are functional `Yagra-*` (codenames retired; see CLAUDE.md
-# "Components"). Physical crate dirs keep the old names until a dedicated rename:
-#   crates/saihai   = Yagra-core      (Core/API)                  [bin]
-#   crates/banshu   = Yagra-poller    (Poller worker)             [bin]
-#   crates/monomi   = Yagra-discovery (Discovery)                 [lib]
-#   crates/noroshi  = Yagra-alert     (Alert engine)              [lib]
-#   crates/hikyaku  = Yagra-bus       (Task queue / bus)          [lib]
-#   crates/sekisho  = Yagra-transport (ICMP/SNMP/HTTP abstraction)[lib]
-#   crates/nawabari = Yagra-topology  (Topology)                  [lib]
-#   crates/yagra-common = shared types/models                     [lib]
+# Crate names are the functional `Yagra-*` names (world-view codenames fully retired):
+#   crates/yagra-core      = Core/API                       [bin: yagra-core]
+#   crates/yagra-poller    = Poller worker                  [bin: yagra-poller]
+#   crates/yagra-discovery = Discovery & classification      [lib]
+#   crates/yagra-alert     = Alert engine                    [lib]
+#   crates/yagra-bus       = Task queue / bus                [lib]
+#   crates/yagra-transport = ICMP/SNMP/HTTP abstraction      [lib]
+#   crates/yagra-topology  = Topology & dependency graph     [lib]
+#   crates/yagra-common    = shared types/models             [lib]
+#   crates/yagra-secrets   = secret/credential crypto        [lib]
 # Yagra-web (WebUI) lives under `web/` (React+TS), not a Rust crate.
 
 [workspace]
@@ -19,13 +19,13 @@ resolver = "2"
 members = [
     "crates/yagra-common",
     "crates/yagra-secrets",
-    "crates/sekisho",
-    "crates/hikyaku",
-    "crates/nawabari",
-    "crates/monomi",
-    "crates/noroshi",
-    "crates/banshu",
-    "crates/saihai",
+    "crates/yagra-transport",
+    "crates/yagra-bus",
+    "crates/yagra-topology",
+    "crates/yagra-discovery",
+    "crates/yagra-alert",
+    "crates/yagra-poller",
+    "crates/yagra-core",
 ]
 
 [workspace.package]
