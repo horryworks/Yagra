@@ -11,6 +11,7 @@
 
 mod alerts;
 mod api;
+mod auth;
 mod config;
 mod repo;
 mod scheduler;
@@ -23,6 +24,7 @@ use std::time::Duration;
 
 use alerts::{AlertManager, Notifier};
 use api::{AdminState, ApiState};
+use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
@@ -111,12 +113,18 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs, snmp));
     }
 
-    // Write side (inventory + encrypted credentials), sharing the metadata DB pool.
+    // Write side (inventory + encrypted credentials + users), sharing the metadata pool.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
+    let users = Arc::new(UserStore::new(repo.pool()));
+    let admin_password =
+        std::env::var("YAGRA_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_owned());
+    users.ensure_default_admin(&admin_password).await?;
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
         creds,
+        users,
     }));
+    let sessions = Arc::new(SessionStore::new());
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
@@ -124,6 +132,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         nodes,
         alerts,
         admin,
+        sessions,
     };
     serve(state, &cfg.api_addr, metrics).await
 }
@@ -146,6 +155,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
         admin: None,
+        sessions: Arc::new(SessionStore::new()),
     };
     serve(state, "0.0.0.0:8080", metrics).await
 }
