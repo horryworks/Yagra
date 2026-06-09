@@ -9,6 +9,7 @@
 //! PostgreSQL + NATS + VictoriaMetrics), else an in-memory **skeleton** so a bare
 //! `cargo run` still serves the API.
 
+mod alerts;
 mod api;
 mod config;
 mod repo;
@@ -19,6 +20,7 @@ mod store;
 use std::sync::Arc;
 use std::time::Duration;
 
+use alerts::{AlertManager, Notifier};
 use api::ApiState;
 use axum::routing::get;
 use config::Config;
@@ -62,11 +64,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
 
-    // Result consumer: bus → TSDB.
+    // Alert engine + optional Webhook notifier (ADR-015).
+    let alerts = Arc::new(AlertManager::new());
+    let notifier = std::env::var("YAGRA_WEBHOOK_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .map(|url| {
+            tracing::info!("alert Webhook notifier enabled");
+            Arc::new(Notifier::webhook(url))
+        });
+
+    // Result consumer: bus → TSDB + alert engine.
     {
         let store = store.clone();
+        let alerts = alerts.clone();
+        let notifier = notifier.clone();
         let results = Box::pin(bus.subscribe_results().await?);
-        tokio::spawn(consume_results(results, store));
+        tokio::spawn(consume_results(results, store, alerts, notifier));
     }
 
     // Scheduler: inventory → jobs on the bus, jittered across the interval.
@@ -77,7 +91,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     }
 
     let nodes: Arc<dyn NodeListing> = repo;
-    let state = ApiState { store, nodes };
+    let state = ApiState {
+        store,
+        nodes,
+        alerts,
+    };
     serve(state, &cfg.api_addr, metrics).await
 }
 
@@ -97,18 +115,29 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     let state = ApiState {
         store: sink,
         nodes: Arc::new(StaticNodeList::demo()),
+        alerts: Arc::new(AlertManager::new()),
     };
     serve(state, "0.0.0.0:8080", metrics).await
 }
 
-/// Drain poll results off the bus into the metric store. Returns when the stream ends.
-async fn consume_results<S>(mut results: S, store: Arc<dyn MetricStore>)
-where
+/// Drain poll results off the bus into the metric store and the alert engine. Returns
+/// when the stream ends.
+async fn consume_results<S>(
+    mut results: S,
+    store: Arc<dyn MetricStore>,
+    alerts: Arc<AlertManager>,
+    notifier: Option<Arc<Notifier>>,
+) where
     S: Stream<Item = PollResult> + Unpin,
 {
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
         store.write(&result).await;
+        for action in alerts.observe(&result) {
+            if let Some(notifier) = &notifier {
+                notifier.handle(action).await;
+            }
+        }
     }
     tracing::warn!("result stream ended");
 }
