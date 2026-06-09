@@ -35,6 +35,7 @@ async-trait = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 tokio-stream = { workspace = true }
+lettre = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
