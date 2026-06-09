@@ -18,6 +18,7 @@ yagra-bus = { path = "../yagra-bus", features = ["nats"] }
 yagra-topology = { path = "../yagra-topology" }
 yagra-alert = { path = "../yagra-alert" }
 yagra-discovery = { path = "../yagra-discovery" }
+yagra-secrets = { path = "../yagra-secrets" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tracing = { workspace = true }

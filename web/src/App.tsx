@@ -1,3 +1,4 @@
+import { Admin } from './components/Admin/Admin';
 import { Dashboard } from './components/Dashboard/Dashboard';
 
 export function App() {
@@ -8,6 +9,9 @@ export function App() {
         <span className="muted">Network Monitoring</span>
       </header>
       <Dashboard />
+      <main className="app-main">
+        <Admin />
+      </main>
     </>
   );
 }

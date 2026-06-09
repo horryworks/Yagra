@@ -7,7 +7,8 @@
 //! API grows; the alert endpoints are stubs until the alert engine is wired (Workstream B).
 
 use crate::alerts::AlertManager;
-use crate::repo::NodeListing;
+use crate::repo::{NodeListing, NodeRepo};
+use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
 use axum::{
     extract::{Path, Query, State},
@@ -16,17 +17,25 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::get,
+    routing::{delete, get},
     Json, Router,
 };
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{NodeId, NodeState, SeriesKey};
+
+/// Live-only write side: inventory + credential mutations. Absent in skeleton mode, where
+/// the management endpoints return 503.
+pub struct AdminState {
+    pub repo: Arc<NodeRepo>,
+    pub creds: Arc<CredentialStore>,
+}
 
 /// Default range window when `from`/`to` are omitted (seconds).
 const DEFAULT_RANGE_SECS: i64 = 3600;
@@ -42,13 +51,16 @@ pub struct ApiState {
     pub nodes: Arc<dyn NodeListing>,
     /// Alert engine (active alerts + live event stream).
     pub alerts: Arc<AlertManager>,
+    /// Write side (inventory + credentials); `None` in skeleton mode.
+    pub admin: Option<Arc<AdminState>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/v1/nodes", get(list_nodes))
+        .route("/api/v1/nodes", get(list_nodes).post(create_node))
+        .route("/api/v1/nodes/:node_id", delete(delete_node))
         .route(
             "/api/v1/nodes/:node_id/metrics/:metric",
             get(get_node_metric),
@@ -57,6 +69,11 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/nodes/:node_id/metrics/:metric/range",
             get(get_node_metric_range),
         )
+        .route(
+            "/api/v1/credentials",
+            get(list_credentials).post(create_credential),
+        )
+        .route("/api/v1/credentials/:id", delete(delete_credential))
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .with_state(state)
@@ -256,6 +273,139 @@ async fn stream_alerts(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+// ── Admin (write) handlers — live mode only ──────────────────────────────────
+
+fn unavailable() -> Response {
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "admin_unavailable",
+        "inventory/credential management is not available in skeleton mode".to_owned(),
+    )
+}
+
+fn internal(what: &str) -> Response {
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        what.to_owned(),
+    )
+}
+
+/// Create-node request body.
+#[derive(Deserialize)]
+struct CreateNode {
+    name: String,
+    address: String,
+    pool: Option<String>,
+}
+
+async fn create_node(State(st): State<ApiState>, Json(body): Json<CreateNode>) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "node name must not be empty".to_owned(),
+        );
+    }
+    let Ok(address) = body.address.parse::<IpAddr>() else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_address",
+            format!("address {:?} is not a valid IP address", body.address),
+        );
+    };
+    match admin
+        .repo
+        .create_node(body.name.trim(), address, body.pool.as_deref())
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create node failed");
+            internal("failed to create node")
+        }
+    }
+}
+
+async fn delete_node(State(st): State<ApiState>, Path(id): Path<Uuid>) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.repo.delete_node(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete node failed");
+            internal("failed to delete node")
+        }
+    }
+}
+
+/// Create-credential request body. `secret` is encrypted before storage and never logged.
+#[derive(Deserialize)]
+struct CreateCredential {
+    name: String,
+    kind: String,
+    secret: String,
+}
+
+async fn create_credential(
+    State(st): State<ApiState>,
+    Json(body): Json<CreateCredential>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if body.name.trim().is_empty() || body.kind.trim().is_empty() || body.secret.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_credential",
+            "name, kind, and secret are required".to_owned(),
+        );
+    }
+    match admin
+        .creds
+        .create(body.name.trim(), body.kind.trim(), body.secret.as_bytes())
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create credential failed");
+            internal("failed to store credential")
+        }
+    }
+}
+
+async fn list_credentials(State(st): State<ApiState>) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.creds.list().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list credentials failed");
+            internal("failed to list credentials")
+        }
+    }
+}
+
+async fn delete_credential(State(st): State<ApiState>, Path(id): Path<Uuid>) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.creds.delete(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("credential_not_found", format!("no credential {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete credential failed");
+            internal("failed to delete credential")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +421,7 @@ mod tests {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
+            admin: None,
         }
     }
 
@@ -416,6 +567,26 @@ mod tests {
         let json = body_json(resp).await;
         assert_eq!(json["metric"], "icmp_rtt_ms");
         assert!(json["points"].is_array());
+    }
+
+    #[tokio::test]
+    async fn create_node_unavailable_without_admin() {
+        // Skeleton mode (admin: None) rejects writes with 503 rather than 404/500.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/nodes")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"r1","address":"10.0.0.1"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]

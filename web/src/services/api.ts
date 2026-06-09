@@ -2,7 +2,14 @@
 // scatter raw fetch across components). All calls go through `api`; errors surface as a
 // typed `ApiError` decoded from the fixed error envelope (ADR-019).
 
-import type { Alert, ApiErrorBody, MetricRange, MetricReading, NodeSummary } from '../types/api';
+import type {
+  Alert,
+  ApiErrorBody,
+  CredentialSummary,
+  MetricRange,
+  MetricReading,
+  NodeSummary,
+} from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 
@@ -18,8 +25,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Keep the single-arg call shape for plain GETs (tests assert on it).
+  const res = init ? await fetch(`${BASE}${path}`, init) : await fetch(`${BASE}${path}`);
   if (!res.ok) {
     let code = 'http_error';
     let message = `request failed with status ${res.status}`;
@@ -34,7 +42,17 @@ async function request<T>(path: string): Promise<T> {
     }
     throw new ApiError(code, message, res.status);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** JSON request body init for a mutating call. */
+function jsonBody(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  };
 }
 
 export const api = {
@@ -59,6 +77,28 @@ export const api = {
 
   /** Inventory listing. */
   listNodes: (): Promise<NodeSummary[]> => request('/nodes'),
+
+  /** Create a node. */
+  createNode: (body: { name: string; address: string; pool?: string }): Promise<{ id: string }> =>
+    request('/nodes', jsonBody('POST', body)),
+
+  /** Delete a node. */
+  deleteNode: (id: string): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Credential metadata listing (never includes secret values). */
+  listCredentials: (): Promise<CredentialSummary[]> => request('/credentials'),
+
+  /** Store a new encrypted credential. */
+  createCredential: (body: {
+    name: string;
+    kind: string;
+    secret: string;
+  }): Promise<{ id: string }> => request('/credentials', jsonBody('POST', body)),
+
+  /** Delete a credential. */
+  deleteCredential: (id: string): Promise<void> =>
+    request(`/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Active alerts. */
   listAlerts: (): Promise<Alert[]> => request('/alerts'),

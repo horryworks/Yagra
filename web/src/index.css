@@ -118,3 +118,42 @@ body {
   color: var(--text);
   border-color: var(--accent);
 }
+
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.admin-form input,
+.admin-form select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.admin-form input:focus,
+.admin-form select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.admin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.admin-grow {
+  flex: 1;
+}
+
+.admin-section {
+  margin-top: 16px;
+}

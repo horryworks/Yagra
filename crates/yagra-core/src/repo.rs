@@ -90,6 +90,13 @@ impl NodeRepo {
         }
     }
 
+    /// A clone of the underlying connection pool (for sibling stores that share the DB,
+    /// e.g. the credential store).
+    #[must_use]
+    pub fn pool(&self) -> PgPool {
+        self.pool.clone()
+    }
+
     /// Apply all embedded migrations (expand-contract, ADR-017). Embedded at compile
     /// time, so this needs no database at build.
     pub async fn migrate(&self) -> anyhow::Result<()> {
@@ -134,6 +141,33 @@ impl NodeRepo {
             });
         }
         Ok(nodes)
+    }
+
+    /// Create a top-level node; returns its new id.
+    pub async fn create_node(
+        &self,
+        name: &str,
+        address: IpAddr,
+        pool: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO nodes (id, name, address, pool) VALUES ($1, $2, $3::inet, $4)")
+            .bind(id)
+            .bind(name)
+            .bind(address.to_string())
+            .bind(pool)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
+    /// Delete a node by id. Returns whether a row was removed.
+    pub async fn delete_node(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// If the inventory is empty, seed a few demo nodes so the walking skeleton shows

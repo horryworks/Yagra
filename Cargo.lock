@@ -3537,6 +3537,7 @@ dependencies = [
  "yagra-bus",
  "yagra-common",
  "yagra-discovery",
+ "yagra-secrets",
  "yagra-topology",
 ]
 
