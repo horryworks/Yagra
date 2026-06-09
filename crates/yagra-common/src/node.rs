@@ -6,7 +6,7 @@
 //! `pool` attribute (location-affinity pools, ADR-009).
 
 use crate::address::AddressFamily;
-use crate::ids::{NodeId, ProfileId};
+use crate::ids::{CredentialId, NodeId, ProfileId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -28,6 +28,9 @@ pub struct Node {
     /// Poller-assignment attribute (ADR-009). Maps the node to a poller pool;
     /// conventionally the site, but free to mirror region or any topology.
     pub pool: Option<String>,
+    /// Monitoring credential bound to this node (SNMP community / v3 / token), if any.
+    /// The poller never reads the store; core resolves/inlines the secret (ADR-018/020).
+    pub credential: Option<CredentialId>,
     /// Arbitrary grouping attributes (site, region, role, …) used for filtering
     /// and group-scoped thresholds/visibility. Sorted for deterministic output.
     pub tags: BTreeMap<String, String>,
@@ -44,6 +47,7 @@ impl Node {
             address,
             profile: None,
             pool: None,
+            credential: None,
             tags: BTreeMap::new(),
         }
     }

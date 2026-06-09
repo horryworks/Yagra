@@ -19,7 +19,7 @@ pub mod state;
 pub mod thresholds;
 
 pub use address::AddressFamily;
-pub use ids::{CheckId, IfIndex, NodeId, ProfileId};
+pub use ids::{CheckId, CredentialId, IfIndex, NodeId, ProfileId};
 pub use metric::{MetricKind, SeriesKey};
 pub use node::Node;
 pub use profile::Profile;
