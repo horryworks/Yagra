@@ -9,8 +9,10 @@
 //! Without `YAGRA_BUS_URL` the binary stays idle (so a bare `cargo run` doesn't
 //! crash-loop or require raw-socket privilege); the container always sets it.
 
+mod limiter;
 mod worker;
 
+use limiter::PollLimiter;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,10 +46,18 @@ async fn main() -> anyhow::Result<()> {
     let queue =
         std::env::var("YAGRA_POLLER_QUEUE").unwrap_or_else(|_| yagra_bus::POLLER_QUEUE.to_owned());
     let jobs = Box::pin(bus.subscribe_jobs(&queue).await?);
-    tracing::info!(%queue, "Yagra-poller consuming jobs");
+
+    // Rate control: bound total concurrent probes + per-device single-flight (#4).
+    let max_concurrent = std::env::var("YAGRA_MAX_CONCURRENT_POLLS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(64);
+    let limiter = Arc::new(PollLimiter::new(max_concurrent));
+    tracing::info!(%queue, max_concurrent, "Yagra-poller consuming jobs");
 
     // Runs until the bus closes; the stateless loop carries no recovery state.
-    worker::run_stream(jobs, bus, transport).await;
+    worker::run_stream(jobs, bus, transport, limiter).await;
     tracing::warn!("job stream ended — poller shutting down");
     Ok(())
 }

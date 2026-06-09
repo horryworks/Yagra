@@ -6,6 +6,7 @@
 //! and fail over (ADR-003/009). Counters are reported raw; rates are derived later
 //! (ADR-012).
 
+use crate::limiter::PollLimiter;
 use futures::stream::{Stream, StreamExt};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -96,21 +97,36 @@ fn now_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Run the poll loop over a stream of jobs: for each job, execute it and publish the
-/// result. Returns when the stream ends. Stream-generic so the same loop drives both the
-/// in-memory bus (tests / single-process skeleton) and the NATS queue subscription
-/// (production) — pollers stay stateless regardless of the source (ADR-003/009).
-pub async fn run_stream<B, S>(mut jobs: S, bus: Arc<B>, transport: Arc<dyn Transport>)
-where
-    B: Bus,
+/// Run the poll loop over a stream of jobs. Each job runs concurrently under the
+/// [`PollLimiter`]: a global concurrency cap bounds total load and per-device single-flight
+/// drops a poll whose target is still being probed (backpressure, monitoring-conventions).
+/// Returns when the stream ends. Stream-generic so the same loop drives both the in-memory
+/// bus (tests/skeleton) and the NATS queue subscription (production), ADR-003/009.
+pub async fn run_stream<B, S>(
+    mut jobs: S,
+    bus: Arc<B>,
+    transport: Arc<dyn Transport>,
+    limiter: Arc<PollLimiter>,
+) where
+    B: Bus + 'static,
     S: Stream<Item = PollJob> + Unpin,
 {
     while let Some(job) = jobs.next().await {
-        metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
-        let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
-        if let Err(err) = bus.publish_result(result).await {
-            tracing::error!(error = %err, "failed to publish poll result");
-        }
+        let Some(guard) = limiter.try_begin(job.target).await else {
+            metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
+            tracing::debug!(target = %job.target, "skipping poll: previous still in flight");
+            continue;
+        };
+        let bus = bus.clone();
+        let transport = transport.clone();
+        tokio::spawn(async move {
+            let _guard = guard; // released (and target unmarked) when the probe finishes
+            metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
+            let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+            if let Err(err) = bus.publish_result(result).await {
+                tracing::error!(error = %err, "failed to publish poll result");
+            }
+        });
     }
 }
 
@@ -211,7 +227,8 @@ mod tests {
 
         // Adapt the broadcast receiver into the generic job stream the loop consumes.
         let jobs = Box::pin(BroadcastStream::new(jobs_rx).filter_map(|r| async move { r.ok() }));
-        tokio::spawn(run_stream(jobs, bus.clone(), transport));
+        let limiter = Arc::new(PollLimiter::new(16));
+        tokio::spawn(run_stream(jobs, bus.clone(), transport, limiter));
 
         // Simulate core dispatching a job.
         bus.publish_job(icmp_job()).await.unwrap();
