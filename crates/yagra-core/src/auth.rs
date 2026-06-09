@@ -3,8 +3,9 @@
 //! Passwords are Argon2id-verified ([`yagra_secrets::password`]); a successful login mints
 //! an opaque bearer token held in an in-memory [`SessionStore`] mapped to a [`Principal`]
 //! (role + scope). Mutating API endpoints call [`SessionStore::authorize`] with the
-//! required [`Permission`]. Read endpoints stay open in this MVP — group-scope filtering
-//! of reads is Phase 2 (ADR-014). Tokens are process-local (lost on restart), which is
+//! required [`Permission`]. Read endpoints require `View` by default, but can be opened
+//! to anonymous access via `YAGRA_PUBLIC_DASHBOARD` (a public read-only dashboard);
+//! group-scope filtering of reads is Phase 2 (ADR-014). Tokens are process-local (lost on restart), which is
 //! acceptable for the single-core MVP; shared/persistent sessions come with HA.
 
 use std::collections::HashMap;

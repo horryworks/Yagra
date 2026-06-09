@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { sortedAlerts, useAlertStore } from './store';
+import { sortedAlerts, useAlertStore, useAuthStore } from './store';
 import type { Alert } from './types/api';
 
 function alert(over: Partial<Alert>): Alert {
@@ -42,5 +42,14 @@ describe('alert store', () => {
       c: alert({ node: 'c', severity: 'critical', at_unix_ms: 9 }),
     });
     expect(list.map((x) => x.node)).toEqual(['c', 'b', 'a']);
+  });
+});
+
+describe('auth store', () => {
+  it('tracks the logged-in flag', () => {
+    useAuthStore.getState().setAuthed(true);
+    expect(useAuthStore.getState().authed).toBe(true);
+    useAuthStore.getState().setAuthed(false);
+    expect(useAuthStore.getState().authed).toBe(false);
   });
 });

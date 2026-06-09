@@ -29,6 +29,9 @@ services:
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Default local-auth admin password seeded on first start (change for real use).
       YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-admin}
+      # Read-only dashboard exposure: unset/false = viewing requires login (default);
+      # set true to serve node/metric/alert reads without authentication.
+      YAGRA_PUBLIC_DASHBOARD: ${YAGRA_PUBLIC_DASHBOARD:-false}
       # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
       YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
       YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}

@@ -20,6 +20,8 @@ services:
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Viewing requires login by default (seeded admin/admin). Uncomment to open reads:
+      # YAGRA_PUBLIC_DASHBOARD: "true"
     ports:
       - "8080:8080"   # northbound API
     # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does

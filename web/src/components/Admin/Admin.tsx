@@ -4,14 +4,14 @@
 
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import { api, ApiError, getToken } from '../../services/api';
+import { api, ApiError } from '../../services/api';
+import { useAuthStore } from '../../store';
 import type { CredentialSummary, NodeSummary } from '../../types/api';
+import { Login } from '../Login/Login';
 
 export function Admin() {
-  const [authed, setAuthed] = useState(getToken() != null);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const authed = useAuthStore((s) => s.authed);
+  const setAuthed = useAuthStore((s) => s.setAuthed);
 
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
@@ -43,18 +43,6 @@ export function Admin() {
   const onError = (e: unknown) => setError(e instanceof ApiError ? e.message : 'request failed');
   const text = (set: (v: string) => void) => (e: ChangeEvent<HTMLInputElement>) =>
     set(e.target.value);
-
-  const doLogin = (e: FormEvent) => {
-    e.preventDefault();
-    setLoginError(null);
-    api
-      .login(username, password)
-      .then(() => {
-        setPassword('');
-        setAuthed(true);
-      })
-      .catch((x: unknown) => setLoginError(x instanceof ApiError ? x.message : 'login failed'));
-  };
 
   const logout = () => {
     api.logout();
@@ -88,24 +76,7 @@ export function Admin() {
   };
 
   if (!authed) {
-    return (
-      <section className="pane">
-        <h2>Sign in</h2>
-        <form className="admin-form" onSubmit={doLogin}>
-          <input placeholder="username" value={username} onChange={text(setUsername)} />
-          <input
-            placeholder="password"
-            type="password"
-            value={password}
-            onChange={text(setPassword)}
-          />
-          <button className="node-tab" type="submit">
-            Log in
-          </button>
-        </form>
-        {loginError && <p className="muted">{loginError}</p>}
-      </section>
-    );
+    return <Login />;
   }
 
   if (!available) {

@@ -160,6 +160,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         admin,
         sessions,
         history: Some(history),
+        public_dashboard: cfg.public_dashboard,
     };
     serve(state, &cfg.api_addr, metrics).await
 }
@@ -184,6 +185,9 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         admin: None,
         sessions: Arc::new(SessionStore::new()),
         history: None,
+        // Skeleton has no user store (login returns 503), so reads must stay open or the
+        // dev dashboard would be unreachable. Auth gating applies in live mode.
+        public_dashboard: true,
     };
     serve(state, "0.0.0.0:8080", metrics).await
 }

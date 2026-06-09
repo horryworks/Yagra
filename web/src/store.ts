@@ -4,7 +4,21 @@
 
 import { create } from 'zustand';
 import { severityRank } from './lib/format';
+import { getToken } from './services/api';
 import type { Alert } from './types/api';
+
+// Shared authentication state so the app-level login gate and the Admin pane stay in
+// sync (a single source of truth for "am I logged in"). The token itself lives in the
+// api client (localStorage); this just tracks the boolean for re-rendering.
+interface AuthStore {
+  authed: boolean;
+  setAuthed: (authed: boolean) => void;
+}
+
+export const useAuthStore = create<AuthStore>((set) => ({
+  authed: getToken() != null,
+  setAuthed: (authed) => set({ authed }),
+}));
 
 export function alertKey(a: Pick<Alert, 'node' | 'check' | 'severity'>): string {
   return `${a.node}|${a.check}|${a.severity}`;

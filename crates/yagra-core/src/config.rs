@@ -23,6 +23,10 @@ pub struct Config {
     pub poll_interval_secs: u32,
     /// API bind address.
     pub api_addr: String,
+    /// When true, read-only endpoints (node list, metrics, alerts) are served without
+    /// authentication — a public, read-only dashboard. Default `false`: viewing requires
+    /// a valid session (Viewer role), matching the RBAC design.
+    pub public_dashboard: bool,
 }
 
 impl Config {
@@ -38,8 +42,18 @@ impl Config {
             poll_interval_secs: parse_interval(std::env::var("YAGRA_POLL_INTERVAL_SECS").ok()),
             api_addr: std::env::var("YAGRA_API_ADDR")
                 .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
+            public_dashboard: parse_bool(std::env::var("YAGRA_PUBLIC_DASHBOARD").ok()),
         })
     }
+}
+
+/// Parse a boolean flag. Truthy: `1`/`true`/`yes`/`on` (case-insensitive); everything
+/// else (including unset) is `false`.
+fn parse_bool(raw: Option<String>) -> bool {
+    matches!(
+        raw.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
 }
 
 /// Parse a polling interval, clamping to a sane floor and defaulting on bad input.
@@ -66,5 +80,17 @@ mod tests {
     #[test]
     fn interval_parses_valid_value() {
         assert_eq!(parse_interval(Some("60".into())), 60);
+    }
+
+    #[test]
+    fn bool_is_false_unless_explicitly_truthy() {
+        assert!(!parse_bool(None));
+        assert!(!parse_bool(Some("".into())));
+        assert!(!parse_bool(Some("false".into())));
+        assert!(!parse_bool(Some("0".into())));
+        assert!(parse_bool(Some("1".into())));
+        assert!(parse_bool(Some("true".into())));
+        assert!(parse_bool(Some(" YES ".into())));
+        assert!(parse_bool(Some("On".into())));
     }
 }
