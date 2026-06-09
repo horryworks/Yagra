@@ -20,6 +20,22 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let sink = Arc::new(sink::InMemorySink::default());
+
+    // Demo seed: one reading so the walking-skeleton API/WebUI show data before real
+    // polling is wired (the WebUI's NodeDetail queries this exact node + metric).
+    {
+        use hikyaku::{CheckOutcome, PollResult, Sample};
+        use sink::MetricSink;
+        sink.ingest(&PollResult {
+            schema_version: 1,
+            job_id: uuid::Uuid::nil(),
+            node_id: yagra_common::NodeId::from(uuid::Uuid::nil()),
+            at_unix_ms: 0,
+            outcome: CheckOutcome::Reachable,
+            samples: vec![Sample::gauge("icmp_rtt_ms", 8.0)],
+        });
+    }
+
     let app = api::router(sink.clone());
 
     // NATS wiring pending (ADR-007). Once the `Bus` impl lands this becomes:
