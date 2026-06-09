@@ -25,6 +25,31 @@ pub struct ProfileSummary {
     pub name: String,
 }
 
+/// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
+fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
+    let id: Uuid = row.try_get("id")?;
+    let name: String = row.try_get("name")?;
+    let parent: Option<Uuid> = row.try_get("parent_id")?;
+    let address: String = row.try_get("address")?;
+    let profile: Option<Uuid> = row.try_get("profile_id")?;
+    let pool: Option<String> = row.try_get("pool")?;
+    let credential: Option<Uuid> = row.try_get("credential_id")?;
+    let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
+    let address: IpAddr = address
+        .parse()
+        .map_err(|e| anyhow::anyhow!("node {id} has unparseable address {address:?}: {e}"))?;
+    Ok(Node {
+        id: NodeId::from(id),
+        name,
+        parent: parent.map(NodeId::from),
+        address,
+        profile: profile.map(ProfileId::from),
+        pool,
+        credential: credential.map(CredentialId::from),
+        tags: tags.0,
+    })
+}
+
 /// Fixed id for the seeded demo node the walking-skeleton WebUI queries.
 const DEMO_NODE_ID: Uuid = Uuid::nil();
 
@@ -33,14 +58,16 @@ const DEMO_NODE_ID: Uuid = Uuid::nil();
 /// which is behind it.
 #[async_trait]
 pub trait NodeListing: Send + Sync {
-    /// All nodes in the inventory.
-    async fn list(&self) -> anyhow::Result<Vec<Node>>;
+    /// One keyset page: nodes with `id > after` (or from the start), ordered by id,
+    /// capped at `limit`. The API paginates with this so large inventories don't load
+    /// everything (ui-conventions: scale-aware lists).
+    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>>;
 }
 
 #[async_trait]
 impl NodeListing for NodeRepo {
-    async fn list(&self) -> anyhow::Result<Vec<Node>> {
-        self.list_nodes().await
+    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>> {
+        self.list_nodes_page(after, limit).await
     }
 }
 
@@ -62,8 +89,14 @@ impl StaticNodeList {
 
 #[async_trait]
 impl NodeListing for StaticNodeList {
-    async fn list(&self) -> anyhow::Result<Vec<Node>> {
-        Ok(self.0.clone())
+    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>> {
+        let mut nodes: Vec<Node> = self.0.clone();
+        nodes.sort_by_key(|n| n.id.as_uuid());
+        Ok(nodes
+            .into_iter()
+            .filter(|n| after.is_none_or(|a| n.id.as_uuid() > a))
+            .take(limit.clamp(1, 500) as usize)
+            .collect())
     }
 }
 
@@ -113,44 +146,48 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Every node in the inventory (full table scan is fine at MVP scale; paginated
-    /// pool-scoped queries land with distributed scheduling).
+    /// Column list shared by the full and paged node queries (`host(address)` strips any
+    /// netmask so the INET parses straight to IpAddr).
+    const NODE_COLUMNS: &'static str =
+        "id, name, parent_id, host(address) AS address, profile_id, pool, credential_id, tags";
+
+    /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
-        // `host(address)` strips any netmask so the INET parses straight to IpAddr.
-        let rows = sqlx::query(
-            "SELECT id, name, parent_id, host(address) AS address, profile_id, pool, \
-             credential_id, tags FROM nodes",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(&format!("SELECT {} FROM nodes", Self::NODE_COLUMNS))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(node_from_row).collect()
+    }
 
-        let mut nodes = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let name: String = row.try_get("name")?;
-            let parent: Option<Uuid> = row.try_get("parent_id")?;
-            let address: String = row.try_get("address")?;
-            let profile: Option<Uuid> = row.try_get("profile_id")?;
-            let pool: Option<String> = row.try_get("pool")?;
-            let credential: Option<Uuid> = row.try_get("credential_id")?;
-            let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
-
-            let address: IpAddr = address.parse().map_err(|e| {
-                anyhow::anyhow!("node {id} has unparseable address {address:?}: {e}")
-            })?;
-
-            nodes.push(Node {
-                id: NodeId::from(id),
-                name,
-                parent: parent.map(NodeId::from),
-                address,
-                profile: profile.map(ProfileId::from),
-                pool,
-                credential: credential.map(CredentialId::from),
-                tags: tags.0,
-            });
-        }
-        Ok(nodes)
+    /// One keyset page of nodes ordered by id, starting after `after`.
+    pub async fn list_nodes_page(
+        &self,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
+        let limit = limit.clamp(1, 500);
+        let rows = match after {
+            Some(after) => {
+                sqlx::query(&format!(
+                    "SELECT {} FROM nodes WHERE id > $1 ORDER BY id LIMIT $2",
+                    Self::NODE_COLUMNS
+                ))
+                .bind(after)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&format!(
+                    "SELECT {} FROM nodes ORDER BY id LIMIT $1",
+                    Self::NODE_COLUMNS
+                ))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        rows.iter().map(node_from_row).collect()
     }
 
     /// Create a node; returns its new id. Optional profile, bound credential, and parent.
