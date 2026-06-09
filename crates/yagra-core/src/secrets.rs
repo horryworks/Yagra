@@ -109,9 +109,7 @@ impl CredentialStore {
     }
 
     /// Decrypt a credential's secret in memory (core-side resolution; never exposed via
-    /// the API). Returns `None` if no such credential. Used by SNMP credential resolution
-    /// (Workstream C); allowed-dead until that path lands.
-    #[allow(dead_code)]
+    /// the API). Returns `None` if no such credential.
     pub async fn secret(&self, id: Uuid) -> anyhow::Result<Option<Vec<u8>>> {
         let row = sqlx::query(
             "SELECT key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \

@@ -11,11 +11,19 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use sqlx::Row;
 use uuid::Uuid;
-use yagra_common::{Node, NodeId, ProfileId};
+use yagra_common::{CredentialId, Node, NodeId, ProfileId};
+
+/// A device-class/profile row for the API (id + name).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileSummary {
+    pub id: Uuid,
+    pub name: String,
+}
 
 /// Fixed id for the seeded demo node the walking-skeleton WebUI queries.
 const DEMO_NODE_ID: Uuid = Uuid::nil();
@@ -110,8 +118,8 @@ impl NodeRepo {
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
         // `host(address)` strips any netmask so the INET parses straight to IpAddr.
         let rows = sqlx::query(
-            "SELECT id, name, parent_id, host(address) AS address, profile_id, pool, tags \
-             FROM nodes",
+            "SELECT id, name, parent_id, host(address) AS address, profile_id, pool, \
+             credential_id, tags FROM nodes",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -124,6 +132,7 @@ impl NodeRepo {
             let address: String = row.try_get("address")?;
             let profile: Option<Uuid> = row.try_get("profile_id")?;
             let pool: Option<String> = row.try_get("pool")?;
+            let credential: Option<Uuid> = row.try_get("credential_id")?;
             let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
 
             let address: IpAddr = address.parse().map_err(|e| {
@@ -137,33 +146,97 @@ impl NodeRepo {
                 address,
                 profile: profile.map(ProfileId::from),
                 pool,
+                credential: credential.map(CredentialId::from),
                 tags: tags.0,
             });
         }
         Ok(nodes)
     }
 
-    /// Create a top-level node; returns its new id.
+    /// Create a node; returns its new id. Optional profile, bound credential, and parent.
     pub async fn create_node(
         &self,
         name: &str,
         address: IpAddr,
         pool: Option<&str>,
+        profile: Option<Uuid>,
+        credential: Option<Uuid>,
+        parent: Option<Uuid>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO nodes (id, name, address, pool) VALUES ($1, $2, $3::inet, $4)")
-            .bind(id)
-            .bind(name)
-            .bind(address.to_string())
-            .bind(pool)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO nodes (id, name, address, pool, profile_id, credential_id, parent_id) \
+             VALUES ($1, $2, $3::inet, $4, $5, $6, $7)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(address.to_string())
+        .bind(pool)
+        .bind(profile)
+        .bind(credential)
+        .bind(parent)
+        .execute(&self.pool)
+        .await?;
         Ok(id)
+    }
+
+    /// Set (or clear) a node's profile and bound credential. Returns whether the node exists.
+    pub async fn set_node_bindings(
+        &self,
+        id: Uuid,
+        profile: Option<Uuid>,
+        credential: Option<Uuid>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE nodes SET profile_id = $2, credential_id = $3, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(profile)
+        .bind(credential)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// Delete a node by id. Returns whether a row was removed.
     pub async fn delete_node(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// All device-class profiles.
+    pub async fn list_profiles(&self) -> anyhow::Result<Vec<ProfileSummary>> {
+        let rows = sqlx::query("SELECT id, name FROM profiles ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ProfileSummary {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Create a profile; returns its id.
+    pub async fn create_profile(&self, name: &str) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO profiles (id, name) VALUES ($1, $2)")
+            .bind(id)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
+    /// Delete a profile. Returns whether a row was removed.
+    pub async fn delete_profile(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query("DELETE FROM profiles WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;

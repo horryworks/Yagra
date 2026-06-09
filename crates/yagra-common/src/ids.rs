@@ -126,6 +126,43 @@ impl From<Uuid> for CheckId {
     }
 }
 
+/// Stable identifier for a stored monitoring credential (SNMP community / v3 / token).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CredentialId(pub Uuid);
+
+impl CredentialId {
+    /// Generate a fresh, random credential id.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    /// The underlying UUID.
+    #[must_use]
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for CredentialId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for CredentialId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for CredentialId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
 /// SNMP interface index (`ifIndex`).
 ///
 /// Identifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,

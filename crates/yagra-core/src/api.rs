@@ -19,7 +19,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use futures::stream::StreamExt;
@@ -67,6 +67,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         .route("/api/v1/nodes/:node_id", delete(delete_node))
+        .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
+        .route("/api/v1/profiles", get(list_profiles).post(create_profile))
+        .route("/api/v1/profiles/:id", delete(delete_profile))
         .route(
             "/api/v1/nodes/:node_id/metrics/:metric",
             get(get_node_metric),
@@ -372,12 +375,15 @@ async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     }
 }
 
-/// Create-node request body.
+/// Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.
 #[derive(Deserialize)]
 struct CreateNode {
     name: String,
     address: String,
     pool: Option<String>,
+    profile_id: Option<Uuid>,
+    credential_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
 }
 
 async fn create_node(
@@ -407,13 +413,123 @@ async fn create_node(
     };
     match admin
         .repo
-        .create_node(body.name.trim(), address, body.pool.as_deref())
+        .create_node(
+            body.name.trim(),
+            address,
+            body.pool.as_deref(),
+            body.profile_id,
+            body.credential_id,
+            body.parent_id,
+        )
         .await
     {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "create node failed");
             internal("failed to create node")
+        }
+    }
+}
+
+/// Set/clear a node's profile + bound credential.
+#[derive(Deserialize)]
+struct NodeBindings {
+    profile_id: Option<Uuid>,
+    credential_id: Option<Uuid>,
+}
+
+async fn set_node_bindings(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NodeBindings>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin
+        .repo
+        .set_node_bindings(id, body.profile_id, body.credential_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set node bindings failed");
+            internal("failed to update node")
+        }
+    }
+}
+
+async fn list_profiles(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.repo.list_profiles().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list profiles failed");
+            internal("failed to list profiles")
+        }
+    }
+}
+
+/// Create-profile request body.
+#[derive(Deserialize)]
+struct CreateProfile {
+    name: String,
+}
+
+async fn create_profile(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateProfile>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "profile name must not be empty".to_owned(),
+        );
+    }
+    match admin.repo.create_profile(body.name.trim()).await {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create profile failed");
+            internal("failed to create profile")
+        }
+    }
+}
+
+async fn delete_profile(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.repo.delete_profile(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("profile_not_found", format!("no profile {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete profile failed");
+            internal("failed to delete profile")
         }
     }
 }

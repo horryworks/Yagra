@@ -90,30 +90,39 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(consume_results(results, store, alerts, notifier));
     }
 
-    // Optional SNMP v2c polling (ADR-021 PoC): enabled by a configured community. OIDs
-    // default to sysUpTime. Per-node credential binding replaces this env hook later.
-    let snmp = std::env::var("YAGRA_SNMP_COMMUNITY")
+    // Credential store, shared by the API admin and the scheduler's SNMP resolution.
+    let creds = Arc::new(CredentialStore::from_env(repo.pool()));
+
+    // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
+    // community is a fallback for nodes without one. OIDs default to sysUpTime.
+    let env_community = std::env::var("YAGRA_SNMP_COMMUNITY")
         .ok()
-        .filter(|c| !c.is_empty())
-        .map(|community| {
-            let oids = std::env::var("YAGRA_SNMP_OIDS")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    s.split(',')
-                        .map(|x| x.trim().to_owned())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| vec!["1.3.6.1.2.1.1.3.0".to_owned()]);
-            tracing::info!(oids = oids.len(), "SNMP v2c polling enabled");
-            (community, oids)
-        });
+        .filter(|c| !c.is_empty());
+    let snmp_oids = std::env::var("YAGRA_SNMP_OIDS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["1.3.6.1.2.1.1.3.0".to_owned()]);
 
     // Scheduler: inventory → jobs on the bus, jittered across the interval.
     {
         let repo = repo.clone();
         let bus = bus.clone();
-        tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs, snmp));
+        let creds = creds.clone();
+        let env_community = env_community.clone();
+        let snmp_oids = snmp_oids.clone();
+        tokio::spawn(run_scheduler(
+            repo,
+            bus,
+            cfg.poll_interval_secs,
+            creds,
+            env_community,
+            snmp_oids,
+        ));
     }
 
     // Thresholds: snapshot into the alert engine now, then refresh periodically so edits
@@ -133,7 +142,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     }
 
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
-    let creds = Arc::new(CredentialStore::from_env(repo.pool()));
     let users = Arc::new(UserStore::new(repo.pool()));
     let admin_password =
         std::env::var("YAGRA_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_owned());
@@ -208,7 +216,9 @@ async fn run_scheduler(
     repo: Arc<NodeRepo>,
     bus: Arc<NatsBus>,
     interval_secs: u32,
-    snmp: Option<(String, Vec<String>)>,
+    creds: Arc<CredentialStore>,
+    env_community: Option<String>,
+    snmp_oids: Vec<String>,
 ) {
     let interval = Duration::from_secs(u64::from(interval_secs));
     let window_ms = interval.as_millis().max(1) as u64;
@@ -218,33 +228,31 @@ async fn run_scheduler(
             Ok(nodes) => {
                 tracing::debug!(count = nodes.len(), "scheduling poll round");
                 for node in nodes {
-                    // Optional SNMP job (clone the node before the ICMP task takes it).
-                    if let Some((community, oids)) = &snmp {
-                        let bus = bus.clone();
-                        let node = node.clone();
-                        let check = SnmpCheck {
-                            community: community.clone(),
-                            oids: oids.clone(),
-                            timeout_ms: 2000,
-                        };
-                        let delay = jitter();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(delay).await;
-                            let job = scheduler::build_snmp_job(
-                                &node,
-                                check,
-                                interval_secs,
-                                Uuid::new_v4(),
-                            );
-                            match bus.publish_job(job).await {
-                                Ok(()) => {
-                                    metrics::counter!("yagra_jobs_published_total").increment(1);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, node = %node.id, "failed to publish snmp job");
-                                }
-                            }
-                        });
+                    // Resolve the SNMP community: the node's bound credential (decrypted)
+                    // wins; otherwise the env fallback. None ⇒ no SNMP for this node.
+                    let community =
+                        resolve_community(&creds, &node, env_community.as_deref()).await;
+                    if let Some(community) = community {
+                        if !snmp_oids.is_empty() {
+                            let bus = bus.clone();
+                            let node = node.clone();
+                            let check = SnmpCheck {
+                                community,
+                                oids: snmp_oids.clone(),
+                                timeout_ms: 2000,
+                            };
+                            let delay = jitter();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(delay).await;
+                                let job = scheduler::build_snmp_job(
+                                    &node,
+                                    check,
+                                    interval_secs,
+                                    Uuid::new_v4(),
+                                );
+                                publish(&bus, job, "snmp", node.id).await;
+                            });
+                        }
                     }
 
                     // ICMP liveness job.
@@ -258,18 +266,38 @@ async fn run_scheduler(
                             interval_secs,
                             Uuid::new_v4(),
                         );
-                        match bus.publish_job(job).await {
-                            Ok(()) => metrics::counter!("yagra_jobs_published_total").increment(1),
-                            Err(e) => {
-                                tracing::warn!(error = %e, node = %node.id, "failed to publish poll job");
-                            }
-                        }
+                        publish(&bus, job, "icmp", node.id).await;
                     });
                 }
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
         tokio::time::sleep(interval).await;
+    }
+}
+
+/// Resolve a node's SNMP community: prefer its bound credential (decrypted in core, never
+/// the poller — ADR-018/020), else the env fallback.
+async fn resolve_community(
+    creds: &CredentialStore,
+    node: &yagra_common::Node,
+    env_community: Option<&str>,
+) -> Option<String> {
+    if let Some(cred) = node.credential {
+        match creds.secret(cred.as_uuid()).await {
+            Ok(Some(bytes)) => return String::from_utf8(bytes).ok(),
+            Ok(None) => tracing::warn!(node = %node.id, "bound credential not found"),
+            Err(e) => tracing::warn!(node = %node.id, error = %e, "credential decrypt failed"),
+        }
+    }
+    env_community.map(ToOwned::to_owned)
+}
+
+/// Publish a job and bump the published-jobs counter, logging failures.
+async fn publish(bus: &NatsBus, job: yagra_bus::PollJob, kind: &str, node: yagra_common::NodeId) {
+    match bus.publish_job(job).await {
+        Ok(()) => metrics::counter!("yagra_jobs_published_total").increment(1),
+        Err(e) => tracing::warn!(error = %e, %kind, node = %node, "failed to publish job"),
     }
 }
 
