@@ -32,7 +32,7 @@ use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use uuid::Uuid;
-use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult};
+use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult, SnmpCheck};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -85,11 +85,30 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(consume_results(results, store, alerts, notifier));
     }
 
+    // Optional SNMP v2c polling (ADR-021 PoC): enabled by a configured community. OIDs
+    // default to sysUpTime. Per-node credential binding replaces this env hook later.
+    let snmp = std::env::var("YAGRA_SNMP_COMMUNITY")
+        .ok()
+        .filter(|c| !c.is_empty())
+        .map(|community| {
+            let oids = std::env::var("YAGRA_SNMP_OIDS")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.split(',')
+                        .map(|x| x.trim().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec!["1.3.6.1.2.1.1.3.0".to_owned()]);
+            tracing::info!(oids = oids.len(), "SNMP v2c polling enabled");
+            (community, oids)
+        });
+
     // Scheduler: inventory → jobs on the bus, jittered across the interval.
     {
         let repo = repo.clone();
         let bus = bus.clone();
-        tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs));
+        tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs, snmp));
     }
 
     // Write side (inventory + encrypted credentials), sharing the metadata DB pool.
@@ -155,18 +174,54 @@ async fn consume_results<S>(
 
 /// Periodically turn the inventory into ICMP jobs, spread across the interval with
 /// per-node jitter so N nodes don't poll on the same tick (anti-stampede).
-async fn run_scheduler(repo: Arc<NodeRepo>, bus: Arc<NatsBus>, interval_secs: u32) {
+async fn run_scheduler(
+    repo: Arc<NodeRepo>,
+    bus: Arc<NatsBus>,
+    interval_secs: u32,
+    snmp: Option<(String, Vec<String>)>,
+) {
     let interval = Duration::from_secs(u64::from(interval_secs));
     let window_ms = interval.as_millis().max(1) as u64;
+    let jitter = || Duration::from_millis(rand::random::<u64>() % window_ms);
     loop {
         match repo.list_nodes().await {
             Ok(nodes) => {
                 tracing::debug!(count = nodes.len(), "scheduling poll round");
                 for node in nodes {
+                    // Optional SNMP job (clone the node before the ICMP task takes it).
+                    if let Some((community, oids)) = &snmp {
+                        let bus = bus.clone();
+                        let node = node.clone();
+                        let check = SnmpCheck {
+                            community: community.clone(),
+                            oids: oids.clone(),
+                            timeout_ms: 2000,
+                        };
+                        let delay = jitter();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(delay).await;
+                            let job = scheduler::build_snmp_job(
+                                &node,
+                                check,
+                                interval_secs,
+                                Uuid::new_v4(),
+                            );
+                            match bus.publish_job(job).await {
+                                Ok(()) => {
+                                    metrics::counter!("yagra_jobs_published_total").increment(1);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, node = %node.id, "failed to publish snmp job");
+                                }
+                            }
+                        });
+                    }
+
+                    // ICMP liveness job.
                     let bus = bus.clone();
-                    let jitter = Duration::from_millis(rand::random::<u64>() % window_ms);
+                    let delay = jitter();
                     tokio::spawn(async move {
-                        tokio::time::sleep(jitter).await;
+                        tokio::time::sleep(delay).await;
                         let job = scheduler::build_icmp_job(
                             &node,
                             IcmpCheck::default(),

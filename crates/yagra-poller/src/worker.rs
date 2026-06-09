@@ -37,6 +37,40 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 }
             }
         }
+        CheckSpec::Snmp(snmp) => {
+            let timeout = Duration::from_millis(u64::from(snmp.timeout_ms));
+            match transport
+                .snmp_get(job.target, &snmp.community, &snmp.oids, timeout)
+                .await
+            {
+                Ok(samples) => {
+                    // No values back ⇒ treat as unreachable (agent down / wrong community).
+                    let outcome = if samples.is_empty() {
+                        CheckOutcome::Unreachable
+                    } else {
+                        CheckOutcome::Reachable
+                    };
+                    let mapped = samples
+                        .into_iter()
+                        .map(|s| Sample::gauge(snmp_metric_name(&s.oid), s.value))
+                        .collect();
+                    result(job, at_unix_ms, outcome, mapped)
+                }
+                Err(err) => {
+                    tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
+                    result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
+                }
+            }
+        }
+    }
+}
+
+/// Stable metric name for an SNMP OID. Known OIDs get friendly names; others fall back to
+/// an OID-derived name (a bounded set per profile, so cardinality stays controlled).
+fn snmp_metric_name(oid: &str) -> String {
+    match oid {
+        "1.3.6.1.2.1.1.3.0" => "snmp_sys_uptime_ticks".to_owned(),
+        other => format!("snmp_oid_{}", other.replace('.', "_")),
     }
 }
 
@@ -85,9 +119,9 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use uuid::Uuid;
-    use yagra_bus::{IcmpCheck, InMemoryBus};
+    use yagra_bus::{IcmpCheck, InMemoryBus, SnmpCheck};
     use yagra_common::NodeId;
-    use yagra_transport::FakeTransport;
+    use yagra_transport::{FakeTransport, SnmpSample};
 
     fn icmp_job() -> PollJob {
         PollJob::icmp(
@@ -125,6 +159,43 @@ mod tests {
             .samples
             .iter()
             .any(|s| s.metric == "icmp_loss_pct" && s.value == 100.0));
+    }
+
+    fn snmp_job() -> PollJob {
+        PollJob::snmp(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            SnmpCheck {
+                community: "public".to_owned(),
+                oids: vec!["1.3.6.1.2.1.1.3.0".to_owned()],
+                timeout_ms: 2000,
+            },
+            30,
+        )
+    }
+
+    #[tokio::test]
+    async fn snmp_samples_map_to_named_metrics() {
+        let t = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+            value: 123.0,
+        }]);
+        let r = execute(&snmp_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == "snmp_sys_uptime_ticks" && s.value == 123.0));
+    }
+
+    #[tokio::test]
+    async fn snmp_no_values_is_unreachable() {
+        // FakeTransport with no canned SNMP samples → empty → unreachable.
+        let t = FakeTransport::reachable(0.0);
+        let r = execute(&snmp_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert!(r.samples.is_empty());
     }
 
     /// Walking skeleton: a job published to the bus flows through the poll loop and a

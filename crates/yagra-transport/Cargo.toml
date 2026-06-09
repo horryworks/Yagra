@@ -15,6 +15,7 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 surge-ping = { workspace = true }
+csnmp = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]

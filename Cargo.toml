@@ -54,6 +54,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 async-nats = "0.38"
 # Raw-socket ICMP for the poller (needs CAP_NET_RAW at runtime, ADR build-prereqs)
 surge-ping = "0.8"
+# SNMP v2c (pure-Rust async; ADR-021 PoC — validate before any net-snmp FFI fallback)
+csnmp = "0.5"
 # Async stream combinators (bus consumers)
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }

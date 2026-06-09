@@ -88,6 +88,16 @@ impl Transport for SurgePingTransport {
 
         Ok(summarize(count, &rtts_ms))
     }
+
+    async fn snmp_get(
+        &self,
+        target: IpAddr,
+        community: &str,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<crate::SnmpSample>, TransportError> {
+        crate::snmp::snmp_get_v2c(target, community, oids, timeout).await
+    }
 }
 
 /// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply
