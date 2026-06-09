@@ -10,9 +10,12 @@
 
 mod worker;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    tracing::info!("Yagra-poller (banshu) — stub; NATS bus + ICMP transport wiring pending");
+    tracing::info!(
+        "Yagra-poller (banshu) — running idle; NATS bus + ICMP transport wiring pending"
+    );
 
     // The loop is ready: once the NATS `Bus` impl and `surge-ping` transport land, the
     // entry point becomes roughly:
@@ -22,5 +25,8 @@ fn main() -> anyhow::Result<()> {
     // Referenced here so the tested loop is wired into the binary, not orphaned:
     let _entrypoint = worker::run::<hikyaku::InMemoryBus>;
 
+    // No bus connected yet — stay alive (idle) so the container doesn't crash-loop.
+    // Replaced by the NATS-backed poll loop once wired.
+    std::future::pending::<()>().await;
     Ok(())
 }
