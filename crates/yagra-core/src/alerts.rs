@@ -9,19 +9,26 @@
 //! dedup + retry. Threshold-based alerting and persistence land in a later pass — this
 //! MVP covers reachability, which needs no threshold table.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Mutex, RwLock};
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
+use uuid::Uuid;
 use yagra_alert::CheckState;
 use yagra_alert::{
     Alert, DedupKey, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
 };
 use yagra_bus::{CheckOutcome, PollResult};
-use yagra_common::{CheckId, NodeState};
+use yagra_common::{
+    resolve_effective, CheckId, EffectiveThreshold, NodeId, NodeState, ScopeLevel, ScopedThreshold,
+};
 
-/// Consecutive samples a state must hold before it commits (anti-flap).
+use crate::thresholds::StoredThreshold;
+
+/// Liveness check name (distinct from any metric name).
+const LIVENESS: &str = "__liveness__";
+/// Consecutive samples a state must hold before it commits (anti-flap) for liveness.
 const DWELL_SAMPLES: u32 = 3;
 /// Flapping detection window and threshold.
 const FLAP_WINDOW_MS: i64 = 600_000;
@@ -38,15 +45,76 @@ pub enum NotifyAction {
     Resolve(DedupKey),
 }
 
-/// In-memory alert engine: per-node check state, active alerts, and an SSE broadcast.
+/// Per-node metadata used to resolve threshold scope (profile + groups).
+#[derive(Debug, Clone, Default)]
+pub struct NodeMeta {
+    /// Profile id (as text) the node belongs to, if any.
+    pub profile: Option<String>,
+    /// Group identifiers (node tag values) for group-scoped thresholds.
+    pub groups: BTreeSet<String>,
+}
+
+/// A snapshot of thresholds + node metadata the engine evaluates against. Rebuilt
+/// periodically from the database so threshold edits take effect without a restart.
+#[derive(Debug, Clone, Default)]
+pub struct AlertConfig {
+    thresholds: Vec<StoredThreshold>,
+    node_meta: HashMap<NodeId, NodeMeta>,
+}
+
+impl AlertConfig {
+    /// Build a config from the stored thresholds and node metadata.
+    #[must_use]
+    pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
+        Self {
+            thresholds,
+            node_meta,
+        }
+    }
+
+    /// Resolve the effective threshold for one (node, metric), honouring scope inheritance.
+    fn resolve(&self, node: NodeId, metric: &str) -> Option<EffectiveThreshold> {
+        let meta = self.node_meta.get(&node);
+        let scoped: Vec<ScopedThreshold> = self
+            .thresholds
+            .iter()
+            .filter(|t| t.rule.metric == metric && self.applies(t, node, meta))
+            .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
+            .collect();
+        resolve_effective(&scoped)
+    }
+
+    fn applies(&self, t: &StoredThreshold, node: NodeId, meta: Option<&NodeMeta>) -> bool {
+        match t.level {
+            ScopeLevel::Node => t.scope_id == node.to_string(),
+            ScopeLevel::Profile => {
+                meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str())
+            }
+            ScopeLevel::Group => meta.is_some_and(|m| m.groups.contains(&t.scope_id)),
+        }
+    }
+}
+
+/// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
+/// stable dedup identity across restarts.
+fn check_id(node: NodeId, name: &str) -> CheckId {
+    CheckId::from(Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("{node}:{name}").as_bytes(),
+    ))
+}
+
+/// In-memory alert engine: per-check state, active alerts, an SSE broadcast, and the
+/// threshold/metadata config snapshot.
 pub struct AlertManager {
     states: Mutex<HashMap<CheckId, CheckState>>,
     active: Mutex<HashMap<CheckId, Alert>>,
     tx: broadcast::Sender<String>,
+    config: RwLock<AlertConfig>,
 }
 
 impl AlertManager {
-    /// New manager.
+    /// New manager with an empty config (no thresholds until [`Self::set_config`]).
     #[must_use]
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
@@ -54,7 +122,13 @@ impl AlertManager {
             states: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             tx,
+            config: RwLock::new(AlertConfig::default()),
         }
+    }
+
+    /// Replace the threshold/metadata snapshot (called by the periodic refresh task).
+    pub fn set_config(&self, config: AlertConfig) {
+        *self.config.write().expect("config rwlock poisoned") = config;
     }
 
     /// Subscribe to the live alert event stream (JSON strings; `resolved` flag included).
@@ -74,29 +148,69 @@ impl AlertManager {
             .collect()
     }
 
-    /// Feed one poll result through the state machine. Returns the notify actions for any
-    /// committed transition (also broadcast to SSE subscribers here).
+    /// Feed one poll result through the engine: a liveness check from the outcome plus a
+    /// threshold check per sample that has a resolved threshold. Returns notify actions for
+    /// every committed transition (also broadcast to SSE subscribers here).
     pub fn observe(&self, result: &PollResult) -> Vec<NotifyAction> {
+        let node = result.node_id;
+        let mut actions = Vec::new();
+
+        // Liveness from the reachability outcome.
         let raw = match result.outcome {
             CheckOutcome::Reachable => NodeState::Ok,
             CheckOutcome::Unreachable => NodeState::Unreachable,
             CheckOutcome::Error => NodeState::Unknown,
         };
-        // One liveness check per node; its id is derived from the node id (stable dedup).
-        let check = CheckId::from(result.node_id.as_uuid());
+        actions.extend(self.process_check(
+            check_id(node, LIVENESS),
+            node,
+            raw,
+            DWELL_SAMPLES,
+            result.at_unix_ms,
+        ));
 
+        // Threshold checks per sample (only metrics with a resolved threshold alert).
+        for sample in &result.samples {
+            let eff = {
+                let config = self.config.read().expect("config rwlock poisoned");
+                config.resolve(node, &sample.metric)
+            };
+            if let Some(eff) = eff {
+                let raw = eff.evaluate(sample.value);
+                actions.extend(self.process_check(
+                    check_id(node, &sample.metric),
+                    node,
+                    raw,
+                    eff.dwell_samples,
+                    result.at_unix_ms,
+                ));
+            }
+        }
+        actions
+    }
+
+    /// Run one raw state through a check's hysteresis and emit a fire/resolve action on a
+    /// committed transition.
+    fn process_check(
+        &self,
+        check: CheckId,
+        node: NodeId,
+        raw: NodeState,
+        dwell: u32,
+        at_unix_ms: i64,
+    ) -> Vec<NotifyAction> {
         let transition = {
             let mut states = self.states.lock().expect("states mutex poisoned");
             let cs = states.entry(check).or_insert_with(|| {
-                CheckState::new(NodeState::Ok, DWELL_SAMPLES, FLAP_WINDOW_MS, FLAP_THRESHOLD)
+                CheckState::new(NodeState::Ok, dwell.max(1), FLAP_WINDOW_MS, FLAP_THRESHOLD)
             });
-            cs.observe(raw, result.at_unix_ms)
+            cs.observe(raw, at_unix_ms)
         };
         let Some(t) = transition else {
             return Vec::new();
         };
 
-        match t.to_alert(result.node_id, check, result.at_unix_ms, None) {
+        match t.to_alert(node, check, at_unix_ms, None) {
             Some(alert) => {
                 self.active
                     .lock()
@@ -106,7 +220,6 @@ impl AlertManager {
                 vec![NotifyAction::Fire(alert)]
             }
             None => {
-                // Recovered (Ok/Unknown) — resolve any active alert for this check.
                 let prev = self
                     .active
                     .lock()
@@ -267,5 +380,58 @@ mod tests {
                 .is_empty());
         }
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn node_threshold_breach_fires_metric_alert() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        // Node-scoped threshold: icmp_rtt_ms critical at/above 100ms, no dwell.
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(AlertConfig::new(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "icmp_rtt_ms".into(),
+                    direction: Direction::Above,
+                    warning: Some(50.0),
+                    critical: Some(100.0),
+                    dwell_samples: 1,
+                },
+            }],
+            meta,
+        ));
+
+        let mut reachable_high = result(node, CheckOutcome::Reachable, 0);
+        reachable_high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        let actions = mgr.observe(&reachable_high);
+        // Reachable ⇒ no liveness alert; rtt 150 ≥ 100 ⇒ one critical metric alert.
+        assert!(matches!(actions.as_slice(), [NotifyAction::Fire(_)]));
+        let alerts = mgr.active_alerts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].state, NodeState::Critical);
+
+        // Back under threshold ⇒ resolves.
+        let mut reachable_ok = result(node, CheckOutcome::Reachable, 1_000);
+        reachable_ok.samples = vec![Sample::gauge("icmp_rtt_ms", 5.0)];
+        let actions = mgr.observe(&reachable_ok);
+        assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn metric_without_threshold_is_ignored() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        let mut r = result(node, CheckOutcome::Reachable, 0);
+        r.samples = vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 9999.0)];
+        // No thresholds configured ⇒ no metric alert (and reachable ⇒ no liveness alert).
+        assert!(mgr.observe(&r).is_empty());
     }
 }
