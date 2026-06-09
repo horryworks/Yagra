@@ -13,6 +13,7 @@ mod alerts;
 mod api;
 mod auth;
 mod config;
+mod history;
 mod repo;
 mod scheduler;
 mod secrets;
@@ -30,6 +31,7 @@ use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
+use history::AlertHistoryStore;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
@@ -71,23 +73,19 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
 
-    // Alert engine + optional Webhook notifier (ADR-015).
+    // Alert engine + optional notifier (Webhook/email, ADR-015) + history persistence.
     let alerts = Arc::new(AlertManager::new());
-    let notifier = std::env::var("YAGRA_WEBHOOK_URL")
-        .ok()
-        .filter(|u| !u.is_empty())
-        .map(|url| {
-            tracing::info!("alert Webhook notifier enabled");
-            Arc::new(Notifier::webhook(url))
-        });
+    let notifier = Notifier::from_env().map(Arc::new);
+    let history = Arc::new(AlertHistoryStore::new(repo.pool()));
 
-    // Result consumer: bus → TSDB + alert engine.
+    // Result consumer: bus → TSDB + alert engine (+ history + notifications).
     {
         let store = store.clone();
         let alerts = alerts.clone();
         let notifier = notifier.clone();
+        let history = history.clone();
         let results = Box::pin(bus.subscribe_results().await?);
-        tokio::spawn(consume_results(results, store, alerts, notifier));
+        tokio::spawn(consume_results(results, store, alerts, notifier, history));
     }
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
@@ -161,6 +159,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         alerts,
         admin,
         sessions,
+        history: Some(history),
     };
     serve(state, &cfg.api_addr, metrics).await
 }
@@ -184,6 +183,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         alerts: Arc::new(AlertManager::new()),
         admin: None,
         sessions: Arc::new(SessionStore::new()),
+        history: None,
     };
     serve(state, "0.0.0.0:8080", metrics).await
 }
@@ -195,13 +195,23 @@ async fn consume_results<S>(
     store: Arc<dyn MetricStore>,
     alerts: Arc<AlertManager>,
     notifier: Option<Arc<Notifier>>,
+    history: Arc<AlertHistoryStore>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
+    use crate::alerts::NotifyAction;
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
         store.write(&result).await;
         for action in alerts.observe(&result) {
+            // Persist the lifecycle transition (best-effort).
+            let recorded = match &action {
+                NotifyAction::Fire(alert) => history.record(alert, false).await,
+                NotifyAction::Resolve(alert) => history.record(alert, true).await,
+            };
+            if let Err(e) = recorded {
+                tracing::warn!(error = %e, "failed to record alert history");
+            }
             if let Some(notifier) = &notifier {
                 notifier.handle(action).await;
             }

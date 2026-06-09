@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_alert::CheckState;
-use yagra_alert::{
-    Alert, DedupKey, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
-};
+use yagra_alert::{Alert, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy};
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
     resolve_effective, CheckId, EffectiveThreshold, NodeId, NodeState, ScopeLevel, ScopedThreshold,
@@ -41,8 +39,9 @@ const EVENT_BUFFER: usize = 256;
 pub enum NotifyAction {
     /// A new problem alert fired.
     Fire(Alert),
-    /// An alert recovered; stop deduping it so the next occurrence notifies again.
-    Resolve(DedupKey),
+    /// An alert recovered (carries the previously-active alert so it can be logged and its
+    /// dedup state cleared).
+    Resolve(Alert),
 }
 
 /// Per-node metadata used to resolve threshold scope (profile + groups).
@@ -228,7 +227,7 @@ impl AlertManager {
                 match prev {
                     Some(alert) => {
                         self.broadcast(&alert, true);
-                        vec![NotifyAction::Resolve(alert.dedup_key())]
+                        vec![NotifyAction::Resolve(alert)]
                     }
                     None => Vec::new(),
                 }
@@ -291,21 +290,108 @@ impl NotifyChannel for WebhookChannel {
     }
 }
 
-/// Forwards alert lifecycle to a channel with the engine's dedup + retry (ADR-015).
+/// An email [`NotifyChannel`] over SMTP (`lettre`, async + rustls).
+pub struct EmailChannel {
+    mailer: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
+    from: lettre::message::Mailbox,
+    to: lettre::message::Mailbox,
+}
+
+impl EmailChannel {
+    /// Build from env (`YAGRA_SMTP_HOST`, `_FROM`, `_TO`, optional `_PORT`/`_USER`/`_PASS`).
+    /// Returns `None` if the required vars are missing or malformed.
+    pub fn from_env() -> Option<Self> {
+        use lettre::transport::smtp::authentication::Credentials;
+        let host = std::env::var("YAGRA_SMTP_HOST")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let from = std::env::var("YAGRA_SMTP_FROM").ok()?.parse().ok()?;
+        let to = std::env::var("YAGRA_SMTP_TO").ok()?.parse().ok()?;
+        let mut builder =
+            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&host).ok()?;
+        if let Ok(port) = std::env::var("YAGRA_SMTP_PORT") {
+            if let Ok(port) = port.parse::<u16>() {
+                builder = builder.port(port);
+            }
+        }
+        if let (Ok(user), Ok(pass)) = (
+            std::env::var("YAGRA_SMTP_USER"),
+            std::env::var("YAGRA_SMTP_PASS"),
+        ) {
+            builder = builder.credentials(Credentials::new(user, pass));
+        }
+        Some(Self {
+            mailer: builder.build(),
+            from,
+            to,
+        })
+    }
+}
+
+#[async_trait]
+impl NotifyChannel for EmailChannel {
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        use lettre::AsyncTransport;
+        let email = lettre::Message::builder()
+            .from(self.from.clone())
+            .to(self.to.clone())
+            .subject(notification.summary.clone())
+            .body(notification.payload.clone())
+            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+        self.mailer
+            .send(email)
+            .await
+            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+        Ok(())
+    }
+}
+
+/// Fan-out channel: deliver to every configured channel; fails if any fails (so the
+/// dispatcher's retry covers a transient outage on any of them).
+pub struct MultiChannel {
+    channels: Vec<Box<dyn NotifyChannel>>,
+}
+
+#[async_trait]
+impl NotifyChannel for MultiChannel {
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        for channel in &self.channels {
+            channel.deliver(notification).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Forwards alert lifecycle to the configured channels with the engine's dedup + retry
+/// (ADR-015).
 pub struct Notifier {
-    dispatcher: tokio::sync::Mutex<Dispatcher<WebhookChannel>>,
+    dispatcher: tokio::sync::Mutex<Dispatcher<MultiChannel>>,
 }
 
 impl Notifier {
-    /// A notifier delivering to `url` over a Webhook channel.
+    /// Build a notifier from env: a Webhook (`YAGRA_WEBHOOK_URL`) and/or email
+    /// (`YAGRA_SMTP_*`). Returns `None` if no channel is configured.
     #[must_use]
-    pub fn webhook(url: String) -> Self {
-        Self {
+    pub fn from_env() -> Option<Self> {
+        let mut channels: Vec<Box<dyn NotifyChannel>> = Vec::new();
+        if let Ok(url) = std::env::var("YAGRA_WEBHOOK_URL") {
+            if !url.is_empty() {
+                channels.push(Box::new(WebhookChannel::new(url)));
+            }
+        }
+        if let Some(email) = EmailChannel::from_env() {
+            channels.push(Box::new(email));
+        }
+        if channels.is_empty() {
+            return None;
+        }
+        tracing::info!(channels = channels.len(), "alert notifier enabled");
+        Some(Self {
             dispatcher: tokio::sync::Mutex::new(Dispatcher::new(
-                WebhookChannel::new(url),
+                MultiChannel { channels },
                 RetryPolicy::default(),
             )),
-        }
+        })
     }
 
     /// Apply one notify action (deliver a fire, or clear a resolved alert's dedup state).
@@ -320,7 +406,7 @@ impl Notifier {
                     .await;
                 tracing::info!(?outcome, node = %alert.node, "alert notification dispatched");
             }
-            NotifyAction::Resolve(key) => d.mark_resolved(&key),
+            NotifyAction::Resolve(alert) => d.mark_resolved(&alert.dedup_key()),
         }
     }
 }

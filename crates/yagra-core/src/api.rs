@@ -8,6 +8,7 @@
 
 use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserStore};
+use crate::history::AlertHistoryStore;
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
@@ -59,6 +60,8 @@ pub struct ApiState {
     pub admin: Option<Arc<AdminState>>,
     /// Bearer-token sessions for local auth.
     pub sessions: Arc<SessionStore>,
+    /// Alert history (read); `None` in skeleton mode.
+    pub history: Option<Arc<AlertHistoryStore>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -91,6 +94,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/alerts", get(list_alerts))
+        .route("/api/v1/alerts/history", get(list_alert_history))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .with_state(state)
 }
@@ -276,6 +280,25 @@ async fn get_node_metric_range(
 /// Currently active alerts (from the in-memory alert engine).
 async fn list_alerts(State(st): State<ApiState>) -> Json<Vec<Alert>> {
     Json(st.alerts.active_alerts())
+}
+
+/// Recent alert-history rows. Query: `?limit=` (default 100). Empty in skeleton mode.
+#[derive(Deserialize)]
+struct HistoryQuery {
+    limit: Option<i64>,
+}
+
+async fn list_alert_history(State(st): State<ApiState>, Query(q): Query<HistoryQuery>) -> Response {
+    let Some(history) = st.history.as_ref() else {
+        return Json(Vec::<serde_json::Value>::new()).into_response();
+    };
+    match history.recent(q.limit.unwrap_or(100)).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list alert history failed");
+            internal("failed to list alert history")
+        }
+    }
 }
 
 /// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's
@@ -745,6 +768,7 @@ mod tests {
             alerts: Arc::new(AlertManager::new()),
             admin: None,
             sessions: Arc::new(SessionStore::new()),
+            history: None,
         }
     }
 
