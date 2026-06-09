@@ -12,9 +12,10 @@
 name: deploy-test
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:        # allow manual "Run workflow" from the Actions tab
+  # Manual-only until a self-hosted runner (labels: self-hosted, linux, yagra-test) is
+  # registered on the home server — otherwise the deploy job queues forever. Re-add a
+  # `push:` trigger once the runner exists.
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
