@@ -203,22 +203,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "banshu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "hikyaku",
- "sekisho",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "yagra-common",
-]
-
-[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -804,22 +788,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hikyaku"
-version = "0.1.0"
-dependencies = [
- "async-nats",
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "yagra-common",
-]
-
-[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1231,21 +1199,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monomi"
-version = "0.1.0"
-dependencies = [
- "sekisho",
- "yagra-common",
-]
-
-[[package]]
-name = "nawabari"
-version = "0.1.0"
-dependencies = [
- "yagra-common",
-]
-
-[[package]]
 name = "nkeys"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1265,19 +1218,6 @@ name = "no-std-net"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43794a0ace135be66a25d3ae77d41b91615fb68ae937f904090203e81f755b65"
-
-[[package]]
-name = "noroshi"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "nawabari",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
- "yagra-common",
-]
 
 [[package]]
 name = "nu-ansi-term"
@@ -1884,31 +1824,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "saihai"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "futures",
- "hikyaku",
- "monomi",
- "nawabari",
- "noroshi",
- "rand 0.8.6",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "yagra-common",
-]
-
-[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1957,19 +1872,6 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
-]
-
-[[package]]
-name = "sekisho"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "rand 0.8.6",
- "surge-ping",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "yagra-common",
 ]
 
 [[package]]
@@ -3348,12 +3250,90 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
+name = "yagra-alert"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+ "yagra-common",
+ "yagra-topology",
+]
+
+[[package]]
+name = "yagra-bus"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "yagra-common",
+]
+
+[[package]]
 name = "yagra-common"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "yagra-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "futures",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "yagra-alert",
+ "yagra-bus",
+ "yagra-common",
+ "yagra-discovery",
+ "yagra-topology",
+]
+
+[[package]]
+name = "yagra-discovery"
+version = "0.1.0"
+dependencies = [
+ "yagra-common",
+ "yagra-transport",
+]
+
+[[package]]
+name = "yagra-poller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "yagra-bus",
+ "yagra-common",
+ "yagra-transport",
 ]
 
 [[package]]
@@ -3364,6 +3344,26 @@ dependencies = [
  "argon2",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "yagra-topology"
+version = "0.1.0"
+dependencies = [
+ "yagra-common",
+]
+
+[[package]]
+name = "yagra-transport"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "rand 0.8.6",
+ "surge-ping",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "yagra-common",
 ]
 
 [[package]]

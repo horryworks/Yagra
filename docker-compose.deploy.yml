@@ -17,9 +17,9 @@
 name: yagra
 
 services:
-  # ── Yagra-core (crates/saihai) — orchestration, scheduling, northbound API ──
-  saihai:
-    image: ghcr.io/horryworks/yagra-saihai:${YAGRA_IMAGE_TAG:-latest}
+  # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
+  core:
+    image: ghcr.io/horryworks/yagra-core:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
     depends_on: [postgres, redis, nats, victoriametrics]
     environment:
@@ -31,9 +31,9 @@ services:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped
 
-  # ── Yagra-poller (crates/banshu) — stateless poller worker ──
-  banshu:
-    image: ghcr.io/horryworks/yagra-banshu:${YAGRA_IMAGE_TAG:-latest}
+  # ── Yagra-poller (crates/poller) — stateless poller worker ──
+  poller:
+    image: ghcr.io/horryworks/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
     depends_on: [nats]
     environment:
@@ -46,7 +46,7 @@ services:
   web:
     image: ghcr.io/horryworks/yagra-web:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
-    depends_on: [saihai]
+    depends_on: [core]
     ports:
       - "${YAGRA_WEB_PORT:-3000}:80"
     restart: unless-stopped

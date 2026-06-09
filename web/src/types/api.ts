@@ -23,7 +23,7 @@ export interface MetricReading {
   value: number;
 }
 
-/** An alert as produced by the engine (`noroshi::Alert`). */
+/** An alert as produced by the engine (`yagra_alert::Alert`). */
 export interface Alert {
   node: string;
   check: string;

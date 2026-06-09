@@ -57,8 +57,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - { name: saihai, context: ., dockerfile: docker/saihai.Dockerfile }
-          - { name: banshu, context: ., dockerfile: docker/banshu.Dockerfile }
+          - { name: core, context: ., dockerfile: docker/yagra-core.Dockerfile }
+          - { name: poller, context: ., dockerfile: docker/yagra-poller.Dockerfile }
           - { name: web, context: ./web, dockerfile: docker/web.Dockerfile }
     steps:
       - uses: actions/checkout@v4

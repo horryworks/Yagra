@@ -1,5 +1,5 @@
-# Build context excludes for the saihai/banshu image builds (context = repo root).
-# IMPORTANT: do NOT exclude `migrations/` — saihai embeds it at compile time via
+# Build context excludes for the yagra-core/yagra-poller image builds (context = repo root).
+# IMPORTANT: do NOT exclude `migrations/` — yagra-core embeds it at compile time via
 # `sqlx::migrate!`. Keep `Cargo.toml`, `Cargo.lock`, and `crates/`.
 
 # Rust build artifacts (regenerated in-image; huge).

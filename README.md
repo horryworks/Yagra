@@ -17,20 +17,19 @@ Each backend component is a workspace crate under `crates/`; the WebUI lives und
 
 | Component | Role | Crate / dir |
 |---|---|---|
-| Yagra-core | Orchestration, scheduling, northbound API | `crates/saihai` |
-| Yagra-poller | ICMP/SNMP/API polling (stateless, scalable) | `crates/banshu` |
-| Yagra-discovery | Device discovery & classification | `crates/monomi` |
-| Yagra-alert | State machine, hysteresis, dependency suppression | `crates/noroshi` |
-| Yagra-bus | Job distribution, poller fan-out | `crates/hikyaku` |
-| Yagra-transport | ICMP/SNMP/HTTP abstraction | `crates/sekisho` |
-| Yagra-topology | Dependency graph & map | `crates/nawabari` |
+| Yagra-core | Orchestration, scheduling, northbound API | `crates/yagra-core` |
+| Yagra-poller | ICMP/SNMP/API polling (stateless, scalable) | `crates/yagra-poller` |
+| Yagra-discovery | Device discovery & classification | `crates/yagra-discovery` |
+| Yagra-alert | State machine, hysteresis, dependency suppression | `crates/yagra-alert` |
+| Yagra-bus | Job distribution, poller fan-out | `crates/yagra-bus` |
+| Yagra-transport | ICMP/SNMP/HTTP abstraction | `crates/yagra-transport` |
+| Yagra-topology | Dependency graph & map | `crates/yagra-topology` |
 | Yagra-web | Dashboards & visualization | `web/` |
 
 Shared libraries: `crates/yagra-common` (cross-cutting types) and `crates/yagra-secrets`
 (envelope encryption for credentials).
 
-> Crate directories still carry their original short names (`saihai`, `banshu`, …); the
-> functional `Yagra-*` names above are canonical and a crate rename is planned.
+> Crate directory names match the functional `Yagra-*` names above (e.g. `crates/yagra-core`).
 
 ## Tech Stack
 
