@@ -99,8 +99,9 @@ export const api = {
     return request(qs ? `${path}?${qs}` : path);
   },
 
-  /** Inventory listing. */
-  listNodes: (): Promise<NodeSummary[]> => request('/nodes'),
+  /** Inventory listing (first page; the response is keyset-paginated). */
+  listNodes: (): Promise<NodeSummary[]> =>
+    request<{ nodes: NodeSummary[]; next_cursor: string | null }>('/nodes').then((r) => r.nodes),
 
   /** Create a node. */
   createNode: (body: { name: string; address: string; pool?: string }): Promise<{ id: string }> =>

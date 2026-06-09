@@ -180,13 +180,26 @@ fn is_valid_metric_name(metric: &str) -> bool {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-async fn list_nodes(State(st): State<ApiState>) -> Response {
-    match st.nodes.list().await {
+/// Keyset pagination query for the node list.
+#[derive(Deserialize)]
+struct NodePageQuery {
+    cursor: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+async fn list_nodes(State(st): State<ApiState>, Query(q): Query<NodePageQuery>) -> Response {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    match st.nodes.list_page(q.cursor, limit).await {
         Ok(nodes) => {
+            // A full page implies there may be more — hand back the last id as the cursor.
+            let next_cursor = if nodes.len() as i64 == limit {
+                nodes.last().map(|n| n.id.to_string())
+            } else {
+                None
+            };
             let mut out = Vec::with_capacity(nodes.len());
             for n in nodes {
-                // Until the alert state machine is wired (Workstream B), derive a coarse
-                // state from liveness: a recent RTT ⇒ ok, otherwise unknown.
+                // Coarse state from liveness (full state machine: a recent RTT ⇒ ok).
                 let live = st
                     .store
                     .latest(&SeriesKey::node(n.id, "icmp_rtt_ms"))
@@ -203,7 +216,7 @@ async fn list_nodes(State(st): State<ApiState>) -> Response {
                     },
                 });
             }
-            Json(out).into_response()
+            Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to list nodes");
@@ -876,8 +889,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
-        assert_eq!(json[0]["id"], node.to_string());
-        assert_eq!(json[0]["state"], "ok");
+        assert_eq!(json["nodes"][0]["id"], node.to_string());
+        assert_eq!(json["nodes"][0]["state"], "ok");
     }
 
     #[tokio::test]
@@ -893,7 +906,7 @@ mod tests {
             .await
             .unwrap();
         let json = body_json(resp).await;
-        assert_eq!(json[0]["state"], "unknown");
+        assert_eq!(json["nodes"][0]["state"], "unknown");
     }
 
     #[tokio::test]
