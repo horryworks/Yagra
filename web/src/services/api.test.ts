@@ -49,4 +49,24 @@ describe('api client', () => {
     await api.getNodeMetric('a/b', 'm m');
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/a%2Fb/metrics/m%20m');
   });
+
+  it('builds the range path with query params', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetricRange('n1', 'icmp_rtt_ms', { from: 100, to: 200, step: 30 });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/nodes/n1/metrics/icmp_rtt_ms/range?from=100&to=200&step=30',
+    );
+  });
+
+  it('omits the query string when no range options are given', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetricRange('n1', 'icmp_rtt_ms');
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/icmp_rtt_ms/range');
+  });
 });

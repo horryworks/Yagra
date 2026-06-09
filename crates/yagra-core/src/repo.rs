@@ -7,9 +7,10 @@
 //! macro) so the build needs no live database — important for CI.
 
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use sqlx::Row;
@@ -18,6 +19,45 @@ use yagra_common::{Node, NodeId, ProfileId};
 
 /// Fixed id for the seeded demo node the walking-skeleton WebUI queries.
 const DEMO_NODE_ID: Uuid = Uuid::nil();
+
+/// A read-only source of the node inventory for the API. Implemented by [`NodeRepo`]
+/// (live, PostgreSQL) and [`StaticNodeList`] (skeleton mode), so the router doesn't care
+/// which is behind it.
+#[async_trait]
+pub trait NodeListing: Send + Sync {
+    /// All nodes in the inventory.
+    async fn list(&self) -> anyhow::Result<Vec<Node>>;
+}
+
+#[async_trait]
+impl NodeListing for NodeRepo {
+    async fn list(&self) -> anyhow::Result<Vec<Node>> {
+        self.list_nodes().await
+    }
+}
+
+/// A fixed node list for skeleton mode (no database). Mirrors the live seed's demo node
+/// so the WebUI shows the same nil-id loopback node.
+pub struct StaticNodeList(Vec<Node>);
+
+impl StaticNodeList {
+    /// The single demo node (nil id → loopback) used by the skeleton.
+    #[must_use]
+    pub fn demo() -> Self {
+        Self(vec![Node::new(
+            NodeId::from(DEMO_NODE_ID),
+            "demo-localhost",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+        )])
+    }
+}
+
+#[async_trait]
+impl NodeListing for StaticNodeList {
+    async fn list(&self) -> anyhow::Result<Vec<Node>> {
+        Ok(self.0.clone())
+    }
+}
 
 /// The nodes/profiles metadata store.
 pub struct NodeRepo {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { severityColorVar, severityRank, stateColorVar, stateLabel } from './format';
+import {
+  pointsToSeries,
+  severityColorVar,
+  severityRank,
+  stateColorVar,
+  stateLabel,
+} from './format';
 
 describe('format', () => {
   it('maps severity to theme color variables', () => {
@@ -20,5 +26,15 @@ describe('format', () => {
 
   it('capitalizes state labels', () => {
     expect(stateLabel('maintenance')).toBe('Maintenance');
+  });
+
+  it('splits time-series points into parallel arrays', () => {
+    const { timestamps, values } = pointsToSeries([
+      { t: 100, v: 8 },
+      { t: 160, v: 9.5 },
+    ]);
+    expect(timestamps).toEqual([100, 160]);
+    expect(values).toEqual([8, 9.5]);
+    expect(pointsToSeries([])).toEqual({ timestamps: [], values: [] });
   });
 });

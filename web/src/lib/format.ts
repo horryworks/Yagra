@@ -1,7 +1,18 @@
 // Pure presentation helpers. Colors resolve to theme CSS variables (ui-conventions) — no
 // hardcoded hex here, so the theme stays the single source of truth.
 
-import type { NodeState, Severity } from '../types/api';
+import type { MetricPoint, NodeState, Severity } from '../types/api';
+
+/** Split time-series points into the parallel `[timestamps, values]` uPlot wants. */
+export function pointsToSeries(points: MetricPoint[]): {
+  timestamps: number[];
+  values: number[];
+} {
+  return {
+    timestamps: points.map((p) => p.t),
+    values: points.map((p) => p.v),
+  };
+}
 
 /** CSS variable holding the color for a severity. */
 export function severityColorVar(severity: Severity): string {

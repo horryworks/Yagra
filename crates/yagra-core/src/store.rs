@@ -7,18 +7,32 @@
 //! stored as-is; rates are derived at query time (ADR-012).
 
 use async_trait::async_trait;
+use serde::Serialize;
 use yagra_bus::PollResult;
 use yagra_common::SeriesKey;
 
 use crate::sink::InMemorySink;
 
-/// Somewhere poll results are written and the latest value can be read.
+/// One point of a time series: Unix-seconds timestamp and value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MetricPoint {
+    /// Unix timestamp in seconds.
+    pub t: i64,
+    /// Sample value.
+    pub v: f64,
+}
+
+/// Somewhere poll results are written and read back.
 #[async_trait]
 pub trait MetricStore: Send + Sync {
     /// Persist every sample in a completed poll.
     async fn write(&self, result: &PollResult);
     /// The latest value for a series, if any.
     async fn latest(&self, key: &SeriesKey) -> Option<f64>;
+    /// Sampled values for a series over `[from_s, to_s]` at `step_s` resolution
+    /// (oldest first). Empty if the store has no history (e.g. the in-memory sink).
+    async fn range(&self, key: &SeriesKey, from_s: i64, to_s: i64, step_s: u64)
+        -> Vec<MetricPoint>;
 }
 
 #[async_trait]
@@ -30,6 +44,17 @@ impl MetricStore for InMemorySink {
     async fn latest(&self, key: &SeriesKey) -> Option<f64> {
         // Inherent (sync) method — disambiguated from this trait method.
         InMemorySink::latest(self, key)
+    }
+
+    async fn range(
+        &self,
+        _key: &SeriesKey,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
+        // The skeleton sink keeps only the latest value, so it has no history to serve.
+        Vec::new()
     }
 }
 
@@ -104,6 +129,56 @@ impl MetricStore for VmStore {
             .get(1)?
             .as_str()?;
         raw.parse().ok()
+    }
+
+    async fn range(
+        &self,
+        key: &SeriesKey,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        let url = format!("{}/api/v1/query_range", self.base);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[
+                ("query", selector(key)),
+                ("start", from_s.to_string()),
+                ("end", to_s.to_string()),
+                ("step", format!("{step_s}s")),
+            ])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics query_range request failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        // data.result[0].values is [[<ts_seconds>, "<value>"], …].
+        let Some(values) = json
+            .get("data")
+            .and_then(|d| d.get("result"))
+            .and_then(|r| r.get(0))
+            .and_then(|s| s.get("values"))
+            .and_then(|v| v.as_array())
+        else {
+            return Vec::new();
+        };
+        values
+            .iter()
+            .filter_map(|pair| {
+                let arr = pair.as_array()?;
+                let t = arr.first()?.as_f64()? as i64;
+                let v = arr.get(1)?.as_str()?.parse::<f64>().ok()?;
+                Some(MetricPoint { t, v })
+            })
+            .collect()
     }
 }
 

@@ -23,6 +23,19 @@ export interface MetricReading {
   value: number;
 }
 
+/** One time-series point: `t` Unix seconds, `v` value. */
+export interface MetricPoint {
+  t: number;
+  v: number;
+}
+
+/** A time-series window (`GET /api/v1/nodes/:id/metrics/:metric/range`). */
+export interface MetricRange {
+  node_id: string;
+  metric: string;
+  points: MetricPoint[];
+}
+
 /** An alert as produced by the engine (`yagra_alert::Alert`). */
 export interface Alert {
   node: string;
