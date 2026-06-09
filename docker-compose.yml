@@ -1,0 +1,86 @@
+# Yagra — single-node MVP composition.
+#
+# MVP runs all components co-located in a few containers; scaling out (distributed
+# pollers, HA stores) is a config change, not a rewrite (see CLAUDE.md "Architecture").
+# This is a skeleton: image build contexts and env wiring are stubs to be filled in
+# as the crates land. Pin image tags before any real deployment.
+
+name: yagra
+
+services:
+  # ── Yagra-core — orchestration, scheduling, northbound API ──
+  saihai:
+    build:
+      context: .
+      dockerfile: docker/saihai.Dockerfile
+    image: ghcr.io/horryworks/yagra-saihai:dev
+    depends_on: [postgres, redis, nats, victoriametrics]
+    environment:
+      YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
+      YAGRA_REDIS_URL: redis://redis:6379
+      YAGRA_BUS_URL: nats://nats:4222
+      YAGRA_TSDB_URL: http://victoriametrics:8428
+    ports:
+      - "8080:8080"   # northbound API
+    # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does
+    restart: unless-stopped
+
+  # ── Yagra-poller — stateless, horizontally scalable ──
+  banshu:
+    build:
+      context: .
+      dockerfile: docker/banshu.Dockerfile
+    image: ghcr.io/horryworks/yagra-banshu:dev
+    depends_on: [nats]
+    environment:
+      YAGRA_BUS_URL: nats://nats:4222
+    cap_add:
+      - NET_RAW        # required for raw-socket ICMP (surge-ping)
+    # deploy: { replicas: 1 }  # scale out here when distributing polling
+    restart: unless-stopped
+
+  # ── Yagra-web (WebUI) ──
+  web:
+    build:
+      context: ./web
+      dockerfile: ../docker/web.Dockerfile
+    image: ghcr.io/horryworks/yagra-web:dev
+    depends_on: [saihai]
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+  # ── Stores ──
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: yagra
+      POSTGRES_PASSWORD: yagra
+      POSTGRES_DB: yagra
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  # Message bus for core⇄poller distribution (Yagra-bus client).
+  # NATS vs gRPC is an open ADR — NATS shown here as the leading candidate.
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]   # JetStream for durable job delivery
+    restart: unless-stopped
+
+  # TSDB — VictoriaMetrics shown as the default candidate (open ADR:
+  # VictoriaMetrics / TimescaleDB / ClickHouse). Metrics body store.
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    command: ["--retentionPeriod=12"]
+    volumes:
+      - vmdata:/victoria-metrics-data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  vmdata:

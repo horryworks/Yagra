@@ -1,0 +1,83 @@
+# Yagra — deploy-only composition for the home test server.
+#
+# Unlike docker-compose.yml (which BUILDS images locally), this file only PULLS
+# pre-built images from GHCR and runs them. It is what the GitHub Actions deploy
+# job (self-hosted runner on the home server) invokes:
+#
+#   YAGRA_IMAGE_TAG=<git-sha> docker compose -f docker-compose.deploy.yml pull
+#   YAGRA_IMAGE_TAG=<git-sha> docker compose -f docker-compose.deploy.yml up -d
+#
+# Image tag defaults to ":test" but CI pins it to the immutable git SHA so a deploy
+# is reproducible and rollback = re-run with an older SHA.
+#
+# Project name is fixed ("yagra") so the named volumes (pgdata/vmdata) persist
+# across redeploys regardless of the runner's checkout dir — this is what keeps
+# PostgreSQL/VictoriaMetrics data intact through upgrades (ADR-017).
+
+name: yagra
+
+services:
+  # ── Yagra-core (crates/saihai) — orchestration, scheduling, northbound API ──
+  saihai:
+    image: ghcr.io/horryworks/yagra-saihai:${YAGRA_IMAGE_TAG:-test}
+    pull_policy: always
+    depends_on: [postgres, redis, nats, victoriametrics]
+    environment:
+      YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
+      YAGRA_REDIS_URL: redis://redis:6379
+      YAGRA_BUS_URL: nats://nats:4222
+      YAGRA_TSDB_URL: http://victoriametrics:8428
+    ports:
+      - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
+    restart: unless-stopped
+
+  # ── Yagra-poller (crates/banshu) — stateless poller worker ──
+  banshu:
+    image: ghcr.io/horryworks/yagra-banshu:${YAGRA_IMAGE_TAG:-test}
+    pull_policy: always
+    depends_on: [nats]
+    environment:
+      YAGRA_BUS_URL: nats://nats:4222
+    cap_add:
+      - NET_RAW        # required for raw-socket ICMP (surge-ping)
+    restart: unless-stopped
+
+  # ── Yagra-web (web/) — WebUI ──
+  web:
+    image: ghcr.io/horryworks/yagra-web:${YAGRA_IMAGE_TAG:-test}
+    pull_policy: always
+    depends_on: [saihai]
+    ports:
+      - "${YAGRA_WEB_PORT:-3000}:80"
+    restart: unless-stopped
+
+  # ── Stores (persistent data lives here; preserved across upgrades) ──
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: yagra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yagra}
+      POSTGRES_DB: yagra
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]   # JetStream for durable job delivery
+    restart: unless-stopped
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    command: ["--retentionPeriod=12"]
+    volumes:
+      - vmdata:/victoria-metrics-data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  vmdata:

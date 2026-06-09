@@ -1,0 +1,94 @@
+/* Theme tokens — the single source of truth for colors/spacing (ui-conventions).
+   Components reference these via var(); never hardcode a hex outside this file. */
+:root {
+  --bg: #0f1419;
+  --surface: #1a2029;
+  --border: #2a3340;
+  --text: #e6edf3;
+  --text-muted: #9aa7b4;
+  --accent: #4f8cff;
+
+  /* Severity / state colors */
+  --sev-critical: #ff5c5c;
+  --sev-warning: #ffb84d;
+  --sev-info: #5ca8ff;
+  --state-ok: #3fb950;
+  --state-unknown: #9aa7b4;
+  --state-maintenance: #a371f7;
+
+  --radius: 8px;
+  --gap: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: var(--gap) 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.app-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 20px;
+}
+
+.pane {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.pane h2 {
+  font-size: 14px;
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.alert-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.alert-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.alert-flapping {
+  font-size: 11px;
+  color: var(--sev-warning);
+  border: 1px solid var(--sev-warning);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
