@@ -1,0 +1,2 @@
+# PostgreSQL schema migrations (sqlx) — metadata store: nodes / config / thresholds /
+# users / alert history. Add timestamped .sql files here as the schema is designed.

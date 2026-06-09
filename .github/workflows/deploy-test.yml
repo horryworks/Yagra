@@ -1,0 +1,102 @@
+# Build images in cloud CI, then deploy to the home test server via a self-hosted runner.
+#
+#   push to main ──▶ [build] GitHub-hosted: build 3 images, push to GHCR
+#                          │
+#                          ▼
+#                    [deploy] self-hosted runner ON the home server:
+#                             pull the just-built images and `compose up -d`
+#
+# The home server is behind home NAT. The self-hosted runner dials OUT to GitHub,
+# so NO inbound ports need to be opened. See README / .claude/docs for runner setup.
+
+name: deploy-test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # allow manual "Run workflow" from the Actions tab
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: horryworks
+
+concurrency:
+  group: deploy-test        # never run two deploys at once
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # push to GHCR
+    strategy:
+      matrix:
+        include:
+          - name: saihai      # Yagra-core
+            context: .
+            dockerfile: docker/saihai.Dockerfile
+          - name: banshu      # Yagra-poller
+            context: .
+            dockerfile: docker/banshu.Dockerfile
+          - name: web         # Yagra-web
+            context: ./web
+            dockerfile: docker/web.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/yagra-${{ matrix.name }}:test
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/yagra-${{ matrix.name }}:${{ github.sha }}
+          # GitHub Actions layer cache — keeps heavy Rust rebuilds fast across runs.
+          cache-from: type=gha,scope=yagra-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=yagra-${{ matrix.name }}
+
+  deploy:
+    needs: build
+    # Targets the runner registered on the home server with these labels.
+    runs-on: [self-hosted, linux, yagra-test]
+    permissions:
+      contents: read
+      packages: read         # pull from GHCR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR (for pull)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      # ── ADR-017 hook: back up persistent stores before a new version goes live ──
+      # No-op while migrations are absent (crates are stubs). Uncomment once the
+      # schema exists so every deploy takes a pre-upgrade PostgreSQL snapshot.
+      # - name: Pre-deploy backup
+      #   run: ./scripts/backup-test.sh
+
+      - name: Pull & deploy (pinned to this commit's images)
+        env:
+          YAGRA_IMAGE_TAG: ${{ github.sha }}
+          # Optional override. If the repo secret is unset/empty, compose's
+          # ${POSTGRES_PASSWORD:-yagra} falls back to the test default — so you
+          # don't need a server-side .env (which checkout would wipe anyway).
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          docker compose -f docker-compose.deploy.yml pull
+          docker compose -f docker-compose.deploy.yml up -d --remove-orphans
+
+      - name: Reclaim disk (drop dangling images)
+        if: always()
+        run: docker image prune -f

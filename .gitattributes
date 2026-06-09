@@ -1,0 +1,10 @@
+# Normalize line endings. The backend builds inside Linux containers and shell/Docker
+# files must stay LF regardless of the checkout OS.
+* text=auto eol=lf
+
+# Binary files Git must not touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

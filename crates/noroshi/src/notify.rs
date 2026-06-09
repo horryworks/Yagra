@@ -1,0 +1,265 @@
+//! Notification dispatch: dedup + retry over pluggable channels.
+//!
+//! Yagra forwards a *clean* alert signal to external tools — escalation/on-call live there
+//! (ADR-015). This module owns the quality gate around delivery: it **dedups** so a still-active
+//! alert is not re-sent, and **retries with backoff** on transient channel failure. The actual
+//! email/Webhook transport is a [`NotifyChannel`] implementation (an I/O adapter); the dispatcher
+//! and its policy are pure and tested against a fake channel.
+
+use crate::alert::{Alert, DedupKey};
+use async_trait::async_trait;
+use std::collections::HashSet;
+use std::time::Duration;
+use thiserror::Error;
+use yagra_common::Severity;
+
+/// A rendered notification ready to hand to a channel. Content is templated upstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    /// Identity for dedup (same key = same alert).
+    pub dedup_key: DedupKey,
+    /// Severity headline.
+    pub severity: Severity,
+    /// Short human summary (subject line).
+    pub summary: String,
+    /// Rendered payload (JSON/text) for the channel.
+    pub payload: String,
+}
+
+impl Notification {
+    /// Build a notification for an alert with a pre-rendered summary/payload.
+    #[must_use]
+    pub fn for_alert(
+        alert: &Alert,
+        summary: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> Self {
+        Self {
+            dedup_key: alert.dedup_key(),
+            severity: alert.severity,
+            summary: summary.into(),
+            payload: payload.into(),
+        }
+    }
+}
+
+/// A delivery channel (email, Webhook/PagerDuty/JSM, …). Implementations are I/O adapters.
+#[async_trait]
+pub trait NotifyChannel: Send + Sync {
+    /// Attempt one delivery. Returning `Err` triggers the dispatcher's retry policy.
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError>;
+}
+
+/// Errors from a channel.
+#[derive(Debug, Error)]
+pub enum NotifyError {
+    /// Transient or permanent delivery failure (message is channel-specific).
+    #[error("delivery failed: {0}")]
+    Delivery(String),
+}
+
+/// Retry behaviour for a flaky channel.
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPolicy {
+    /// Total attempts before giving up (>= 1).
+    pub max_attempts: u32,
+    /// Base backoff; attempt `n` waits `base * 2^(n-1)`.
+    pub base_backoff_ms: u64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            base_backoff_ms: 500,
+        }
+    }
+}
+
+/// Outcome of dispatching one notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    /// Delivered (after up to `attempts` tries).
+    Delivered { attempts: u32 },
+    /// Suppressed as a duplicate of a still-active alert (channel not called).
+    Suppressed,
+    /// All retries exhausted without success.
+    Failed { attempts: u32 },
+}
+
+/// Dedups and delivers notifications over a channel, applying the retry policy.
+pub struct Dispatcher<C: NotifyChannel> {
+    channel: C,
+    policy: RetryPolicy,
+    active: HashSet<DedupKey>,
+}
+
+impl<C: NotifyChannel> Dispatcher<C> {
+    /// New dispatcher over a channel with a retry policy.
+    pub fn new(channel: C, policy: RetryPolicy) -> Self {
+        Self {
+            channel,
+            policy,
+            active: HashSet::new(),
+        }
+    }
+
+    /// Dispatch a notification: suppress duplicates of active alerts, else deliver with retry.
+    pub async fn dispatch(&mut self, notification: Notification) -> DispatchOutcome {
+        if self.active.contains(&notification.dedup_key) {
+            return DispatchOutcome::Suppressed;
+        }
+        match self.deliver_with_retry(&notification).await {
+            Ok(attempts) => {
+                self.active.insert(notification.dedup_key);
+                DispatchOutcome::Delivered { attempts }
+            }
+            Err(attempts) => DispatchOutcome::Failed { attempts },
+        }
+    }
+
+    /// Mark an alert resolved so the next occurrence notifies again.
+    pub fn mark_resolved(&mut self, dedup_key: &DedupKey) {
+        self.active.remove(dedup_key);
+    }
+
+    async fn deliver_with_retry(&self, notification: &Notification) -> Result<u32, u32> {
+        let max = self.policy.max_attempts.max(1);
+        for attempt in 1..=max {
+            match self.channel.deliver(notification).await {
+                Ok(()) => return Ok(attempt),
+                Err(_) if attempt < max => {
+                    let backoff = self.policy.base_backoff_ms * (1u64 << (attempt - 1));
+                    tokio::time::sleep(Duration::from_millis(backoff)).await;
+                }
+                Err(_) => return Err(attempt),
+            }
+        }
+        Err(max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+    use yagra_common::{CheckId, NodeId, NodeState};
+
+    /// A channel that fails its first `fail_first` calls, then succeeds. Counts calls.
+    struct FlakyChannel {
+        fail_first: u32,
+        calls: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl NotifyChannel for FlakyChannel {
+        async fn deliver(&self, _n: &Notification) -> Result<(), NotifyError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= self.fail_first {
+                Err(NotifyError::Delivery("transient".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn notification() -> Notification {
+        let alert = Alert {
+            node: NodeId::new(),
+            check: CheckId::new(),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+        };
+        Notification::for_alert(&alert, "node down", "{}")
+    }
+
+    fn no_backoff() -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: 3,
+            base_backoff_ms: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn delivers_on_first_try() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 0,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        assert_eq!(
+            d.dispatch(notification()).await,
+            DispatchOutcome::Delivered { attempts: 1 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retries_then_succeeds() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 2,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        assert_eq!(
+            d.dispatch(notification()).await,
+            DispatchOutcome::Delivered { attempts: 3 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn gives_up_after_max_attempts() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 99,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        assert_eq!(
+            d.dispatch(notification()).await,
+            DispatchOutcome::Failed { attempts: 3 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn duplicate_active_alert_is_suppressed() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 0,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        let n = notification();
+        assert_eq!(
+            d.dispatch(n.clone()).await,
+            DispatchOutcome::Delivered { attempts: 1 }
+        );
+        // Same dedup key again → suppressed, channel not called.
+        assert_eq!(d.dispatch(n.clone()).await, DispatchOutcome::Suppressed);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // After resolve, it notifies again.
+        d.mark_resolved(&n.dedup_key);
+        assert_eq!(
+            d.dispatch(n).await,
+            DispatchOutcome::Delivered { attempts: 1 }
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+}

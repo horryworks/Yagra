@@ -1,0 +1,113 @@
+//! Alert identity: dedup and grouping keys.
+//!
+//! Dedup collapses duplicate alerts for the same `(node, check, severity)`; grouping rolls
+//! related alerts up under their root-cause node so a parent outage shows as one incident
+//! plus its children, not N pages (ADR-015). The alert *lifecycle* is then forwarded to an
+//! external tool — Yagra owns the quality, not the escalation.
+
+use serde::{Deserialize, Serialize};
+use yagra_common::{CheckId, NodeId, NodeState, Severity};
+
+/// Dedup key: two alerts with the same key are the same alert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DedupKey {
+    /// Affected node.
+    pub node: NodeId,
+    /// The check that fired.
+    pub check: CheckId,
+    /// Severity of the alert.
+    pub severity: Severity,
+}
+
+/// Grouping key: alerts sharing a root cause are grouped into one incident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GroupKey {
+    /// The root-cause node alerts are grouped under (the node itself if standalone).
+    pub root: NodeId,
+}
+
+/// A single alert produced by the engine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Alert {
+    /// Affected node.
+    pub node: NodeId,
+    /// The check that produced it.
+    pub check: CheckId,
+    /// Severity (derived from the committed state).
+    pub severity: Severity,
+    /// The committed state that triggered the alert.
+    pub state: NodeState,
+    /// When it fired (Unix ms, UTC).
+    pub at_unix_ms: i64,
+    /// Root-cause node, if this alert was attributed upstream by dependency analysis.
+    pub root_cause: Option<NodeId>,
+    /// Whether the underlying check is currently flapping.
+    pub flapping: bool,
+}
+
+impl Alert {
+    /// The dedup key for this alert.
+    #[must_use]
+    pub fn dedup_key(&self) -> DedupKey {
+        DedupKey {
+            node: self.node,
+            check: self.check,
+            severity: self.severity,
+        }
+    }
+
+    /// The grouping key — the root cause if attributed upstream, else the node itself.
+    #[must_use]
+    pub fn group_key(&self) -> GroupKey {
+        GroupKey {
+            root: self.root_cause.unwrap_or(self.node),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn alert(node: NodeId, root: Option<NodeId>) -> Alert {
+        Alert {
+            node,
+            check: CheckId::from(uuid_nil()),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: root,
+            flapping: false,
+        }
+    }
+
+    fn uuid_nil() -> uuid::Uuid {
+        uuid::Uuid::nil()
+    }
+
+    #[test]
+    fn standalone_alert_groups_under_itself() {
+        let n = NodeId::new();
+        assert_eq!(alert(n, None).group_key(), GroupKey { root: n });
+    }
+
+    #[test]
+    fn attributed_alert_groups_under_root_cause() {
+        let (node, parent) = (NodeId::new(), NodeId::new());
+        assert_eq!(
+            alert(node, Some(parent)).group_key(),
+            GroupKey { root: parent }
+        );
+    }
+
+    #[test]
+    fn dedup_key_ignores_timestamp_and_flapping() {
+        let n = NodeId::new();
+        let mut a = alert(n, None);
+        let mut b = alert(n, None);
+        a.at_unix_ms = 100;
+        b.at_unix_ms = 999;
+        b.flapping = true;
+        assert_eq!(a.dedup_key(), b.dedup_key());
+    }
+}

@@ -1,0 +1,77 @@
+# Yagra — Cargo workspace root.
+# This is the canonical version source-of-truth for the Rust side
+# (see `### Version Files` in CLAUDE.md). `web/package.json` mirrors it for the frontend.
+#
+# Canonical names are functional `Yagra-*` (codenames retired; see CLAUDE.md
+# "Components"). Physical crate dirs keep the old names until a dedicated rename:
+#   crates/saihai   = Yagra-core      (Core/API)                  [bin]
+#   crates/banshu   = Yagra-poller    (Poller worker)             [bin]
+#   crates/monomi   = Yagra-discovery (Discovery)                 [lib]
+#   crates/noroshi  = Yagra-alert     (Alert engine)              [lib]
+#   crates/hikyaku  = Yagra-bus       (Task queue / bus)          [lib]
+#   crates/sekisho  = Yagra-transport (ICMP/SNMP/HTTP abstraction)[lib]
+#   crates/nawabari = Yagra-topology  (Topology)                  [lib]
+#   crates/yagra-common = shared types/models                     [lib]
+# Yagra-web (WebUI) lives under `web/` (React+TS), not a Rust crate.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/yagra-common",
+    "crates/yagra-secrets",
+    "crates/sekisho",
+    "crates/hikyaku",
+    "crates/nawabari",
+    "crates/monomi",
+    "crates/noroshi",
+    "crates/banshu",
+    "crates/saihai",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["horryworks <horryworks@gmail.com>"]
+repository = "https://github.com/horryworks/Yagra"
+
+# Shared dependency versions. Crates opt in with `foo = { workspace = true }`.
+# Declared here as the recommended stack (see CLAUDE.md "Tech Stack"); unused
+# entries are harmless — they are only pulled when a member references them.
+[workspace.dependencies]
+# Async runtime / web
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+# DB / storage
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid"] }
+redis = { version = "0.27", features = ["tokio-comp"] }
+# Serialization / types
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+# Errors
+thiserror = "2"
+anyhow = "1"
+# Async trait objects (bus/transport abstractions)
+async-trait = "0.1"
+# Observability (self-monitoring: structured logs + tracing + Prometheus)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.27"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+# Config
+config = "0.14"
+# Crypto (envelope encryption of monitoring credentials — pure Rust, no NASM)
+aes-gcm = "0.10"
+# Password hashing for local auth (Argon2, pure Rust)
+argon2 = "0.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

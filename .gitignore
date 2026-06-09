@@ -1,0 +1,40 @@
+# ── Rust ──
+/target/
+**/target/
+*.pdb
+
+# ── Node / frontend ──
+node_modules/
+web/node_modules/
+web/dist/
+dist/
+*.tsbuildinfo
+
+# ── Env / secrets ──
+.env
+.env.*
+!.env.example
+*.local
+
+# ── Logs ──
+*.log
+npm-debug.log*
+
+# ── OS / editor ──
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── Docker / data ──
+# local bind-mount data dirs, if any
+/data/
+
+# ── Claude / AI assistant config (kept entirely out of the repo) ──
+# CLAUDE.md, .claude/ (commands, rules, settings, docs, plans, runtime) are local
+# developer/assistant config and are not committed.
+.claude/
+CLAUDE.md
+
+# ── Internal design / requirements documents (kept local, not pushed) ──
+yagra-requirements_1.md
