@@ -72,6 +72,7 @@ where
     S: Stream<Item = PollJob> + Unpin,
 {
     while let Some(job) = jobs.next().await {
+        metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
         let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
         if let Err(err) = bus.publish_result(result).await {
             tracing::error!(error = %err, "failed to publish poll result");

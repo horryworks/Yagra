@@ -31,6 +31,8 @@ reqwest = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
 async-trait = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

@@ -20,8 +20,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use api::ApiState;
+use axum::routing::get;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
@@ -32,14 +34,20 @@ use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult};
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
+    // Self-observability (ADR / monitoring-conventions): install the Prometheus recorder
+    // up front so `metrics::counter!` calls anywhere are captured; `/metrics` renders it.
+    let metrics = PrometheusBuilder::new()
+        .install_recorder()
+        .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
+
     match Config::from_env() {
-        Some(cfg) => run_live(cfg).await,
-        None => run_skeleton().await,
+        Some(cfg) => run_live(cfg, metrics).await,
+        None => run_skeleton(metrics).await,
     }
 }
 
 /// Live mode: PostgreSQL + NATS + VictoriaMetrics, real ICMP polling end to end.
-async fn run_live(cfg: Config) -> anyhow::Result<()> {
+async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> {
     tracing::info!(
         interval = cfg.poll_interval_secs,
         "Yagra-core starting (live mode)"
@@ -70,11 +78,11 @@ async fn run_live(cfg: Config) -> anyhow::Result<()> {
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState { store, nodes };
-    serve(state, &cfg.api_addr).await
+    serve(state, &cfg.api_addr, metrics).await
 }
 
 /// Skeleton mode: serve the API over an in-memory sink seeded with one demo reading.
-async fn run_skeleton() -> anyhow::Result<()> {
+async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     tracing::warn!("store/bus URLs not set — running in in-memory skeleton mode (no real polling)");
     let sink = Arc::new(InMemorySink::default());
     // Demo seed so the walking-skeleton WebUI shows data before real polling is wired.
@@ -90,7 +98,7 @@ async fn run_skeleton() -> anyhow::Result<()> {
         store: sink,
         nodes: Arc::new(StaticNodeList::demo()),
     };
-    serve(state, "0.0.0.0:8080").await
+    serve(state, "0.0.0.0:8080", metrics).await
 }
 
 /// Drain poll results off the bus into the metric store. Returns when the stream ends.
@@ -99,6 +107,7 @@ where
     S: Stream<Item = PollResult> + Unpin,
 {
     while let Some(result) = results.next().await {
+        metrics::counter!("yagra_poll_results_total").increment(1);
         store.write(&result).await;
     }
     tracing::warn!("result stream ended");
@@ -124,8 +133,11 @@ async fn run_scheduler(repo: Arc<NodeRepo>, bus: Arc<NatsBus>, interval_secs: u3
                             interval_secs,
                             Uuid::new_v4(),
                         );
-                        if let Err(e) = bus.publish_job(job).await {
-                            tracing::warn!(error = %e, node = %node.id, "failed to publish poll job");
+                        match bus.publish_job(job).await {
+                            Ok(()) => metrics::counter!("yagra_jobs_published_total").increment(1),
+                            Err(e) => {
+                                tracing::warn!(error = %e, node = %node.id, "failed to publish poll job");
+                            }
                         }
                     });
                 }
@@ -136,11 +148,17 @@ async fn run_scheduler(repo: Arc<NodeRepo>, bus: Arc<NatsBus>, interval_secs: u3
     }
 }
 
-/// Bind and serve the northbound API.
-async fn serve(state: ApiState, addr: &str) -> anyhow::Result<()> {
-    let app = api::router(state);
+/// Bind and serve the northbound API plus the Prometheus `/metrics` endpoint.
+async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow::Result<()> {
+    let app = api::router(state).route(
+        "/metrics",
+        get(move || {
+            let handle = metrics.clone();
+            async move { handle.render() }
+        }),
+    );
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "Yagra-core API listening on /api/v1");
+    tracing::info!(%addr, "Yagra-core API listening on /api/v1 (+ /metrics)");
     axum::serve(listener, app).await?;
     Ok(())
 }
