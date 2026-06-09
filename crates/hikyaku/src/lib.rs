@@ -8,9 +8,13 @@
 
 pub mod bus;
 pub mod messages;
+#[cfg(feature = "nats")]
+pub mod nats;
 pub mod subjects;
 
 pub use bus::{Bus, BusError, InMemoryBus};
 pub use messages::{
     CheckOutcome, CheckSpec, IcmpCheck, PollJob, PollResult, Sample, BUS_SCHEMA_VERSION,
 };
+#[cfg(feature = "nats")]
+pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};

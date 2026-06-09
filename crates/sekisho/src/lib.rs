@@ -15,6 +15,9 @@ use std::net::IpAddr;
 use std::time::Duration;
 use thiserror::Error;
 
+mod icmp;
+pub use icmp::{summarize, SurgePingTransport};
+
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IcmpProbe {

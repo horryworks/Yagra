@@ -1,0 +1,70 @@
+//! Runtime configuration from the environment.
+//!
+//! The three store/bus URLs decide the run mode: if all are present the core runs
+//! **live** (PostgreSQL + NATS + VictoriaMetrics, real polling); if any is missing it
+//! falls back to the in-memory **skeleton** so a bare `cargo run` still serves the API.
+//! Compose always injects all three.
+
+/// Default polling interval when `YAGRA_POLL_INTERVAL_SECS` is unset/invalid.
+const DEFAULT_POLL_INTERVAL_SECS: u32 = 30;
+/// Default API bind address.
+const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
+
+/// Live-mode configuration. Absent ⇒ skeleton mode.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// PostgreSQL connection URL (metadata store).
+    pub database_url: String,
+    /// NATS connection URL (core⇄poller bus).
+    pub bus_url: String,
+    /// VictoriaMetrics base URL (TSDB).
+    pub tsdb_url: String,
+    /// Base polling interval, seconds (jitter is applied per node).
+    pub poll_interval_secs: u32,
+    /// API bind address.
+    pub api_addr: String,
+}
+
+impl Config {
+    /// Build live config from the environment, or `None` if a required URL is missing.
+    pub fn from_env() -> Option<Self> {
+        let database_url = std::env::var("YAGRA_DATABASE_URL").ok()?;
+        let bus_url = std::env::var("YAGRA_BUS_URL").ok()?;
+        let tsdb_url = std::env::var("YAGRA_TSDB_URL").ok()?;
+        Some(Self {
+            database_url,
+            bus_url,
+            tsdb_url,
+            poll_interval_secs: parse_interval(std::env::var("YAGRA_POLL_INTERVAL_SECS").ok()),
+            api_addr: std::env::var("YAGRA_API_ADDR")
+                .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
+        })
+    }
+}
+
+/// Parse a polling interval, clamping to a sane floor and defaulting on bad input.
+fn parse_interval(raw: Option<String>) -> u32 {
+    raw.and_then(|s| s.parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_POLL_INTERVAL_SECS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interval_defaults_when_absent_or_invalid() {
+        assert_eq!(parse_interval(None), DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(
+            parse_interval(Some("abc".into())),
+            DEFAULT_POLL_INTERVAL_SECS
+        );
+        assert_eq!(parse_interval(Some("0".into())), DEFAULT_POLL_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn interval_parses_valid_value() {
+        assert_eq!(parse_interval(Some("60".into())), 60);
+    }
+}

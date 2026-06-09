@@ -15,11 +15,13 @@ path = "src/main.rs"
 [dependencies]
 yagra-common = { path = "../yagra-common" }
 sekisho = { path = "../sekisho" }
-hikyaku = { path = "../hikyaku" }
+hikyaku = { path = "../hikyaku", features = ["nats"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }
+tokio-stream = { workspace = true }

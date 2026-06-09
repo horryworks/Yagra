@@ -1,22 +1,15 @@
-//! Metric sink: where poll results land.
+//! In-memory metric sink for the skeleton / tests.
 //!
-//! [`MetricSink`] is the seam behind which the production TSDB (VictoriaMetrics) writer
-//! sits. The skeleton uses [`InMemorySink`], which keeps only the latest value per
-//! series so the API can serve it. Samples are keyed by their thin-label
+//! Holds only the latest value per series so the API can serve it without a TSDB. The
+//! live path uses [`crate::store::VmStore`] (VictoriaMetrics); both sit behind the
+//! [`crate::store::MetricStore`] trait. Samples are keyed by their thin-label
 //! [`SeriesKey`](yagra_common::SeriesKey) (ADR-011); raw counters are stored as-is and
 //! rates are derived at query time (ADR-012).
 
 use hikyaku::PollResult;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
+use std::sync::Mutex;
 use yagra_common::SeriesKey;
-
-/// Somewhere poll results can be written. The real implementation writes to the TSDB.
-pub trait MetricSink: Send + Sync {
-    /// Ingest all samples from a completed poll.
-    fn ingest(&self, result: &PollResult);
-}
 
 /// An in-memory sink holding the latest value per series — enough for the skeleton API.
 #[derive(Default)]
@@ -25,6 +18,14 @@ pub struct InMemorySink {
 }
 
 impl InMemorySink {
+    /// Ingest all samples from a completed poll, keeping the latest value per series.
+    pub fn ingest(&self, result: &PollResult) {
+        let mut map = self.latest.lock().expect("sink mutex poisoned");
+        for sample in &result.samples {
+            map.insert(sample.series_key(result.node_id), sample.value);
+        }
+    }
+
     /// The latest value recorded for a series, if any.
     #[must_use]
     pub fn latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -33,29 +34,6 @@ impl InMemorySink {
             .expect("sink mutex poisoned")
             .get(key)
             .copied()
-    }
-}
-
-impl MetricSink for InMemorySink {
-    fn ingest(&self, result: &PollResult) {
-        let mut map = self.latest.lock().expect("sink mutex poisoned");
-        for sample in &result.samples {
-            map.insert(sample.series_key(result.node_id), sample.value);
-        }
-    }
-}
-
-/// Consume poll results off the bus and write them to the sink. Returns when the result
-/// channel closes.
-pub async fn run_sink<S: MetricSink>(mut results: broadcast::Receiver<PollResult>, sink: Arc<S>) {
-    loop {
-        match results.recv().await {
-            Ok(result) => sink.ingest(&result),
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                tracing::warn!(skipped, "sink lagged behind; some results were dropped");
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        }
     }
 }
 

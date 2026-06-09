@@ -1,0 +1,19 @@
+# Build context excludes for the saihai/banshu image builds (context = repo root).
+# IMPORTANT: do NOT exclude `migrations/` — saihai embeds it at compile time via
+# `sqlx::migrate!`. Keep `Cargo.toml`, `Cargo.lock`, and `crates/`.
+
+# Rust build artifacts (regenerated in-image; huge).
+target/
+
+# VCS and tooling.
+.git/
+.github/
+
+# Local-only config / internal docs (never needed in an image, keep out of layers).
+.claude/
+CLAUDE.md
+yagra-requirements_1.md
+
+# Frontend deps/build (web image uses its own context + .dockerignore).
+web/node_modules/
+web/dist/

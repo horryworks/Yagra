@@ -46,8 +46,19 @@ axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 # DB / storage
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid", "json", "migrate"] }
 redis = { version = "0.27", features = ["tokio-comp"] }
+# HTTP client (VictoriaMetrics import/query — in-cluster plaintext, so no TLS feature)
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# Message bus (core⇄poller over NATS, ADR-007)
+async-nats = "0.38"
+# Raw-socket ICMP for the poller (needs CAP_NET_RAW at runtime, ADR build-prereqs)
+surge-ping = "0.8"
+# Async stream combinators (bus consumers)
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+# Polling jitter (anti-stampede, monitoring-conventions)
+rand = "0.8"
 # Serialization / types
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
