@@ -5,7 +5,7 @@
 # capability to the binary itself via a file capability (`setcap cap_net_raw+ep`),
 # so only this one program (still non-root) can open raw ICMP sockets.
 
-FROM rust:1.85-slim AS build
+FROM rust:1.90-slim AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release --bin banshu
