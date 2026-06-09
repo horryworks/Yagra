@@ -51,7 +51,10 @@ impl Config {
 /// else (including unset) is `false`.
 fn parse_bool(raw: Option<String>) -> bool {
     matches!(
-        raw.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        raw.as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
 }

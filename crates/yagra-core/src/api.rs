@@ -360,8 +360,12 @@ async fn stream_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Respon
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
-    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe())
-        .filter_map(|r| async move { r.ok().map(|json| Ok::<_, Infallible>(Event::default().data(json))) });
+    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe()).filter_map(
+        |r| async move {
+            r.ok()
+                .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
+        },
+    );
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
