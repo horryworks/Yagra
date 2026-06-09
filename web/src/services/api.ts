@@ -2,7 +2,7 @@
 // scatter raw fetch across components). All calls go through `api`; errors surface as a
 // typed `ApiError` decoded from the fixed error envelope (ADR-019).
 
-import type { Alert, ApiErrorBody, MetricReading, NodeSummary } from '../types/api';
+import type { Alert, ApiErrorBody, MetricRange, MetricReading, NodeSummary } from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 
@@ -41,6 +41,21 @@ export const api = {
   /** Latest reading for one node metric. */
   getNodeMetric: (nodeId: string, metric: string): Promise<MetricReading> =>
     request(`/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}`),
+
+  /** Time-series window for one node metric (defaults: last hour, 60s step). */
+  getNodeMetricRange: (
+    nodeId: string,
+    metric: string,
+    opts?: { from?: number; to?: number; step?: number },
+  ): Promise<MetricRange> => {
+    const params = new URLSearchParams();
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    if (opts?.step != null) params.set('step', String(opts.step));
+    const qs = params.toString();
+    const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}/range`;
+    return request(qs ? `${path}?${qs}` : path);
+  },
 
   /** Inventory listing. */
   listNodes: (): Promise<NodeSummary[]> => request('/nodes'),

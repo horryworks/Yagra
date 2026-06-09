@@ -19,9 +19,10 @@ mod store;
 use std::sync::Arc;
 use std::time::Duration;
 
+use api::ApiState;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
-use repo::NodeRepo;
+use repo::{NodeListing, NodeRepo, StaticNodeList};
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use uuid::Uuid;
@@ -67,7 +68,9 @@ async fn run_live(cfg: Config) -> anyhow::Result<()> {
         tokio::spawn(run_scheduler(repo, bus, cfg.poll_interval_secs));
     }
 
-    serve(store, &cfg.api_addr).await
+    let nodes: Arc<dyn NodeListing> = repo;
+    let state = ApiState { store, nodes };
+    serve(state, &cfg.api_addr).await
 }
 
 /// Skeleton mode: serve the API over an in-memory sink seeded with one demo reading.
@@ -83,7 +86,11 @@ async fn run_skeleton() -> anyhow::Result<()> {
         outcome: yagra_bus::CheckOutcome::Reachable,
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
     });
-    serve(sink, "0.0.0.0:8080").await
+    let state = ApiState {
+        store: sink,
+        nodes: Arc::new(StaticNodeList::demo()),
+    };
+    serve(state, "0.0.0.0:8080").await
 }
 
 /// Drain poll results off the bus into the metric store. Returns when the stream ends.
@@ -130,10 +137,10 @@ async fn run_scheduler(repo: Arc<NodeRepo>, bus: Arc<NatsBus>, interval_secs: u3
 }
 
 /// Bind and serve the northbound API.
-async fn serve(store: Arc<dyn MetricStore>, addr: &str) -> anyhow::Result<()> {
-    let app = api::router(store);
+async fn serve(state: ApiState, addr: &str) -> anyhow::Result<()> {
+    let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "Yagra-core (yagra_core) API listening on /api/v1");
+    tracing::info!(%addr, "Yagra-core API listening on /api/v1");
     axum::serve(listener, app).await?;
     Ok(())
 }
