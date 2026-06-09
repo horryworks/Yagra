@@ -7,17 +7,18 @@
 //! API grows; the alert endpoints are stubs until the alert engine is wired (Workstream B).
 
 use crate::alerts::AlertManager;
+use crate::auth::{AuthError, SessionStore, UserStore};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use futures::stream::StreamExt;
@@ -28,13 +29,14 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::{NodeId, NodeState, SeriesKey};
+use yagra_common::{NodeId, NodeState, Permission, SeriesKey};
 
-/// Live-only write side: inventory + credential mutations. Absent in skeleton mode, where
-/// the management endpoints return 503.
+/// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
+/// mode, where the management/auth endpoints return 503.
 pub struct AdminState {
     pub repo: Arc<NodeRepo>,
     pub creds: Arc<CredentialStore>,
+    pub users: Arc<UserStore>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -51,8 +53,10 @@ pub struct ApiState {
     pub nodes: Arc<dyn NodeListing>,
     /// Alert engine (active alerts + live event stream).
     pub alerts: Arc<AlertManager>,
-    /// Write side (inventory + credentials); `None` in skeleton mode.
+    /// Write side (inventory + credentials + users); `None` in skeleton mode.
     pub admin: Option<Arc<AdminState>>,
+    /// Bearer-token sessions for local auth.
+    pub sessions: Arc<SessionStore>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -74,6 +78,8 @@ pub fn router(state: ApiState) -> Router {
             get(list_credentials).post(create_credential),
         )
         .route("/api/v1/credentials/:id", delete(delete_credential))
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .with_state(state)
@@ -291,6 +297,74 @@ fn internal(what: &str) -> Response {
     )
 }
 
+/// Extract the `Authorization: Bearer <token>` value, if present.
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+/// Require a valid token with `perm`. Returns `Some(error response)` to short-circuit the
+/// handler on failure (401/403), or `None` when authorized.
+fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) -> Option<Response> {
+    match st.sessions.authorize(bearer(headers), perm) {
+        Ok(_) => None,
+        Err(AuthError::Forbidden) => Some(error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "your role does not permit this action".to_owned(),
+        )),
+        Err(_) => Some(error_response(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid bearer token is required".to_owned(),
+        )),
+    }
+}
+
+/// Login request body.
+#[derive(Deserialize)]
+struct LoginBody {
+    username: String,
+    password: String,
+}
+
+async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.users.verify(&body.username, &body.password).await {
+        Ok(Some(principal)) => {
+            let role = principal.role;
+            let token = st.sessions.issue(principal);
+            Json(serde_json::json!({ "token": token, "role": role })).into_response()
+        }
+        Ok(None) => error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalid_credentials",
+            "incorrect username or password".to_owned(),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "login failed");
+            internal("login failed")
+        }
+    }
+}
+
+async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    // `View` is granted to every role, so this just checks for a valid token.
+    match st.sessions.authorize(bearer(&headers), Permission::View) {
+        Ok(principal) => Json(serde_json::json!({ "role": principal.role })).into_response(),
+        Err(_) => error_response(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "not authenticated".to_owned(),
+        ),
+    }
+}
+
 /// Create-node request body.
 #[derive(Deserialize)]
 struct CreateNode {
@@ -299,10 +373,17 @@ struct CreateNode {
     pool: Option<String>,
 }
 
-async fn create_node(State(st): State<ApiState>, Json(body): Json<CreateNode>) -> Response {
+async fn create_node(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateNode>,
+) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
     if body.name.trim().is_empty() {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -330,10 +411,17 @@ async fn create_node(State(st): State<ApiState>, Json(body): Json<CreateNode>) -
     }
 }
 
-async fn delete_node(State(st): State<ApiState>, Path(id): Path<Uuid>) -> Response {
+async fn delete_node(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
     match admin.repo.delete_node(id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => not_found("node_not_found", format!("no node {id}")),
@@ -354,11 +442,15 @@ struct CreateCredential {
 
 async fn create_credential(
     State(st): State<ApiState>,
+    headers: HeaderMap,
     Json(body): Json<CreateCredential>,
 ) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
+        return resp;
+    }
     if body.name.trim().is_empty() || body.kind.trim().is_empty() || body.secret.is_empty() {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -379,10 +471,13 @@ async fn create_credential(
     }
 }
 
-async fn list_credentials(State(st): State<ApiState>) -> Response {
+async fn list_credentials(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
+        return resp;
+    }
     match admin.creds.list().await {
         Ok(list) => Json(list).into_response(),
         Err(e) => {
@@ -392,10 +487,17 @@ async fn list_credentials(State(st): State<ApiState>) -> Response {
     }
 }
 
-async fn delete_credential(State(st): State<ApiState>, Path(id): Path<Uuid>) -> Response {
+async fn delete_credential(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
+        return resp;
+    }
     match admin.creds.delete(id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => not_found("credential_not_found", format!("no credential {id}")),
@@ -422,6 +524,7 @@ mod tests {
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             admin: None,
+            sessions: Arc::new(SessionStore::new()),
         }
     }
 

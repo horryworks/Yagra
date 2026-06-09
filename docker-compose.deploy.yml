@@ -27,6 +27,11 @@ services:
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Default local-auth admin password seeded on first start (change for real use).
+      YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-admin}
+      # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
+      YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
+      YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}
     ports:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped

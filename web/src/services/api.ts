@@ -12,6 +12,23 @@ import type {
 } from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
+const TOKEN_KEY = 'yagra_token';
+
+let authToken: string | null =
+  typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
+
+/** Set (or clear) the bearer token, persisting it across reloads. */
+export function setToken(token: string | null): void {
+  authToken = token;
+  if (typeof localStorage === 'undefined') return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** The current bearer token, if logged in. */
+export function getToken(): string | null {
+  return authToken;
+}
 
 /** A decoded API error carrying the stable machine-readable `code`. */
 export class ApiError extends Error {
@@ -26,8 +43,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  // Keep the single-arg call shape for plain GETs (tests assert on it).
-  const res = init ? await fetch(`${BASE}${path}`, init) : await fetch(`${BASE}${path}`);
+  // Attach the bearer token when logged in; otherwise keep the single-arg call shape
+  // for plain GETs (tests assert on it).
+  let finalInit = init;
+  if (authToken) {
+    const headers = new Headers(init?.headers);
+    headers.set('Authorization', `Bearer ${authToken}`);
+    finalInit = { ...init, headers };
+  }
+  const res = finalInit ? await fetch(`${BASE}${path}`, finalInit) : await fetch(`${BASE}${path}`);
   if (!res.ok) {
     let code = 'http_error';
     let message = `request failed with status ${res.status}`;
@@ -102,4 +126,17 @@ export const api = {
 
   /** Active alerts. */
   listAlerts: (): Promise<Alert[]> => request('/alerts'),
+
+  /** Log in; stores the bearer token on success. */
+  login: async (username: string, password: string): Promise<{ token: string; role: string }> => {
+    const res = await request<{ token: string; role: string }>(
+      '/auth/login',
+      jsonBody('POST', { username, password }),
+    );
+    setToken(res.token);
+    return res;
+  },
+
+  /** Forget the stored token. */
+  logout: (): void => setToken(null),
 };
