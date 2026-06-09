@@ -11,12 +11,21 @@
 
 mod worker;
 
+use metrics_exporter_prometheus::PrometheusBuilder;
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+
+    // Self-observability: expose Prometheus metrics on :9100/metrics (monitoring-conventions).
+    if let Err(e) = PrometheusBuilder::new()
+        .with_http_listener(([0, 0, 0, 0], 9100))
+        .install()
+    {
+        tracing::warn!(error = %e, "failed to start metrics exporter");
+    }
 
     let Ok(bus_url) = std::env::var("YAGRA_BUS_URL") else {
         tracing::warn!("YAGRA_BUS_URL not set — poller idle (no bus configured)");
@@ -35,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     let queue =
         std::env::var("YAGRA_POLLER_QUEUE").unwrap_or_else(|_| yagra_bus::POLLER_QUEUE.to_owned());
     let jobs = Box::pin(bus.subscribe_jobs(&queue).await?);
-    tracing::info!(%queue, "Yagra-poller (yagra_poller) consuming jobs");
+    tracing::info!(%queue, "Yagra-poller consuming jobs");
 
     // Runs until the bus closes; the stateless loop carries no recovery state.
     worker::run_stream(jobs, bus, transport).await;
