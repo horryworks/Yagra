@@ -17,6 +17,7 @@ const REFRESH_MS = 15_000;
 
 export function Dashboard() {
   const upsertAlert = useAlertStore((s) => s.upsertAlert);
+  const resolveAlert = useAlertStore((s) => s.resolveAlert);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
@@ -25,11 +26,17 @@ export function Dashboard() {
   });
   const [chartError, setChartError] = useState<string | null>(null);
 
-  // Live alert updates via SSE (ADR-019). EventSource only exists in the browser.
+  // Seed active alerts on mount, then take live fire/resolve updates via SSE (ADR-019).
   useEffect(() => {
+    api
+      .listAlerts()
+      .then((list) => list.forEach(upsertAlert))
+      .catch(() => {
+        /* no alerts endpoint yet / transient — SSE will still deliver live events */
+      });
     if (typeof EventSource === 'undefined') return;
-    return subscribeAlerts(upsertAlert);
-  }, [upsertAlert]);
+    return subscribeAlerts(upsertAlert, (a) => resolveAlert(a));
+  }, [upsertAlert, resolveAlert]);
 
   // Load the inventory once; default the selection to the first node.
   useEffect(() => {

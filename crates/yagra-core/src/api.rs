@@ -6,6 +6,7 @@
 //! the inventory from a [`NodeListing`]. Cursor pagination and RBAC scoping land as the
 //! API grows; the alert endpoints are stubs until the alert engine is wired (Workstream B).
 
+use crate::alerts::AlertManager;
 use crate::repo::NodeListing;
 use crate::store::{MetricPoint, MetricStore};
 use axum::{
@@ -18,11 +19,13 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use yagra_alert::Alert;
 use yagra_common::{NodeId, NodeState, SeriesKey};
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -30,13 +33,15 @@ const DEFAULT_RANGE_SECS: i64 = 3600;
 /// Default range step when `step` is omitted (seconds).
 const DEFAULT_STEP_SECS: u64 = 60;
 
-/// Shared API state: the metric store and the node inventory source.
+/// Shared API state: the metric store, the node inventory source, and the alert engine.
 #[derive(Clone)]
 pub struct ApiState {
     /// TSDB read/write seam.
     pub store: Arc<dyn MetricStore>,
     /// Inventory read seam.
     pub nodes: Arc<dyn NodeListing>,
+    /// Alert engine (active alerts + live event stream).
+    pub alerts: Arc<AlertManager>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -235,17 +240,20 @@ async fn get_node_metric_range(
     .into_response()
 }
 
-/// Active alerts. Stub until the alert engine is wired (Workstream B) — always empty.
-async fn list_alerts() -> Json<Vec<serde_json::Value>> {
-    Json(Vec::new())
+/// Currently active alerts (from the in-memory alert engine).
+async fn list_alerts(State(st): State<ApiState>) -> Json<Vec<Alert>> {
+    Json(st.alerts.active_alerts())
 }
 
-/// Live alert stream (SSE, ADR-019). Stub until the alert engine is wired: holds the
-/// connection open with keep-alive comments and emits no events yet (so the WebUI's
-/// EventSource connects cleanly instead of reconnect-looping on a 404).
-async fn stream_alerts() -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
-    Sse::new(futures::stream::pending::<Result<Event, Infallible>>())
-        .keep_alive(KeepAlive::default())
+/// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's
+/// `data` is the alert JSON with a `resolved` flag. Keep-alive holds the connection open
+/// when idle.
+async fn stream_alerts(
+    State(st): State<ApiState>,
+) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe())
+        .filter_map(|r| async move { r.ok().map(|json| Ok(Event::default().data(json))) });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[cfg(test)]
@@ -262,6 +270,7 @@ mod tests {
         ApiState {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
+            alerts: Arc::new(AlertManager::new()),
         }
     }
 
@@ -407,6 +416,23 @@ mod tests {
         let json = body_json(resp).await;
         assert_eq!(json["metric"], "icmp_rtt_ms");
         assert!(json["points"].is_array());
+    }
+
+    #[tokio::test]
+    async fn alerts_empty_by_default() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/alerts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json.as_array().map(Vec::len), Some(0));
     }
 
     #[tokio::test]
