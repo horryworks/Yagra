@@ -16,6 +16,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 mod icmp;
+mod snmp;
 pub use icmp::{summarize, SurgePingTransport};
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
@@ -27,6 +28,17 @@ pub struct IcmpProbe {
     pub rtt_ms: Option<f64>,
     /// Packet loss percentage over the probe (0.0–100.0).
     pub loss_pct: f64,
+}
+
+/// One numeric SNMP value: the OID it came from and its value as `f64`. Non-numeric
+/// OIDs (strings, etc.) are skipped — only countable/gaugeable values become metrics.
+/// Counters are reported **raw** (rates are derived at query time, ADR-012).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnmpSample {
+    /// The dotted OID, e.g. `1.3.6.1.2.1.1.3.0`.
+    pub oid: String,
+    /// The value as a float (counters lose no range at MVP magnitudes).
+    pub value: f64,
 }
 
 /// Errors performing device I/O.
@@ -52,6 +64,16 @@ pub trait Transport: Send + Sync {
         count: u8,
         timeout: Duration,
     ) -> Result<IcmpProbe, TransportError>;
+
+    /// Fetch the given OIDs from `target` via SNMP v2c with `community`, returning the
+    /// numeric values (non-numeric OIDs skipped). Counters are returned raw (ADR-012).
+    async fn snmp_get(
+        &self,
+        target: IpAddr,
+        community: &str,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpSample>, TransportError>;
 }
 
 /// A canned [`Transport`] for tests and the single-process walking skeleton.
@@ -60,8 +82,10 @@ pub trait Transport: Send + Sync {
 /// raw-socket privilege and no real device.
 #[derive(Debug, Clone)]
 pub struct FakeTransport {
-    /// The probe every call returns.
+    /// The probe every ICMP call returns.
     pub probe: IcmpProbe,
+    /// The samples every SNMP call returns.
+    pub snmp: Vec<SnmpSample>,
 }
 
 impl FakeTransport {
@@ -74,6 +98,7 @@ impl FakeTransport {
                 rtt_ms: Some(rtt_ms),
                 loss_pct: 0.0,
             },
+            snmp: Vec::new(),
         }
     }
 
@@ -86,7 +111,15 @@ impl FakeTransport {
                 rtt_ms: None,
                 loss_pct: 100.0,
             },
+            snmp: Vec::new(),
         }
+    }
+
+    /// Set the canned SNMP samples this fake returns.
+    #[must_use]
+    pub fn with_snmp(mut self, samples: Vec<SnmpSample>) -> Self {
+        self.snmp = samples;
+        self
     }
 }
 
@@ -99,6 +132,16 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<IcmpProbe, TransportError> {
         Ok(self.probe.clone())
+    }
+
+    async fn snmp_get(
+        &self,
+        _target: IpAddr,
+        _community: &str,
+        _oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpSample>, TransportError> {
+        Ok(self.snmp.clone())
     }
 }
 

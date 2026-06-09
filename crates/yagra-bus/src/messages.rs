@@ -65,16 +65,39 @@ impl PollJob {
             credential_ref: None,
         }
     }
+
+    /// A new SNMP v2c poll job for `node` at `target`.
+    #[must_use]
+    pub fn snmp(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::Snmp(check),
+            interval_secs,
+            credential_ref: None,
+        }
+    }
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
-/// older consumers (they ignore unknown tags / fields).
+/// older consumers (they ignore unknown fields; an unknown *tag* is skipped by the
+/// poller's malformed-message handling, so old pollers simply ignore newer check kinds).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CheckSpec {
     /// Liveness/RTT via ICMP echo.
     Icmp(IcmpCheck),
-    // Snmp(...) / Http(...) land in later phases.
+    /// Scalar SNMP v2c GET of a set of OIDs.
+    Snmp(SnmpCheck),
+    // Http(...) lands in a later phase.
 }
 
 /// ICMP echo parameters.
@@ -93,6 +116,23 @@ impl Default for IcmpCheck {
             timeout_ms: 1000,
         }
     }
+}
+
+/// SNMP v2c check parameters. The community is the resolved credential, inlined by core
+/// over the (TLS) bus at send time (ADR-018/020); the poller never reads the secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// OIDs to GET (dotted form, e.g. `1.3.6.1.2.1.1.3.0`).
+    pub oids: Vec<String>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+const fn default_snmp_timeout_ms() -> u32 {
+    2000
 }
 
 /// The result of executing a [`PollJob`], sent back to core.
