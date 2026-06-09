@@ -69,4 +69,11 @@ describe('api client', () => {
     await api.getNodeMetricRange('n1', 'icmp_rtt_ms');
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/icmp_rtt_ms/range');
   });
+
+  it('fetches the public client config', async () => {
+    mockFetch(200, { public_dashboard: false, auth_available: true });
+    const cfg = await api.getConfig();
+    expect(cfg.public_dashboard).toBe(false);
+    expect(cfg.auth_available).toBe(true);
+  });
 });

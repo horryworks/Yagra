@@ -79,7 +79,16 @@ function jsonBody(method: string, body: unknown): RequestInit {
   };
 }
 
+/** Public client bootstrap config (no secrets). */
+export interface ClientConfig {
+  public_dashboard: boolean;
+  auth_available: boolean;
+}
+
 export const api = {
+  /** Public bootstrap config: whether reads are open and login is available. */
+  getConfig: (): Promise<ClientConfig> => request('/config'),
+
   /** Latest reading for one node metric. */
   getNodeMetric: (nodeId: string, metric: string): Promise<MetricReading> =>
     request(`/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}`),

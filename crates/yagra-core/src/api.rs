@@ -30,7 +30,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_alert::Alert;
 use yagra_common::{NodeId, NodeState, Permission, SeriesKey};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -62,12 +61,16 @@ pub struct ApiState {
     pub sessions: Arc<SessionStore>,
     /// Alert history (read); `None` in skeleton mode.
     pub history: Option<Arc<AlertHistoryStore>>,
+    /// When true, read-only endpoints skip authentication (public read-only dashboard).
+    /// When false (default), they require a valid session with `View` (every role has it).
+    pub public_dashboard: bool,
 }
 
 /// Build the `/api/v1` router backed by the given state.
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/v1/config", get(get_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         .route("/api/v1/nodes/:node_id", delete(delete_node))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
@@ -102,6 +105,17 @@ pub fn router(state: ApiState) -> Router {
 /// Liveness probe for the deploy/orchestrator — no auth, no store access.
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Public client bootstrap config (no secrets): tells the WebUI whether read endpoints
+/// are open and whether interactive login is available, so it can decide up front whether
+/// to gate behind a login screen. Intentionally unauthenticated.
+async fn get_config(State(st): State<ApiState>) -> Response {
+    Json(serde_json::json!({
+        "public_dashboard": st.public_dashboard,
+        "auth_available": st.admin.is_some(),
+    }))
+    .into_response()
 }
 
 fn now_unix_s() -> i64 {
@@ -187,7 +201,14 @@ struct NodePageQuery {
     limit: Option<i64>,
 }
 
-async fn list_nodes(State(st): State<ApiState>, Query(q): Query<NodePageQuery>) -> Response {
+async fn list_nodes(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<NodePageQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
     match st.nodes.list_page(q.cursor, limit).await {
         Ok(nodes) => {
@@ -231,8 +252,12 @@ async fn list_nodes(State(st): State<ApiState>, Query(q): Query<NodePageQuery>) 
 
 async fn get_node_metric(
     State(st): State<ApiState>,
+    headers: HeaderMap,
     Path((node_id, metric)): Path<(Uuid, String)>,
 ) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
     if !is_valid_metric_name(&metric) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -266,9 +291,13 @@ struct RangeQuery {
 
 async fn get_node_metric_range(
     State(st): State<ApiState>,
+    headers: HeaderMap,
     Path((node_id, metric)): Path<(Uuid, String)>,
     Query(q): Query<RangeQuery>,
 ) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
     if !is_valid_metric_name(&metric) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -291,8 +320,11 @@ async fn get_node_metric_range(
 }
 
 /// Currently active alerts (from the in-memory alert engine).
-async fn list_alerts(State(st): State<ApiState>) -> Json<Vec<Alert>> {
-    Json(st.alerts.active_alerts())
+async fn list_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    Json(st.alerts.active_alerts()).into_response()
 }
 
 /// Recent alert-history rows. Query: `?limit=` (default 100). Empty in skeleton mode.
@@ -301,7 +333,14 @@ struct HistoryQuery {
     limit: Option<i64>,
 }
 
-async fn list_alert_history(State(st): State<ApiState>, Query(q): Query<HistoryQuery>) -> Response {
+async fn list_alert_history(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
     let Some(history) = st.history.as_ref() else {
         return Json(Vec::<serde_json::Value>::new()).into_response();
     };
@@ -317,12 +356,15 @@ async fn list_alert_history(State(st): State<ApiState>, Query(q): Query<HistoryQ
 /// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's
 /// `data` is the alert JSON with a `resolved` flag. Keep-alive holds the connection open
 /// when idle.
-async fn stream_alerts(
-    State(st): State<ApiState>,
-) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+async fn stream_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
     let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe())
-        .filter_map(|r| async move { r.ok().map(|json| Ok(Event::default().data(json))) });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+        .filter_map(|r| async move { r.ok().map(|json| Ok::<_, Infallible>(Event::default().data(json))) });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 // ── Admin (write) handlers — live mode only ──────────────────────────────────
@@ -368,6 +410,16 @@ fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) -> Option<Res
             "a valid bearer token is required".to_owned(),
         )),
     }
+}
+
+/// Gate a read-only endpoint. In public-dashboard mode reads are open (returns `None`);
+/// otherwise a valid session with `View` (granted to every role) is required. Returns
+/// `Some(error response)` to short-circuit on failure.
+fn require_view(st: &ApiState, headers: &HeaderMap) -> Option<Response> {
+    if st.public_dashboard {
+        return None;
+    }
+    authorize(st, headers, Permission::View)
 }
 
 /// Login request body.
@@ -775,6 +827,7 @@ mod tests {
     use yagra_bus::{CheckOutcome, PollResult, Sample};
 
     fn state_with(store: Arc<dyn MetricStore>) -> ApiState {
+        // Public-dashboard mode: read endpoints are open (no token required).
         ApiState {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
@@ -782,7 +835,25 @@ mod tests {
             admin: None,
             sessions: Arc::new(SessionStore::new()),
             history: None,
+            public_dashboard: true,
         }
+    }
+
+    /// A private (auth-required) state plus a freshly issued Viewer token for it.
+    fn private_state_with(store: Arc<dyn MetricStore>) -> (ApiState, String) {
+        use yagra_common::{Principal, Role, Scope};
+        let sessions = Arc::new(SessionStore::new());
+        let token = sessions.issue(Principal::new(Role::Viewer, Scope::All));
+        let state = ApiState {
+            store,
+            nodes: Arc::new(StaticNodeList::demo()),
+            alerts: Arc::new(AlertManager::new()),
+            admin: None,
+            sessions,
+            history: None,
+            public_dashboard: false,
+        };
+        (state, token)
     }
 
     fn store_with_reading(node: NodeId, metric: &str, value: f64) -> Arc<dyn MetricStore> {
@@ -964,6 +1035,62 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
         assert_eq!(json.as_array().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
+    async fn private_mode_rejects_unauthenticated_reads() {
+        // Default (non-public) mode: listing nodes without a token is 401.
+        let (state, _token) = private_state_with(Arc::new(InMemorySink::default()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/nodes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn private_mode_allows_reads_with_viewer_token() {
+        let node = NodeId::from(Uuid::nil());
+        let (state, token) = private_state_with(store_with_reading(node, "icmp_rtt_ms", 8.0));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/nodes")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["nodes"][0]["id"], node.to_string());
+    }
+
+    #[tokio::test]
+    async fn private_mode_healthz_stays_open() {
+        // The liveness probe is never gated, even in private mode.
+        let (state, _token) = private_state_with(Arc::new(InMemorySink::default()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
