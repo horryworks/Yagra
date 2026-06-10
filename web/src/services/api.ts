@@ -37,6 +37,15 @@ export function getToken(): string | null {
   return authToken;
 }
 
+// Invoked when a request fails auth with a token already attached — i.e. the stored token
+// has gone stale (most commonly: yagra-core restarted and dropped its in-memory sessions).
+// The app registers a handler to flip auth state off and prompt a fresh sign-in, instead of
+// surfacing a raw 401 from a write the user thought they were authorized for.
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
+}
+
 /** A decoded API error carrying the stable machine-readable `code`. */
 export class ApiError extends Error {
   constructor(
@@ -70,6 +79,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
     } catch {
       // Non-JSON error body — keep the generic message.
+    }
+    // A 401 while a token was attached means the stored token is no longer valid; drop it
+    // and let the app re-prompt for sign-in. (Bad-credentials at /auth/login never hits this:
+    // no token is attached yet during login.)
+    if (res.status === 401 && authToken) {
+      setToken(null);
+      onUnauthorized?.();
     }
     throw new ApiError(code, message, res.status);
   }
