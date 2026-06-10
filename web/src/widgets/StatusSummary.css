@@ -1,0 +1,53 @@
+.statussummary {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.statussummary-total {
+  display: flex;
+  flex-direction: column;
+}
+
+.statussummary-num {
+  font-size: 30px;
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+.statussummary-cap {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.statussummary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.statussummary-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.statussummary-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.statussummary-count {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+}
+
+.statussummary-label {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}

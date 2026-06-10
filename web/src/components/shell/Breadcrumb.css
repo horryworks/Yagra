@@ -1,0 +1,28 @@
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--font-sm);
+}
+
+.breadcrumb-seg {
+  display: inline-flex;
+  align-items: center;
+}
+
+.breadcrumb-link {
+  color: var(--text-secondary);
+}
+
+a.breadcrumb-link:hover {
+  color: var(--text-primary);
+}
+
+.breadcrumb-current {
+  color: var(--text-primary);
+}
+
+.breadcrumb-sep {
+  margin: 0 8px;
+  color: var(--text-tertiary);
+}

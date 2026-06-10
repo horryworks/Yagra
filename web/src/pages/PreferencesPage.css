@@ -1,0 +1,47 @@
+.pref-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.pref-label {
+  flex: 1;
+}
+
+.pref-name {
+  font-weight: var(--weight-medium);
+}
+
+.pref-help {
+  font-size: var(--font-sm);
+  margin-top: 2px;
+}
+
+.pref-seg {
+  display: inline-flex;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.pref-seg-btn {
+  height: 30px;
+  padding: 0 16px;
+  background: var(--bg-secondary);
+  border: none;
+  border-right: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.pref-seg-btn:last-child {
+  border-right: none;
+}
+
+.pref-seg-btn.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent-color);
+}

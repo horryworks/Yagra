@@ -76,4 +76,47 @@ describe('api client', () => {
     expect(cfg.public_dashboard).toBe(false);
     expect(cfg.auth_available).toBe(true);
   });
+
+  it('passes keyset cursor + limit on the node page request', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ nodes: [], next_cursor: null }) } as Response);
+    globalThis.fetch = spy;
+    await api.listNodesPage({ cursor: 'abc', limit: 50 });
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes?cursor=abc&limit=50');
+  });
+
+  it('omits the query string for the first node page', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ nodes: [], next_cursor: null }) } as Response);
+    globalThis.fetch = spy;
+    await api.listNodesPage();
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes');
+  });
+
+  it('posts a threshold rule as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 't1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createThreshold({
+      scope_level: 'node',
+      scope_id: 's1',
+      metric: 'cpu_util',
+      direction: 'above',
+      warning: 70,
+      critical: 90,
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/thresholds');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ scope_level: 'node', metric: 'cpu_util' });
+  });
+
+  it('requests the current principal from /auth/me', async () => {
+    mockFetch(200, { role: 'Admin' });
+    const me = await api.me();
+    expect(me.role).toBe('Admin');
+  });
 });

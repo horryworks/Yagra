@@ -1,0 +1,25 @@
+.comingsoon {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 24px 8px;
+}
+
+.comingsoon-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--status-maintenance);
+  color: var(--status-maintenance);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+}
+
+.comingsoon-text {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}

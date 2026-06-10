@@ -1,0 +1,137 @@
+.login {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-primary);
+}
+
+.login-card {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  width: min(720px, 100%);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+/* Brand panel: a physical brand surface — fixed 藍 in both themes (§1.2). */
+.login-brand {
+  background: var(--yagra-ai);
+  color: var(--on-brand);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.login-brand-name {
+  font-size: 22px;
+  font-weight: var(--weight-medium);
+  margin-top: 8px;
+}
+
+.login-brand-tag {
+  font-size: var(--font-sm);
+  opacity: 0.8;
+}
+
+.login-form-side {
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-title {
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+}
+
+.login-sso {
+  position: relative;
+  height: 38px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.login-sso-note {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-normal);
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: var(--border-width);
+  background: var(--border-color);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.login-error {
+  margin: 0;
+  font-size: var(--font-sm);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid;
+}
+
+/* Hard failure (auth invalid / unavailable / SSO not provisioned). */
+.login-error-danger {
+  color: var(--status-critical);
+  border-color: var(--status-critical);
+}
+
+/* Recoverable (lockout / expiry). */
+.login-error-warning {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.login-embedded {
+  min-height: auto;
+  padding: 0;
+  background: none;
+}
+
+@media (max-width: 560px) {
+  .login-card {
+    grid-template-columns: 1fr;
+  }
+}

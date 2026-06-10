@@ -1,0 +1,40 @@
+.thresholds-note-card {
+  margin-bottom: 16px;
+  border-left: 2px solid var(--status-maintenance);
+}
+
+.thresholds-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+}
+
+.thresholds-form .thresholds-num {
+  width: 72px;
+}
+
+.thresholds-row {
+  gap: 10px;
+}
+
+.thresholds-scope {
+  min-width: 120px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.thresholds-metric {
+  min-width: 140px;
+}
+
+.thresholds-bounds {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.thresholds-dwell {
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}

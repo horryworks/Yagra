@@ -1,0 +1,33 @@
+.field {
+  height: 30px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+}
+
+/* Addresses / OIDs / secrets read better in mono — opt in with .field.mono. */
+.field.mono {
+  font-family: var(--font-family);
+}
+
+.field::placeholder {
+  color: var(--text-tertiary);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.field:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select.field {
+  cursor: pointer;
+}

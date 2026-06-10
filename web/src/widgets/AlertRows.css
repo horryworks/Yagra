@@ -1,0 +1,62 @@
+.alertrows {
+  display: flex;
+  flex-direction: column;
+}
+
+.alertrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--row-h);
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.alertrow:last-child {
+  border-bottom: none;
+}
+
+.alertrow-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.alertrow-node {
+  font-size: var(--font-sm);
+}
+
+.alertrow-check {
+  color: var(--text-primary);
+}
+
+.alertrow-cause {
+  font-size: var(--font-sm);
+}
+
+.alertrow-flap {
+  font-size: var(--font-xs);
+  color: var(--status-warning);
+  border: var(--border-width) solid var(--status-warning);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+
+.alertrow-time {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.alertrow-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.alertrows-empty {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  margin: 0;
+  padding: 8px 0;
+}
