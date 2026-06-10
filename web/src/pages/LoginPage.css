@@ -17,9 +17,10 @@
   background: var(--bg-secondary);
 }
 
-/* Brand panel: a physical brand surface — fixed 藍 in both themes (§1.2). */
+/* Brand panel: a physical brand surface — the orange seal at panel scale, fixed in both
+   themes (§1.2/§1.5). The mark-variant logo sits on it in off-white. */
 .login-brand {
-  background: var(--yagra-ai);
+  background: var(--brand-fixed);
   color: var(--on-brand);
   padding: 32px 24px;
   display: flex;

@@ -34,14 +34,14 @@
 }
 
 .btn-primary {
-  background: var(--yagra-ai);
-  border-color: var(--yagra-ai);
-  color: #f2ede0;
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-mark);
 }
 
 .btn-primary:hover {
-  background: #234b75;
-  border-color: #234b75;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .btn-danger {

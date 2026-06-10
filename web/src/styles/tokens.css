@@ -3,54 +3,56 @@
    CSS variables, not prose. Components reference these via var(); never hardcode a hex
    outside this file (uPlot canvas strokes are the one exemption — see ui-conventions.md).
 
+   Brand is a single LIXIL orange (#E95D08), seal style. It is the active/selected/focus
+   accent ONLY (§1.1) — kept on its own channel, never mixed with status warning (amber).
+   Status and series are separate channels from brand and from each other.
+
    Layering:
-   - Brand / status / series tokens (§1.2) are CANONICAL and identical across themes.
-   - Semantic chrome tokens (surface/ink/border) switch between light and dark.
-   - ui-conventions.md aliases (--status-ok, --bg-primary, …) derive from the canonical set
-     so both rule-sets resolve to one palette. */
+   - Fixed brand surface (the orange seal tile / login panel) is theme-independent.
+   - --brand (the accent) is fixed too, nudged slightly brighter in dark for readability.
+   - Semantic chrome (bg/text/border), status, and series switch by theme (§1.5).
+   - ui-conventions.md aliases (--status-ok, --status-unreachable) derive from the set. */
 
 :root {
-  /* ---- brand (§1.2) — fixed in both themes ---- */
-  --yagra-ai: #1b3a5b; /* 藍  primary brand        */
-  --yagra-shu: #c7402e; /* 朱  accent (active only) */
-  --yagra-kinari: #f2ede0; /* 生成り surface          */
-  --yagra-sumi: #2b2a28; /* 墨  ink / text          */
+  /* ---- fixed brand seal (§1.1) — a physical brand surface, identical in both themes ---- */
+  --brand-fixed: #e95d08; /* orange seal tile / login brand panel */
+  --brand-mark: #faf7f3; /* off-white 生成り mark on the seal     */
 
-  /* ---- status (§1.3) — network state semantics; never reused for decoration ---- */
-  --status-up: #2e7d32; /* up / ok          */
-  --status-warning: #c77a0b; /* warning          */
-  --status-critical: #c62828; /* critical / down  */
-  --status-unknown: #6b6b66; /* unknown (gaps)   */
-  --status-maintenance: #2e5aac; /* maintenance      */
-  /* Domain has a distinct Unreachable state (yagra-common NodeState); design folds
-     down/critical together, so it shares the critical color but keeps its own name. */
-  --status-unreachable: var(--status-critical);
-  /* ui-conventions.md alias spelling. */
-  --status-ok: var(--status-up);
+  /* ---- brand accent (§1.1) — orange, active/selected/focus ONLY ---- */
+  --brand: #e95d08;
+  --accent-color: var(--brand); /* alias used by interactive states */
+  --accent-hover: #cf5207;
 
   /* ---- series (§1.2) — categorical graph colors; carry NO status meaning ---- */
   --series-1: #4c8dd6; /* 青 */
   --series-2: #9b7bd4; /* 紫 */
-  --series-3: #4caf9b; /* 青緑 */
-  --series-4: #d68a4c; /* 橙茶 */
-  --series-5: #b05c8e; /* 臙脂 */
-  --series-6: #7c9b4c; /* 苔 */
+  --series-3: #4caf9b; /* 青緑 (extension) */
+  --series-4: #d68a4c; /* 橙茶 (extension) */
+  --series-5: #b05c8e; /* 臙脂 (extension) */
+  --series-6: #7c9b4c; /* 苔   (extension) */
   /* Severity 'info' is not a network status — borrow the categorical blue, not a status. */
   --severity-info: var(--series-1);
 
-  /* ---- accent (§1.1) — 朱 ONLY for active/selected/focus ---- */
-  --accent-color: var(--yagra-shu);
-  --accent-hover: #d8543f;
+  /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
+  --status-up: #2e7d32;
+  --status-warning: #c77a0b;
+  --status-critical: #c62828;
+  --status-unknown: #6b6b66;
+  --status-maintenance: #2e5aac;
+  /* Domain has a distinct Unreachable state (yagra-common NodeState); design folds it into
+     critical, so it shares that color but keeps its own name. Resolves per-theme at use. */
+  --status-unreachable: var(--status-critical);
+  --status-ok: var(--status-up); /* ui-conventions alias spelling */
 
-  /* ---- typography (§1.4) ---- */
+  /* ---- typography (§1.4) — theme-independent ---- */
   --ui-font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-family: 'SFMono-Regular', 'JetBrains Mono', 'Consolas', ui-monospace, monospace;
-  --font-base: 13px; /* size scale derives from this via calc() */
-  --font-xs: calc(var(--font-base) - 2px); /* 11 */
-  --font-sm: calc(var(--font-base) - 1px); /* 12 */
-  --font-md: var(--font-base); /* 13 */
-  --font-lg: calc(var(--font-base) + 2px); /* 15 */
-  --font-xl: calc(var(--font-base) + 5px); /* 18 */
+  --font-base: 13px;
+  --font-xs: calc(var(--font-base) - 2px);
+  --font-sm: calc(var(--font-base) - 1px);
+  --font-md: var(--font-base);
+  --font-lg: calc(var(--font-base) + 2px);
+  --font-xl: calc(var(--font-base) + 5px);
   --weight-normal: 400;
   --weight-medium: 500;
 
@@ -59,39 +61,46 @@
   --radius-sm: 4px;
   --border-width: 0.5px;
   --gap: 12px;
-  --row-h: 30px; /* compact list row (§4 high-density) */
+  --row-h: 30px;
   --topbar-h: 52px;
   --sidebar-w: 220px;
   --sidebar-w-collapsed: 52px;
-  --transition: 0.15s ease; /* snappy (≤0.3s) */
+  --transition: 0.15s ease;
 
-  /* ---- light theme (default) — surface 生成り, ink 墨 ---- */
-  --bg-primary: #faf8f2;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #efeadd;
-  --text-primary: var(--yagra-sumi);
-  --text-secondary: #5c5a55;
-  --text-tertiary: #8a877f;
-  --border-color: #d9d3c4;
-  --overlay: rgba(43, 42, 40, 0.4);
-  /* On-brand-panel ink (the 藍 login panel is a physical brand surface — fixed both modes). */
-  --on-brand: var(--yagra-kinari);
+  /* ---- Light theme (default; §1.5) ---- */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f3efe9;
+  --bg-tertiary: #ece7df; /* inset / hover (between secondary and border) */
+  --border-color: #e5e0d8;
+  --text-primary: #232323;
+  --text-secondary: #57534c;
+  --text-tertiary: #8c867c;
+  --overlay: rgba(35, 35, 35, 0.4);
+  /* Ink that sits on the fixed orange brand surface (login panel / seal). */
+  --on-brand: var(--brand-mark);
 }
 
-/* ---- dark theme — surface 墨寄り, ink 生成り寄り. Brand/status/series unchanged. ---- */
+/* ---- Dark theme — blue-slate, lets the complementary orange pop (§1.5) ---- */
 [data-theme='dark'] {
-  --bg-primary: #14171c;
-  --bg-secondary: #1c2128;
-  --bg-tertiary: #262c35;
-  --text-primary: #e6edf3;
-  --text-secondary: #aab3bd;
-  --text-tertiary: #79828d;
-  --border-color: #2c333d;
+  --bg-primary: #161a21;
+  --bg-secondary: #1f2630;
+  --bg-tertiary: #29313c;
+  --border-color: #2e3540;
+  --text-primary: #edeff3;
+  --text-secondary: #a7aebb;
+  --text-tertiary: #757e8c;
   --overlay: rgba(0, 0, 0, 0.55);
-  /* Status hues read slightly brighter on dark surfaces. */
-  --status-up: #3fae46;
-  --status-warning: #e0930f;
+
+  /* Brand nudged brighter for dark readability (§1.5). Seal/login stay --brand-fixed. */
+  --brand: #f26a12;
+  --accent-hover: #ff7c2e;
+
+  --status-up: #4caf50;
+  --status-warning: #e2a526;
   --status-critical: #ef5350;
-  --status-unknown: #8a8f96;
-  --status-maintenance: #4a7bd6;
+  --status-unknown: #8a93a3;
+  --status-maintenance: #6e8fd6;
+
+  --series-1: #5b9bdb;
+  --series-2: #ab91de;
 }
