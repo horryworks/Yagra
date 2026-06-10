@@ -3,8 +3,9 @@
 //! Path-versioned (ADR-019). Responses are JSON; errors use the fixed envelope
 //! `{"error": {"code", "message"}}` so clients never see a raw internal error. Readings
 //! come from the [`MetricStore`] (VictoriaMetrics live, in-memory for the skeleton) and
-//! the inventory from a [`NodeListing`]. Cursor pagination and RBAC scoping land as the
-//! API grows; the alert endpoints are stubs until the alert engine is wired (Workstream B).
+//! the inventory from a [`NodeListing`]. A node's display state and the alert endpoints are
+//! served from the live [`AlertManager`] (committed liveness + threshold roll-up + active
+//! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
 
 use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserStore};
@@ -73,6 +74,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/config", get(get_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         .route("/api/v1/nodes/:node_id", delete(delete_node))
+        .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route("/api/v1/profiles/:id", delete(delete_profile))
@@ -218,23 +220,21 @@ async fn list_nodes(
             } else {
                 None
             };
+            // Display state comes from the live alert engine (committed liveness rolled up
+            // with any active threshold alert). Nodes the engine hasn't observed yet fall
+            // back to a coarse store probe (a recent RTT ⇒ ok, else unknown).
+            let states = st.alerts.node_states();
             let mut out = Vec::with_capacity(nodes.len());
             for n in nodes {
-                // Coarse state from liveness (full state machine: a recent RTT ⇒ ok).
-                let live = st
-                    .store
-                    .latest(&SeriesKey::node(n.id, "icmp_rtt_ms"))
-                    .await
-                    .is_some();
+                let state = match states.get(&n.id) {
+                    Some(s) => *s,
+                    None => derive_fallback_state(&st, n.id).await,
+                };
                 out.push(NodeSummary {
                     id: n.id,
                     name: n.name,
                     address: n.address.to_string(),
-                    state: if live {
-                        NodeState::Ok
-                    } else {
-                        NodeState::Unknown
-                    },
+                    state,
                 });
             }
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
@@ -248,6 +248,41 @@ async fn list_nodes(
             )
         }
     }
+}
+
+/// Coarse fallback state for a node the alert engine has not observed yet: a recent ICMP
+/// RTT reading ⇒ `ok`, otherwise `unknown`. Used only when the engine has no opinion (e.g.
+/// just-added node, or skeleton mode where nothing polls).
+async fn derive_fallback_state(st: &ApiState, node: NodeId) -> NodeState {
+    if st
+        .store
+        .latest(&SeriesKey::node(node, "icmp_rtt_ms"))
+        .await
+        .is_some()
+    {
+        NodeState::Ok
+    } else {
+        NodeState::Unknown
+    }
+}
+
+/// One node's live status: its rolled-up display state plus the alerts currently attributed
+/// to it (so node detail can show *why* it's down without re-deriving from the list).
+async fn get_node_status(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let node = NodeId::from(node_id);
+    let state = match st.alerts.node_state(node) {
+        Some(s) => s,
+        None => derive_fallback_state(&st, node).await,
+    };
+    let alerts = st.alerts.alerts_for(node);
+    Json(serde_json::json!({ "node_id": node, "state": state, "alerts": alerts })).into_response()
 }
 
 async fn get_node_metric(
@@ -1022,6 +1057,28 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let json = body_json(resp).await;
         assert_eq!(json["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn node_status_reports_state_and_alerts() {
+        let node = NodeId::from(Uuid::nil());
+        // Demo node has a live RTT but no alert-engine activity ⇒ fallback state "ok",
+        // and no active alerts attributed to it.
+        let app = router(state_with(store_with_reading(node, "icmp_rtt_ms", 8.0)));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/status"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["node_id"], node.to_string());
+        assert_eq!(json["state"], "ok");
+        assert_eq!(json["alerts"].as_array().map(Vec::len), Some(0));
     }
 
     #[tokio::test]
