@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError } from './api';
+import { api, ApiError, getToken, setToken, setUnauthorizedHandler } from './api';
 
 function mockFetch(status: number, body: unknown) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -118,5 +118,30 @@ describe('api client', () => {
     mockFetch(200, { role: 'Admin' });
     const me = await api.me();
     expect(me.role).toBe('Admin');
+  });
+
+  it('clears a stale token and notifies on a 401 with a token attached', async () => {
+    setToken('stale-token');
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    mockFetch(401, { error: { code: 'unauthorized', message: 'a valid bearer token is required' } });
+
+    await expect(api.createProfile('p1')).rejects.toMatchObject({ status: 401 });
+    expect(getToken()).toBeNull();
+    expect(onUnauth).toHaveBeenCalledOnce();
+
+    setUnauthorizedHandler(null);
+  });
+
+  it('does not fire the unauthorized handler when no token was attached (e.g. bad login)', async () => {
+    setToken(null);
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    mockFetch(401, { error: { code: 'invalid_credentials', message: 'bad' } });
+
+    await expect(api.login('u', 'bad')).rejects.toMatchObject({ status: 401 });
+    expect(onUnauth).not.toHaveBeenCalled();
+
+    setUnauthorizedHandler(null);
   });
 });
