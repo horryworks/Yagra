@@ -62,6 +62,53 @@ export interface CredentialSummary {
   kind: string;
 }
 
+/** A page of the keyset-paginated node list (`GET /api/v1/nodes`). */
+export interface NodePage {
+  nodes: NodeSummary[];
+  next_cursor: string | null;
+}
+
+/** Current principal (`GET /api/v1/auth/me`). */
+export interface AuthMe {
+  role: string;
+}
+
+/** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). */
+export interface ProfileSummary {
+  id: string;
+  name: string;
+}
+
+/** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */
+export type ScopeLevel = 'profile' | 'group' | 'node';
+
+/** Breach direction (yagra-common `Direction`, snake_case). */
+export type Direction = 'above' | 'below';
+
+/** A stored threshold rule (`GET /api/v1/thresholds`, core `StoredThreshold`). The rule
+ *  fields are flattened onto the row. Note: the GET shape names the scope `level`, while the
+ *  POST body names it `scope_level`. */
+export interface StoredThreshold {
+  id: string;
+  level: ScopeLevel;
+  scope_id: string;
+  metric: string;
+  direction: Direction;
+  warning: number | null;
+  critical: number | null;
+  dwell_samples: number;
+}
+
+/** One alert-history row (`GET /api/v1/alerts/history`, core `AlertHistoryRow`). */
+export interface AlertHistoryRow {
+  node: string;
+  check: string;
+  severity: Severity;
+  state: NodeState;
+  at_unix_ms: number;
+  resolved: boolean;
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

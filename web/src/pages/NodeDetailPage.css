@@ -1,0 +1,33 @@
+.nodedetail-body {
+  margin-top: 16px;
+}
+
+.nodedetail-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.nodedetail-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nodedetail-metric {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+}
+
+.nodedetail-value {
+  font-size: 26px;
+  font-weight: var(--weight-medium);
+}
+
+@media (max-width: 760px) {
+  .nodedetail-grid {
+    grid-template-columns: 1fr;
+  }
+}

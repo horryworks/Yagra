@@ -1,0 +1,102 @@
+.sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+  transition: width var(--transition);
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-w-collapsed);
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.sidebar-title {
+  flex: 1;
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.sidebar-toggle {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  gap: 1px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row-h);
+  padding: 0 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+.sidebar-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+/* Active item = 朱 left border + secondary background (§2.1). */
+.sidebar-item.active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-left-color: var(--accent-color);
+}
+
+.sidebar-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-soon {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex: none;
+}
+
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-mono {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-family);
+}

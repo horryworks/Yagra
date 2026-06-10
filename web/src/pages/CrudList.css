@@ -1,0 +1,41 @@
+.crud-add {
+  margin-bottom: 14px;
+}
+
+.crud-add .field {
+  min-width: 260px;
+  flex: 1;
+}
+
+.crud-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.crud-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--row-h);
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.crud-name {
+  min-width: 180px;
+  font-weight: var(--weight-medium);
+}
+
+.crud-id {
+  flex: 1;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crud-kind {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}

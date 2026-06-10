@@ -1,0 +1,17 @@
+.statusdot-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.statusdot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.statusdot-label {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}

@@ -1,0 +1,70 @@
+.dt {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.dt-head {
+  display: grid;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.dt-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+  padding-right: 10px;
+}
+
+.dt-scroll {
+  position: relative;
+}
+
+.dt-body {
+  position: relative;
+  width: 100%;
+}
+
+.dt-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--row-h);
+  display: grid;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.dt-row.clickable {
+  cursor: pointer;
+}
+
+.dt-row.clickable:hover {
+  background: var(--bg-tertiary);
+}
+
+.dt-cell {
+  padding-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-empty {
+  padding: 24px 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}

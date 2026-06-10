@@ -4,11 +4,18 @@
 
 import type {
   Alert,
+  AlertHistoryRow,
   ApiErrorBody,
+  AuthMe,
   CredentialSummary,
+  Direction,
   MetricRange,
   MetricReading,
+  NodePage,
   NodeSummary,
+  ProfileSummary,
+  ScopeLevel,
+  StoredThreshold,
 } from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -110,15 +117,67 @@ export const api = {
 
   /** Inventory listing (first page; the response is keyset-paginated). */
   listNodes: (): Promise<NodeSummary[]> =>
-    request<{ nodes: NodeSummary[]; next_cursor: string | null }>('/nodes').then((r) => r.nodes),
+    request<NodePage>('/nodes').then((r) => r.nodes),
 
-  /** Create a node. */
-  createNode: (body: { name: string; address: string; pool?: string }): Promise<{ id: string }> =>
-    request('/nodes', jsonBody('POST', body)),
+  /** One keyset page of the inventory (for the virtualized node table). Pass the previous
+   *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. */
+  listNodesPage: (opts?: { cursor?: string; limit?: number }): Promise<NodePage> => {
+    const params = new URLSearchParams();
+    if (opts?.cursor) params.set('cursor', opts.cursor);
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request(qs ? `/nodes?${qs}` : '/nodes');
+  },
+
+  /** Create a node. Optional profile/credential/parent bindings. */
+  createNode: (body: {
+    name: string;
+    address: string;
+    pool?: string;
+    profile_id?: string;
+    credential_id?: string;
+    parent_id?: string;
+  }): Promise<{ id: string }> => request('/nodes', jsonBody('POST', body)),
 
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Set or clear a node's device-profile + bound credential. */
+  setNodeBindings: (
+    id: string,
+    body: { profile_id?: string | null; credential_id?: string | null },
+  ): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
+
+  /** Device-class profiles. */
+  listProfiles: (): Promise<ProfileSummary[]> => request('/profiles'),
+
+  /** Create a profile. */
+  createProfile: (name: string): Promise<{ id: string }> =>
+    request('/profiles', jsonBody('POST', { name })),
+
+  /** Delete a profile. */
+  deleteProfile: (id: string): Promise<void> =>
+    request(`/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Threshold rules (hierarchical overrides; most-specific scope wins). */
+  listThresholds: (): Promise<StoredThreshold[]> => request('/thresholds'),
+
+  /** Create a threshold rule. */
+  createThreshold: (body: {
+    scope_level: ScopeLevel;
+    scope_id: string;
+    metric: string;
+    direction: Direction;
+    warning?: number;
+    critical?: number;
+    dwell_samples?: number;
+  }): Promise<{ id: string }> => request('/thresholds', jsonBody('POST', body)),
+
+  /** Delete a threshold rule. */
+  deleteThreshold: (id: string): Promise<void> =>
+    request(`/thresholds/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Credential metadata listing (never includes secret values). */
   listCredentials: (): Promise<CredentialSummary[]> => request('/credentials'),
@@ -136,6 +195,13 @@ export const api = {
 
   /** Active alerts. */
   listAlerts: (): Promise<Alert[]> => request('/alerts'),
+
+  /** Recent alert history (default 100 rows). */
+  listAlertHistory: (limit?: number): Promise<AlertHistoryRow[]> =>
+    request(limit != null ? `/alerts/history?limit=${limit}` : '/alerts/history'),
+
+  /** The current principal (role). Requires a valid session. */
+  me: (): Promise<AuthMe> => request('/auth/me'),
 
   /** Log in; stores the bearer token on success. */
   login: async (username: string, password: string): Promise<{ token: string; role: string }> => {

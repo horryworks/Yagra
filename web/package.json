@@ -12,8 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.10.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "react-router-dom": "^6.28.0",
     "uplot": "^1.6.31",
     "zustand": "^5.0.0"
   },
