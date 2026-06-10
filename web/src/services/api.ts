@@ -12,6 +12,7 @@ import type {
   MetricRange,
   MetricReading,
   NodePage,
+  NodeStatus,
   NodeSummary,
   ProfileSummary,
   ScopeLevel,
@@ -154,6 +155,10 @@ export const api = {
     credential_id?: string;
     parent_id?: string;
   }): Promise<{ id: string }> => request('/nodes', jsonBody('POST', body)),
+
+  /** One node's live status: rolled-up display state + active alerts attributed to it. */
+  getNodeStatus: (id: string): Promise<NodeStatus> =>
+    request(`/nodes/${encodeURIComponent(id)}/status`),
 
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>

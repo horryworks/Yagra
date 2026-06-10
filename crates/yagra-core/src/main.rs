@@ -40,6 +40,7 @@ use store::{MetricStore, VmStore};
 use thresholds::ThresholdStore;
 use uuid::Uuid;
 use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult, SnmpCheck};
+use yagra_topology::Topology;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -330,9 +331,10 @@ async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow
     Ok(())
 }
 
-/// Build the alert engine's config snapshot: all thresholds plus per-node metadata
-/// (profile + group tag-values) for scope resolution. Failures degrade to empty rather
-/// than crashing the refresh loop.
+/// Build the alert engine's config snapshot: all thresholds, per-node metadata (profile +
+/// group tag-values) for scope resolution, and the dependency topology (parent edges) for
+/// suppression / root-cause roll-up. Failures degrade to empty rather than crashing the
+/// refresh loop.
 async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> AlertConfig {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load thresholds");
@@ -340,7 +342,12 @@ async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> Aler
     });
     let nodes = repo.list_nodes().await.unwrap_or_default();
     let mut meta = HashMap::new();
+    let mut topology = Topology::new();
     for node in nodes {
+        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
+        if let Some(parent) = node.parent {
+            topology.add_dependency(node.id, parent);
+        }
         meta.insert(
             node.id,
             NodeMeta {
@@ -349,7 +356,7 @@ async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> Aler
             },
         );
     }
-    AlertConfig::new(rules, meta)
+    AlertConfig::new(rules, meta).with_topology(topology)
 }
 
 /// Connect to NATS with retry so startup ordering doesn't matter.

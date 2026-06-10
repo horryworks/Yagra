@@ -1,8 +1,8 @@
 // Rules & thresholds (Alerts ▸ Rules & thresholds). Thresholds resolve by hierarchical
-// override — global → profile → folder → node, most-specific wins (§3.3) — so each rule
-// carries a scope level + id. CRUD against /thresholds. The store accepts rules today, but
-// metric-threshold *evaluation* isn't wired into the alert engine yet (only ICMP liveness
-// fires), so the page says so rather than implying alerts will fire.
+// override — profile → group → node, most-specific wins (§3.3) — so each rule carries a
+// scope level + id. CRUD against /thresholds. Rules are evaluated live: the alert engine
+// snapshots them (refreshed every ~30s) and checks each matching poll sample through the
+// same hysteresis/flapping machinery as liveness, so a breach fires a real alert.
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -18,6 +18,10 @@ import './ThresholdsPage.css';
 
 const LEVELS: ScopeLevel[] = ['profile', 'group', 'node'];
 const DIRECTIONS: Direction[] = ['above', 'below'];
+// Metrics the pollers emit today (ICMP every node, SNMP when a community is bound). Offered
+// as presets so operators don't have to guess the exact series name; free text is still
+// allowed for any other collected metric (e.g. snmp_oid_*).
+const METRIC_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
 
 export function ThresholdsPage() {
   const authed = useAuthStore((s) => s.authed);
@@ -88,9 +92,10 @@ export function ThresholdsPage() {
 
       <Card className="thresholds-note-card">
         <p className="thresholds-note">
-          Rules are stored and resolved by scope, but metric-threshold evaluation isn't wired
-          into the alert engine yet — only ICMP liveness fires alerts today. Defining rules here
-          is forward-compatible; they'll take effect once threshold evaluation lands.
+          ICMP liveness (node up/down) alerts automatically — no rule needed. Rules here add
+          metric thresholds on top: each is evaluated live on every matching poll sample, with
+          the most-specific scope winning. Warning/critical bounds and a dwell (consecutive
+          samples before it commits, anti-flap) are per rule.
         </p>
       </Card>
 
@@ -117,10 +122,16 @@ export function ThresholdsPage() {
               />
               <TextInput
                 className="mono"
-                placeholder="metric (e.g. cpu_util)"
+                placeholder="metric (e.g. icmp_rtt_ms)"
+                list="metric-presets"
                 value={metric}
                 onChange={(e) => setMetric(e.target.value)}
               />
+              <datalist id="metric-presets">
+                {METRIC_PRESETS.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
               <Select
                 value={direction}
                 onChange={(e) => setDirection(e.target.value as Direction)}
