@@ -1,0 +1,30 @@
+.pageheader {
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pageheader-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.pageheader-title {
+  font-size: var(--font-xl);
+  font-weight: var(--weight-medium);
+}
+
+.pageheader-note {
+  margin: 4px 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.pageheader-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

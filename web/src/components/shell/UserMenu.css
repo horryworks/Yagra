@@ -1,0 +1,59 @@
+.usermenu {
+  position: relative;
+}
+
+.usermenu-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.usermenu-avatar:hover {
+  border-color: var(--accent-color);
+}
+
+.usermenu-pop {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 50;
+}
+
+.usermenu-head {
+  padding: 6px 8px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  margin-bottom: 4px;
+}
+
+.usermenu-role {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.usermenu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.usermenu-item:hover {
+  background: var(--bg-tertiary);
+}

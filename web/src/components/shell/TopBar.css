@@ -1,0 +1,121 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  height: var(--topbar-h);
+  padding: 0 16px;
+  gap: 24px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.topbar-home {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.topbar-wordmark {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.topbar-tabs {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  gap: 4px;
+}
+
+.topbar-tab {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition);
+}
+
+.topbar-tab:hover {
+  color: var(--text-primary);
+}
+
+/* Active tab = 朱 underline (§2.1). */
+.topbar-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-color);
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-search {
+  width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+}
+
+.topbar-search:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.topbar-search:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topbar-bell {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.topbar-bell:hover {
+  color: var(--text-primary);
+}
+
+.topbar-bell-glyph {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.topbar-bell-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #fff;
+  background: var(--status-critical);
+  border-radius: 8px;
+}

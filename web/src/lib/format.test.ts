@@ -8,15 +8,17 @@ import {
 } from './format';
 
 describe('format', () => {
-  it('maps severity to theme color variables', () => {
-    expect(severityColorVar('critical')).toBe('var(--sev-critical)');
-    expect(severityColorVar('warning')).toBe('var(--sev-warning)');
-    expect(severityColorVar('info')).toBe('var(--sev-info)');
+  it('maps severity to status/theme color variables', () => {
+    expect(severityColorVar('critical')).toBe('var(--status-critical)');
+    expect(severityColorVar('warning')).toBe('var(--status-warning)');
+    expect(severityColorVar('info')).toBe('var(--severity-info)');
   });
 
-  it('maps unreachable state to the critical color', () => {
-    expect(stateColorVar('unreachable')).toBe('var(--sev-critical)');
-    expect(stateColorVar('ok')).toBe('var(--state-ok)');
+  it('maps node state to status color variables', () => {
+    expect(stateColorVar('unreachable')).toBe('var(--status-unreachable)');
+    expect(stateColorVar('ok')).toBe('var(--status-up)');
+    expect(stateColorVar('warning')).toBe('var(--status-warning)');
+    expect(stateColorVar('maintenance')).toBe('var(--status-maintenance)');
   });
 
   it('ranks severities for sorting', () => {

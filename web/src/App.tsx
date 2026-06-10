@@ -1,16 +1,26 @@
+// App root: applies the persisted theme, discovers whether reads are gated, and mounts the
+// router. In private-dashboard mode (reads require auth) and not logged in, the whole app is
+// gated behind the login screen; otherwise the shell + routes render. On a config-fetch
+// error we fall back to an open dashboard so a transient/older server never hard-locks the UI.
+
 import { useEffect, useState } from 'react';
-import { Admin } from './components/Admin/Admin';
-import { Dashboard } from './components/Dashboard/Dashboard';
-import { Login } from './components/Login/Login';
+import { BrowserRouter } from 'react-router-dom';
+import { LoginPage } from './pages/LoginPage';
+import { AppRoutes } from './routes';
 import { api, type ClientConfig } from './services/api';
+import { applyTheme, usePrefsStore } from './prefs';
 import { useAuthStore } from './store';
 
 export function App() {
   const authed = useAuthStore((s) => s.authed);
+  const theme = usePrefsStore((s) => s.theme);
   const [config, setConfig] = useState<ClientConfig | null>(null);
 
-  // Discover whether the server gates reads behind login. On error, fall back to an open
-  // dashboard so a transient/older server never hard-locks the UI.
+  // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
   useEffect(() => {
     api
       .getConfig()
@@ -18,31 +28,17 @@ export function App() {
       .catch(() => setConfig({ public_dashboard: true, auth_available: false }));
   }, []);
 
-  // Private mode (reads require auth) and not logged in ⇒ gate the whole app behind login.
   const gated = config != null && !config.public_dashboard && !authed;
 
   return (
-    <>
-      <header className="app-header">
-        <h1>Yagra</h1>
-        <span className="muted">Network Monitoring</span>
-      </header>
+    <BrowserRouter>
       {config == null ? (
-        <main className="app-main">
-          <p className="muted">Loading…</p>
-        </main>
+        <div className="app-loading muted">Loading…</div>
       ) : gated ? (
-        <main className="app-main">
-          <Login title="Sign in to Yagra" />
-        </main>
+        <LoginPage />
       ) : (
-        <>
-          <Dashboard />
-          <main className="app-main">
-            <Admin />
-          </main>
-        </>
+        <AppRoutes />
       )}
-    </>
+    </BrowserRouter>
   );
 }

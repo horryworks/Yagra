@@ -14,32 +14,34 @@ export function pointsToSeries(points: MetricPoint[]): {
   };
 }
 
-/** CSS variable holding the color for a severity. */
+/** CSS variable holding the color for a severity. Severity maps onto the status palette
+   (critical/warning); 'info' is not a network status, so it borrows a categorical color. */
 export function severityColorVar(severity: Severity): string {
   switch (severity) {
     case 'critical':
-      return 'var(--sev-critical)';
+      return 'var(--status-critical)';
     case 'warning':
-      return 'var(--sev-warning)';
+      return 'var(--status-warning)';
     case 'info':
-      return 'var(--sev-info)';
+      return 'var(--severity-info)';
   }
 }
 
-/** CSS variable holding the color for a node state. */
+/** CSS variable holding the color for a node state (design-system §1.3 status semantics). */
 export function stateColorVar(state: NodeState): string {
   switch (state) {
     case 'ok':
-      return 'var(--state-ok)';
+      return 'var(--status-up)';
     case 'warning':
-      return 'var(--sev-warning)';
+      return 'var(--status-warning)';
     case 'critical':
+      return 'var(--status-critical)';
     case 'unreachable':
-      return 'var(--sev-critical)';
+      return 'var(--status-unreachable)';
     case 'unknown':
-      return 'var(--state-unknown)';
+      return 'var(--status-unknown)';
     case 'maintenance':
-      return 'var(--state-maintenance)';
+      return 'var(--status-maintenance)';
   }
 }
 
