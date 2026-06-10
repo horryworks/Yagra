@@ -54,7 +54,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
     <div className={embedded ? 'login login-embedded' : 'login'}>
       <div className="login-card">
         <aside className="login-brand">
-          <Logo size={56} />
+          <Logo size={56} variant="mark" />
           <div className="login-brand-name">Yagra</div>
           <div className="login-brand-tag">Network monitoring</div>
         </aside>
