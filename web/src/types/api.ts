@@ -55,6 +55,14 @@ export interface NodeSummary {
   state: NodeState;
 }
 
+/** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
+ *  alerts currently attributed to it. */
+export interface NodeStatus {
+  node_id: string;
+  state: NodeState;
+  alerts: Alert[];
+}
+
 /** Credential metadata (never the secret value). */
 export interface CredentialSummary {
   id: string;

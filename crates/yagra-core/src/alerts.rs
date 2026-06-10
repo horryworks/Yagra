@@ -6,8 +6,17 @@
 //! ([`CheckState`]). A committed transition into a problem state fires an [`Alert`];
 //! recovery resolves it. Active alerts are held in memory and broadcast to SSE
 //! subscribers; transitions are forwarded to a [`Notifier`] (Webhook) with the engine's
-//! dedup + retry. Threshold-based alerting and persistence land in a later pass — this
-//! MVP covers reachability, which needs no threshold table.
+//! dedup + retry.
+//!
+//! Two more quality features are wired here on top of liveness:
+//! - **Threshold alerting** — each poll sample with a resolved [`EffectiveThreshold`]
+//!   (scope inheritance via [`AlertConfig`]) is evaluated and fed through the same
+//!   hysteresis/flapping machinery as liveness.
+//! - **Dependency suppression** — a node's committed liveness is tracked per node; when a
+//!   node goes down and *every* upstream is also down (per the [`Topology`]), its alert is
+//!   attributed to the highest down ancestor (`root_cause`) and the downstream
+//!   notification is suppressed (rolled up into the parent incident, ADR-015). The alert
+//!   still fires for the UI/history — only the duplicate page is suppressed.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, RwLock};
@@ -21,6 +30,7 @@ use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
     resolve_effective, CheckId, EffectiveThreshold, NodeId, NodeState, ScopeLevel, ScopedThreshold,
 };
+use yagra_topology::Topology;
 
 use crate::thresholds::StoredThreshold;
 
@@ -53,22 +63,33 @@ pub struct NodeMeta {
     pub groups: BTreeSet<String>,
 }
 
-/// A snapshot of thresholds + node metadata the engine evaluates against. Rebuilt
-/// periodically from the database so threshold edits take effect without a restart.
+/// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
+/// against. Rebuilt periodically from the database so threshold/topology edits take effect
+/// without a restart.
 #[derive(Debug, Clone, Default)]
 pub struct AlertConfig {
     thresholds: Vec<StoredThreshold>,
     node_meta: HashMap<NodeId, NodeMeta>,
+    topology: Topology,
 }
 
 impl AlertConfig {
-    /// Build a config from the stored thresholds and node metadata.
+    /// Build a config from the stored thresholds and node metadata (no dependency edges;
+    /// add them with [`Self::with_topology`]).
     #[must_use]
     pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
         Self {
             thresholds,
             node_meta,
+            topology: Topology::new(),
         }
+    }
+
+    /// Attach the dependency topology used for parent-down suppression / root-cause roll-up.
+    #[must_use]
+    pub fn with_topology(mut self, topology: Topology) -> Self {
+        self.topology = topology;
+        self
     }
 
     /// Resolve the effective threshold for one (node, metric), honouring scope inheritance.
@@ -103,11 +124,28 @@ fn check_id(node: NodeId, name: &str) -> CheckId {
     ))
 }
 
-/// In-memory alert engine: per-check state, active alerts, an SSE broadcast, and the
-/// threshold/metadata config snapshot.
+/// Severity ordering over [`NodeState`] for rolling several states up to one headline.
+/// Worse states rank higher; ties never matter (they map to the same display).
+fn severity_rank(state: NodeState) -> u8 {
+    match state {
+        NodeState::Critical => 5,
+        NodeState::Unreachable => 4,
+        NodeState::Warning => 3,
+        NodeState::Unknown => 2,
+        NodeState::Maintenance => 1,
+        NodeState::Ok => 0,
+    }
+}
+
+/// In-memory alert engine: per-check state, active alerts, an SSE broadcast, the committed
+/// per-node liveness map (inventory roll-up + suppression down-set), and the
+/// threshold/metadata/topology config snapshot.
 pub struct AlertManager {
     states: Mutex<HashMap<CheckId, CheckState>>,
     active: Mutex<HashMap<CheckId, Alert>>,
+    /// Committed liveness state per node — the source of truth for the inventory's display
+    /// state and for the suppression down-set. Updated on every liveness observation.
+    live: Mutex<HashMap<NodeId, NodeState>>,
     tx: broadcast::Sender<String>,
     config: RwLock<AlertConfig>,
 }
@@ -120,6 +158,7 @@ impl AlertManager {
         Self {
             states: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashMap::new()),
             tx,
             config: RwLock::new(AlertConfig::default()),
         }
@@ -147,6 +186,55 @@ impl AlertManager {
             .collect()
     }
 
+    /// The rolled-up display state per known node: the worst of its committed liveness
+    /// state and any active alert on it (so a reachable node breaching a threshold reads
+    /// `warning`/`critical`, not `ok`). Nodes the engine has never observed are absent —
+    /// the caller maps those to `unknown` (or a store-derived fallback).
+    #[must_use]
+    pub fn node_states(&self) -> HashMap<NodeId, NodeState> {
+        let mut out = self.live.lock().expect("live mutex poisoned").clone();
+        for alert in self.active.lock().expect("alerts mutex poisoned").values() {
+            out.entry(alert.node)
+                .and_modify(|s| {
+                    if severity_rank(alert.state) > severity_rank(*s) {
+                        *s = alert.state;
+                    }
+                })
+                .or_insert(alert.state);
+        }
+        out
+    }
+
+    /// The rolled-up display state for one node, if the engine has observed it.
+    #[must_use]
+    pub fn node_state(&self, node: NodeId) -> Option<NodeState> {
+        self.node_states().get(&node).copied()
+    }
+
+    /// The active alerts currently attributed to one node (its own problems plus any
+    /// suppressed-but-shown downstream entry).
+    #[must_use]
+    pub fn alerts_for(&self, node: NodeId) -> Vec<Alert> {
+        self.active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .values()
+            .filter(|a| a.node == node)
+            .cloned()
+            .collect()
+    }
+
+    /// The set of nodes currently committed `Unreachable` — the suppression down-set.
+    fn down_set(&self) -> BTreeSet<NodeId> {
+        self.live
+            .lock()
+            .expect("live mutex poisoned")
+            .iter()
+            .filter(|(_, s)| matches!(**s, NodeState::Unreachable))
+            .map(|(n, _)| *n)
+            .collect()
+    }
+
     /// Feed one poll result through the engine: a liveness check from the outcome plus a
     /// threshold check per sample that has a resolved threshold. Returns notify actions for
     /// every committed transition (also broadcast to SSE subscribers here).
@@ -166,6 +254,7 @@ impl AlertManager {
             raw,
             DWELL_SAMPLES,
             result.at_unix_ms,
+            true,
         ));
 
         // Threshold checks per sample (only metrics with a resolved threshold alert).
@@ -182,6 +271,7 @@ impl AlertManager {
                     raw,
                     eff.dwell_samples,
                     result.at_unix_ms,
+                    false,
                 ));
             }
         }
@@ -189,7 +279,9 @@ impl AlertManager {
     }
 
     /// Run one raw state through a check's hysteresis and emit a fire/resolve action on a
-    /// committed transition.
+    /// committed transition. `is_liveness` checks also update the per-node committed-state
+    /// map and apply dependency suppression (root-cause attribution) on a problem
+    /// transition.
     fn process_check(
         &self,
         check: CheckId,
@@ -197,19 +289,46 @@ impl AlertManager {
         raw: NodeState,
         dwell: u32,
         at_unix_ms: i64,
+        is_liveness: bool,
     ) -> Vec<NotifyAction> {
-        let transition = {
+        let (transition, committed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
             let cs = states.entry(check).or_insert_with(|| {
                 CheckState::new(NodeState::Ok, dwell.max(1), FLAP_WINDOW_MS, FLAP_THRESHOLD)
             });
-            cs.observe(raw, at_unix_ms)
+            let t = cs.observe(raw, at_unix_ms);
+            (t, cs.committed())
         };
+
+        // Keep the per-node committed liveness current even when nothing transitioned (a
+        // node's first reachable poll commits `ok` with no transition, but the inventory
+        // still needs to read it as `ok`).
+        if is_liveness {
+            self.live
+                .lock()
+                .expect("live mutex poisoned")
+                .insert(node, committed);
+        }
+
         let Some(t) = transition else {
             return Vec::new();
         };
 
-        match t.to_alert(node, check, at_unix_ms, None) {
+        // Dependency suppression (liveness only): if this node is down and every upstream is
+        // also down, attribute the alert to the highest down ancestor so it groups under
+        // that incident and its own notification is suppressed (ADR-015).
+        let root_cause = if is_liveness && t.state.is_problem() {
+            let down = self.down_set();
+            self.config
+                .read()
+                .expect("config rwlock poisoned")
+                .topology
+                .root_cause(node, &down)
+        } else {
+            None
+        };
+
+        match t.to_alert(node, check, at_unix_ms, root_cause) {
             Some(alert) => {
                 self.active
                     .lock()
@@ -399,6 +518,14 @@ impl Notifier {
         let mut d = self.dispatcher.lock().await;
         match action {
             NotifyAction::Fire(alert) => {
+                // Suppressed downstream alert: it's attributed to an upstream root cause and
+                // rolled into that incident, so we don't page for it separately (the root
+                // cause's own alert — root_cause: None — is what notifies). It still fired
+                // for the UI/history; only the duplicate notification is suppressed.
+                if let Some(root) = alert.root_cause {
+                    tracing::debug!(node = %alert.node, %root, "suppressing downstream alert notification (rolled up under root cause)");
+                    return;
+                }
                 let summary = format!("node {} is {}", alert.node, alert.state);
                 let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
                 let outcome = d
@@ -519,5 +646,95 @@ mod tests {
         r.samples = vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 9999.0)];
         // No thresholds configured ⇒ no metric alert (and reachable ⇒ no liveness alert).
         assert!(mgr.observe(&r).is_empty());
+    }
+
+    #[test]
+    fn node_states_reflect_liveness_and_threshold_rollup() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+
+        // A node never observed has no rolled-up state.
+        assert_eq!(mgr.node_state(node), None);
+
+        // First reachable poll commits `ok` with no transition, but the inventory must still
+        // read it as `ok` (the whole point of ① — surfacing the live state).
+        assert!(mgr
+            .observe(&result(node, CheckOutcome::Reachable, 0))
+            .is_empty());
+        assert_eq!(mgr.node_state(node), Some(NodeState::Ok));
+
+        // A reachable node breaching a critical threshold rolls up to `critical` even though
+        // its liveness is still `ok` underneath.
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(AlertConfig::new(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "icmp_rtt_ms".into(),
+                    direction: Direction::Above,
+                    warning: Some(50.0),
+                    critical: Some(100.0),
+                    dwell_samples: 1,
+                },
+            }],
+            meta,
+        ));
+        let mut high = result(node, CheckOutcome::Reachable, 1);
+        high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        let _ = mgr.observe(&high);
+        assert_eq!(mgr.node_state(node), Some(NodeState::Critical));
+        let alerts = mgr.alerts_for(node);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].state, NodeState::Critical);
+    }
+
+    #[test]
+    fn parent_down_suppresses_child_and_attributes_root_cause() {
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut topo = Topology::new();
+        topo.add_dependency(child, parent);
+
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::default().with_topology(topo));
+
+        // Helper: drive a node Unreachable until it commits and return the fired alert.
+        let drive_down = |node: NodeId, base: i64| -> Alert {
+            let mut fired = None;
+            for i in 0..DWELL_SAMPLES {
+                for action in mgr.observe(&result(
+                    node,
+                    CheckOutcome::Unreachable,
+                    base + i64::from(i),
+                )) {
+                    if let NotifyAction::Fire(alert) = action {
+                        fired = Some(alert);
+                    }
+                }
+            }
+            fired.expect("node should fire after dwell")
+        };
+
+        // Parent goes down first: it is a root (no upstream), so it carries no root cause and
+        // would be the one that pages.
+        let parent_alert = drive_down(parent, 0);
+        assert_eq!(parent_alert.root_cause, None);
+
+        // Child goes down with its only parent already down ⇒ attributed to the parent and its
+        // own notification is suppressed (root_cause is what `Notifier` keys the skip on).
+        let child_alert = drive_down(child, 100);
+        assert_eq!(child_alert.root_cause, Some(parent));
+
+        // Inventory roll-up still shows both down (the signal is kept; only the page is rolled
+        // up).
+        let states = mgr.node_states();
+        assert_eq!(states.get(&parent), Some(&NodeState::Unreachable));
+        assert_eq!(states.get(&child), Some(&NodeState::Unreachable));
     }
 }
