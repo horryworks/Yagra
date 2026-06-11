@@ -75,7 +75,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/config", get(get_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
-        .route("/api/v1/nodes/:node_id", delete(delete_node))
+        .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
@@ -285,6 +285,47 @@ async fn derive_fallback_state(st: &ApiState, node: NodeId) -> NodeState {
         NodeState::Ok
     } else {
         NodeState::Unknown
+    }
+}
+
+/// One node's configuration detail, including its bindings (profile/credential/parent) so
+/// the node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
+#[derive(Serialize)]
+struct NodeDetail {
+    id: NodeId,
+    name: String,
+    address: String,
+    profile_id: Option<Uuid>,
+    credential_id: Option<Uuid>,
+    parent_id: Option<Uuid>,
+}
+
+async fn get_node(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return not_found("node_not_found", format!("no node {node_id}"));
+    };
+    match admin.repo.get_node(node_id).await {
+        Ok(Some(node)) => Json(NodeDetail {
+            id: node.id,
+            name: node.name,
+            address: node.address.to_string(),
+            profile_id: node.profile.map(|p| p.0),
+            credential_id: node.credential.map(|c| c.as_uuid()),
+            parent_id: node.parent.map(|p| p.as_uuid()),
+        })
+        .into_response(),
+        Ok(None) => not_found("node_not_found", format!("no node {node_id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "get node failed");
+            internal("failed to load node")
+        }
     }
 }
 
@@ -1502,6 +1543,24 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn node_detail_not_found_without_admin() {
+        // Skeleton has no metadata store, so node-detail (bindings) reads 404.
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(resp).await["error"]["code"], "node_not_found");
     }
 
     #[tokio::test]

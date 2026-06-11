@@ -7,19 +7,33 @@ import type {
   AlertHistoryRow,
   ApiErrorBody,
   AuthMe,
+  CollectionKind,
   CredentialSummary,
   Direction,
+  InterfaceRow,
+  MetricKind,
   MetricRange,
   MetricReading,
+  NodeDetail,
   NodePage,
   NodeStatus,
   NodeSummary,
   ProfileSummary,
   Role,
   ScopeLevel,
+  StoredCollectionItem,
   StoredThreshold,
   UserSummary,
 } from '../types/api';
+
+/** Request body to create a collection item (scalar or table). */
+export interface CollectionItemInput {
+  metric_name: string;
+  oid: string;
+  collection: CollectionKind;
+  metric_kind: MetricKind;
+  enabled?: boolean;
+}
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 const TOKEN_KEY = 'yagra_token';
@@ -162,6 +176,13 @@ export const api = {
   getNodeStatus: (id: string): Promise<NodeStatus> =>
     request(`/nodes/${encodeURIComponent(id)}/status`),
 
+  /** One node's config detail incl. bindings (profile/credential/parent). */
+  getNode: (id: string): Promise<NodeDetail> => request(`/nodes/${encodeURIComponent(id)}`),
+
+  /** Interfaces discovered on a node, with query-time utilization. Empty in skeleton mode. */
+  listNodeInterfaces: (id: string): Promise<InterfaceRow[]> =>
+    request(`/nodes/${encodeURIComponent(id)}/interfaces`),
+
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -201,6 +222,29 @@ export const api = {
   /** Delete a threshold rule. */
   deleteThreshold: (id: string): Promise<void> =>
     request(`/thresholds/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** A profile's collection set (what every node of that device class collects). */
+  listProfileCollection: (id: string): Promise<StoredCollectionItem[]> =>
+    request(`/profiles/${encodeURIComponent(id)}/collection`),
+
+  /** A node's collection items. `resolved` returns the effective set (profile defaults
+   *  overridden by node-level items) rather than just the node-level overrides. */
+  listNodeCollection: (id: string, resolved = false): Promise<StoredCollectionItem[]> => {
+    const path = `/nodes/${encodeURIComponent(id)}/collection`;
+    return request(resolved ? `${path}?resolved=true` : path);
+  },
+
+  /** Add (or update) a collection item on a profile. */
+  addProfileCollection: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
+    request(`/profiles/${encodeURIComponent(id)}/collection`, jsonBody('POST', body)),
+
+  /** Add (or update) a collection item on a node (overrides the profile default). */
+  addNodeCollection: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
+    request(`/nodes/${encodeURIComponent(id)}/collection`, jsonBody('POST', body)),
+
+  /** Delete a collection item by id. */
+  deleteCollectionItem: (itemId: string): Promise<void> =>
+    request(`/collection/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
 
   /** Credential metadata listing (never includes secret values). */
   listCredentials: (): Promise<CredentialSummary[]> => request('/credentials'),
