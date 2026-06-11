@@ -9,7 +9,7 @@
 
 use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
-use crate::collection::CollectionRepo;
+use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::history::AlertHistoryStore;
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
@@ -99,10 +99,6 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/thresholds/:id", delete(delete_threshold))
         .route(
-            "/api/v1/profiles/:id/collection",
-            get(list_profile_collection).post(create_profile_collection),
-        )
-        .route(
             "/api/v1/nodes/:node_id/collection",
             get(list_node_collection).post(create_node_collection),
         )
@@ -113,6 +109,26 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/nodes/:node_id/interfaces",
             get(list_node_interfaces),
+        )
+        .route(
+            "/api/v1/collection-templates",
+            get(list_collection_templates).post(create_collection_template),
+        )
+        .route(
+            "/api/v1/collection-templates/:id",
+            delete(delete_collection_template),
+        )
+        .route(
+            "/api/v1/collection-templates/:id/items",
+            get(list_template_items).post(create_template_item),
+        )
+        .route(
+            "/api/v1/collection-templates/:id/items/:item_id",
+            delete(delete_template_item),
+        )
+        .route(
+            "/api/v1/profiles/:id/templates",
+            get(list_profile_templates).put(set_profile_templates),
         )
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id", delete(delete_user))
@@ -969,41 +985,6 @@ struct InterfaceRow {
     stale: bool,
 }
 
-async fn list_profile_collection(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.list_items("profile", id).await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list profile collection failed");
-            internal("failed to list collection set")
-        }
-    }
-}
-
-async fn create_profile_collection(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<CreateCollectionItem>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    create_collection_item(admin, "profile", id, body).await
-}
-
 async fn list_node_collection(
     State(st): State<ApiState>,
     headers: HeaderMap,
@@ -1059,35 +1040,43 @@ async fn create_node_collection(
     create_collection_item(admin, "node", node_id, body).await
 }
 
-/// Validate + create a collection item at a scope (shared by the profile/node handlers).
+/// Validate a collection-item body at the API edge; `Some(resp)` short-circuits with 400.
+fn validate_collection_item(body: &CreateCollectionItem) -> Option<Response> {
+    if !is_valid_metric_name(&body.metric_name) {
+        return Some(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_name",
+            "metric_name must be a valid identifier".to_owned(),
+        ));
+    }
+    if !is_valid_oid(&body.oid) {
+        return Some(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_oid",
+            "oid must be a dotted numeric OID".to_owned(),
+        ));
+    }
+    if !matches!(body.collection.as_str(), "scalar" | "table")
+        || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
+    {
+        return Some(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_collection_item",
+            "collection must be scalar|table and metric_kind gauge|counter".to_owned(),
+        ));
+    }
+    None
+}
+
+/// Validate + create a node-scope collection item (the only direct-scope create now).
 async fn create_collection_item(
     admin: &AdminState,
     scope_level: &str,
     scope_id: Uuid,
     body: CreateCollectionItem,
 ) -> Response {
-    if !is_valid_metric_name(&body.metric_name) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            "metric_name must be a valid identifier".to_owned(),
-        );
-    }
-    if !is_valid_oid(&body.oid) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_oid",
-            "oid must be a dotted numeric OID".to_owned(),
-        );
-    }
-    if !matches!(body.collection.as_str(), "scalar" | "table")
-        || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
-    {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_collection_item",
-            "collection must be scalar|table and metric_kind gauge|counter".to_owned(),
-        );
+    if let Some(resp) = validate_collection_item(&body) {
+        return resp;
     }
     match admin
         .collection
@@ -1106,6 +1095,224 @@ async fn create_collection_item(
         Err(e) => {
             tracing::error!(error = %e, "create collection item failed");
             internal("failed to create collection item")
+        }
+    }
+}
+
+// ── Collection templates (reusable metric bundles) — ManageConfig only ───────
+
+/// Create-template body.
+#[derive(Deserialize)]
+struct CreateTemplate {
+    name: String,
+    description: Option<String>,
+}
+
+/// Replace-all body for a profile's attached templates.
+#[derive(Deserialize)]
+struct SetProfileTemplates {
+    template_ids: Vec<Uuid>,
+}
+
+async fn list_collection_templates(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.list_templates().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list templates failed");
+            internal("failed to list collection templates")
+        }
+    }
+}
+
+async fn create_collection_template(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateTemplate>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "template name must not be empty".to_owned(),
+        );
+    }
+    match admin
+        .collection
+        .create_template(body.name.trim(), body.description.as_deref())
+        .await
+    {
+        Ok(CreateTemplateOutcome::Created(id)) => {
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Ok(CreateTemplateOutcome::NameTaken) => error_response(
+            StatusCode::CONFLICT,
+            "template_name_taken",
+            "a template with that name already exists".to_owned(),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "create template failed");
+            internal("failed to create collection template")
+        }
+    }
+}
+
+async fn delete_collection_template(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.delete_template(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("template_not_found", format!("no template {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete template failed");
+            internal("failed to delete collection template")
+        }
+    }
+}
+
+async fn list_template_items(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.list_template_items(id).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list template items failed");
+            internal("failed to list template items")
+        }
+    }
+}
+
+async fn create_template_item(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateCollectionItem>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if let Some(resp) = validate_collection_item(&body) {
+        return resp;
+    }
+    match admin
+        .collection
+        .create_template_item(
+            id,
+            &body.metric_name,
+            &body.oid,
+            &body.collection,
+            &body.metric_kind,
+            body.enabled.unwrap_or(true),
+        )
+        .await
+    {
+        Ok(item_id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": item_id })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create template item failed");
+            internal("failed to create template item")
+        }
+    }
+}
+
+async fn delete_template_item(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path((id, item_id)): Path<(Uuid, Uuid)>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.delete_template_item(id, item_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(
+            "template_item_not_found",
+            format!("no item {item_id} in template {id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "delete template item failed");
+            internal("failed to delete template item")
+        }
+    }
+}
+
+async fn list_profile_templates(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.list_profile_templates(id).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list profile templates failed");
+            internal("failed to list profile templates")
+        }
+    }
+}
+
+async fn set_profile_templates(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetProfileTemplates>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin
+        .collection
+        .set_profile_templates(id, &body.template_ids)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "set profile templates failed");
+            internal("failed to set profile templates")
         }
     }
 }
@@ -1529,14 +1736,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn collection_list_unavailable_without_admin() {
+    async fn collection_templates_list_unavailable_without_admin() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/collection-templates")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn create_template_unavailable_without_admin() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/collection-templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"My template"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn set_profile_templates_unavailable_without_admin() {
         let id = Uuid::nil();
         let app = router(state_with(Arc::new(InMemorySink::default())));
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/v1/profiles/{id}/collection"))
-                    .body(Body::empty())
+                    .method("PUT")
+                    .uri(format!("/api/v1/profiles/{id}/templates"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"template_ids":[]}"#))
                     .unwrap(),
             )
             .await

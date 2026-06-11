@@ -218,6 +218,66 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('lists collection templates', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listCollectionTemplates();
+    expect(spy).toHaveBeenCalledWith('/api/v1/collection-templates');
+  });
+
+  it('creates a collection template as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 't1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createCollectionTemplate({ name: 'Standard interfaces', description: 'ifTable' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/collection-templates');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ name: 'Standard interfaces' });
+  });
+
+  it('posts a template item to the nested items path', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'i1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.addTemplateItem('t1', {
+      metric_name: 'if_hc_in_octets',
+      oid: '1.3.6.1.2.1.31.1.1.1.6',
+      collection: 'table',
+      metric_kind: 'counter',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/collection-templates/t1/items');
+    expect(init.method).toBe('POST');
+  });
+
+  it('deletes a template item via the nested path (url-encoded)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.deleteTemplateItem('t/1', 'i/2');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/collection-templates/t%2F1/items/i%2F2');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('replaces a profile’s templates with a PUT body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setProfileTemplates('p1', ['t1', 't2']);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/profiles/p1/templates');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ template_ids: ['t1', 't2'] });
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

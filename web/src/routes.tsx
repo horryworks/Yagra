@@ -11,6 +11,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
+import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { CredentialsPage } from './pages/CredentialsPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
@@ -37,7 +38,7 @@ export function AppRoutes() {
         <Route path="nodes/discovery" element={<ComingSoon />} />
         <Route path="nodes/dependencies" element={<ComingSoon />} />
         <Route path="nodes/profiles" element={<ProfilesPage />} />
-        <Route path="nodes/collection-templates" element={<ComingSoon />} />
+        <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />
         <Route path="nodes/mib" element={<ComingSoon />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
