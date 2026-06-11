@@ -39,18 +39,3 @@
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
-
-/* Inline role picker in a user row — sized to content, not stretched like the add form. */
-.crud-role-select {
-  min-width: 120px;
-  flex: 0 0 auto;
-}
-
-/* Inline password-reset editor that replaces a row's action buttons. */
-.crud-reset {
-  margin-left: auto;
-}
-
-.crud-reset .field {
-  min-width: 180px;
-}

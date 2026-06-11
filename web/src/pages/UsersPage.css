@@ -1,0 +1,103 @@
+/* Users & roles — a headered accounts table (small list, so static not virtualized) plus
+   labelled modal form fields. Matches the node/alert table chrome (uppercase header on the
+   tertiary surface) without pulling in DataTable's virtual-scroll machinery. */
+
+.users-table {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.users-head,
+.users-row {
+  display: grid;
+  grid-template-columns: 1.4fr 150px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+}
+
+.users-head {
+  height: 32px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.users-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.users-h.right {
+  justify-self: end;
+}
+
+.users-row {
+  min-height: var(--row-h);
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.users-row:last-child {
+  border-bottom: none;
+}
+
+.users-name {
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.users-role-select {
+  width: 100%;
+}
+
+.users-created {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.users-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
+}
+
+.users-empty {
+  padding: 20px 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* Labelled, stacked, full-width fields inside the Add user / Change password modals. */
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.modal-field:last-of-type {
+  margin-bottom: 0;
+}
+
+.modal-field-label {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.modal-field .field {
+  width: 100%;
+}
+
+.modal-confirm-text {
+  font-size: var(--font-md);
+}
