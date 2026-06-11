@@ -45,8 +45,13 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::Snmp(snmp) => {
             let timeout = Duration::from_millis(u64::from(snmp.timeout_ms));
+            // GET the bare OIDs and the explicitly-named scalar columns together.
+            let col_by_oid: HashMap<&str, &SnmpColumn> =
+                snmp.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+            let mut all_oids = snmp.oids.clone();
+            all_oids.extend(snmp.columns.iter().map(|c| c.oid.clone()));
             match transport
-                .snmp_get(job.target, &snmp.community, &snmp.oids, timeout)
+                .snmp_get(job.target, &snmp.community, &all_oids, timeout)
                 .await
             {
                 Ok(samples) => {
@@ -58,7 +63,17 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     };
                     let mapped = samples
                         .into_iter()
-                        .map(|s| Sample::gauge(snmp_metric_name(&s.oid), s.value))
+                        .map(|s| match col_by_oid.get(s.oid.as_str()) {
+                            // Configured column → honour its metric name and kind.
+                            Some(col) => Sample {
+                                metric: col.metric_name.clone(),
+                                ifindex: None,
+                                value: s.value,
+                                kind: col.kind,
+                            },
+                            // Bare OID → the poller's built-in naming (gauge).
+                            None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
+                        })
                         .collect();
                     result(job, at_unix_ms, outcome, mapped)
                 }
@@ -365,6 +380,7 @@ mod tests {
             SnmpCheck {
                 community: "public".to_owned(),
                 oids: vec!["1.3.6.1.2.1.1.3.0".to_owned()],
+                columns: Vec::new(),
                 timeout_ms: 2000,
             },
             30,
@@ -392,6 +408,40 @@ mod tests {
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert!(r.samples.is_empty());
+    }
+
+    #[tokio::test]
+    async fn snmp_scalar_columns_use_configured_metric_name() {
+        use yagra_bus::SnmpColumn;
+        use yagra_common::MetricKind;
+        use yagra_transport::SnmpSample;
+        let job = PollJob::snmp(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            SnmpCheck {
+                community: "public".to_owned(),
+                oids: Vec::new(),
+                columns: vec![SnmpColumn {
+                    metric_name: "cpu_util".to_owned(),
+                    oid: "1.3.6.1.4.1.9.2.1.58.0".to_owned(),
+                    kind: MetricKind::Gauge,
+                }],
+                timeout_ms: 2000,
+            },
+            30,
+        );
+        let t = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.4.1.9.2.1.58.0".to_owned(),
+            value: 42.0,
+        }]);
+        let r = execute(&job, &t, 1_000).await;
+        // The configured metric name is used, not the built-in OID-derived fallback.
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == "cpu_util" && s.value == 42.0));
+        assert!(!r.samples.iter().any(|s| s.metric.starts_with("snmp_oid_")));
     }
 
     fn snmp_table_job() -> PollJob {
