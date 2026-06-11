@@ -1,0 +1,20 @@
+/* Theme uPlot's HTML chrome (title + legend) so it's legible in both light and dark.
+   uPlot's defaults are near-black, which disappears on the dark theme. The canvas axis/grid
+   colors can't read CSS variables, so those are set in JS from the resolved theme values
+   (see MetricChart.tsx); this file covers the HTML parts. */
+
+.uplot,
+.uplot .u-title,
+.uplot .u-legend {
+  font-family: var(--ui-font-family);
+}
+
+.uplot .u-title {
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+
+.uplot .u-legend {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}

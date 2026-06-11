@@ -6,6 +6,7 @@
 import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
+import './MetricChart.css';
 
 /** Default series palette (In / Out / aux …), indexed by series position. */
 const PALETTE = ['#4f8cff', '#34d399', '#f59e0b', '#ef4444'];
@@ -39,10 +40,22 @@ export function MetricChart({ title, timestamps, values, series, height = 220 }:
     const resolved: ChartSeries[] =
       series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
 
+    // Canvas can't read CSS variables, so resolve the theme's axis/grid colors here (adapts
+    // to light/dark). Charts re-create on data refresh, so a theme switch is picked up then.
+    const cs = getComputedStyle(el);
+    const axisColor = cs.getPropertyValue('--text-tertiary').trim() || '#8a8f98';
+    const gridColor = cs.getPropertyValue('--border-color').trim() || 'rgba(255,255,255,0.1)';
+    const axis = {
+      stroke: axisColor,
+      grid: { stroke: gridColor, width: 1 },
+      ticks: { stroke: gridColor, width: 1 },
+    };
+
     const opts: uPlot.Options = {
       title,
       width: el.clientWidth || 460,
       height,
+      axes: [axis, axis],
       series: [
         {},
         ...resolved.map((s, i) => ({
