@@ -8,9 +8,14 @@
 
 use crate::limiter::PollLimiter;
 use futures::stream::{Stream, StreamExt};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use yagra_bus::{Bus, CheckOutcome, CheckSpec, PollJob, PollResult, Sample, BUS_SCHEMA_VERSION};
+use yagra_bus::{
+    Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
+    SnmpMetaColumn, SnmpTableCheck, BUS_SCHEMA_VERSION,
+};
+use yagra_common::{IfIndex, InterfaceField};
 use yagra_transport::Transport;
 
 /// Execute one job and build its result. Pure given the transport and timestamp, so it
@@ -95,7 +100,149 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 }
             }
         }
+        CheckSpec::SnmpTable(table) => {
+            let timeout = Duration::from_millis(u64::from(table.timeout_ms));
+            execute_snmp_table(job, transport, at_unix_ms, table, timeout).await
+        }
     }
+}
+
+/// Execute an SNMP table-walk check: numeric columns become per-interface samples (keyed
+/// by ifIndex, using the column's explicit metric name and kind — no OID-name guessing),
+/// and metadata columns become [`DiscoveredInterface`] records (PostgreSQL inventory, never
+/// TSDB labels — ADR-011). Split out of [`execute`] for readability and direct testing.
+async fn execute_snmp_table(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    table: &SnmpTableCheck,
+    timeout: Duration,
+) -> PollResult {
+    let column_oids: Vec<String> = table.columns.iter().map(|c| c.oid.clone()).collect();
+    let by_base: HashMap<&str, &SnmpColumn> =
+        table.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+
+    let mut samples = Vec::new();
+    match transport
+        .snmp_walk(job.target, &table.community, &column_oids, timeout)
+        .await
+    {
+        Ok(rows) => {
+            for row in rows {
+                if let Some(col) = by_base.get(row.oid_base.as_str()) {
+                    samples.push(Sample::interface(
+                        col.metric_name.clone(),
+                        IfIndex(row.ifindex),
+                        row.value,
+                        col.kind,
+                    ));
+                }
+            }
+        }
+        Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
+    }
+
+    let interfaces = walk_interface_metadata(
+        job,
+        transport,
+        &table.community,
+        &table.meta_columns,
+        timeout,
+    )
+    .await;
+
+    // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
+    let outcome = if samples.is_empty() {
+        CheckOutcome::Unreachable
+    } else {
+        CheckOutcome::Reachable
+    };
+
+    PollResult {
+        schema_version: BUS_SCHEMA_VERSION,
+        job_id: job.job_id,
+        node_id: job.node_id,
+        at_unix_ms,
+        outcome,
+        samples,
+        interfaces,
+    }
+}
+
+/// Walk interface-metadata columns and fold them per ifIndex into [`DiscoveredInterface`]s.
+/// `ifName`/`ifAlias` are string columns; `ifSpeed` is numeric — each walked appropriately.
+async fn walk_interface_metadata(
+    job: &PollJob,
+    transport: &dyn Transport,
+    community: &str,
+    meta_columns: &[SnmpMetaColumn],
+    timeout: Duration,
+) -> Vec<DiscoveredInterface> {
+    let field_by_base: HashMap<&str, InterfaceField> = meta_columns
+        .iter()
+        .map(|m| (m.oid.as_str(), m.field))
+        .collect();
+    let string_oids: Vec<String> = meta_columns
+        .iter()
+        .filter(|m| matches!(m.field, InterfaceField::Name | InterfaceField::Alias))
+        .map(|m| m.oid.clone())
+        .collect();
+    let speed_oids: Vec<String> = meta_columns
+        .iter()
+        .filter(|m| matches!(m.field, InterfaceField::Speed))
+        .map(|m| m.oid.clone())
+        .collect();
+
+    let mut ifs: BTreeMap<u32, DiscoveredInterface> = BTreeMap::new();
+    let blank = |ifindex: u32| DiscoveredInterface {
+        ifindex: IfIndex(ifindex),
+        if_name: None,
+        if_alias: None,
+        if_speed: None,
+    };
+
+    if !string_oids.is_empty() {
+        match transport
+            .snmp_walk_strings(job.target, community, &string_oids, timeout)
+            .await
+        {
+            Ok(rows) => {
+                for row in rows {
+                    let Some(field) = field_by_base.get(row.oid_base.as_str()) else {
+                        continue;
+                    };
+                    let rec = ifs.entry(row.ifindex).or_insert_with(|| blank(row.ifindex));
+                    match field {
+                        InterfaceField::Name => rec.if_name = Some(row.value),
+                        InterfaceField::Alias => rec.if_alias = Some(row.value),
+                        InterfaceField::Speed => {}
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifName/ifAlias walk failed");
+            }
+        }
+    }
+
+    if !speed_oids.is_empty() {
+        match transport
+            .snmp_walk(job.target, community, &speed_oids, timeout)
+            .await
+        {
+            Ok(rows) => {
+                for row in rows {
+                    let rec = ifs.entry(row.ifindex).or_insert_with(|| blank(row.ifindex));
+                    rec.if_speed = Some(row.value as i64);
+                }
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifSpeed walk failed");
+            }
+        }
+    }
+
+    ifs.into_values().collect()
 }
 
 /// Stable metric name for an SNMP OID. Known OIDs get friendly names; others fall back to
@@ -120,6 +267,7 @@ fn result(
         at_unix_ms,
         outcome,
         samples,
+        interfaces: Vec::new(),
     }
 }
 
@@ -244,6 +392,122 @@ mod tests {
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert!(r.samples.is_empty());
+    }
+
+    fn snmp_table_job() -> PollJob {
+        use yagra_bus::{SnmpColumn, SnmpMetaColumn, SnmpTableCheck};
+        use yagra_common::{InterfaceField, MetricKind};
+        PollJob::snmp_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            SnmpTableCheck {
+                community: "public".to_owned(),
+                columns: vec![
+                    SnmpColumn {
+                        metric_name: "if_hc_in_octets".to_owned(),
+                        oid: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                        kind: MetricKind::Counter,
+                    },
+                    SnmpColumn {
+                        metric_name: "if_oper_status".to_owned(),
+                        oid: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+                        kind: MetricKind::Gauge,
+                    },
+                ],
+                meta_columns: vec![
+                    SnmpMetaColumn {
+                        field: InterfaceField::Name,
+                        oid: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                    },
+                    SnmpMetaColumn {
+                        field: InterfaceField::Speed,
+                        oid: "1.3.6.1.2.1.2.2.1.5".to_owned(),
+                    },
+                ],
+                timeout_ms: 2000,
+            },
+            60,
+        )
+    }
+
+    #[tokio::test]
+    async fn snmp_table_maps_columns_to_per_interface_samples() {
+        use yagra_common::MetricKind;
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 1,
+                value: 1000.0,
+            },
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 2,
+                value: 2000.0,
+            },
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.2.2.1.8".to_owned(),
+                ifindex: 1,
+                value: 1.0,
+            },
+        ]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        // The in-octets counter for ifIndex 2 is mapped by name, ifindex, and kind.
+        let octets2 = r
+            .samples
+            .iter()
+            .find(|s| s.metric == "if_hc_in_octets" && s.ifindex == Some(IfIndex(2)))
+            .expect("if_hc_in_octets ifIndex 2 present");
+        assert_eq!(octets2.value, 2000.0);
+        assert_eq!(octets2.kind, MetricKind::Counter);
+        // The oper-status gauge for ifIndex 1.
+        assert!(r.samples.iter().any(|s| s.metric == "if_oper_status"
+            && s.ifindex == Some(IfIndex(1))
+            && s.kind == MetricKind::Gauge));
+    }
+
+    #[tokio::test]
+    async fn snmp_table_metadata_folds_into_discovered_interfaces() {
+        use yagra_transport::{SnmpTableSample, SnmpTableString};
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp_table(vec![
+                // One numeric sample so the poll counts as reachable.
+                SnmpTableSample {
+                    oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                    ifindex: 1,
+                    value: 10.0,
+                },
+                // ifSpeed (numeric meta column) for ifIndex 1.
+                SnmpTableSample {
+                    oid_base: "1.3.6.1.2.1.2.2.1.5".to_owned(),
+                    ifindex: 1,
+                    value: 1_000_000_000.0,
+                },
+            ])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                ifindex: 1,
+                value: "Gi0/1".to_owned(),
+            }]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        assert_eq!(r.interfaces.len(), 1);
+        let iface = &r.interfaces[0];
+        assert_eq!(iface.ifindex, IfIndex(1));
+        assert_eq!(iface.if_name.as_deref(), Some("Gi0/1"));
+        assert_eq!(iface.if_speed, Some(1_000_000_000));
+        // ifSpeed must NOT have leaked into the TSDB samples (it's metadata, not a metric).
+        assert!(!r.samples.iter().any(|s| s.metric == "1.3.6.1.2.1.2.2.1.5"));
+    }
+
+    #[tokio::test]
+    async fn snmp_table_no_values_is_unreachable() {
+        let t = FakeTransport::reachable(0.0); // no canned table rows
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert!(r.samples.is_empty());
+        assert!(r.interfaces.is_empty());
     }
 
     /// Walking skeleton: a job published to the bus flows through the poll loop and a

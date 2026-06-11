@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{IfIndex, MetricKind, NodeId, SeriesKey};
+use yagra_common::{IfIndex, InterfaceField, MetricKind, NodeId, SeriesKey};
 
 /// Current bus message schema version. Bump on a backward-compatible change; a
 /// breaking change needs an N/N-1 migration plan (ADR-017).
@@ -105,6 +105,26 @@ impl PollJob {
             credential_ref: None,
         }
     }
+
+    /// A new SNMP v2c table-walk poll job for `node` at `target`.
+    #[must_use]
+    pub fn snmp_table(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpTableCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpTable(check),
+            interval_secs,
+            credential_ref: None,
+        }
+    }
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
@@ -119,6 +139,10 @@ pub enum CheckSpec {
     Snmp(SnmpCheck),
     /// Scalar SNMP v3 (USM) GET of a set of OIDs.
     SnmpV3(SnmpV3Check),
+    /// SNMP v2c GETBULK walk of table columns (per-interface metrics + metadata).
+    /// A new variant: older pollers that don't know this tag simply skip the job
+    /// (the poller's malformed-message handling), preserving N-1 compatibility.
+    SnmpTable(SnmpTableCheck),
     // Http(...) lands in a later phase.
 }
 
@@ -184,6 +208,51 @@ pub struct SnmpV3Check {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c table-walk parameters. Each numeric column base is walked with GETBULK to
+/// yield one sample per interface (keyed by ifIndex); the metadata columns populate the
+/// interface inventory and never become TSDB series (ADR-011). The community is the
+/// resolved credential, inlined by core (ADR-018/020) — the poller never reads the store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpTableCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Numeric table columns → per-interface TSDB samples.
+    pub columns: Vec<SnmpColumn>,
+    /// Interface-metadata columns (ifName/ifAlias/ifSpeed) → interface inventory, not TSDB.
+    #[serde(default)]
+    pub meta_columns: Vec<SnmpMetaColumn>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One numeric table column to walk: its stable metric name, the column base OID, and
+/// whether the values are gauges or raw counters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpColumn {
+    /// Stable TSDB metric name (e.g. `if_hc_in_octets`). Bounded by convention (ADR-011).
+    pub metric_name: String,
+    /// Column base OID (the walk root), e.g. `1.3.6.1.2.1.31.1.1.1.6`.
+    pub oid: String,
+    /// Gauge vs raw counter (rates derived at query time, ADR-012).
+    #[serde(default = "default_metric_kind")]
+    pub kind: MetricKind,
+}
+
+const fn default_metric_kind() -> MetricKind {
+    MetricKind::Gauge
+}
+
+/// One interface-metadata column to walk: which interface field it populates and the
+/// column base OID. The value is descriptive (PostgreSQL), never a TSDB label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpMetaColumn {
+    /// Which interface attribute this column carries.
+    pub field: InterfaceField,
+    /// Column base OID, e.g. `1.3.6.1.2.1.31.1.1.1.1` (ifName).
+    pub oid: String,
+}
+
 /// The result of executing a [`PollJob`], sent back to core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PollResult {
@@ -201,6 +270,28 @@ pub struct PollResult {
     /// Collected metric samples (raw values; rates are derived later, ADR-012).
     #[serde(default)]
     pub samples: Vec<Sample>,
+    /// Interfaces discovered on this poll (table walks only). Descriptive metadata that
+    /// core upserts into the interface inventory; empty for non-table checks. Defaulted so
+    /// an older poller that doesn't send it stays N-1 compatible (ADR-017).
+    #[serde(default)]
+    pub interfaces: Vec<DiscoveredInterface>,
+}
+
+/// An interface discovered during a table walk: its index and the descriptive metadata
+/// columns. Joined to per-interface metrics at query time; never a TSDB label (ADR-011).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveredInterface {
+    /// Interface index (the table row key).
+    pub ifindex: IfIndex,
+    /// `ifName`, if walked.
+    #[serde(default)]
+    pub if_name: Option<String>,
+    /// `ifAlias`, if walked.
+    #[serde(default)]
+    pub if_alias: Option<String>,
+    /// Line rate in bits/sec, if walked.
+    #[serde(default)]
+    pub if_speed: Option<i64>,
 }
 
 /// High-level outcome of a check.
@@ -239,6 +330,33 @@ impl Sample {
             ifindex: None,
             value,
             kind: MetricKind::Gauge,
+        }
+    }
+
+    /// A node-level raw-counter sample (rates derived at query time, ADR-012).
+    #[must_use]
+    pub fn counter(metric: impl Into<String>, value: f64) -> Self {
+        Self {
+            metric: metric.into(),
+            ifindex: None,
+            value,
+            kind: MetricKind::Counter,
+        }
+    }
+
+    /// A per-interface sample of the given kind (gauge or raw counter).
+    #[must_use]
+    pub fn interface(
+        metric: impl Into<String>,
+        ifindex: IfIndex,
+        value: f64,
+        kind: MetricKind,
+    ) -> Self {
+        Self {
+            metric: metric.into(),
+            ifindex: Some(ifindex),
+            value,
+            kind,
         }
     }
 
@@ -290,6 +408,67 @@ mod tests {
         let job: PollJob = serde_json::from_str(json).unwrap();
         assert_eq!(job.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(job.interval_secs, 30);
+    }
+
+    #[test]
+    fn snmp_table_job_round_trips_with_snake_case_tag() {
+        let job = PollJob::snmp_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            SnmpTableCheck {
+                community: "public".into(),
+                columns: vec![SnmpColumn {
+                    metric_name: "if_hc_in_octets".into(),
+                    oid: "1.3.6.1.2.1.31.1.1.1.6".into(),
+                    kind: MetricKind::Counter,
+                }],
+                meta_columns: vec![SnmpMetaColumn {
+                    field: InterfaceField::Name,
+                    oid: "1.3.6.1.2.1.31.1.1.1.1".into(),
+                }],
+                timeout_ms: 2000,
+            },
+            60,
+        );
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(json.contains("\"kind\":\"snmp_table\""));
+        let back: PollJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(job, back);
+    }
+
+    #[test]
+    fn snmp_column_kind_defaults_to_gauge_when_absent() {
+        // Forward-compat: a column without an explicit kind defaults rather than failing.
+        let col: SnmpColumn = serde_json::from_str(r#"{"metric_name":"x","oid":"1.2.3"}"#).unwrap();
+        assert_eq!(col.kind, MetricKind::Gauge);
+    }
+
+    #[test]
+    fn poll_result_without_interfaces_defaults_empty() {
+        // N-1: an older poller's PollResult has no `interfaces` field — new core must
+        // default it to empty rather than failing to deserialize (ADR-017).
+        let json = r#"{
+            "schema_version": 1,
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "samples": []
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.interfaces.is_empty());
+    }
+
+    #[test]
+    fn sample_counter_and_interface_helpers_set_kind_and_ifindex() {
+        let c = Sample::counter("if_hc_in_octets", 5.0);
+        assert_eq!(c.kind, MetricKind::Counter);
+        assert_eq!(c.ifindex, None);
+
+        let i = Sample::interface("if_hc_in_octets", IfIndex(4), 9.0, MetricKind::Counter);
+        assert_eq!(i.ifindex, Some(IfIndex(4)));
+        assert_eq!(i.kind, MetricKind::Counter);
     }
 
     #[test]

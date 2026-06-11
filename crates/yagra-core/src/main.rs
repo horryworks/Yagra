@@ -178,6 +178,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         at_unix_ms: 0,
         outcome: yagra_bus::CheckOutcome::Reachable,
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
+        interfaces: Vec::new(),
     });
     let state = ApiState {
         store: sink,
