@@ -145,12 +145,22 @@ export interface CollectionItem {
 }
 
 /** A stored collection item with its id/scope/enabled flag (core `StoredCollectionItem`,
- *  the item fields flattened on). */
+ *  the item fields flattened on). Also the shape of a template item (core `TemplateItem`,
+ *  without the scope fields). */
 export interface StoredCollectionItem extends CollectionItem {
   id: string;
-  scope_level: ScopeLevel;
-  scope_id: string;
+  scope_level?: ScopeLevel;
+  scope_id?: string;
   enabled: boolean;
+}
+
+/** A reusable collection template (core `TemplateSummary`): a named metric bundle that
+ *  device profiles attach. `item_count` is how many metrics it carries. */
+export interface CollectionTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  item_count: number;
 }
 
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */

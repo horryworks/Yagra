@@ -176,22 +176,34 @@ pub fn builtin_interface_meta_columns() -> Vec<(InterfaceField, &'static str)> {
     ]
 }
 
-// --- Built-in device-profile templates ----------------------------------------------
+// --- Built-in collection templates + device profiles --------------------------------
 //
-// Ready-made device-class profiles so an operator can bind one (plus an SNMP credential)
-// and immediately get graphs, instead of hand-entering OIDs. Core seeds these into the
-// `profiles` table (with their collection items at profile scope). The generic interface
-// set works on virtually any SNMP agent; the vendor scalars below are *best-effort* common
-// OIDs (walked as table columns so we don't guess an instance index) — an OID a given
-// device lacks is simply skipped by the poller.
+// Collection templates are reusable, named metric bundles (the design's middle layer:
+// MIB → Collection templates → Device profile references). A device profile is just a set
+// of attached templates (it holds no raw OIDs). Core seeds these templates and links the
+// built-in profiles to them, so binding a profile (+ an SNMP credential) yields graphs out
+// of the box. The generic interface set works on virtually any SNMP agent; the vendor
+// columns are *best-effort* common OIDs (walked as table columns so we don't guess an
+// instance index) — an OID a device lacks is simply skipped by the poller.
 
-/// A named device-class profile template and the collection items it ships with.
+/// A named, reusable collection template and the metrics it bundles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuiltinTemplate {
+    /// Display name (unique).
+    pub name: &'static str,
+    /// One-line description.
+    pub description: &'static str,
+    /// The metrics this template collects.
+    pub items: Vec<CollectionItem>,
+}
+
+/// A built-in device profile: a name and the template names it references (no raw OIDs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltinProfile {
     /// Display name shown in Device profiles.
     pub name: &'static str,
-    /// Collection items defined at this profile's scope (may be empty for ICMP-only).
-    pub items: Vec<CollectionItem>,
+    /// Names of the [`builtin_templates`] this profile attaches (empty ⇒ ICMP-only).
+    pub templates: Vec<&'static str>,
 }
 
 /// A vendor table column (CPU/mem usage etc.), walked per-entity like the interface table.
@@ -204,42 +216,59 @@ fn vendor_table(metric: &str, oid: &str) -> CollectionItem {
     }
 }
 
-/// The built-in device-profile templates shipped with Yagra (seeded on startup).
+/// Standard SNMP template name — the cross-vendor system + interface set most profiles use.
+pub const TEMPLATE_STANDARD_SNMP: &str = "Standard SNMP";
+
+/// The built-in collection templates shipped with Yagra (seeded on startup).
 #[must_use]
-pub fn builtin_profiles() -> Vec<BuiltinProfile> {
-    // Generic SNMP = the standard scalar + interface set; the vendor profiles extend it.
-    let generic = builtin_catalog();
-    let with_extras = |extras: Vec<CollectionItem>| {
-        let mut v = generic.clone();
-        v.extend(extras);
-        v
-    };
+pub fn builtin_templates() -> Vec<BuiltinTemplate> {
     vec![
-        // ICMP-only: no SNMP collection (for devices without a usable SNMP agent).
-        BuiltinProfile {
-            name: "Generic ping",
-            items: Vec::new(),
+        BuiltinTemplate {
+            name: TEMPLATE_STANDARD_SNMP,
+            description:
+                "System uptime + per-interface traffic, errors, and status (any SNMP agent).",
+            items: builtin_catalog(),
         },
-        BuiltinProfile {
-            name: "Generic SNMP",
-            items: generic.clone(),
-        },
-        BuiltinProfile {
-            name: "Cisco IOS router",
-            items: with_extras(vec![
-                // cpmCPUTotal5minRev (%), ciscoMemoryPoolUsed / Free (bytes) — table-indexed.
+        BuiltinTemplate {
+            name: "Cisco device health",
+            description: "Cisco IOS CPU (cpmCPUTotal5min) and memory-pool used/free.",
+            items: vec![
                 vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
                 vendor_table("cisco_mem_used", "1.3.6.1.4.1.9.9.48.1.1.1.5"),
                 vendor_table("cisco_mem_free", "1.3.6.1.4.1.9.9.48.1.1.1.6"),
-            ]),
+            ],
+        },
+        BuiltinTemplate {
+            name: "Huawei device health",
+            description: "Huawei VRP entity CPU and memory usage (hwEntityCpu/MemUsage).",
+            items: vec![
+                vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
+                vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
+            ],
+        },
+    ]
+}
+
+/// The built-in device profiles and the templates each references.
+#[must_use]
+pub fn builtin_profiles() -> Vec<BuiltinProfile> {
+    vec![
+        // ICMP-only: no templates (for devices without a usable SNMP agent).
+        BuiltinProfile {
+            name: "Generic ping",
+            templates: Vec::new(),
+        },
+        BuiltinProfile {
+            name: "Generic SNMP",
+            templates: vec![TEMPLATE_STANDARD_SNMP],
+        },
+        BuiltinProfile {
+            name: "Cisco IOS router",
+            templates: vec![TEMPLATE_STANDARD_SNMP, "Cisco device health"],
         },
         BuiltinProfile {
             name: "Huawei USG firewall",
-            items: with_extras(vec![
-                // hwEntityCpuUsage / hwEntityMemUsage (%), indexed by entPhysicalIndex.
-                vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
-                vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
-            ]),
+            templates: vec![TEMPLATE_STANDARD_SNMP, "Huawei device health"],
         },
     ]
 }
@@ -323,7 +352,29 @@ mod tests {
     }
 
     #[test]
-    fn builtin_profiles_ship_expected_templates() {
+    fn builtin_templates_carry_expected_metrics() {
+        let templates = builtin_templates();
+        let by_name = |n: &str| templates.iter().find(|t| t.name == n).unwrap();
+
+        // Standard SNMP = the system + interface set.
+        let std = &by_name(TEMPLATE_STANDARD_SNMP).items;
+        assert!(std.iter().any(|i| i.metric_name == "snmp_sys_uptime_ticks"));
+        assert!(std.iter().any(|i| i.metric_name == "if_hc_in_octets"
+            && i.kind == CollectionKind::Table
+            && i.metric_kind == MetricKind::Counter));
+
+        // Vendor templates carry only their extras (not the generic set).
+        let cisco = &by_name("Cisco device health").items;
+        assert!(cisco.iter().any(|i| i.metric_name == "cisco_cpu_5min"));
+        assert!(!cisco.iter().any(|i| i.metric_name == "if_hc_in_octets"));
+        assert!(by_name("Huawei device health")
+            .items
+            .iter()
+            .any(|i| i.metric_name == "huawei_cpu_usage"));
+    }
+
+    #[test]
+    fn builtin_profiles_reference_existing_templates() {
         let profiles = builtin_profiles();
         let names: Vec<&str> = profiles.iter().map(|p| p.name).collect();
         assert_eq!(
@@ -337,29 +388,32 @@ mod tests {
         );
         let by_name = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
 
-        // Generic ping is ICMP-only (no SNMP collection).
-        assert!(by_name("Generic ping").items.is_empty());
+        assert!(by_name("Generic ping").templates.is_empty());
+        assert_eq!(
+            by_name("Generic SNMP").templates,
+            vec![TEMPLATE_STANDARD_SNMP]
+        );
+        assert_eq!(
+            by_name("Cisco IOS router").templates,
+            vec![TEMPLATE_STANDARD_SNMP, "Cisco device health"]
+        );
 
-        // Generic SNMP carries the standard interface set.
-        let generic = &by_name("Generic SNMP").items;
-        assert!(generic.iter().any(|i| i.metric_name == "if_hc_in_octets"
-            && i.kind == CollectionKind::Table
-            && i.metric_kind == MetricKind::Counter));
-        assert!(generic
-            .iter()
-            .any(|i| i.metric_name == "snmp_sys_uptime_ticks"));
-
-        // Vendor profiles are a superset of the generic set plus their extras.
-        let huawei = &by_name("Huawei USG firewall").items;
-        assert!(huawei.iter().any(|i| i.metric_name == "if_hc_in_octets"));
-        assert!(huawei.iter().any(|i| i.metric_name == "huawei_cpu_usage"));
-        let cisco = &by_name("Cisco IOS router").items;
-        assert!(cisco.iter().any(|i| i.metric_name == "cisco_cpu_5min"));
-        assert!(cisco.len() > generic.len());
+        // Every referenced template actually exists.
+        let template_names: std::collections::BTreeSet<&str> =
+            builtin_templates().iter().map(|t| t.name).collect();
+        for p in &profiles {
+            for t in &p.templates {
+                assert!(
+                    template_names.contains(t),
+                    "{} references unknown template {t}",
+                    p.name
+                );
+            }
+        }
     }
 
     #[test]
-    fn builtin_profile_oids_are_dotted_digits() {
+    fn builtin_template_oids_are_dotted_digits() {
         // Mirror the API's is_valid_oid so seeded items can never be rejected on re-create.
         let dotted_digits = |oid: &str| {
             !oid.is_empty()
@@ -367,13 +421,13 @@ mod tests {
                     .split('.')
                     .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
         };
-        for p in builtin_profiles() {
-            for item in p.items {
+        for t in builtin_templates() {
+            for item in t.items {
                 assert!(
                     dotted_digits(&item.oid),
                     "bad OID {} in {}",
                     item.oid,
-                    p.name
+                    t.name
                 );
             }
         }
