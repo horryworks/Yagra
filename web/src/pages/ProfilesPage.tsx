@@ -11,6 +11,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
+import { CollectionEditor } from '../components/CollectionEditor/CollectionEditor';
 import './CrudList.css';
 
 export function ProfilesPage() {
@@ -19,6 +20,8 @@ export function ProfilesPage() {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  // Which profile's collection set is expanded (one at a time).
+  const [openCollection, setOpenCollection] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
@@ -88,13 +91,26 @@ export function ProfilesPage() {
           ) : (
             <div className="crud-list">
               {rows.map((p) => (
-                <div className="crud-row" key={p.id}>
-                  <span className="crud-name">{p.name}</span>
-                  <span className="crud-id mono">{p.id}</span>
-                  {authed && (
-                    <Button variant="ghost" onClick={() => remove(p.id)}>
-                      Delete
+                <div key={p.id}>
+                  <div className="crud-row">
+                    <span className="crud-name">{p.name}</span>
+                    <span className="crud-id mono">{p.id}</span>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setOpenCollection((cur) => (cur === p.id ? null : p.id))}
+                    >
+                      {openCollection === p.id ? 'Hide collection' : 'Collection'}
                     </Button>
+                    {authed && (
+                      <Button variant="ghost" onClick={() => remove(p.id)}>
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                  {openCollection === p.id && (
+                    <div className="crud-collection">
+                      <CollectionEditor scope="profile" scopeId={p.id} canEdit={authed} />
+                    </div>
                   )}
                 </div>
               ))}
