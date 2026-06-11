@@ -9,6 +9,7 @@
 
 use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
+use crate::collection::CollectionRepo;
 use crate::history::AlertHistoryStore;
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
@@ -31,7 +32,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_common::{NodeId, NodeState, Permission, SeriesKey};
+use yagra_common::{resolve_collection_set, IfIndex, NodeId, NodeState, Permission, SeriesKey};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -40,6 +41,7 @@ pub struct AdminState {
     pub creds: Arc<CredentialStore>,
     pub users: Arc<UserStore>,
     pub thresholds: Arc<ThresholdStore>,
+    pub collection: Arc<CollectionRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -96,6 +98,22 @@ pub fn router(state: ApiState) -> Router {
             get(list_thresholds).post(create_threshold),
         )
         .route("/api/v1/thresholds/:id", delete(delete_threshold))
+        .route(
+            "/api/v1/profiles/:id/collection",
+            get(list_profile_collection).post(create_profile_collection),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/collection",
+            get(list_node_collection).post(create_node_collection),
+        )
+        .route(
+            "/api/v1/collection/:item_id",
+            delete(delete_collection_item),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/interfaces",
+            get(list_node_interfaces),
+        )
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id", delete(delete_user))
         .route("/api/v1/users/:id/role", put(set_user_role))
@@ -859,6 +877,283 @@ async fn delete_threshold(
     }
 }
 
+// ── Collection sets (what to poll, per profile/node) — ManageConfig only ─────
+
+/// Rate-window for interface utilization (seconds). Matches the TSDB query-time rate()
+/// derivation (ADR-012); 5 min covers a few poll intervals so a single missed poll doesn't
+/// blank the rate.
+const DEFAULT_RATE_LOOKBACK_SECS: u64 = 300;
+/// An interface not refreshed within this window is flagged stale (its metadata is old).
+const INTERFACE_STALE_SECS: i64 = 900;
+
+/// A dotted numeric OID, e.g. `1.3.6.1.2.1.1.3.0`. Validated at the edge so an OID can't be
+/// interpolated into an SNMP request as anything but digits and dots (security.md).
+fn is_valid_oid(oid: &str) -> bool {
+    !oid.is_empty()
+        && oid
+            .split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Create/update body for a collection item.
+#[derive(Deserialize)]
+struct CreateCollectionItem {
+    metric_name: String,
+    oid: String,
+    collection: String,
+    metric_kind: String,
+    enabled: Option<bool>,
+}
+
+/// Query for the node collection list: `?resolved=true` returns the effective set.
+#[derive(Deserialize)]
+struct CollectionQuery {
+    resolved: Option<bool>,
+}
+
+/// One interface row for the node-detail Interfaces tab: stored metadata joined with
+/// query-time rate()/latest() metrics. Utilization is derived here (never stored, ADR-012).
+#[derive(Serialize)]
+struct InterfaceRow {
+    ifindex: u32,
+    if_name: Option<String>,
+    if_alias: Option<String>,
+    if_speed_bps: Option<i64>,
+    oper_status: Option<f64>,
+    in_bps: Option<f64>,
+    out_bps: Option<f64>,
+    in_util_pct: Option<f64>,
+    out_util_pct: Option<f64>,
+    last_seen_unix: Option<i64>,
+    stale: bool,
+}
+
+async fn list_profile_collection(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.list_items("profile", id).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list profile collection failed");
+            internal("failed to list collection set")
+        }
+    }
+}
+
+async fn create_profile_collection(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateCollectionItem>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    create_collection_item(admin, "profile", id, body).await
+}
+
+async fn list_node_collection(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<CollectionQuery>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if q.resolved.unwrap_or(false) {
+        // Effective set: profile defaults overridden by node-level items.
+        let profile = match admin.repo.get_node(node_id).await {
+            Ok(Some(node)) => node.profile.map(|p| p.0),
+            Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
+            Err(e) => {
+                tracing::error!(error = %e, "get node failed");
+                return internal("failed to load node");
+            }
+        };
+        match admin.collection.list_items_for_node(node_id, profile).await {
+            Ok(scoped) => Json(resolve_collection_set(&scoped)).into_response(),
+            Err(e) => {
+                tracing::error!(error = %e, "resolve collection failed");
+                internal("failed to resolve collection set")
+            }
+        }
+    } else {
+        match admin.collection.list_items("node", node_id).await {
+            Ok(list) => Json(list).into_response(),
+            Err(e) => {
+                tracing::error!(error = %e, "list node collection failed");
+                internal("failed to list collection set")
+            }
+        }
+    }
+}
+
+async fn create_node_collection(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<CreateCollectionItem>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    create_collection_item(admin, "node", node_id, body).await
+}
+
+/// Validate + create a collection item at a scope (shared by the profile/node handlers).
+async fn create_collection_item(
+    admin: &AdminState,
+    scope_level: &str,
+    scope_id: Uuid,
+    body: CreateCollectionItem,
+) -> Response {
+    if !is_valid_metric_name(&body.metric_name) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_name",
+            "metric_name must be a valid identifier".to_owned(),
+        );
+    }
+    if !is_valid_oid(&body.oid) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_oid",
+            "oid must be a dotted numeric OID".to_owned(),
+        );
+    }
+    if !matches!(body.collection.as_str(), "scalar" | "table")
+        || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_collection_item",
+            "collection must be scalar|table and metric_kind gauge|counter".to_owned(),
+        );
+    }
+    match admin
+        .collection
+        .create_item(
+            scope_level,
+            scope_id,
+            &body.metric_name,
+            &body.oid,
+            &body.collection,
+            &body.metric_kind,
+            body.enabled.unwrap_or(true),
+        )
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create collection item failed");
+            internal("failed to create collection item")
+        }
+    }
+}
+
+async fn delete_collection_item(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(item_id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.collection.delete_item(item_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(
+            "collection_item_not_found",
+            format!("no collection item {item_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "delete collection item failed");
+            internal("failed to delete collection item")
+        }
+    }
+}
+
+/// Interfaces discovered on a node, with query-time utilization. Read endpoint; empty in
+/// skeleton mode (interface inventory is PostgreSQL-only).
+async fn list_node_interfaces(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return Json(Vec::<InterfaceRow>::new()).into_response();
+    };
+    let metas = match admin.repo.list_interfaces(node_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!(error = %e, "list interfaces failed");
+            return internal("failed to list interfaces");
+        }
+    };
+    let node = NodeId::from(node_id);
+    let now = now_unix_s();
+    let mut out = Vec::with_capacity(metas.len());
+    for m in metas {
+        let ifindex = u32::try_from(m.ifindex).unwrap_or(0);
+        let key = |metric: &str| SeriesKey::interface(node, IfIndex(ifindex), metric);
+        // Octet counters are bytes/sec via rate(); ×8 ⇒ bits/sec.
+        let in_bps = st
+            .store
+            .rate(&key("if_hc_in_octets"), DEFAULT_RATE_LOOKBACK_SECS)
+            .await
+            .map(|r| r * 8.0);
+        let out_bps = st
+            .store
+            .rate(&key("if_hc_out_octets"), DEFAULT_RATE_LOOKBACK_SECS)
+            .await
+            .map(|r| r * 8.0);
+        let oper_status = st.store.latest(&key("if_oper_status")).await;
+        let speed = m.if_speed.filter(|s| *s > 0);
+        let util = |bps: Option<f64>| match (bps, speed) {
+            (Some(b), Some(s)) => Some(b / s as f64 * 100.0),
+            _ => None,
+        };
+        let stale = m.last_seen_s.is_none_or(|s| now - s > INTERFACE_STALE_SECS);
+        out.push(InterfaceRow {
+            ifindex,
+            if_name: m.if_name,
+            if_alias: m.if_alias,
+            if_speed_bps: m.if_speed,
+            oper_status,
+            in_bps,
+            out_bps,
+            in_util_pct: util(in_bps),
+            out_util_pct: util(out_bps),
+            last_seen_unix: m.last_seen_s,
+            stale,
+        });
+    }
+    Json(out).into_response()
+}
+
 // ── Users & roles (Settings ▸ Users & roles) — ManageUsers (admin) only ──────
 
 /// Minimum password length accepted for a new account or a reset.
@@ -1157,6 +1452,76 @@ mod tests {
         assert!(!is_valid_metric_name("a b"));
         assert!(!is_valid_metric_name("9starts_with_digit"));
         assert!(!is_valid_metric_name(""));
+    }
+
+    #[test]
+    fn oid_validation_accepts_dotted_digits_only() {
+        assert!(is_valid_oid("1.3.6.1.2.1.31.1.1.1.6"));
+        assert!(is_valid_oid("0"));
+        // Injection / non-numeric / malformed are rejected.
+        assert!(!is_valid_oid("1.3.6.x"));
+        assert!(!is_valid_oid("1..3"));
+        assert!(!is_valid_oid(".1.3"));
+        assert!(!is_valid_oid(""));
+        assert!(!is_valid_oid("1.3; DROP"));
+    }
+
+    #[tokio::test]
+    async fn collection_create_unavailable_without_admin() {
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/nodes/{node}/collection"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"metric_name":"if_hc_in_octets","oid":"1.3.6.1.2.1.31.1.1.1.6","collection":"table","metric_kind":"counter"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn collection_list_unavailable_without_admin() {
+        let id = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/profiles/{id}/collection"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn interfaces_empty_array_without_admin() {
+        // Interface inventory is PostgreSQL-only; skeleton returns an empty array, not 503.
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/interfaces"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert!(json.is_array());
+        assert_eq!(json.as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

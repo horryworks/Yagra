@@ -25,6 +25,18 @@ pub struct ProfileSummary {
     pub name: String,
 }
 
+/// One interface's stored metadata (from a table walk). Descriptive attributes only —
+/// joined to per-interface metrics at query time (thin-label model, ADR-011).
+#[derive(Debug, Clone)]
+pub struct InterfaceMeta {
+    pub ifindex: i32,
+    pub if_name: Option<String>,
+    pub if_alias: Option<String>,
+    pub if_speed: Option<i64>,
+    /// `last_seen` as Unix seconds, for staleness checks.
+    pub last_seen_s: Option<i64>,
+}
+
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
 fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     let id: Uuid = row.try_get("id")?;
@@ -157,6 +169,41 @@ impl NodeRepo {
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(node_from_row).collect()
+    }
+
+    /// One node by id, if it exists (for endpoints that need its profile/bindings).
+    pub async fn get_node(&self, id: Uuid) -> anyhow::Result<Option<Node>> {
+        let row = sqlx::query(&format!(
+            "SELECT {} FROM nodes WHERE id = $1",
+            Self::NODE_COLUMNS
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(node_from_row).transpose()
+    }
+
+    /// Interfaces discovered on a node (metadata for the interfaces view), ordered by index.
+    pub async fn list_interfaces(&self, node_id: Uuid) -> anyhow::Result<Vec<InterfaceMeta>> {
+        let rows = sqlx::query(
+            "SELECT ifindex, if_name, if_alias, if_speed, \
+                    extract(epoch FROM last_seen)::bigint AS last_seen_s \
+             FROM interfaces WHERE node_id = $1 ORDER BY ifindex",
+        )
+        .bind(node_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(InterfaceMeta {
+                    ifindex: row.try_get("ifindex")?,
+                    if_name: row.try_get("if_name")?,
+                    if_alias: row.try_get("if_alias")?,
+                    if_speed: row.try_get("if_speed")?,
+                    last_seen_s: row.try_get("last_seen_s")?,
+                })
+            })
+            .collect()
     }
 
     /// One keyset page of nodes ordered by id, starting after `after`.
