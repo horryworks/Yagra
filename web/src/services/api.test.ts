@@ -114,6 +114,49 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toMatchObject({ scope_level: 'node', metric: 'cpu_util' });
   });
 
+  it('posts a new user as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'u1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createUser({ username: 'alice', password: 'hunter2hunter2', role: 'operator' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/users');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ username: 'alice', role: 'operator' });
+  });
+
+  it('puts a role change to the user role endpoint', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setUserRole('u/1', 'admin');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/users/u%2F1/role');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ role: 'admin' });
+  });
+
+  it('deletes a user via the user endpoint', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.deleteUser('u1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/users/u1');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('surfaces the last-admin guard as a typed error', async () => {
+    mockFetch(409, { error: { code: 'last_admin', message: 'cannot remove the last admin' } });
+    await expect(api.deleteUser('admin-id')).rejects.toMatchObject({
+      code: 'last_admin',
+      status: 409,
+    });
+  });
+
   it('requests the current principal from /auth/me', async () => {
     mockFetch(200, { role: 'Admin' });
     const me = await api.me();

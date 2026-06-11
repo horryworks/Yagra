@@ -81,6 +81,18 @@ export interface AuthMe {
   role: string;
 }
 
+/** A predefined role (yagra-common `Role`, snake_case), ordered least → most privileged. */
+export type Role = 'viewer' | 'operator' | 'admin';
+
+/** A user account row (`GET /api/v1/users`, core `UserSummary`). Never includes the
+ *  password hash. `created_at` is RFC 3339 text. */
+export interface UserSummary {
+  id: string;
+  username: string;
+  role: Role;
+  created_at: string;
+}
+
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). */
 export interface ProfileSummary {
   id: string;
