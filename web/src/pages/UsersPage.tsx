@@ -1,8 +1,9 @@
-// Users & roles (Settings ▸ Users & roles). Admin-only CRUD over local auth accounts:
-// create with a role, change role inline, reset password, and delete. The server enforces
-// ManageUsers (admin) and guards against removing/demoting the last admin (409 last_admin);
-// the UI surfaces those typed errors rather than re-deriving the rule. Passwords are
-// write-only — the API never returns a hash.
+// Users & roles (Settings ▸ Users & roles). Admin-only CRUD over local auth accounts,
+// presented as a headered table: create via an "Add user" modal, change role inline, change
+// password and delete via modals (delete behind a confirmation, per ui-conventions). The
+// server enforces ManageUsers (admin) and guards against removing/demoting the last admin
+// (409 last_admin); the UI surfaces those typed errors. Passwords are write-only — the API
+// never returns a hash.
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -11,23 +12,26 @@ import type { Role, UserSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
-import './CrudList.css';
+import './UsersPage.css';
 
 const ROLES: Role[] = ['viewer', 'operator', 'admin'];
+const MIN_PW = 8;
+
+const errMsg = (e: unknown, fallback: string) =>
+  e instanceof ApiError ? e.message : fallback;
 
 export function UsersPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<UserSummary[]>([]);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState<Role>('viewer');
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [forbidden, setForbidden] = useState(false);
-  // Per-row password reset: the id whose reset input is open, and its draft value.
-  const [resetId, setResetId] = useState<string | null>(null);
-  const [resetPw, setResetPw] = useState('');
+  // Open dialogs: the add form, and the user targeted by a password change / delete.
+  const [adding, setAdding] = useState(false);
+  const [pwUser, setPwUser] = useState<UserSummary | null>(null);
+  const [delUser, setDelUser] = useState<UserSummary | null>(null);
 
   const load = useCallback(() => {
     api
@@ -48,47 +52,12 @@ export function UsersPage() {
     load();
   }, [load]);
 
-  const fail = (e: unknown, fallback: string) =>
-    setError(e instanceof ApiError ? e.message : fallback);
-
-  const add = () => {
-    setError(null);
-    api
-      .createUser({ username: username.trim(), password, role })
-      .then(() => {
-        setUsername('');
-        setPassword('');
-        setRole('viewer');
-        load();
-      })
-      .catch((e: unknown) => fail(e, 'failed to create user'));
-  };
-
   const changeRole = (id: string, next: Role) => {
     setError(null);
     api
       .setUserRole(id, next)
       .then(load)
-      .catch((e: unknown) => fail(e, 'failed to change role'));
-  };
-
-  const remove = (id: string) => {
-    setError(null);
-    api
-      .deleteUser(id)
-      .then(load)
-      .catch((e: unknown) => fail(e, 'failed to delete user'));
-  };
-
-  const saveReset = (id: string) => {
-    setError(null);
-    api
-      .setUserPassword(id, resetPw)
-      .then(() => {
-        setResetId(null);
-        setResetPw('');
-      })
-      .catch((e: unknown) => fail(e, 'failed to reset password'));
+      .catch((e: unknown) => setError(errMsg(e, 'failed to change role')));
   };
 
   return (
@@ -108,49 +77,33 @@ export function UsersPage() {
           <p className="muted">Managing users requires an admin account.</p>
         </Card>
       ) : (
-        <Card title="Accounts">
-          {authed && (
-            <div className="crud-add form-row">
-              <TextInput
-                placeholder="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="off"
-              />
-              <TextInput
-                type="password"
-                placeholder="Password (min 8 chars)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-              />
-              <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                variant="primary"
-                onClick={add}
-                disabled={!username.trim() || password.length < 8}
-              >
-                Add user
+        <Card
+          title="Accounts"
+          actions={
+            authed && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + Add user
               </Button>
-            </div>
-          )}
+            )
+          }
+        >
           {error && <p className="form-error">{error}</p>}
-          {rows.length === 0 ? (
-            <p className="muted">No users yet.</p>
-          ) : (
-            <div className="crud-list">
-              {rows.map((u) => (
-                <div className="crud-row" key={u.id}>
-                  <span className="crud-name">{u.username}</span>
+          <div className="users-table">
+            <div className="users-head">
+              <div className="users-h">Username</div>
+              <div className="users-h">Role</div>
+              <div className="users-h">Created</div>
+              <div className="users-h right">Actions</div>
+            </div>
+            {rows.length === 0 ? (
+              <div className="users-empty">No users yet.</div>
+            ) : (
+              rows.map((u) => (
+                <div className="users-row" key={u.id}>
+                  <span className="users-name">{u.username}</span>
                   {authed ? (
                     <Select
-                      className="crud-role-select"
+                      className="users-role-select"
                       value={u.role}
                       onChange={(e) => changeRole(u.id, e.target.value as Role)}
                       aria-label={`Role for ${u.username}`}
@@ -162,58 +115,239 @@ export function UsersPage() {
                       ))}
                     </Select>
                   ) : (
-                    <span className="crud-kind">{u.role}</span>
+                    <span>{u.role}</span>
                   )}
-                  <span className="crud-id mono">{u.created_at}</span>
-                  {authed &&
-                    (resetId === u.id ? (
-                      <div className="crud-reset form-row">
-                        <TextInput
-                          type="password"
-                          placeholder="New password"
-                          value={resetPw}
-                          onChange={(e) => setResetPw(e.target.value)}
-                          autoComplete="new-password"
-                        />
-                        <Button
-                          variant="primary"
-                          onClick={() => saveReset(u.id)}
-                          disabled={resetPw.length < 8}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          onClick={() => {
-                            setResetId(null);
-                            setResetPw('');
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : (
+                  <span className="users-created mono">{u.created_at}</span>
+                  <div className="users-actions">
+                    {authed && (
                       <>
-                        <Button
-                          variant="ghost"
-                          onClick={() => {
-                            setResetId(u.id);
-                            setResetPw('');
-                          }}
-                        >
-                          Reset password
+                        <Button variant="ghost" onClick={() => setPwUser(u)}>
+                          Change password
                         </Button>
-                        <Button variant="ghost" onClick={() => remove(u.id)}>
+                        <Button variant="ghost" onClick={() => setDelUser(u)}>
                           Delete
                         </Button>
                       </>
-                    ))}
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            )}
+          </div>
         </Card>
       )}
+
+      {adding && (
+        <AddUserModal
+          onClose={() => setAdding(false)}
+          onDone={() => {
+            setAdding(false);
+            load();
+          }}
+        />
+      )}
+      {pwUser && (
+        <ChangePasswordModal user={pwUser} onClose={() => setPwUser(null)} onDone={() => setPwUser(null)} />
+      )}
+      {delUser && (
+        <DeleteUserModal
+          user={delUser}
+          onClose={() => setDelUser(null)}
+          onDone={() => {
+            setDelUser(null);
+            load();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Create a new account (focused-editing modal). */
+function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<Role>('viewer');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const valid = username.trim().length > 0 && password.length >= MIN_PW;
+
+  const submit = () => {
+    if (!valid) return;
+    setBusy(true);
+    setError(null);
+    api
+      .createUser({ username: username.trim(), password, role })
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to create user'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Add user"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
+            Add user
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">Username</label>
+        <TextInput
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoComplete="off"
+          autoFocus
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Password (min {MIN_PW} chars)</label>
+        <TextInput
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="new-password"
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Role</label>
+        <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </Select>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Change a user's password (with confirmation, focused-editing modal). */
+function ChangePasswordModal({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: UserSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const tooShort = password.length < MIN_PW;
+  const mismatch = confirm.length > 0 && password !== confirm;
+  const valid = !tooShort && password === confirm;
+
+  const submit = () => {
+    if (!valid) return;
+    setBusy(true);
+    setError(null);
+    api
+      .setUserPassword(user.id, password)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to change password'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title={`Change password — ${user.username}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">New password (min {MIN_PW} chars)</label>
+        <TextInput
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="new-password"
+          autoFocus
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Confirm new password</label>
+        <TextInput
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          autoComplete="new-password"
+        />
+      </div>
+      {mismatch && <p className="form-error">passwords do not match</p>}
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Confirm + delete a user (destructive-consent modal). */
+function DeleteUserModal({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: UserSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteUser(user.id)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete user'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete user"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-confirm-text">
+        Delete user <strong>{user.username}</strong>? This cannot be undone.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
   );
 }
