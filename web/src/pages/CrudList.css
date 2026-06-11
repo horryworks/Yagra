@@ -40,9 +40,32 @@
   color: var(--text-secondary);
 }
 
-/* Inline collection-set editor revealed under a profile row. */
+/* Inline collection-set / template editor revealed under a profile or template row. */
 .crud-collection {
   padding: 12px 0 18px 0;
   border-top: var(--border-width) solid var(--border-color);
   margin-bottom: 6px;
+}
+
+/* Template attach checklist on a device profile. */
+.profile-templates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-template-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.profile-template-name {
+  font-weight: var(--weight-medium);
+}
+
+.profile-template-meta {
+  font-size: var(--font-xs);
 }

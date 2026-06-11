@@ -6,7 +6,7 @@
 //! tested in `yagra-common`. Queries are runtime `sqlx::query` (not the compile-time
 //! macro) so the build needs no live database — important for CI.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
@@ -404,14 +404,58 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Seed the built-in device-profile templates (Generic ping/SNMP, Cisco, Huawei …) and
-    /// their profile-scope collection items. Idempotent and non-destructive: each profile
-    /// gets a stable id and is inserted `ON CONFLICT DO NOTHING`, as are its items — so the
-    /// templates reliably exist after a deploy without clobbering operator edits (an item an
-    /// operator deleted may reappear on restart; acceptable for built-ins). Runs every boot.
+    /// Seed the built-in **collection templates** (Standard SNMP, vendor health) and the
+    /// **device profiles** (Generic ping/SNMP, Cisco, Huawei) that reference them. Idempotent
+    /// and non-destructive: every row uses a stable id and `ON CONFLICT DO NOTHING`, so the
+    /// catalog reliably exists after a deploy without clobbering operator edits. Runs every
+    /// boot. Also removes the legacy profile-scope `collection_items` the built-in profiles
+    /// used to carry (PR #12) — profiles are now templates-only, so those would be ignored.
     pub async fn seed_builtin_profiles(&self) -> anyhow::Result<()> {
-        // Stable base so the same profile keeps the same id across restarts (bindings survive).
+        // Stable bases so ids (and thus existing bindings/links) survive restarts.
         const PROFILE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_0000;
+        const TEMPLATE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_7000;
+
+        // 1. Templates + their metrics; remember name → id for the profile links.
+        let mut template_id_by_name: HashMap<&'static str, Uuid> = HashMap::new();
+        for (i, template) in yagra_common::builtin_templates().into_iter().enumerate() {
+            let template_id = Uuid::from_u128(TEMPLATE_ID_BASE + i as u128);
+            template_id_by_name.insert(template.name, template_id);
+            sqlx::query(
+                "INSERT INTO collection_templates (id, name, description) VALUES ($1, $2, $3) \
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(template_id)
+            .bind(template.name)
+            .bind(template.description)
+            .execute(&self.pool)
+            .await?;
+            for item in template.items {
+                let collection = match item.kind {
+                    CollectionKind::Scalar => "scalar",
+                    CollectionKind::Table => "table",
+                };
+                let metric_kind = match item.metric_kind {
+                    MetricKind::Gauge => "gauge",
+                    MetricKind::Counter => "counter",
+                };
+                sqlx::query(
+                    "INSERT INTO collection_template_items \
+                        (id, template_id, metric_name, oid, collection, metric_kind, enabled) \
+                     VALUES ($1, $2, $3, $4, $5, $6, true) \
+                     ON CONFLICT (template_id, metric_name) DO NOTHING",
+                )
+                .bind(Uuid::new_v4())
+                .bind(template_id)
+                .bind(&item.metric_name)
+                .bind(&item.oid)
+                .bind(collection)
+                .bind(metric_kind)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+
+        // 2. Profiles + their template links; drop any legacy profile-scope collection items.
         for (i, profile) in yagra_common::builtin_profiles().into_iter().enumerate() {
             let profile_id = Uuid::from_u128(PROFILE_ID_BASE + i as u128);
             sqlx::query(
@@ -421,34 +465,27 @@ impl NodeRepo {
             .bind(profile.name)
             .execute(&self.pool)
             .await?;
-            for item in profile.items {
-                let (collection, metric_kind) = (
-                    match item.kind {
-                        CollectionKind::Scalar => "scalar",
-                        CollectionKind::Table => "table",
-                    },
-                    match item.metric_kind {
-                        MetricKind::Gauge => "gauge",
-                        MetricKind::Counter => "counter",
-                    },
-                );
-                sqlx::query(
-                    "INSERT INTO collection_items \
-                        (id, scope_level, scope_id, metric_name, oid, collection, metric_kind, enabled) \
-                     VALUES ($1, 'profile', $2, $3, $4, $5, $6, true) \
-                     ON CONFLICT (scope_level, scope_id, metric_name) DO NOTHING",
-                )
-                .bind(Uuid::new_v4())
-                .bind(profile_id)
-                .bind(&item.metric_name)
-                .bind(&item.oid)
-                .bind(collection)
-                .bind(metric_kind)
-                .execute(&self.pool)
-                .await?;
+            // Legacy cleanup: built-in profiles no longer carry direct OIDs (templates-only).
+            sqlx::query(
+                "DELETE FROM collection_items WHERE scope_level = 'profile' AND scope_id = $1",
+            )
+            .bind(profile_id)
+            .execute(&self.pool)
+            .await?;
+            for template_name in profile.templates {
+                if let Some(template_id) = template_id_by_name.get(template_name) {
+                    sqlx::query(
+                        "INSERT INTO profile_collection_templates (profile_id, template_id) \
+                         VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    )
+                    .bind(profile_id)
+                    .bind(template_id)
+                    .execute(&self.pool)
+                    .await?;
+                }
             }
         }
-        tracing::info!("seeded built-in device-profile templates");
+        tracing::info!("seeded built-in collection templates + device profiles");
         Ok(())
     }
 }

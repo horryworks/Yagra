@@ -8,6 +8,7 @@ import type {
   ApiErrorBody,
   AuthMe,
   CollectionKind,
+  CollectionTemplate,
   CredentialSummary,
   Direction,
   InterfaceRow,
@@ -223,28 +224,58 @@ export const api = {
   deleteThreshold: (id: string): Promise<void> =>
     request(`/thresholds/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /** A profile's collection set (what every node of that device class collects). */
-  listProfileCollection: (id: string): Promise<StoredCollectionItem[]> =>
-    request(`/profiles/${encodeURIComponent(id)}/collection`),
-
-  /** A node's collection items. `resolved` returns the effective set (profile defaults
-   *  overridden by node-level items) rather than just the node-level overrides. */
+  /** A node's collection items. `resolved` returns the effective set (the profile's
+   *  templates overridden by node-level items) rather than just the node-level overrides. */
   listNodeCollection: (id: string, resolved = false): Promise<StoredCollectionItem[]> => {
     const path = `/nodes/${encodeURIComponent(id)}/collection`;
     return request(resolved ? `${path}?resolved=true` : path);
   },
 
-  /** Add (or update) a collection item on a profile. */
-  addProfileCollection: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
-    request(`/profiles/${encodeURIComponent(id)}/collection`, jsonBody('POST', body)),
-
-  /** Add (or update) a collection item on a node (overrides the profile default). */
+  /** Add (or update) a collection item on a node (overrides the profile/template default). */
   addNodeCollection: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
     request(`/nodes/${encodeURIComponent(id)}/collection`, jsonBody('POST', body)),
 
-  /** Delete a collection item by id. */
+  /** Delete a node-scope collection item by id. */
   deleteCollectionItem: (itemId: string): Promise<void> =>
     request(`/collection/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
+
+  /** Reusable collection templates (named metric bundles profiles attach). */
+  listCollectionTemplates: (): Promise<CollectionTemplate[]> => request('/collection-templates'),
+
+  /** Create a template. 409 `template_name_taken` if the name is in use. */
+  createCollectionTemplate: (body: {
+    name: string;
+    description?: string;
+  }): Promise<{ id: string }> => request('/collection-templates', jsonBody('POST', body)),
+
+  /** Delete a template (also detaches it from every profile). */
+  deleteCollectionTemplate: (id: string): Promise<void> =>
+    request(`/collection-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** The metrics in a template. */
+  listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>
+    request(`/collection-templates/${encodeURIComponent(id)}/items`),
+
+  /** Add (or update) a metric in a template. */
+  addTemplateItem: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
+    request(`/collection-templates/${encodeURIComponent(id)}/items`, jsonBody('POST', body)),
+
+  /** Delete a metric from a template. */
+  deleteTemplateItem: (templateId: string, itemId: string): Promise<void> =>
+    request(
+      `/collection-templates/${encodeURIComponent(templateId)}/items/${encodeURIComponent(itemId)}`,
+      { method: 'DELETE' },
+    ),
+
+  /** The templates a profile attaches. */
+  listProfileTemplates: (id: string): Promise<CollectionTemplate[]> =>
+    request(`/profiles/${encodeURIComponent(id)}/templates`),
+
+  /** Replace the set of templates a profile attaches. */
+  setProfileTemplates: (id: string, templateIds: string[]): Promise<void> =>
+    request(`/profiles/${encodeURIComponent(id)}/templates`, jsonBody('PUT', {
+      template_ids: templateIds,
+    })),
 
   /** Credential metadata listing (never includes secret values). */
   listCredentials: (): Promise<CredentialSummary[]> => request('/credentials'),

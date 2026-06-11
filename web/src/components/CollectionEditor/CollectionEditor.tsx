@@ -21,7 +21,7 @@ export function CollectionEditor({
   scopeId,
   canEdit,
 }: {
-  scope: 'profile' | 'node';
+  scope: 'node' | 'template';
   scopeId: string;
   canEdit: boolean;
 }) {
@@ -35,13 +35,13 @@ export function CollectionEditor({
 
   const load = useCallback(() => {
     const p =
-      scope === 'profile'
-        ? api.listProfileCollection(scopeId)
+      scope === 'template'
+        ? api.listTemplateItems(scopeId)
         : api.listNodeCollection(scopeId);
     p.then((list) => {
       setItems(list);
       setError(null);
-    }).catch((e: unknown) => setError(errMsg(e, 'failed to load collection set')));
+    }).catch((e: unknown) => setError(errMsg(e, 'failed to load metrics')));
   }, [scope, scopeId]);
 
   useEffect(() => {
@@ -61,8 +61,8 @@ export function CollectionEditor({
       metric_kind: metricKind,
     };
     const p =
-      scope === 'profile'
-        ? api.addProfileCollection(scopeId, body)
+      scope === 'template'
+        ? api.addTemplateItem(scopeId, body)
         : api.addNodeCollection(scopeId, body);
     p.then(() => {
       setMetricName('');
@@ -73,11 +73,13 @@ export function CollectionEditor({
       .finally(() => setBusy(false));
   };
 
-  const remove = (id: string) =>
-    api
-      .deleteCollectionItem(id)
-      .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to delete metric')));
+  const remove = (id: string) => {
+    const p =
+      scope === 'template'
+        ? api.deleteTemplateItem(scopeId, id)
+        : api.deleteCollectionItem(id);
+    p.then(load).catch((e: unknown) => setError(errMsg(e, 'failed to delete metric')));
+  };
 
   return (
     <div className="ce">
@@ -118,8 +120,9 @@ export function CollectionEditor({
       {error && <p className="form-error">{error}</p>}
       {items.length === 0 ? (
         <p className="muted">
-          No metrics configured at this scope.
-          {scope === 'node' ? ' The profile / built-in defaults still apply.' : ''}
+          {scope === 'template'
+            ? 'No metrics in this template yet.'
+            : 'No node-level metrics. The profile templates / built-in defaults still apply.'}
         </p>
       ) : (
         <div className="ce-table">

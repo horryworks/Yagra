@@ -45,7 +45,7 @@ export const NAV: NavSection[] = [
       {
         label: 'Collection templates',
         path: '/nodes/collection-templates',
-        implemented: false,
+        implemented: true,
         mono: 'Ct',
       },
       { label: 'MIB repository', path: '/nodes/mib', implemented: false, mono: 'Mb' },
