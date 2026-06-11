@@ -149,6 +149,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         creds,
         users,
         thresholds,
+        collection,
     }));
     let sessions = Arc::new(SessionStore::new());
 
