@@ -176,6 +176,74 @@ pub fn builtin_interface_meta_columns() -> Vec<(InterfaceField, &'static str)> {
     ]
 }
 
+// --- Built-in device-profile templates ----------------------------------------------
+//
+// Ready-made device-class profiles so an operator can bind one (plus an SNMP credential)
+// and immediately get graphs, instead of hand-entering OIDs. Core seeds these into the
+// `profiles` table (with their collection items at profile scope). The generic interface
+// set works on virtually any SNMP agent; the vendor scalars below are *best-effort* common
+// OIDs (walked as table columns so we don't guess an instance index) — an OID a given
+// device lacks is simply skipped by the poller.
+
+/// A named device-class profile template and the collection items it ships with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuiltinProfile {
+    /// Display name shown in Device profiles.
+    pub name: &'static str,
+    /// Collection items defined at this profile's scope (may be empty for ICMP-only).
+    pub items: Vec<CollectionItem>,
+}
+
+/// A vendor table column (CPU/mem usage etc.), walked per-entity like the interface table.
+fn vendor_table(metric: &str, oid: &str) -> CollectionItem {
+    CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: oid.to_owned(),
+        kind: CollectionKind::Table,
+        metric_kind: MetricKind::Gauge,
+    }
+}
+
+/// The built-in device-profile templates shipped with Yagra (seeded on startup).
+#[must_use]
+pub fn builtin_profiles() -> Vec<BuiltinProfile> {
+    // Generic SNMP = the standard scalar + interface set; the vendor profiles extend it.
+    let generic = builtin_catalog();
+    let with_extras = |extras: Vec<CollectionItem>| {
+        let mut v = generic.clone();
+        v.extend(extras);
+        v
+    };
+    vec![
+        // ICMP-only: no SNMP collection (for devices without a usable SNMP agent).
+        BuiltinProfile {
+            name: "Generic ping",
+            items: Vec::new(),
+        },
+        BuiltinProfile {
+            name: "Generic SNMP",
+            items: generic.clone(),
+        },
+        BuiltinProfile {
+            name: "Cisco IOS router",
+            items: with_extras(vec![
+                // cpmCPUTotal5minRev (%), ciscoMemoryPoolUsed / Free (bytes) — table-indexed.
+                vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
+                vendor_table("cisco_mem_used", "1.3.6.1.4.1.9.9.48.1.1.1.5"),
+                vendor_table("cisco_mem_free", "1.3.6.1.4.1.9.9.48.1.1.1.6"),
+            ]),
+        },
+        BuiltinProfile {
+            name: "Huawei USG firewall",
+            items: with_extras(vec![
+                // hwEntityCpuUsage / hwEntityMemUsage (%), indexed by entPhysicalIndex.
+                vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
+                vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
+            ]),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +320,62 @@ mod tests {
             serde_json::from_str::<CollectionKind>("\"scalar\"").unwrap(),
             CollectionKind::Scalar
         );
+    }
+
+    #[test]
+    fn builtin_profiles_ship_expected_templates() {
+        let profiles = builtin_profiles();
+        let names: Vec<&str> = profiles.iter().map(|p| p.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Generic ping",
+                "Generic SNMP",
+                "Cisco IOS router",
+                "Huawei USG firewall"
+            ]
+        );
+        let by_name = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+
+        // Generic ping is ICMP-only (no SNMP collection).
+        assert!(by_name("Generic ping").items.is_empty());
+
+        // Generic SNMP carries the standard interface set.
+        let generic = &by_name("Generic SNMP").items;
+        assert!(generic.iter().any(|i| i.metric_name == "if_hc_in_octets"
+            && i.kind == CollectionKind::Table
+            && i.metric_kind == MetricKind::Counter));
+        assert!(generic
+            .iter()
+            .any(|i| i.metric_name == "snmp_sys_uptime_ticks"));
+
+        // Vendor profiles are a superset of the generic set plus their extras.
+        let huawei = &by_name("Huawei USG firewall").items;
+        assert!(huawei.iter().any(|i| i.metric_name == "if_hc_in_octets"));
+        assert!(huawei.iter().any(|i| i.metric_name == "huawei_cpu_usage"));
+        let cisco = &by_name("Cisco IOS router").items;
+        assert!(cisco.iter().any(|i| i.metric_name == "cisco_cpu_5min"));
+        assert!(cisco.len() > generic.len());
+    }
+
+    #[test]
+    fn builtin_profile_oids_are_dotted_digits() {
+        // Mirror the API's is_valid_oid so seeded items can never be rejected on re-create.
+        let dotted_digits = |oid: &str| {
+            !oid.is_empty()
+                && oid
+                    .split('.')
+                    .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        };
+        for p in builtin_profiles() {
+            for item in p.items {
+                assert!(
+                    dotted_digits(&item.oid),
+                    "bad OID {} in {}",
+                    item.oid,
+                    p.name
+                );
+            }
+        }
     }
 }

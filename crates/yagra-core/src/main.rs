@@ -71,6 +71,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let repo = Arc::new(NodeRepo::connect(&cfg.database_url).await?);
     repo.migrate().await?;
     repo.seed_demo_nodes_if_empty().await?;
+    repo.seed_builtin_profiles().await?;
 
     // TSDB + bus.
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));

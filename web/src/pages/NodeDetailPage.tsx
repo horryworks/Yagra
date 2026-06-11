@@ -21,6 +21,7 @@ import type {
   CredentialSummary,
   InterfaceRow,
   MetricReading,
+  NodeDetail,
   NodeState,
   NodeStatus,
   ProfileSummary,
@@ -49,6 +50,7 @@ export function NodeDetailPage() {
   const { nodeId = '' } = useParams();
   const authed = useAuthStore((s) => s.authed);
   const [tab, setTab] = useState('overview');
+  const [node, setNode] = useState<NodeDetail | null>(null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [reading, setReading] = useState<MetricReading | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
@@ -63,6 +65,12 @@ export function NodeDetailPage() {
     setReading(null);
     setError(null);
     setStatus(null);
+    setNode(null);
+    // Node detail (name + address) for the header; falls back to the UUID if unavailable.
+    api
+      .getNode(nodeId)
+      .then((n) => !cancelled && setNode(n))
+      .catch(() => undefined);
     api
       .getNodeMetric(nodeId, METRIC)
       .then((r) => !cancelled && setReading(r))
@@ -87,8 +95,20 @@ export function NodeDetailPage() {
   return (
     <div>
       <PageHeader
-        title={<span className="mono">{nodeId}</span>}
-        trail={[{ label: 'Nodes' }, { label: 'All nodes', to: '/nodes' }, { label: nodeId }]}
+        title={
+          node ? (
+            <span>
+              {node.name} <span className="mono nodedetail-title-addr">({node.address})</span>
+            </span>
+          ) : (
+            <span className="mono">{nodeId}</span>
+          )
+        }
+        trail={[
+          { label: 'Nodes' },
+          { label: 'All nodes', to: '/nodes' },
+          { label: node?.name ?? nodeId },
+        ]}
         actions={
           <div className="nodedetail-head-actions">
             {status && <StatusDot state={status.state} />}
