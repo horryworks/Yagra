@@ -82,3 +82,22 @@ export function formatBps(bps: number | null): string {
 export function formatUtil(pct: number | null): string {
   return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
 }
+
+/** Compact, unit-less SI suffix (k/M/G/T) for a plain number — for chart axis ticks so big
+ *  values (e.g. 455000) render as "455k" instead of being clipped. */
+export function formatSi(n: number): string {
+  const abs = Math.abs(n);
+  const units: [number, string][] = [
+    [1e12, 'T'],
+    [1e9, 'G'],
+    [1e6, 'M'],
+    [1e3, 'k'],
+  ];
+  for (const [div, suffix] of units) {
+    if (abs >= div) {
+      const v = n / div;
+      return `${v.toFixed(v >= 100 || Number.isInteger(v) ? 0 : 1)}${suffix}`;
+    }
+  }
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}

@@ -178,6 +178,35 @@ fn rate_query(key: &SeriesKey, lookback_s: u64) -> String {
     format!("rate({}[{}s])", selector(key), lookback_s.max(1))
 }
 
+/// How far back an *instant* read (`latest`/`rate`) looks for the most recent value. SNMP
+/// polls are jittered and some devices answer slowly, so a bare instant query at `now` often
+/// falls outside VictoriaMetrics' default staleness window and returns nothing — blanking the
+/// UI even though recent data exists. Wrapping in `last_over_time` over this window returns
+/// the most recent value within it (the `stale` flag still dims genuinely-old rows).
+const INSTANT_LOOKBACK_SECS: u64 = 1800;
+
+/// Instant query for the latest value within [`INSTANT_LOOKBACK_SECS`], robust to poll gaps:
+/// `last_over_time(icmp_rtt_ms{node="…"}[1800s])`.
+fn latest_query(key: &SeriesKey) -> String {
+    format!(
+        "last_over_time({}[{}s])",
+        selector(key),
+        INSTANT_LOOKBACK_SECS
+    )
+}
+
+/// Instant query for the most recent rate within [`INSTANT_LOOKBACK_SECS`] — a subquery that
+/// samples `rate(…[lookback])` across the window and takes the last point, so a slightly
+/// stale series still yields its last computed rate rather than nothing.
+fn instant_rate_query(key: &SeriesKey, lookback_s: u64) -> String {
+    format!(
+        "last_over_time(({})[{}s:{}s])",
+        rate_query(key, lookback_s),
+        INSTANT_LOOKBACK_SECS,
+        lookback_s.max(1)
+    )
+}
+
 #[async_trait]
 impl MetricStore for VmStore {
     async fn write(&self, result: &PollResult) {
@@ -206,7 +235,7 @@ impl MetricStore for VmStore {
         let resp = self
             .http
             .get(&url)
-            .query(&[("query", selector(key))])
+            .query(&[("query", latest_query(key))])
             .send()
             .await
             .ok()?;
@@ -238,7 +267,7 @@ impl MetricStore for VmStore {
         let resp = self
             .http
             .get(&url)
-            .query(&[("query", rate_query(key, lookback_s))])
+            .query(&[("query", instant_rate_query(key, lookback_s))])
             .send()
             .await
             .ok()?;
@@ -297,6 +326,24 @@ mod tests {
         assert_eq!(
             rate_query(&key, 300),
             "rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}[300s])"
+        );
+    }
+
+    #[test]
+    fn latest_query_uses_last_over_time_window() {
+        let key = SeriesKey::node(NodeId::from(Uuid::nil()), "icmp_rtt_ms");
+        assert_eq!(
+            latest_query(&key),
+            "last_over_time(icmp_rtt_ms{node=\"00000000-0000-0000-0000-000000000000\"}[1800s])"
+        );
+    }
+
+    #[test]
+    fn instant_rate_query_wraps_rate_in_last_over_time_subquery() {
+        let key = SeriesKey::interface(NodeId::from(Uuid::nil()), IfIndex(3), "if_hc_in_octets");
+        assert_eq!(
+            instant_rate_query(&key, 300),
+            "last_over_time((rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}[300s]))[1800s:300s])"
         );
     }
 
