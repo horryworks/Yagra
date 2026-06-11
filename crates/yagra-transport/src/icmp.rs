@@ -112,6 +112,26 @@ impl Transport for SurgePingTransport {
             "SNMP v3 (USM) — pending net-snmp FFI decision (ADR-021)",
         ))
     }
+
+    async fn snmp_walk(
+        &self,
+        target: IpAddr,
+        community: &str,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<crate::SnmpTableSample>, TransportError> {
+        crate::snmp::snmp_walk_v2c(target, community, column_oids, timeout).await
+    }
+
+    async fn snmp_walk_strings(
+        &self,
+        target: IpAddr,
+        community: &str,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<crate::SnmpTableString>, TransportError> {
+        crate::snmp::snmp_walk_strings_v2c(target, community, column_oids, timeout).await
+    }
 }
 
 /// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply

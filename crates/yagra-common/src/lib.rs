@@ -9,6 +9,7 @@
 //! explicit, exhaustive node state machine (monitoring-conventions).
 
 pub mod address;
+pub mod collection;
 pub mod ids;
 pub mod metric;
 pub mod node;
@@ -19,6 +20,10 @@ pub mod state;
 pub mod thresholds;
 
 pub use address::AddressFamily;
+pub use collection::{
+    builtin_catalog, builtin_interface_meta_columns, resolve_collection_set, CollectionItem,
+    CollectionKind, InterfaceField, ScopedCollectionItem,
+};
 pub use ids::{CheckId, CredentialId, IfIndex, NodeId, ProfileId};
 pub use metric::{MetricKind, SeriesKey};
 pub use node::Node;

@@ -1097,6 +1097,7 @@ mod tests {
             at_unix_ms: 0,
             outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge(metric, value)],
+            interfaces: Vec::new(),
         });
         Arc::new(sink)
     }

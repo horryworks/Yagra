@@ -41,6 +41,31 @@ pub struct SnmpSample {
     pub value: f64,
 }
 
+/// One numeric value from a table walk: the column base it was walked from, the row's
+/// index (the trailing sub-identifier — the ifIndex), and the raw value. The caller maps
+/// `oid_base` back to a metric name (cardinality stays bounded that way).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnmpTableSample {
+    /// The column base OID that was walked, e.g. `1.3.6.1.2.1.31.1.1.1.6`.
+    pub oid_base: String,
+    /// Row index (ifIndex) — the trailing sub-identifier of the instance OID.
+    pub ifindex: u32,
+    /// Raw value (counters reported as-is, ADR-012).
+    pub value: f64,
+}
+
+/// One string value from a table walk (e.g. `ifName`/`ifAlias`): the column base, the
+/// row's ifIndex, and the value. Used for interface *metadata* (PostgreSQL), never TSDB.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnmpTableString {
+    /// The column base OID that was walked, e.g. `1.3.6.1.2.1.31.1.1.1.1`.
+    pub oid_base: String,
+    /// Row index (ifIndex).
+    pub ifindex: u32,
+    /// The string value (lossily decoded UTF-8; device-supplied, treat as untrusted).
+    pub value: String,
+}
+
 /// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job). Keys are
 /// the auth/priv passphrases. `security_level` is `noauth` / `auth` / `authpriv`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -97,6 +122,28 @@ pub trait Transport: Send + Sync {
         oids: &[String],
         timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError>;
+
+    /// Walk one or more table *column base* OIDs via SNMP v2c GETBULK, returning the
+    /// numeric value of every row, tagged with its ifIndex. A per-column walk failure is
+    /// logged and skipped (one bad column doesn't fail the poll). Counters are raw (ADR-012).
+    async fn snmp_walk(
+        &self,
+        target: IpAddr,
+        community: &str,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableSample>, TransportError>;
+
+    /// Walk table *column base* OIDs whose values are strings (e.g. `ifName`, `ifAlias`),
+    /// returning each row's string value tagged with its ifIndex. For interface metadata
+    /// (PostgreSQL), never TSDB labels (ADR-011).
+    async fn snmp_walk_strings(
+        &self,
+        target: IpAddr,
+        community: &str,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableString>, TransportError>;
 }
 
 /// A canned [`Transport`] for tests and the single-process walking skeleton.
@@ -107,8 +154,12 @@ pub trait Transport: Send + Sync {
 pub struct FakeTransport {
     /// The probe every ICMP call returns.
     pub probe: IcmpProbe,
-    /// The samples every SNMP call returns.
+    /// The samples every SNMP GET call returns.
     pub snmp: Vec<SnmpSample>,
+    /// The numeric rows every SNMP table walk returns.
+    pub snmp_table: Vec<SnmpTableSample>,
+    /// The string rows every SNMP string-table walk returns.
+    pub snmp_table_strings: Vec<SnmpTableString>,
 }
 
 impl FakeTransport {
@@ -122,6 +173,8 @@ impl FakeTransport {
                 loss_pct: 0.0,
             },
             snmp: Vec::new(),
+            snmp_table: Vec::new(),
+            snmp_table_strings: Vec::new(),
         }
     }
 
@@ -135,13 +188,29 @@ impl FakeTransport {
                 loss_pct: 100.0,
             },
             snmp: Vec::new(),
+            snmp_table: Vec::new(),
+            snmp_table_strings: Vec::new(),
         }
     }
 
-    /// Set the canned SNMP samples this fake returns.
+    /// Set the canned SNMP GET samples this fake returns.
     #[must_use]
     pub fn with_snmp(mut self, samples: Vec<SnmpSample>) -> Self {
         self.snmp = samples;
+        self
+    }
+
+    /// Set the canned numeric table-walk rows this fake returns.
+    #[must_use]
+    pub fn with_snmp_table(mut self, rows: Vec<SnmpTableSample>) -> Self {
+        self.snmp_table = rows;
+        self
+    }
+
+    /// Set the canned string table-walk rows this fake returns.
+    #[must_use]
+    pub fn with_snmp_table_strings(mut self, rows: Vec<SnmpTableString>) -> Self {
+        self.snmp_table_strings = rows;
         self
     }
 }
@@ -175,6 +244,37 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
         Ok(self.snmp.clone())
+    }
+
+    async fn snmp_walk(
+        &self,
+        _target: IpAddr,
+        _community: &str,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpTableSample>, TransportError> {
+        // Return only the rows for the requested columns, as a real per-column walk would.
+        Ok(self
+            .snmp_table
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
+    }
+
+    async fn snmp_walk_strings(
+        &self,
+        _target: IpAddr,
+        _community: &str,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpTableString>, TransportError> {
+        Ok(self
+            .snmp_table_strings
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
     }
 }
 
