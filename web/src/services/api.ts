@@ -15,8 +15,10 @@ import type {
   NodeStatus,
   NodeSummary,
   ProfileSummary,
+  Role,
   ScopeLevel,
   StoredThreshold,
+  UserSummary,
 } from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -220,6 +222,28 @@ export const api = {
   /** Recent alert history (default 100 rows). */
   listAlertHistory: (limit?: number): Promise<AlertHistoryRow[]> =>
     request(limit != null ? `/alerts/history?limit=${limit}` : '/alerts/history'),
+
+  /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
+  listUsers: (): Promise<UserSummary[]> => request('/users'),
+
+  /** Create a user account. The password is hashed server-side and never returned. */
+  createUser: (body: {
+    username: string;
+    password: string;
+    role: Role;
+  }): Promise<{ id: string }> => request('/users', jsonBody('POST', body)),
+
+  /** Delete a user account. Refused (409 `last_admin`) for the last admin. */
+  deleteUser: (id: string): Promise<void> =>
+    request(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Change a user's role. Refused (409 `last_admin`) when demoting the last admin. */
+  setUserRole: (id: string, role: Role): Promise<void> =>
+    request(`/users/${encodeURIComponent(id)}/role`, jsonBody('PUT', { role })),
+
+  /** Reset a user's password (hashed server-side; never echoed back). */
+  setUserPassword: (id: string, password: string): Promise<void> =>
+    request(`/users/${encodeURIComponent(id)}/password`, jsonBody('PUT', { password })),
 
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => request('/auth/me'),

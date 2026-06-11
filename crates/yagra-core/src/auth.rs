@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::{Permission, Principal, Role, Scope};
@@ -102,6 +103,34 @@ fn parse_role(s: &str) -> Role {
     }
 }
 
+/// User-account metadata for the API — never includes the password hash.
+#[derive(Debug, Clone, Serialize)]
+pub struct UserSummary {
+    pub id: Uuid,
+    pub username: String,
+    pub role: String,
+    /// Account creation time (RFC 3339 text; no chrono types cross the API edge).
+    pub created_at: String,
+}
+
+/// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
+pub enum UserCreateOutcome {
+    /// Created with this id.
+    Created(Uuid),
+    /// The username already exists.
+    UsernameTaken,
+}
+
+/// Outcome of a user mutation (delete / role change) that must not lock out the last admin.
+pub enum UserMutation {
+    /// Applied.
+    Done,
+    /// No such user.
+    NotFound,
+    /// Refused: this is the only remaining admin (removing/demoting it would orphan the system).
+    LastAdmin,
+}
+
 /// PostgreSQL-backed user accounts for local auth.
 pub struct UserStore {
     pool: PgPool,
@@ -159,6 +188,125 @@ impl UserStore {
             Ok(None)
         }
     }
+
+    /// All accounts (metadata only — the password hash is never selected or returned).
+    pub async fn list(&self) -> anyhow::Result<Vec<UserSummary>> {
+        let rows = sqlx::query(
+            "SELECT id, username, role, created_at::text AS created_at \
+             FROM users ORDER BY created_at, username",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(UserSummary {
+                    id: row.try_get("id")?,
+                    username: row.try_get("username")?,
+                    role: row.try_get("role")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Create an account. The password is Argon2id-hashed before it touches the database and
+    /// is never logged. A duplicate username surfaces as [`UserCreateOutcome::UsernameTaken`]
+    /// (the `users.username` UNIQUE constraint), not an opaque 500.
+    pub async fn create(
+        &self,
+        username: &str,
+        password: &str,
+        role: &str,
+    ) -> anyhow::Result<UserCreateOutcome> {
+        let hash = hash_password(password).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
+        let id = Uuid::new_v4();
+        let res = sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(username)
+        .bind(hash)
+        .bind(role)
+        .execute(&self.pool)
+        .await;
+        match res {
+            Ok(_) => Ok(UserCreateOutcome::Created(id)),
+            // 23505 = unique_violation (PostgreSQL) — the username is taken.
+            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => {
+                Ok(UserCreateOutcome::UsernameTaken)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete an account, refusing to remove the **last** admin (which would lock everyone out
+    /// of user/credential/config management). Runs in a transaction so the count and delete are
+    /// consistent under concurrent edits.
+    pub async fn delete(&self, id: Uuid) -> anyhow::Result<UserMutation> {
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query("SELECT role FROM users WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(UserMutation::NotFound);
+        };
+        let role: String = row.try_get("role")?;
+        if role == "admin" && admin_count(&mut tx).await? <= 1 {
+            return Ok(UserMutation::LastAdmin);
+        }
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(UserMutation::Done)
+    }
+
+    /// Change an account's role, refusing to demote the **last** admin (same lock-out guard as
+    /// [`Self::delete`]).
+    pub async fn set_role(&self, id: Uuid, new_role: &str) -> anyhow::Result<UserMutation> {
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query("SELECT role FROM users WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(UserMutation::NotFound);
+        };
+        let current: String = row.try_get("role")?;
+        if current == "admin" && new_role != "admin" && admin_count(&mut tx).await? <= 1 {
+            return Ok(UserMutation::LastAdmin);
+        }
+        sqlx::query("UPDATE users SET role = $2 WHERE id = $1")
+            .bind(id)
+            .bind(new_role)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(UserMutation::Done)
+    }
+
+    /// Reset an account's password (Argon2id-hashed; the plaintext is never stored or logged).
+    /// Returns whether the account exists.
+    pub async fn set_password(&self, id: Uuid, password: &str) -> anyhow::Result<bool> {
+        let hash = hash_password(password).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
+        let res = sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+            .bind(id)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+}
+
+/// Count of admin accounts within an open transaction (lock-out guard helper).
+async fn admin_count(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> anyhow::Result<i64> {
+    let n: i64 = sqlx::query("SELECT count(*) AS n FROM users WHERE role = 'admin'")
+        .fetch_one(&mut **tx)
+        .await?
+        .try_get("n")?;
+    Ok(n)
 }
 
 #[cfg(test)]

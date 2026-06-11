@@ -17,6 +17,7 @@ import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { MetricExplorerPage } from './pages/MetricExplorerPage';
 import { PreferencesPage } from './pages/PreferencesPage';
+import { UsersPage } from './pages/UsersPage';
 
 export function AppRoutes() {
   return (
@@ -62,7 +63,7 @@ export function AppRoutes() {
         <Route path="settings/pollers" element={<ComingSoon />} />
         <Route path="settings/integrations" element={<ComingSoon />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
-        <Route path="settings/users" element={<ComingSoon />} />
+        <Route path="settings/users" element={<UsersPage />} />
         <Route path="settings/auth" element={<ComingSoon />} />
         <Route path="settings/audit" element={<ComingSoon />} />
         <Route path="settings/system" element={<ComingSoon />} />

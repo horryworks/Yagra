@@ -8,7 +8,7 @@
 //! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
 
 use crate::alerts::AlertManager;
-use crate::auth::{AuthError, SessionStore, UserStore};
+use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::history::AlertHistoryStore;
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
@@ -96,6 +96,10 @@ pub fn router(state: ApiState) -> Router {
             get(list_thresholds).post(create_threshold),
         )
         .route("/api/v1/thresholds/:id", delete(delete_threshold))
+        .route("/api/v1/users", get(list_users).post(create_user))
+        .route("/api/v1/users/:id", delete(delete_user))
+        .route("/api/v1/users/:id/role", put(set_user_role))
+        .route("/api/v1/users/:id/password", put(set_user_password))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/alerts", get(list_alerts))
@@ -855,6 +859,195 @@ async fn delete_threshold(
     }
 }
 
+// ── Users & roles (Settings ▸ Users & roles) — ManageUsers (admin) only ──────
+
+/// Minimum password length accepted for a new account or a reset.
+const MIN_PASSWORD_LEN: usize = 8;
+
+/// A valid role string (mirrors `yagra_common::Role`, snake_case).
+fn is_valid_role(role: &str) -> bool {
+    matches!(role, "viewer" | "operator" | "admin")
+}
+
+async fn list_users(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    match admin.users.list().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list users failed");
+            internal("failed to list users")
+        }
+    }
+}
+
+/// Create-user request body. The password is hashed before storage and never logged.
+#[derive(Deserialize)]
+struct CreateUser {
+    username: String,
+    password: String,
+    role: String,
+}
+
+async fn create_user(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateUser>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    let username = body.username.trim();
+    if username.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_user",
+            "username must not be empty".to_owned(),
+        );
+    }
+    if body.password.len() < MIN_PASSWORD_LEN {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "weak_password",
+            format!("password must be at least {MIN_PASSWORD_LEN} characters"),
+        );
+    }
+    if !is_valid_role(&body.role) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_role",
+            "role must be viewer, operator, or admin".to_owned(),
+        );
+    }
+    match admin
+        .users
+        .create(username, &body.password, &body.role)
+        .await
+    {
+        Ok(UserCreateOutcome::Created(id)) => {
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Ok(UserCreateOutcome::UsernameTaken) => error_response(
+            StatusCode::CONFLICT,
+            "username_taken",
+            format!("username {username:?} is already taken"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "create user failed");
+            internal("failed to create user")
+        }
+    }
+}
+
+async fn delete_user(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    match admin.users.delete(id).await {
+        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
+        Ok(UserMutation::LastAdmin) => last_admin(),
+        Err(e) => {
+            tracing::error!(error = %e, "delete user failed");
+            internal("failed to delete user")
+        }
+    }
+}
+
+/// Change-role request body.
+#[derive(Deserialize)]
+struct SetRole {
+    role: String,
+}
+
+async fn set_user_role(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetRole>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    if !is_valid_role(&body.role) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_role",
+            "role must be viewer, operator, or admin".to_owned(),
+        );
+    }
+    match admin.users.set_role(id, &body.role).await {
+        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
+        Ok(UserMutation::LastAdmin) => last_admin(),
+        Err(e) => {
+            tracing::error!(error = %e, "set user role failed");
+            internal("failed to update user role")
+        }
+    }
+}
+
+/// Reset-password request body. The password is hashed before storage and never logged.
+#[derive(Deserialize)]
+struct SetPassword {
+    password: String,
+}
+
+async fn set_user_password(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetPassword>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    if body.password.len() < MIN_PASSWORD_LEN {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "weak_password",
+            format!("password must be at least {MIN_PASSWORD_LEN} characters"),
+        );
+    }
+    match admin.users.set_password(id, &body.password).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("user_not_found", format!("no user {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "reset user password failed");
+            internal("failed to reset password")
+        }
+    }
+}
+
+/// 409 for the last-admin lock-out guard (delete or demote of the only admin).
+fn last_admin() -> Response {
+    error_response(
+        StatusCode::CONFLICT,
+        "last_admin",
+        "cannot remove or demote the last admin account".to_owned(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,6 +1345,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn role_validation_accepts_only_known_roles() {
+        assert!(is_valid_role("viewer"));
+        assert!(is_valid_role("operator"));
+        assert!(is_valid_role("admin"));
+        assert!(!is_valid_role("Admin")); // case-sensitive (matches serde snake_case)
+        assert!(!is_valid_role("superuser"));
+        assert!(!is_valid_role(""));
+    }
+
+    #[tokio::test]
+    async fn list_users_unavailable_without_admin() {
+        // Skeleton mode (admin: None) has no user store, so user management is 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn create_user_unavailable_without_admin() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/users")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"alice","password":"hunter2hunter2","role":"viewer"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]
