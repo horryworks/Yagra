@@ -5,7 +5,7 @@
 // node's bindings (device profile + SNMP credential) from the header.
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   formatBps,
   formatRtt,
@@ -47,10 +47,21 @@ const BUILTIN_SCALARS = ['snmp_sys_uptime_ticks'];
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
+const TABS = ['overview', 'interfaces', 'collection'];
+
 export function NodeDetailPage() {
   const { nodeId = '' } = useParams();
   const authed = useAuthStore((s) => s.authed);
-  const [tab, setTab] = useState('overview');
+  // Keep the active sub-tab in the URL (`?tab=…`) so a browser reload restores it instead
+  // of snapping back to Overview.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') ?? '';
+  const tab = TABS.includes(tabParam) ? tabParam : 'overview';
+  const setTab = (next: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', next);
+    setSearchParams(params, { replace: true });
+  };
   const [node, setNode] = useState<NodeDetail | null>(null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [reading, setReading] = useState<MetricReading | null>(null);
