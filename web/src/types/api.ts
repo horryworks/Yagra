@@ -129,6 +129,56 @@ export interface AlertHistoryRow {
   resolved: boolean;
 }
 
+/** How a collection item is gathered (yagra-common `CollectionKind`). */
+export type CollectionKind = 'scalar' | 'table';
+
+/** Whether a metric is a gauge or a raw counter (yagra-common `MetricKind`). */
+export type MetricKind = 'gauge' | 'counter';
+
+/** One thing to collect: a stable metric name, the OID, how to collect it, and its kind
+ *  (`yagra-common::CollectionItem`). */
+export interface CollectionItem {
+  metric_name: string;
+  oid: string;
+  kind: CollectionKind;
+  metric_kind: MetricKind;
+}
+
+/** A stored collection item with its id/scope/enabled flag (core `StoredCollectionItem`,
+ *  the item fields flattened on). */
+export interface StoredCollectionItem extends CollectionItem {
+  id: string;
+  scope_level: ScopeLevel;
+  scope_id: string;
+  enabled: boolean;
+}
+
+/** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
+export interface NodeDetail {
+  id: string;
+  name: string;
+  address: string;
+  profile_id: string | null;
+  credential_id: string | null;
+  parent_id: string | null;
+}
+
+/** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).
+ *  Rates/utilization are derived at query time; `null` when there's no data or no known speed. */
+export interface InterfaceRow {
+  ifindex: number;
+  if_name: string | null;
+  if_alias: string | null;
+  if_speed_bps: number | null;
+  oper_status: number | null;
+  in_bps: number | null;
+  out_bps: number | null;
+  in_util_pct: number | null;
+  out_util_pct: number | null;
+  last_seen_unix: number | null;
+  stale: boolean;
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

@@ -69,6 +69,109 @@
   font-size: var(--font-xs);
 }
 
+.nodedetail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nodedetail-collection-note {
+  margin-bottom: 14px;
+}
+
+/* System (SNMP) scalar readings: a stacked label/value list. */
+.nodedetail-scalars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nodedetail-scalar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--font-sm);
+}
+
+.nodedetail-scalar-name {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodedetail-scalar-value {
+  font-weight: var(--weight-medium);
+}
+
+/* Interfaces table — static grid (a node has dozens of interfaces, not thousands). */
+.iftbl {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.iftbl-head,
+.iftbl-row {
+  display: grid;
+  grid-template-columns: 36px 1.2fr 1.4fr 110px 110px 80px 80px 110px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+}
+
+.iftbl-head {
+  height: 32px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.iftbl-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.iftbl-h.right {
+  justify-self: end;
+}
+
+.iftbl-row {
+  min-height: var(--row-h);
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.iftbl-row:last-child {
+  border-bottom: none;
+}
+
+.iftbl-row.stale {
+  opacity: 0.55;
+}
+
+.iftbl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iftbl-alias {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iftbl-num {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 760px) {
   .nodedetail-grid {
     grid-template-columns: 1fr;

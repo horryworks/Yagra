@@ -64,3 +64,21 @@ export function formatTimestamp(unixMs: number): string {
 export function formatRtt(ms: number): string {
   return `${ms.toFixed(1)} ms`;
 }
+
+/** Format a bits-per-second rate with SI-ish units (k/M/G), or `—` when unknown. */
+export function formatBps(bps: number | null): string {
+  if (bps == null) return '—';
+  const units = ['bps', 'kbps', 'Mbps', 'Gbps', 'Tbps'];
+  let v = bps;
+  let u = 0;
+  while (v >= 1000 && u < units.length - 1) {
+    v /= 1000;
+    u += 1;
+  }
+  return `${v.toFixed(v >= 100 || u === 0 ? 0 : 1)} ${units[u]}`;
+}
+
+/** Format a utilization percentage, or `—` when unknown (no speed / no data). */
+export function formatUtil(pct: number | null): string {
+  return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+}

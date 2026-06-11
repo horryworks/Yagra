@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatBps,
+  formatUtil,
   pointsToSeries,
   severityColorVar,
   severityRank,
@@ -38,5 +40,18 @@ describe('format', () => {
     expect(timestamps).toEqual([100, 160]);
     expect(values).toEqual([8, 9.5]);
     expect(pointsToSeries([])).toEqual({ timestamps: [], values: [] });
+  });
+
+  it('formats bits-per-second with SI units and a dash when unknown', () => {
+    expect(formatBps(null)).toBe('—');
+    expect(formatBps(500)).toBe('500 bps');
+    expect(formatBps(2_500)).toBe('2.5 kbps');
+    expect(formatBps(1_000_000_000)).toBe('1.0 Gbps');
+  });
+
+  it('formats utilization percentage and a dash when unknown', () => {
+    expect(formatUtil(null)).toBe('—');
+    expect(formatUtil(2.5)).toBe('2.5%');
+    expect(formatUtil(73)).toBe('73%');
   });
 });

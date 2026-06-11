@@ -163,6 +163,61 @@ describe('api client', () => {
     expect(me.role).toBe('Admin');
   });
 
+  it('lists node interfaces', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listNodeInterfaces('n1');
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/interfaces');
+  });
+
+  it('requests the resolved node collection set with the query flag', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listNodeCollection('n1', true);
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/collection?resolved=true');
+  });
+
+  it('omits the resolved flag for the node-level collection set', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listNodeCollection('n1');
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/collection');
+  });
+
+  it('posts a node collection item as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'c1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.addNodeCollection('n1', {
+      metric_name: 'if_hc_in_octets',
+      oid: '1.3.6.1.2.1.31.1.1.1.6',
+      collection: 'table',
+      metric_kind: 'counter',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/nodes/n1/collection');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ metric_name: 'if_hc_in_octets', collection: 'table' });
+  });
+
+  it('deletes a collection item by id (url-encoded)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.deleteCollectionItem('c/1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/collection/c%2F1');
+    expect(init.method).toBe('DELETE');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

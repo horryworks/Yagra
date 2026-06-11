@@ -8,12 +8,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { NodeSummary } from '../types/api';
+import type { CredentialSummary, NodeSummary, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { TextInput } from '../components/ui/Field';
+import { TextInput, Select } from '../components/ui/Field';
 import { StatusDot } from '../components/ui/StatusDot';
 import { DataTable, type Column } from '../components/ui/DataTable';
 
@@ -42,6 +42,11 @@ export function NodesPage() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
+  const [profileId, setProfileId] = useState('');
+  const [credentialId, setCredentialId] = useState('');
+  const [parentId, setParentId] = useState('');
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
 
   const loadMore = useCallback(() => {
@@ -81,14 +86,35 @@ export function NodesPage() {
     reload();
   }, [reload]);
 
+  // Load the binding options (device profiles + SNMP credentials) when the modal opens, so
+  // a node can be put under monitoring with its SNMP community in one step. Best-effort:
+  // a viewer (or skeleton mode) without access just sees empty pickers.
+  useEffect(() => {
+    if (!adding) return;
+    api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
+    api
+      .listCredentials()
+      .then((c) => setCredentials(c.filter((cr) => cr.kind === 'snmp_v2c')))
+      .catch(() => setCredentials([]));
+  }, [adding]);
+
   const submitAdd = () => {
     setAddError(null);
     api
-      .createNode({ name, address })
+      .createNode({
+        name,
+        address,
+        profile_id: profileId || undefined,
+        credential_id: credentialId || undefined,
+        parent_id: parentId || undefined,
+      })
       .then(() => {
         setAdding(false);
         setName('');
         setAddress('');
+        setProfileId('');
+        setCredentialId('');
+        setParentId('');
         reload();
       })
       .catch((e: unknown) =>
@@ -149,6 +175,39 @@ export function NodesPage() {
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="10.0.0.1 or 2001:db8::1"
               />
+            </label>
+            <label className="form-label">
+              Device profile (optional)
+              <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+                <option value="">— none —</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="form-label">
+              SNMP credential (optional — enables SNMP polling)
+              <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
+                <option value="">— none —</option>
+                {credentials.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="form-label">
+              Parent node (optional — for dependency suppression)
+              <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
+                <option value="">— none —</option>
+                {rows.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.name}
+                  </option>
+                ))}
+              </Select>
             </label>
             {addError && <p className="form-error">{addError}</p>}
           </div>
