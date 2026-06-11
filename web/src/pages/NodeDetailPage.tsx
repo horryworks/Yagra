@@ -20,6 +20,7 @@ import { useAuthStore } from '../store';
 import type {
   CredentialSummary,
   InterfaceRow,
+  InterfaceSeries,
   MetricReading,
   NodeDetail,
   NodeState,
@@ -266,12 +267,22 @@ function UtilBadge({ pct }: { pct: number | null }) {
   return <Badge tone={tone}>{formatUtil(pct)}</Badge>;
 }
 
-/** Per-interface traffic table (SNMP table walk + query-time rate utilization). Static (not
- *  virtualized): a node has dozens of interfaces, not thousands. Refreshes on an interval. */
+/** Chart time-windows for the interface detail pane. */
+const RANGES: { label: string; secs: number }[] = [
+  { label: '1h', secs: 3600 },
+  { label: '6h', secs: 6 * 3600 },
+  { label: '24h', secs: 24 * 3600 },
+];
+const CHART_IN = '#4f8cff';
+const CHART_OUT = '#34d399';
+
+/** Interfaces: master/detail — left = the interface list (status/name/util), right = charts
+ *  for the selected interface. The list refreshes on an interval; the first row auto-selects. */
 function InterfacesTab({ nodeId }: { nodeId: string }) {
   const [rows, setRows] = useState<InterfaceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [selected, setSelected] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +294,8 @@ function InterfacesTab({ nodeId }: { nodeId: string }) {
           setRows(r);
           setError(null);
           setLoaded(true);
+          // Auto-select the first interface so the detail pane isn't empty on arrival.
+          setSelected((cur) => (cur == null && r.length > 0 ? r[0].ifindex : cur));
         })
         .catch((e: unknown) => !cancelled && setError(errMsg(e, 'failed to load interfaces')));
     load();
@@ -293,6 +306,8 @@ function InterfacesTab({ nodeId }: { nodeId: string }) {
     };
   }, [nodeId]);
 
+  const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
+
   return (
     <Card title="Interfaces">
       {error && <p className="form-error">{error}</p>}
@@ -302,36 +317,143 @@ function InterfacesTab({ nodeId }: { nodeId: string }) {
           needs a bound SNMP credential and a table metric in its collection set.
         </p>
       ) : (
-        <div className="iftbl">
-          <div className="iftbl-head">
-            <div className="iftbl-h">Status</div>
-            <div className="iftbl-h">Interface</div>
-            <div className="iftbl-h">Alias</div>
-            <div className="iftbl-h right">In</div>
-            <div className="iftbl-h right">Out</div>
-            <div className="iftbl-h right">In&nbsp;%</div>
-            <div className="iftbl-h right">Out&nbsp;%</div>
-            <div className="iftbl-h right">Speed</div>
-          </div>
-          {rows.map((r) => (
-            <div className={r.stale ? 'iftbl-row stale' : 'iftbl-row'} key={r.ifindex}>
-              <StatusDot state={operState(r.oper_status)} />
-              <span className="iftbl-name mono">{r.if_name ?? `if${r.ifindex}`}</span>
-              <span className="iftbl-alias">{r.if_alias ?? '—'}</span>
-              <span className="iftbl-num">{formatBps(r.in_bps)}</span>
-              <span className="iftbl-num">{formatBps(r.out_bps)}</span>
-              <span className="iftbl-num">
-                <UtilBadge pct={r.in_util_pct} />
-              </span>
-              <span className="iftbl-num">
-                <UtilBadge pct={r.out_util_pct} />
-              </span>
-              <span className="iftbl-num">{formatBps(r.if_speed_bps)}</span>
+        <div className="iftab-split">
+          <div className="iflist">
+            <div className="iflist-head">
+              <div className="iflist-h">Status</div>
+              <div className="iflist-h">Interface</div>
+              <div className="iflist-h right">In&nbsp;%</div>
+              <div className="iflist-h right">Out&nbsp;%</div>
             </div>
-          ))}
+            {rows.map((r) => (
+              <button
+                type="button"
+                key={r.ifindex}
+                className={`iflist-row${r.ifindex === selected ? ' selected' : ''}${
+                  r.stale ? ' stale' : ''
+                }`}
+                onClick={() => setSelected(r.ifindex)}
+              >
+                <StatusDot state={operState(r.oper_status)} />
+                <span className="iflist-name mono">{r.if_name ?? `if${r.ifindex}`}</span>
+                <span className="iflist-num">
+                  <UtilBadge pct={r.in_util_pct} />
+                </span>
+                <span className="iflist-num">
+                  <UtilBadge pct={r.out_util_pct} />
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="iftab-detail">
+            {selectedRow ? (
+              <InterfaceDetail nodeId={nodeId} row={selectedRow} />
+            ) : (
+              <p className="muted">Select an interface to see its charts.</p>
+            )}
+          </div>
         </div>
       )}
     </Card>
+  );
+}
+
+/** Charts + stats for one interface: throughput (In/Out bps) and errors (In/Out per second)
+ *  over a selectable window, plus the current stat tiles (from the list row). */
+function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow }) {
+  const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
+  const [series, setSeries] = useState<InterfaceSeries | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const to = Math.floor(Date.now() / 1000);
+      api
+        .getInterfaceSeries(nodeId, row.ifindex, { from: to - rangeSecs, to })
+        .then((s) => !cancelled && setSeries(s))
+        .catch(() => undefined);
+    };
+    setSeries(null);
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, row.ifindex, rangeSecs]);
+
+  const ts = series?.timestamps ?? [];
+  const hasData = ts.length > 0;
+
+  return (
+    <div className="ifdetail">
+      <div className="ifdetail-head">
+        <StatusDot state={operState(row.oper_status)} />
+        <span className="mono ifdetail-name">{row.if_name ?? `if${row.ifindex}`}</span>
+        {row.if_alias && <span className="muted ifdetail-alias">{row.if_alias}</span>}
+        <div className="ifdetail-windows">
+          {RANGES.map((r) => (
+            <Button
+              key={r.secs}
+              variant={rangeSecs === r.secs ? 'primary' : 'outline'}
+              onClick={() => setRangeSecs(r.secs)}
+            >
+              {r.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="ifdetail-section">
+        <div className="ifdetail-section-label">Throughput (In / Out, bps)</div>
+        {hasData ? (
+          <MetricChart
+            title=""
+            timestamps={ts}
+            series={[
+              { label: 'In', values: series!.in_bps, color: CHART_IN },
+              { label: 'Out', values: series!.out_bps, color: CHART_OUT },
+            ]}
+          />
+        ) : (
+          <p className="muted">No data for this window yet…</p>
+        )}
+      </div>
+
+      <div className="ifdetail-section">
+        <div className="ifdetail-section-label">Errors (In / Out, /s)</div>
+        {hasData ? (
+          <MetricChart
+            title=""
+            timestamps={ts}
+            series={[
+              { label: 'In', values: series!.in_errors, color: CHART_IN },
+              { label: 'Out', values: series!.out_errors, color: CHART_OUT },
+            ]}
+          />
+        ) : (
+          <p className="muted">No data for this window yet…</p>
+        )}
+      </div>
+
+      <div className="ifdetail-stats">
+        <div className="ifdetail-stat">
+          <span className="muted">In</span> {formatBps(row.in_bps)}
+        </div>
+        <div className="ifdetail-stat">
+          <span className="muted">Out</span> {formatBps(row.out_bps)}
+        </div>
+        <div className="ifdetail-stat">
+          <span className="muted">In %</span> {formatUtil(row.in_util_pct)}
+        </div>
+        <div className="ifdetail-stat">
+          <span className="muted">Out %</span> {formatUtil(row.out_util_pct)}
+        </div>
+        <div className="ifdetail-stat">
+          <span className="muted">Speed</span> {formatBps(row.if_speed_bps)}
+        </div>
+      </div>
+    </div>
   );
 }
 

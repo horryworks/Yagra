@@ -113,37 +113,37 @@
   font-weight: var(--weight-medium);
 }
 
-/* Interfaces table — static grid (a node has dozens of interfaces, not thousands). */
-.iftbl {
+/* Interfaces tab — master/detail: list on the left, selected-interface charts on the right. */
+.iftab-split {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 1.3fr;
+  gap: 16px;
+  align-items: start;
+}
+
+/* Left: compact interface list (status · name · in% · out%). */
+.iflist {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   overflow: hidden;
 }
 
-.iftbl-head,
-.iftbl-row {
+.iflist-head,
+.iflist-row {
   display: grid;
-  /* status column wide enough for the longest oper-status label ("Critical"/"Unknown")
-     plus the dot, so it never overlaps the interface name. */
-  grid-template-columns: 96px 1.2fr 1.4fr 110px 110px 80px 80px 110px;
+  grid-template-columns: 92px 1fr 64px 64px;
   align-items: center;
-  gap: 12px;
-  padding: 0 14px;
+  gap: 10px;
+  padding: 0 12px;
 }
 
-/* Keep the status dot + label on one line within its column. */
-.iftbl-row > .statusdot-wrap {
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.iftbl-head {
+.iflist-head {
   height: 32px;
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
-.iftbl-h {
+.iflist-h {
   font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -151,40 +151,109 @@
   font-weight: var(--weight-medium);
 }
 
-.iftbl-h.right {
+.iflist-h.right {
   justify-self: end;
 }
 
-.iftbl-row {
+/* Rows are buttons (keyboard-reachable); reset native button chrome. */
+.iflist-row {
   min-height: var(--row-h);
+  border: none;
   border-bottom: var(--border-width) solid var(--border-color);
+  border-radius: 0;
+  background: none;
+  width: 100%;
+  text-align: left;
   font-size: var(--font-md);
+  color: inherit;
+  cursor: pointer;
 }
 
-.iftbl-row:last-child {
+.iflist-row:last-child {
   border-bottom: none;
 }
 
-.iftbl-row.stale {
+.iflist-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.iflist-row.selected {
+  background: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent-color);
+}
+
+.iflist-row.stale {
   opacity: 0.55;
 }
 
-.iftbl-name {
+.iflist-row > .statusdot-wrap {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.iflist-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.iftbl-alias {
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.iftbl-num {
+.iflist-num {
   justify-self: end;
+}
+
+/* Right: the selected interface's detail (header + charts + stats). */
+.ifdetail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ifdetail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ifdetail-name {
+  font-weight: var(--weight-medium);
+}
+
+.ifdetail-alias {
+  font-size: var(--font-sm);
+}
+
+.ifdetail-windows {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.ifdetail-section-label {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+  margin-bottom: 6px;
+}
+
+.ifdetail-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: var(--font-sm);
   font-variant-numeric: tabular-nums;
+}
+
+.ifdetail-stat .muted {
+  margin-right: 4px;
+}
+
+@media (max-width: 900px) {
+  .iftab-split {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
