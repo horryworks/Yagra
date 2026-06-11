@@ -552,6 +552,7 @@ mod tests {
             at_unix_ms: at,
             outcome,
             samples: Vec::new(),
+            interfaces: Vec::new(),
         }
     }
 

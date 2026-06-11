@@ -218,6 +218,7 @@ mod tests {
             at_unix_ms: 0,
             outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 7.0)],
+            interfaces: Vec::new(),
         };
         MetricStore::write(&store, &result).await;
         assert_eq!(
