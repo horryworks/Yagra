@@ -12,6 +12,7 @@ import type {
   CredentialSummary,
   Direction,
   InterfaceRow,
+  InterfaceSeries,
   MetricKind,
   MetricRange,
   MetricReading,
@@ -183,6 +184,21 @@ export const api = {
   /** Interfaces discovered on a node, with query-time utilization. Empty in skeleton mode. */
   listNodeInterfaces: (id: string): Promise<InterfaceRow[]> =>
     request(`/nodes/${encodeURIComponent(id)}/interfaces`),
+
+  /** Per-interface throughput + error time-series for the detail charts (defaults: last hour). */
+  getInterfaceSeries: (
+    nodeId: string,
+    ifindex: number,
+    opts?: { from?: number; to?: number; step?: number },
+  ): Promise<InterfaceSeries> => {
+    const params = new URLSearchParams();
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    if (opts?.step != null) params.set('step', String(opts.step));
+    const qs = params.toString();
+    const path = `/nodes/${encodeURIComponent(nodeId)}/interfaces/${ifindex}/series`;
+    return request(qs ? `${path}?${qs}` : path);
+  },
 
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>

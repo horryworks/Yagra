@@ -37,6 +37,17 @@ pub trait MetricStore: Send + Sync {
     /// at query time (ADR-012) — the TSDB's `rate()` handles counter wrap/reset, so the
     /// poller never does counter arithmetic. `None` if the store has no history.
     async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64>;
+    /// Per-second rate of a counter series sampled across `[from_s, to_s]` at `step_s`
+    /// resolution (oldest first), each point a `rate(...[lookback_s])`. For charting a
+    /// counter as a rate over time. Empty if the store has no history.
+    async fn rate_range(
+        &self,
+        key: &SeriesKey,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+        lookback_s: u64,
+    ) -> Vec<MetricPoint>;
 }
 
 #[async_trait]
@@ -65,6 +76,18 @@ impl MetricStore for InMemorySink {
         // No history ⇒ no rate.
         None
     }
+
+    async fn rate_range(
+        &self,
+        _key: &SeriesKey,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+        _lookback_s: u64,
+    ) -> Vec<MetricPoint> {
+        // No history ⇒ no rate series.
+        Vec::new()
+    }
 }
 
 /// A [`MetricStore`] backed by VictoriaMetrics over HTTP.
@@ -82,6 +105,58 @@ impl VmStore {
             base: base.into(),
         }
     }
+
+    /// Run a PromQL `query_range` and parse the first series' points (oldest first). Shared
+    /// by the raw `range` and the derived `rate_range`. Empty on any request/parse failure.
+    async fn query_range_points(
+        &self,
+        query: String,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        let url = format!("{}/api/v1/query_range", self.base);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[
+                ("query", query),
+                ("start", from_s.to_string()),
+                ("end", to_s.to_string()),
+                ("step", format!("{step_s}s")),
+            ])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics query_range request failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        // data.result[0].values is [[<ts_seconds>, "<value>"], …].
+        let Some(values) = json
+            .get("data")
+            .and_then(|d| d.get("result"))
+            .and_then(|r| r.get(0))
+            .and_then(|s| s.get("values"))
+            .and_then(|v| v.as_array())
+        else {
+            return Vec::new();
+        };
+        values
+            .iter()
+            .filter_map(|pair| {
+                let arr = pair.as_array()?;
+                let t = arr.first()?.as_f64()? as i64;
+                let v = arr.get(1)?.as_str()?.parse::<f64>().ok()?;
+                Some(MetricPoint { t, v })
+            })
+            .collect()
+    }
 }
 
 /// PromQL instant-vector selector for a thin-label series, e.g.
@@ -97,7 +172,8 @@ fn selector(key: &SeriesKey) -> String {
 }
 
 /// PromQL `rate()` query over the selector for a trailing window, e.g.
-/// `rate(if_hc_in_octets{node="…",ifindex="3"}[300s])`.
+/// `rate(if_hc_in_octets{node="…",ifindex="3"}[300s])`. Used for both the instant `rate`
+/// and the `rate_range` series (the range form samples this expression across the window).
 fn rate_query(key: &SeriesKey, lookback_s: u64) -> String {
     format!("rate({}[{}s])", selector(key), lookback_s.max(1))
 }
@@ -153,47 +229,8 @@ impl MetricStore for VmStore {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint> {
-        let url = format!("{}/api/v1/query_range", self.base);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[
-                ("query", selector(key)),
-                ("start", from_s.to_string()),
-                ("end", to_s.to_string()),
-                ("step", format!("{step_s}s")),
-            ])
-            .send()
+        self.query_range_points(selector(key), from_s, to_s, step_s)
             .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics query_range request failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        // data.result[0].values is [[<ts_seconds>, "<value>"], …].
-        let Some(values) = json
-            .get("data")
-            .and_then(|d| d.get("result"))
-            .and_then(|r| r.get(0))
-            .and_then(|s| s.get("values"))
-            .and_then(|v| v.as_array())
-        else {
-            return Vec::new();
-        };
-        values
-            .iter()
-            .filter_map(|pair| {
-                let arr = pair.as_array()?;
-                let t = arr.first()?.as_f64()? as i64;
-                let v = arr.get(1)?.as_str()?.parse::<f64>().ok()?;
-                Some(MetricPoint { t, v })
-            })
-            .collect()
     }
 
     async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64> {
@@ -215,6 +252,18 @@ impl MetricStore for VmStore {
             .get(1)?
             .as_str()?;
         raw.parse().ok()
+    }
+
+    async fn rate_range(
+        &self,
+        key: &SeriesKey,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+        lookback_s: u64,
+    ) -> Vec<MetricPoint> {
+        self.query_range_points(rate_query(key, lookback_s), from_s, to_s, step_s)
+            .await
     }
 }
 
@@ -256,6 +305,15 @@ mod tests {
         let store = InMemorySink::default();
         let key = SeriesKey::interface(NodeId::new(), IfIndex(1), "if_hc_in_octets");
         assert_eq!(MetricStore::rate(&store, &key, 300).await, None);
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_has_no_rate_range() {
+        let store = InMemorySink::default();
+        let key = SeriesKey::interface(NodeId::new(), IfIndex(1), "if_hc_in_octets");
+        assert!(MetricStore::rate_range(&store, &key, 0, 3600, 60, 300)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]

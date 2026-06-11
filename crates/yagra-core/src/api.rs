@@ -111,6 +111,10 @@ pub fn router(state: ApiState) -> Router {
             get(list_node_interfaces),
         )
         .route(
+            "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
+            get(get_interface_series),
+        )
+        .route(
             "/api/v1/collection-templates",
             get(list_collection_templates).post(create_collection_template),
         )
@@ -1402,6 +1406,78 @@ async fn list_node_interfaces(
     Json(out).into_response()
 }
 
+/// Per-interface time-series for the node-detail Interfaces detail pane: In/Out throughput
+/// (bits/sec, from `rate()` of the octet counters) and In/Out errors (per second). All four
+/// share one `timestamps` x-axis (the union of returned points; gaps → null) so the chart
+/// gets aligned series. Derived at query time (ADR-012); empty when there's no history.
+#[derive(Serialize)]
+struct InterfaceSeries {
+    timestamps: Vec<i64>,
+    in_bps: Vec<Option<f64>>,
+    out_bps: Vec<Option<f64>>,
+    in_errors: Vec<Option<f64>>,
+    out_errors: Vec<Option<f64>>,
+}
+
+async fn get_interface_series(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path((node_id, ifindex)): Path<(Uuid, u32)>,
+    Query(q): Query<RangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let node = NodeId::from(node_id);
+    let key = |metric: &str| SeriesKey::interface(node, IfIndex(ifindex), metric);
+    let to = q.to.unwrap_or_else(now_unix_s);
+    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
+    // Default to ~120 points across the window; the rate lookback spans a few steps so a
+    // single missed poll doesn't punch a hole in the line.
+    let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
+    let step = q.step.unwrap_or((span / 120).max(60)).max(1);
+    let lookback = (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS);
+
+    let in_oct = st
+        .store
+        .rate_range(&key("if_hc_in_octets"), from, to, step, lookback)
+        .await;
+    let out_oct = st
+        .store
+        .rate_range(&key("if_hc_out_octets"), from, to, step, lookback)
+        .await;
+    let in_err = st
+        .store
+        .rate_range(&key("if_in_errors"), from, to, step, lookback)
+        .await;
+    let out_err = st
+        .store
+        .rate_range(&key("if_out_errors"), from, to, step, lookback)
+        .await;
+
+    // Shared x-axis = the union of all returned timestamps; align each series onto it.
+    let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    for s in [&in_oct, &out_oct, &in_err, &out_err] {
+        for p in s {
+            grid_set.insert(p.t);
+        }
+    }
+    let grid: Vec<i64> = grid_set.into_iter().collect();
+    let align = |pts: &[MetricPoint], scale: f64| -> Vec<Option<f64>> {
+        let m: std::collections::HashMap<i64, f64> = pts.iter().map(|p| (p.t, p.v)).collect();
+        grid.iter().map(|t| m.get(t).map(|v| v * scale)).collect()
+    };
+
+    Json(InterfaceSeries {
+        in_bps: align(&in_oct, 8.0),
+        out_bps: align(&out_oct, 8.0),
+        in_errors: align(&in_err, 1.0),
+        out_errors: align(&out_err, 1.0),
+        timestamps: grid,
+    })
+    .into_response()
+}
+
 // ── Users & roles (Settings ▸ Users & roles) — ManageUsers (admin) only ──────
 
 /// Minimum password length accepted for a new account or a reset.
@@ -1824,6 +1900,28 @@ mod tests {
         let json = body_json(resp).await;
         assert!(json.is_array());
         assert_eq!(json.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn interface_series_returns_aligned_arrays() {
+        // No history (in-memory store) ⇒ 200 with empty, aligned series arrays.
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/interfaces/3/series"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert!(json["timestamps"].is_array());
+        assert_eq!(json["timestamps"].as_array().unwrap().len(), 0);
+        assert!(json["in_bps"].is_array());
+        assert!(json["out_errors"].is_array());
     }
 
     #[tokio::test]

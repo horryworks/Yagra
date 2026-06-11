@@ -189,6 +189,17 @@ export interface InterfaceRow {
   stale: boolean;
 }
 
+/** Per-interface time-series for the detail pane (`GET /nodes/:id/interfaces/:ifindex/series`).
+ *  All arrays share the `timestamps` x-axis; `null` is a gap. `*_bps` are bits/sec (rate of
+ *  the octet counters × 8); `*_errors` are errors/sec. */
+export interface InterfaceSeries {
+  timestamps: number[];
+  in_bps: (number | null)[];
+  out_bps: (number | null)[];
+  in_errors: (number | null)[];
+  out_errors: (number | null)[];
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

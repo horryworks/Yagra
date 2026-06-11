@@ -218,6 +218,24 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('builds the interface-series path with query params', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getInterfaceSeries('n1', 3, { from: 100, to: 200 });
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/interfaces/3/series?from=100&to=200');
+  });
+
+  it('omits the query string for the interface series when no opts given', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getInterfaceSeries('n1', 3);
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/interfaces/3/series');
+  });
+
   it('lists collection templates', async () => {
     const spy = vi
       .fn()
