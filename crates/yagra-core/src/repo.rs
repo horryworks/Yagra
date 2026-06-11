@@ -236,6 +236,38 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Upsert an interface discovered during a table walk: insert it, or refresh its
+    /// metadata and `last_seen`. Names/aliases are device-supplied metadata kept in
+    /// PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011). A
+    /// `None` field leaves the stored value untouched (COALESCE). Staleness is judged by
+    /// `last_seen` age; rows are not deleted here.
+    pub async fn upsert_interface(
+        &self,
+        node_id: Uuid,
+        ifindex: i32,
+        if_name: Option<&str>,
+        if_alias: Option<&str>,
+        if_speed: Option<i64>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, last_seen) \
+             VALUES ($1, $2, $3, $4, $5, now()) \
+             ON CONFLICT (node_id, ifindex) DO UPDATE SET \
+                if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
+                if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
+                if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
+                last_seen = now()",
+        )
+        .bind(node_id)
+        .bind(ifindex)
+        .bind(if_name)
+        .bind(if_alias)
+        .bind(if_speed)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Delete a node by id. Returns whether a row was removed.
     pub async fn delete_node(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM nodes WHERE id = $1")
