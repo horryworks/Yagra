@@ -12,6 +12,7 @@
 mod alerts;
 mod api;
 mod auth;
+mod collection;
 mod config;
 mod history;
 mod repo;
@@ -29,6 +30,7 @@ use alerts::{AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
 use auth::{SessionStore, UserStore};
 use axum::routing::get;
+use collection::CollectionRepo;
 use config::Config;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
@@ -39,7 +41,7 @@ use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use thresholds::ThresholdStore;
 use uuid::Uuid;
-use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult, SnmpCheck};
+use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult};
 use yagra_topology::Topology;
 
 #[tokio::main]
@@ -79,33 +81,30 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let notifier = Notifier::from_env().map(Arc::new);
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
 
-    // Result consumer: bus → TSDB + alert engine (+ history + notifications).
+    // Result consumer: bus → TSDB + alert engine (+ history + notifications + interface
+    // inventory upsert).
     {
         let store = store.clone();
         let alerts = alerts.clone();
         let notifier = notifier.clone();
         let history = history.clone();
+        let repo = repo.clone();
         let results = Box::pin(bus.subscribe_results().await?);
-        tokio::spawn(consume_results(results, store, alerts, notifier, history));
+        tokio::spawn(consume_results(
+            results, store, alerts, notifier, history, repo,
+        ));
     }
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
 
     // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
-    // community is a fallback for nodes without one. OIDs default to sysUpTime.
+    // community is a fallback for nodes without one. What to collect comes from the node's
+    // resolved collection set (per-node/profile), falling back to the built-in catalog.
     let env_community = std::env::var("YAGRA_SNMP_COMMUNITY")
         .ok()
         .filter(|c| !c.is_empty());
-    let snmp_oids = std::env::var("YAGRA_SNMP_OIDS")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            s.split(',')
-                .map(|x| x.trim().to_owned())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["1.3.6.1.2.1.1.3.0".to_owned()]);
+    let collection = Arc::new(CollectionRepo::new(repo.pool()));
 
     // Scheduler: inventory → jobs on the bus, jittered across the interval.
     {
@@ -113,14 +112,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let bus = bus.clone();
         let creds = creds.clone();
         let env_community = env_community.clone();
-        let snmp_oids = snmp_oids.clone();
+        let collection = collection.clone();
         tokio::spawn(run_scheduler(
             repo,
             bus,
             cfg.poll_interval_secs,
             creds,
             env_community,
-            snmp_oids,
+            collection,
         ));
     }
 
@@ -202,6 +201,7 @@ async fn consume_results<S>(
     alerts: Arc<AlertManager>,
     notifier: Option<Arc<Notifier>>,
     history: Arc<AlertHistoryStore>,
+    repo: Arc<NodeRepo>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
@@ -209,6 +209,24 @@ async fn consume_results<S>(
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
         store.write(&result).await;
+        // Upsert any interfaces discovered on this poll (table walks). Metadata only —
+        // names/aliases live in PostgreSQL, joined to metrics at query time (ADR-011).
+        // Best-effort: a failed upsert must not drop the metric write or alerting.
+        for iface in &result.interfaces {
+            let ifindex = i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX);
+            if let Err(e) = repo
+                .upsert_interface(
+                    result.node_id.as_uuid(),
+                    ifindex,
+                    iface.if_name.as_deref(),
+                    iface.if_alias.as_deref(),
+                    iface.if_speed,
+                )
+                .await
+            {
+                tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interface");
+            }
+        }
         for action in alerts.observe(&result) {
             // Persist the lifecycle transition (best-effort).
             let recorded = match &action {
@@ -234,7 +252,7 @@ async fn run_scheduler(
     interval_secs: u32,
     creds: Arc<CredentialStore>,
     env_community: Option<String>,
-    snmp_oids: Vec<String>,
+    collection: Arc<CollectionRepo>,
 ) {
     let interval = Duration::from_secs(u64::from(interval_secs));
     let window_ms = interval.as_millis().max(1) as u64;
@@ -246,17 +264,19 @@ async fn run_scheduler(
                 for node in nodes {
                     // Resolve the SNMP community: the node's bound credential (decrypted)
                     // wins; otherwise the env fallback. None ⇒ no SNMP for this node.
-                    let community =
-                        resolve_community(&creds, &node, env_community.as_deref()).await;
-                    if let Some(community) = community {
-                        if !snmp_oids.is_empty() {
+                    if let Some(community) =
+                        resolve_community(&creds, &node, env_community.as_deref()).await
+                    {
+                        // Resolve the node's effective collection set (node overrides
+                        // profile); fall back to the built-in catalog so an unconfigured
+                        // node still gets the default sysUpTime + interface poll.
+                        let items = resolve_node_collection(&collection, &node).await;
+                        let (scalar, table) =
+                            scheduler::build_snmp_checks(&community, &items, 2000);
+
+                        if let Some(check) = scalar {
                             let bus = bus.clone();
                             let node = node.clone();
-                            let check = SnmpCheck {
-                                community,
-                                oids: snmp_oids.clone(),
-                                timeout_ms: 2000,
-                            };
                             let delay = jitter();
                             tokio::spawn(async move {
                                 tokio::time::sleep(delay).await;
@@ -267,6 +287,21 @@ async fn run_scheduler(
                                     Uuid::new_v4(),
                                 );
                                 publish(&bus, job, "snmp", node.id).await;
+                            });
+                        }
+                        if let Some(check) = table {
+                            let bus = bus.clone();
+                            let node = node.clone();
+                            let delay = jitter();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(delay).await;
+                                let job = scheduler::build_snmp_table_job(
+                                    &node,
+                                    check,
+                                    interval_secs,
+                                    Uuid::new_v4(),
+                                );
+                                publish(&bus, job, "snmp_table", node.id).await;
                             });
                         }
                     }
@@ -289,6 +324,31 @@ async fn run_scheduler(
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
         tokio::time::sleep(interval).await;
+    }
+}
+
+/// Resolve a node's effective collection set, defaulting to the built-in catalog when
+/// nothing is configured (or the lookup fails) so polling always has a sensible default.
+async fn resolve_node_collection(
+    collection: &CollectionRepo,
+    node: &yagra_common::Node,
+) -> Vec<yagra_common::CollectionItem> {
+    match collection
+        .list_items_for_node(node.id.as_uuid(), node.profile.map(|p| p.0))
+        .await
+    {
+        Ok(scoped) => {
+            let resolved = yagra_common::resolve_collection_set(&scoped);
+            if resolved.is_empty() {
+                yagra_common::builtin_catalog()
+            } else {
+                resolved
+            }
+        }
+        Err(e) => {
+            tracing::warn!(node = %node.id, error = %e, "collection load failed; using built-in catalog");
+            yagra_common::builtin_catalog()
+        }
     }
 }
 

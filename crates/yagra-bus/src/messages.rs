@@ -170,8 +170,14 @@ impl Default for IcmpCheck {
 pub struct SnmpCheck {
     /// SNMP v2c community string (resolved/decrypted by core).
     pub community: String,
-    /// OIDs to GET (dotted form, e.g. `1.3.6.1.2.1.1.3.0`).
+    /// Bare OIDs to GET (dotted form, e.g. `1.3.6.1.2.1.1.3.0`). The poller names these via
+    /// its built-in OID→metric map (legacy / env-configured path).
     pub oids: Vec<String>,
+    /// Scalar OIDs to GET *with an explicit metric name and kind*. Used for configured
+    /// collection sets so a node's chosen scalar metric names are honoured (rather than the
+    /// poller's built-in naming). Defaulted for N-1 compatibility (ADR-017).
+    #[serde(default)]
+    pub columns: Vec<SnmpColumn>,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
