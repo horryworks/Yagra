@@ -16,7 +16,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use sqlx::Row;
 use uuid::Uuid;
-use yagra_common::{CredentialId, Node, NodeId, ProfileId};
+use yagra_common::{CollectionKind, CredentialId, MetricKind, Node, NodeId, ProfileId};
 
 /// A device-class/profile row for the API (id + name).
 #[derive(Debug, Clone, Serialize)]
@@ -401,6 +401,54 @@ impl NodeRepo {
             seeded = demo.len(),
             "seeded demo nodes into empty inventory"
         );
+        Ok(())
+    }
+
+    /// Seed the built-in device-profile templates (Generic ping/SNMP, Cisco, Huawei …) and
+    /// their profile-scope collection items. Idempotent and non-destructive: each profile
+    /// gets a stable id and is inserted `ON CONFLICT DO NOTHING`, as are its items — so the
+    /// templates reliably exist after a deploy without clobbering operator edits (an item an
+    /// operator deleted may reappear on restart; acceptable for built-ins). Runs every boot.
+    pub async fn seed_builtin_profiles(&self) -> anyhow::Result<()> {
+        // Stable base so the same profile keeps the same id across restarts (bindings survive).
+        const PROFILE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_0000;
+        for (i, profile) in yagra_common::builtin_profiles().into_iter().enumerate() {
+            let profile_id = Uuid::from_u128(PROFILE_ID_BASE + i as u128);
+            sqlx::query(
+                "INSERT INTO profiles (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(profile_id)
+            .bind(profile.name)
+            .execute(&self.pool)
+            .await?;
+            for item in profile.items {
+                let (collection, metric_kind) = (
+                    match item.kind {
+                        CollectionKind::Scalar => "scalar",
+                        CollectionKind::Table => "table",
+                    },
+                    match item.metric_kind {
+                        MetricKind::Gauge => "gauge",
+                        MetricKind::Counter => "counter",
+                    },
+                );
+                sqlx::query(
+                    "INSERT INTO collection_items \
+                        (id, scope_level, scope_id, metric_name, oid, collection, metric_kind, enabled) \
+                     VALUES ($1, 'profile', $2, $3, $4, $5, $6, true) \
+                     ON CONFLICT (scope_level, scope_id, metric_name) DO NOTHING",
+                )
+                .bind(Uuid::new_v4())
+                .bind(profile_id)
+                .bind(&item.metric_name)
+                .bind(&item.oid)
+                .bind(collection)
+                .bind(metric_kind)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+        tracing::info!("seeded built-in device-profile templates");
         Ok(())
     }
 }
