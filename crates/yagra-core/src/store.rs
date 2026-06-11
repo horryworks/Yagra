@@ -33,6 +33,10 @@ pub trait MetricStore: Send + Sync {
     /// (oldest first). Empty if the store has no history (e.g. the in-memory sink).
     async fn range(&self, key: &SeriesKey, from_s: i64, to_s: i64, step_s: u64)
         -> Vec<MetricPoint>;
+    /// Per-second rate of a counter series over the trailing `lookback_s` window, derived
+    /// at query time (ADR-012) — the TSDB's `rate()` handles counter wrap/reset, so the
+    /// poller never does counter arithmetic. `None` if the store has no history.
+    async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64>;
 }
 
 #[async_trait]
@@ -55,6 +59,11 @@ impl MetricStore for InMemorySink {
     ) -> Vec<MetricPoint> {
         // The skeleton sink keeps only the latest value, so it has no history to serve.
         Vec::new()
+    }
+
+    async fn rate(&self, _key: &SeriesKey, _lookback_s: u64) -> Option<f64> {
+        // No history ⇒ no rate.
+        None
     }
 }
 
@@ -85,6 +94,12 @@ fn selector(key: &SeriesKey) -> String {
         ),
         None => format!("{}{{node=\"{}\"}}", key.metric, key.node),
     }
+}
+
+/// PromQL `rate()` query over the selector for a trailing window, e.g.
+/// `rate(if_hc_in_octets{node="…",ifindex="3"}[300s])`.
+fn rate_query(key: &SeriesKey, lookback_s: u64) -> String {
+    format!("rate({}[{}s])", selector(key), lookback_s.max(1))
 }
 
 #[async_trait]
@@ -180,6 +195,27 @@ impl MetricStore for VmStore {
             })
             .collect()
     }
+
+    async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("query", rate_query(key, lookback_s))])
+            .send()
+            .await
+            .ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        // data.result[0].value[1] is the rate value as a string (empty result ⇒ None).
+        let raw = json
+            .get("data")?
+            .get("result")?
+            .get(0)?
+            .get("value")?
+            .get(1)?
+            .as_str()?;
+        raw.parse().ok()
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +240,22 @@ mod tests {
             selector(&key),
             "if_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}"
         );
+    }
+
+    #[test]
+    fn rate_query_wraps_selector_in_rate_window() {
+        let key = SeriesKey::interface(NodeId::from(Uuid::nil()), IfIndex(3), "if_hc_in_octets");
+        assert_eq!(
+            rate_query(&key, 300),
+            "rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}[300s])"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_has_no_rate() {
+        let store = InMemorySink::default();
+        let key = SeriesKey::interface(NodeId::new(), IfIndex(1), "if_hc_in_octets");
+        assert_eq!(MetricStore::rate(&store, &key, 300).await, None);
     }
 
     #[tokio::test]
