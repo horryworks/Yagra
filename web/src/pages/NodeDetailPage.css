@@ -123,10 +123,18 @@
 .iftbl-head,
 .iftbl-row {
   display: grid;
-  grid-template-columns: 36px 1.2fr 1.4fr 110px 110px 80px 80px 110px;
+  /* status column wide enough for the longest oper-status label ("Critical"/"Unknown")
+     plus the dot, so it never overlaps the interface name. */
+  grid-template-columns: 96px 1.2fr 1.4fr 110px 110px 80px 80px 110px;
   align-items: center;
   gap: 12px;
   padding: 0 14px;
+}
+
+/* Keep the status dot + label on one line within its column. */
+.iftbl-row > .statusdot-wrap {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .iftbl-head {

@@ -304,7 +304,7 @@ function InterfacesTab({ nodeId }: { nodeId: string }) {
       ) : (
         <div className="iftbl">
           <div className="iftbl-head">
-            <div className="iftbl-h" />
+            <div className="iftbl-h">Status</div>
             <div className="iftbl-h">Interface</div>
             <div className="iftbl-h">Alias</div>
             <div className="iftbl-h right">In</div>
