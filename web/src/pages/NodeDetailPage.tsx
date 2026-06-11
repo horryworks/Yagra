@@ -5,10 +5,11 @@
 // node's bindings (device profile + SNMP credential) from the header.
 
 import { useEffect, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   formatBps,
   formatRtt,
+  formatSi,
   formatTimestamp,
   formatUtil,
   pointsToSeries,
@@ -51,6 +52,7 @@ const TABS = ['overview', 'interfaces', 'collection'];
 
 export function NodeDetailPage() {
   const { nodeId = '' } = useParams();
+  const navigate = useNavigate();
   const authed = useAuthStore((s) => s.authed);
   // Keep the active sub-tab in the URL (`?tab=…`) so a browser reload restores it instead
   // of snapping back to Overview.
@@ -71,6 +73,7 @@ export function NodeDetailPage() {
   });
   const [error, setError] = useState<string | null>(null);
   const [editingBindings, setEditingBindings] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +130,11 @@ export function NodeDetailPage() {
             {authed && (
               <Button variant="outline" onClick={() => setEditingBindings(true)}>
                 Edit bindings
+              </Button>
+            )}
+            {authed && (
+              <Button variant="danger" onClick={() => setDeleting(true)}>
+                Delete
               </Button>
             )}
           </div>
@@ -215,7 +223,66 @@ export function NodeDetailPage() {
           onDone={() => setEditingBindings(false)}
         />
       )}
+      {deleting && (
+        <DeleteNodeModal
+          nodeId={nodeId}
+          name={node?.name ?? nodeId}
+          onClose={() => setDeleting(false)}
+          onDeleted={() => navigate('/nodes')}
+        />
+      )}
     </div>
+  );
+}
+
+/** Confirm + delete a node (destructive-consent modal). On success the caller navigates away. */
+function DeleteNodeModal({
+  nodeId,
+  name,
+  onClose,
+  onDeleted,
+}: {
+  nodeId: string;
+  name: string;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteNode(nodeId)
+      .then(onDeleted)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete node'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete node"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Delete node <strong>{name}</strong>? This removes its inventory entry and its
+        discovered interfaces. Collected metrics age out of the TSDB. This cannot be undone.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
   );
 }
 
@@ -421,6 +488,7 @@ function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow })
           <MetricChart
             title=""
             timestamps={ts}
+            yFormat={formatSi}
             series={[
               { label: 'In', values: series!.in_bps, color: CHART_IN },
               { label: 'Out', values: series!.out_bps, color: CHART_OUT },
@@ -437,6 +505,7 @@ function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow })
           <MetricChart
             title=""
             timestamps={ts}
+            yFormat={formatSi}
             series={[
               { label: 'In', values: series!.in_errors, color: CHART_IN },
               { label: 'Out', values: series!.out_errors, color: CHART_OUT },

@@ -29,9 +29,11 @@ interface Props {
   series?: ChartSeries[];
   /** Chart height in px (default 220). */
   height?: number;
+  /** Optional Y-axis tick formatter (e.g. SI suffixes so big numbers don't clip). */
+  yFormat?: (v: number) => string;
 }
 
-export function MetricChart({ title, timestamps, values, series, height = 220 }: Props) {
+export function MetricChart({ title, timestamps, values, series, height = 220, yFormat }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,12 +52,20 @@ export function MetricChart({ title, timestamps, values, series, height = 220 }:
       grid: { stroke: gridColor, width: 1 },
       ticks: { stroke: gridColor, width: 1 },
     };
+    const yAxis = yFormat
+      ? {
+          ...axis,
+          // Compact Y tick labels (e.g. SI suffixes) so wide numbers aren't clipped.
+          values: (_u: uPlot, splits: number[]) =>
+            splits.map((s) => (s == null ? '' : yFormat(s))),
+        }
+      : axis;
 
     const opts: uPlot.Options = {
       title,
       width: el.clientWidth || 460,
       height,
-      axes: [axis, axis],
+      axes: [axis, yAxis],
       series: [
         {},
         ...resolved.map((s, i) => ({
@@ -79,7 +89,7 @@ export function MetricChart({ title, timestamps, values, series, height = 220 }:
       ro.disconnect();
       plot.destroy();
     };
-  }, [title, timestamps, values, series, height]);
+  }, [title, timestamps, values, series, height, yFormat]);
 
   return <div ref={ref} />;
 }
