@@ -75,6 +75,13 @@
   gap: 12px;
 }
 
+/* The IP address shown after the display name in the node-detail title. */
+.nodedetail-title-addr {
+  color: var(--text-tertiary);
+  font-weight: var(--weight-regular);
+  font-size: var(--font-md);
+}
+
 .nodedetail-collection-note {
   margin-bottom: 14px;
 }
