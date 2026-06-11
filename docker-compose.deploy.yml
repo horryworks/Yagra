@@ -17,16 +17,38 @@
 name: yagra
 
 services:
+  # ── KEK init — generate a persistent key-encryption key on first run ──
+  # Without a mounted KEK, core falls back to an EPHEMERAL key regenerated on every restart,
+  # which makes stored credentials (SNMP communities, API tokens) undecryptable after a
+  # redeploy. This one-shot service writes a 32-byte KEK into a named volume once (and never
+  # overwrites it), so credentials survive restarts/upgrades (ADR-017 / ADR-018).
+  kek-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "test -f /kek/key || { head -c 32 /dev/urandom > /kek/key && chmod 0444 /kek/key; }"
+    volumes:
+      - kekdata:/kek
+    restart: "no"
+
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ghcr.io/horryworks/yagra-core:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
-    depends_on: [postgres, redis, nats, victoriametrics]
+    depends_on:
+      postgres: { condition: service_started }
+      redis: { condition: service_started }
+      nats: { condition: service_started }
+      victoriametrics: { condition: service_started }
+      kek-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
+      YAGRA_KEK_FILE: /kek/key
       # Default local-auth admin password seeded on first start (change for real use).
       YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-admin}
       # Read-only dashboard exposure: unset/false = viewing requires login (default);
@@ -35,6 +57,10 @@ services:
       # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
       YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
       YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}
+      # Structured-log level (info so KEK/credential/scheduler events are visible).
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - kekdata:/kek:ro
     ports:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped
@@ -46,6 +72,7 @@ services:
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      RUST_LOG: ${RUST_LOG:-info}
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     restart: unless-stopped
@@ -89,3 +116,4 @@ services:
 volumes:
   pgdata:
   vmdata:
+  kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts
