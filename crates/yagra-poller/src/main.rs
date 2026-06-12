@@ -9,6 +9,7 @@
 //! Without `YAGRA_BUS_URL` the binary stays idle (so a bare `cargo run` doesn't
 //! crash-loop or require raw-socket privilege); the container always sets it.
 
+mod discovery;
 mod limiter;
 mod worker;
 
@@ -55,6 +56,15 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(64);
     let limiter = Arc::new(PollLimiter::new(max_concurrent));
     tracing::info!(%queue, max_concurrent, "Yagra-poller consuming jobs");
+
+    // Discovery sweeps (separate subject) run alongside polling — they need the same raw-socket
+    // ICMP + SNMP transport.
+    {
+        let disco_jobs = Box::pin(bus.subscribe_discovery_jobs(&queue).await?);
+        let bus = bus.clone();
+        let transport = transport.clone();
+        tokio::spawn(discovery::run_discovery_stream(disco_jobs, bus, transport));
+    }
 
     // Runs until the bus closes; the stateless loop carries no recovery state.
     worker::run_stream(jobs, bus, transport, limiter).await;

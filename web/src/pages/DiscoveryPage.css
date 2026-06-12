@@ -1,0 +1,74 @@
+/* Discovery: scan form + a results table with per-row import controls. */
+
+.disco-form {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.disco-form .field {
+  min-width: 240px;
+  flex: 1;
+}
+
+.disco-results-card {
+  margin-top: 16px;
+}
+
+.disco-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.disco-head,
+.disco-row {
+  display: grid;
+  grid-template-columns: 28px 1.4fr 2fr 1.2fr 1.2fr 1.2fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.disco-head {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.disco-row {
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.disco-row:last-child {
+  border-bottom: none;
+}
+
+.disco-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.disco-identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.disco-sysname {
+  font-weight: var(--weight-medium);
+}
+
+.disco-sysdescr {
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disco-import {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}

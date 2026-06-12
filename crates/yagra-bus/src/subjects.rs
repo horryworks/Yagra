@@ -27,6 +27,18 @@ pub fn results() -> String {
     format!("{ROOT}.results")
 }
 
+/// Subject core publishes discovery sweep jobs on; pollers subscribe (queue group).
+#[must_use]
+pub fn discovery_jobs() -> String {
+    format!("{ROOT}.discovery.jobs")
+}
+
+/// Subject pollers publish discovery results on, consumed by core.
+#[must_use]
+pub fn discovery_results() -> String {
+    format!("{ROOT}.discovery.results")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

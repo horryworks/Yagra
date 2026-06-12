@@ -13,6 +13,7 @@ import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
+import { DiscoveryPage } from './pages/DiscoveryPage';
 import { CredentialsPage } from './pages/CredentialsPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
@@ -37,7 +38,7 @@ export function AppRoutes() {
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}
         <Route path="nodes" element={<NodesPage />} />
-        <Route path="nodes/discovery" element={<ComingSoon />} />
+        <Route path="nodes/discovery" element={<DiscoveryPage />} />
         <Route path="nodes/dependencies" element={<ComingSoon />} />
         <Route path="nodes/profiles" element={<ProfilesPage />} />
         <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />

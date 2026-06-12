@@ -14,8 +14,9 @@ pub mod subjects;
 
 pub use bus::{Bus, BusError, InMemoryBus};
 pub use messages::{
-    CheckOutcome, CheckSpec, DiscoveredInterface, IcmpCheck, PollJob, PollResult, Sample,
-    SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, BUS_SCHEMA_VERSION,
+    CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface, DiscoveryJob, DiscoveryResult,
+    IcmpCheck, PollJob, PollResult, Sample, SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck,
+    SnmpV3Check, BUS_SCHEMA_VERSION,
 };
 #[cfg(feature = "nats")]
 pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};

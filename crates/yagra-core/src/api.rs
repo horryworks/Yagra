@@ -10,6 +10,7 @@
 use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
+use crate::discovery::DiscoveryRunner;
 use crate::history::AlertHistoryStore;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
@@ -48,6 +49,7 @@ pub struct AdminState {
     pub collection: Arc<CollectionRepo>,
     pub notifications: Arc<NotificationRepo>,
     pub mib: Arc<MibRepo>,
+    pub discovery: Arc<DiscoveryRunner>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -170,6 +172,9 @@ pub fn router(state: ApiState) -> Router {
             get(list_mib_catalog).post(create_mib_entry),
         )
         .route("/api/v1/mib-catalog/:id", delete(delete_mib_entry))
+        .route("/api/v1/discovery/scan", post(start_discovery_scan))
+        .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
+        .route("/api/v1/discovery/import", post(import_discovered))
         .with_state(state)
 }
 
@@ -1361,6 +1366,156 @@ async fn delete_mib_entry(
             internal("failed to delete MIB entry")
         }
     }
+}
+
+// ── Discovery (subnet sweep → review → import) — ManageConfig only ───────────
+
+/// Most targets a single scan may sweep (keeps the sweep bounded).
+const MAX_SCAN_TARGETS: usize = 1024;
+
+/// Start-scan body: explicit target IPs (the WebUI expands a CIDR) + candidate communities.
+#[derive(Deserialize)]
+struct StartScan {
+    targets: Vec<String>,
+    #[serde(default)]
+    communities: Vec<String>,
+}
+
+async fn start_discovery_scan(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<StartScan>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.targets.is_empty() || body.targets.len() > MAX_SCAN_TARGETS {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_scan",
+            format!("targets must be 1..={MAX_SCAN_TARGETS} addresses"),
+        );
+    }
+    let mut targets = Vec::with_capacity(body.targets.len());
+    for t in &body.targets {
+        match t.parse::<IpAddr>() {
+            Ok(ip) => targets.push(ip),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_address",
+                    format!("'{t}' is not a valid IP address"),
+                )
+            }
+        }
+    }
+    match admin.discovery.start(targets, body.communities).await {
+        Ok(scan_id) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "scan_id": scan_id })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "start discovery scan failed");
+            internal("failed to start discovery scan")
+        }
+    }
+}
+
+async fn get_discovery_scan(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.discovery.get(id) {
+        Some(status) => Json(status).into_response(),
+        None => not_found("scan_not_found", format!("no scan {id}")),
+    }
+}
+
+/// One discovered device the operator chose to add.
+#[derive(Deserialize)]
+struct ImportNode {
+    address: String,
+    name: String,
+    profile_id: Option<String>,
+    credential_id: Option<String>,
+}
+
+/// Import body: the selected devices to create as nodes.
+#[derive(Deserialize)]
+struct ImportDiscovered {
+    nodes: Vec<ImportNode>,
+}
+
+async fn import_discovered(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ImportDiscovered>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
+        match s {
+            None => Ok(None),
+            Some(v) => v.parse::<Uuid>().map(Some).map_err(|_| ()),
+        }
+    };
+    let mut created = 0u32;
+    for n in &body.nodes {
+        let Ok(addr) = n.address.parse::<IpAddr>() else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_address",
+                format!("'{}' is not a valid IP address", n.address),
+            );
+        };
+        if n.name.trim().is_empty() {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_node",
+                "name must not be empty".to_owned(),
+            );
+        }
+        let (Ok(profile), Ok(credential)) =
+            (parse_uuid(&n.profile_id), parse_uuid(&n.credential_id))
+        else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_binding",
+                "profile_id/credential_id must be UUIDs".to_owned(),
+            );
+        };
+        match admin
+            .repo
+            .create_node(n.name.trim(), addr, None, profile, credential, None)
+            .await
+        {
+            Ok(_) => created += 1,
+            Err(e) => {
+                tracing::error!(error = %e, "import discovered node failed");
+                return internal("failed to import a discovered node");
+            }
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "created": created })),
+    )
+        .into_response()
 }
 
 // ── Collection sets (what to poll, per profile/node) — ManageConfig only ─────
