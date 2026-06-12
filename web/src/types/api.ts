@@ -231,6 +231,30 @@ export interface MibCatalogEntry {
   description: string | null;
 }
 
+/** A maintenance window (`GET /api/v1/maintenance-windows`, core `StoredWindow`). Nodes
+ *  covered by an active window observe `maintenance` — no alerts fire, existing ones
+ *  resolve. Scoped like thresholds; times are RFC 3339. `active` = covers "now". */
+export interface MaintenanceWindow {
+  id: string;
+  name: string;
+  level: ScopeLevel;
+  scope_id: string;
+  starts_at: string;
+  ends_at: string;
+  enabled: boolean;
+  active: boolean;
+}
+
+/** A mute (`GET /api/v1/mutes`, core `StoredMute`): notifications for one node (optionally
+ *  one check) are silenced until `until_at` — the alert still shows in the UI/history. */
+export interface Mute {
+  id: string;
+  node_id: string;
+  check_name: string | null;
+  until_at: string;
+  reason: string | null;
+}
+
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
 export interface NodeDetail {
   id: string;
