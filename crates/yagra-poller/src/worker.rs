@@ -93,8 +93,14 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 priv_protocol: v3.priv_protocol.clone(),
                 priv_key: v3.priv_key.clone(),
             };
+            // GET the bare OIDs and the explicitly-named scalar columns together (mirrors
+            // the v2c arm: configured collection sets travel as named columns).
+            let col_by_oid: HashMap<&str, &SnmpColumn> =
+                v3.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+            let mut all_oids = v3.oids.clone();
+            all_oids.extend(v3.columns.iter().map(|c| c.oid.clone()));
             match transport
-                .snmp_v3_get(job.target, &params, &v3.oids, timeout)
+                .snmp_v3_get(job.target, &params, &all_oids, timeout)
                 .await
             {
                 Ok(samples) => {
@@ -105,7 +111,15 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     };
                     let mapped = samples
                         .into_iter()
-                        .map(|s| Sample::gauge(snmp_metric_name(&s.oid), s.value))
+                        .map(|s| match col_by_oid.get(s.oid.as_str()) {
+                            Some(col) => Sample {
+                                metric: col.metric_name.clone(),
+                                ifindex: None,
+                                value: s.value,
+                                kind: col.kind,
+                            },
+                            None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
+                        })
                         .collect();
                     result(job, at_unix_ms, outcome, mapped)
                 }

@@ -17,6 +17,7 @@ use thiserror::Error;
 
 mod icmp;
 mod snmp;
+mod snmp_v3;
 pub use icmp::{summarize, SurgePingTransport};
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
