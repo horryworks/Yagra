@@ -48,6 +48,20 @@ pub trait MetricStore: Send + Sync {
         step_s: u64,
         lookback_s: u64,
     ) -> Vec<MetricPoint>;
+    /// Latest **node-level aggregate** (`max` across the metric's table/entity series) for the
+    /// key's metric, robust to poll jitter. Collapses a per-entity table gauge (e.g. CPU% per
+    /// `entPhysicalIndex`, one series per core) into a single node value — the idle entities
+    /// reporting 0 drop out. `None` if the store has no such series.
+    async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64>;
+    /// Sampled node-level aggregate (`max`) over `[from_s, to_s]` at `step_s` resolution
+    /// (oldest first). For charting a per-entity gauge as one node series. Empty if no history.
+    async fn aggregate_range(
+        &self,
+        key: &SeriesKey,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint>;
 }
 
 #[async_trait]
@@ -86,6 +100,22 @@ impl MetricStore for InMemorySink {
         _lookback_s: u64,
     ) -> Vec<MetricPoint> {
         // No history ⇒ no rate series.
+        Vec::new()
+    }
+
+    async fn aggregate_latest(&self, _key: &SeriesKey) -> Option<f64> {
+        // No table/entity series ⇒ no aggregate.
+        None
+    }
+
+    async fn aggregate_range(
+        &self,
+        _key: &SeriesKey,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
+        // No history ⇒ no aggregate series.
         Vec::new()
     }
 }
@@ -207,6 +237,30 @@ fn instant_rate_query(key: &SeriesKey, lookback_s: u64) -> String {
     )
 }
 
+/// Node-scoped selector that ignores any `ifindex` dimension — `metric{node="…"}` regardless
+/// of the key's ifindex. Used by the aggregate reads so a table gauge (one series per
+/// entity/core) collapses to a single node-level value via `max()`.
+fn node_scope_selector(key: &SeriesKey) -> String {
+    format!("{}{{node=\"{}\"}}", key.metric, key.node)
+}
+
+/// Instant node-level MAX across entity series within the lookback:
+/// `max(last_over_time(metric{node="…"}[1800s]))`. Inner `last_over_time` keeps the
+/// poll-jitter robustness of [`latest_query`]; outer `max` collapses the entities.
+fn aggregate_latest_query(key: &SeriesKey) -> String {
+    format!(
+        "max(last_over_time({}[{}s]))",
+        node_scope_selector(key),
+        INSTANT_LOOKBACK_SECS
+    )
+}
+
+/// Range node-level MAX across entity series at each step: `max(metric{node="…"})`, sampled
+/// by `query_range` (consistent with the bare-expression `range`/`rate_range` path).
+fn aggregate_range_query(key: &SeriesKey) -> String {
+    format!("max({})", node_scope_selector(key))
+}
+
 #[async_trait]
 impl MetricStore for VmStore {
     async fn write(&self, result: &PollResult) {
@@ -294,6 +348,38 @@ impl MetricStore for VmStore {
         self.query_range_points(rate_query(key, lookback_s), from_s, to_s, step_s)
             .await
     }
+
+    async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("query", aggregate_latest_query(key))])
+            .send()
+            .await
+            .ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        // data.result[0].value[1] is the aggregated value as a string (empty result ⇒ None).
+        let raw = json
+            .get("data")?
+            .get("result")?
+            .get(0)?
+            .get("value")?
+            .get(1)?
+            .as_str()?;
+        raw.parse().ok()
+    }
+
+    async fn aggregate_range(
+        &self,
+        key: &SeriesKey,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        self.query_range_points(aggregate_range_query(key), from_s, to_s, step_s)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -345,6 +431,44 @@ mod tests {
             instant_rate_query(&key, 300),
             "last_over_time((rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}[300s]))[1800s:300s])"
         );
+    }
+
+    #[test]
+    fn aggregate_latest_query_wraps_node_selector_in_max_last_over_time() {
+        let key = SeriesKey::node(NodeId::from(Uuid::nil()), "huawei_cpu_usage");
+        assert_eq!(
+            aggregate_latest_query(&key),
+            "max(last_over_time(huawei_cpu_usage{node=\"00000000-0000-0000-0000-000000000000\"}[1800s]))"
+        );
+    }
+
+    #[test]
+    fn aggregate_range_query_wraps_node_selector_in_max() {
+        let key = SeriesKey::node(NodeId::from(Uuid::nil()), "huawei_mem_usage");
+        assert_eq!(
+            aggregate_range_query(&key),
+            "max(huawei_mem_usage{node=\"00000000-0000-0000-0000-000000000000\"})"
+        );
+    }
+
+    #[test]
+    fn aggregate_selector_drops_ifindex_dimension() {
+        // Built from an interface key, but the aggregate collapses to a node-only selector.
+        let key = SeriesKey::interface(NodeId::from(Uuid::nil()), IfIndex(7), "huawei_cpu_usage");
+        assert_eq!(
+            node_scope_selector(&key),
+            "huawei_cpu_usage{node=\"00000000-0000-0000-0000-000000000000\"}"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_has_no_aggregate() {
+        let store = InMemorySink::default();
+        let key = SeriesKey::node(NodeId::new(), "huawei_cpu_usage");
+        assert_eq!(MetricStore::aggregate_latest(&store, &key).await, None);
+        assert!(MetricStore::aggregate_range(&store, &key, 0, 3600, 60)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
