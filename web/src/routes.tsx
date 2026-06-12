@@ -16,6 +16,7 @@ import { CredentialsPage } from './pages/CredentialsPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
+import { RoutingPage } from './pages/RoutingPage';
 import { MetricExplorerPage } from './pages/MetricExplorerPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { UsersPage } from './pages/UsersPage';
@@ -51,7 +52,7 @@ export function AppRoutes() {
         <Route path="alerts" element={<ActiveAlertsPage />} />
         <Route path="alerts/history" element={<HistoryPage />} />
         <Route path="alerts/rules" element={<ThresholdsPage />} />
-        <Route path="alerts/routing" element={<ComingSoon />} />
+        <Route path="alerts/routing" element={<RoutingPage />} />
         <Route path="alerts/maintenance" element={<ComingSoon />} />
         <Route path="alerts/mutes" element={<ComingSoon />} />
 

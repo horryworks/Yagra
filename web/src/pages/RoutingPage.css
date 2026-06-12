@@ -1,0 +1,42 @@
+/* Routing & notifications: channel + rule forms and rows. */
+
+.routing-form {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.routing-grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.routing-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.routing-channel-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.routing-pick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.routing-rule-channels {
+  font-size: var(--font-sm);
+}
+
+.routing-rules-card {
+  margin-top: 16px;
+}

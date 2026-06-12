@@ -15,6 +15,7 @@ mod auth;
 mod collection;
 mod config;
 mod history;
+mod notifications;
 mod repo;
 mod scheduler;
 mod secrets;
@@ -35,6 +36,7 @@ use config::Config;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use notifications::NotificationRepo;
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
 use sink::InMemorySink;
@@ -77,9 +79,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
 
-    // Alert engine + optional notifier (Webhook/email, ADR-015) + history persistence.
+    // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
-    let notifier = Notifier::from_env().map(Arc::new);
+    let notifier = Arc::new(Notifier::from_env());
+    let notifications = Arc::new(NotificationRepo::from_env(repo.pool()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
 
     // Result consumer: bus → TSDB + alert engine (+ history + notifications + interface
@@ -140,6 +143,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         });
     }
 
+    // Notification routing: load the DB channels/rules into the notifier now, then refresh
+    // periodically so edits take effect without a restart (env channels stay always-on).
+    load_routing(&notifier, &notifications).await;
+    {
+        let notifier = notifier.clone();
+        let notifications = notifications.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                load_routing(&notifier, &notifications).await;
+            }
+        });
+    }
+
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let users = Arc::new(UserStore::new(repo.pool()));
     let admin_password =
@@ -151,6 +168,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         users,
         thresholds,
         collection,
+        notifications,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -201,7 +219,7 @@ async fn consume_results<S>(
     mut results: S,
     store: Arc<dyn MetricStore>,
     alerts: Arc<AlertManager>,
-    notifier: Option<Arc<Notifier>>,
+    notifier: Arc<Notifier>,
     history: Arc<AlertHistoryStore>,
     repo: Arc<NodeRepo>,
 ) where
@@ -238,9 +256,7 @@ async fn consume_results<S>(
             if let Err(e) = recorded {
                 tracing::warn!(error = %e, "failed to record alert history");
             }
-            if let Some(notifier) = &notifier {
-                notifier.handle(action).await;
-            }
+            notifier.handle(action).await;
         }
     }
     tracing::warn!("result stream ended");
@@ -420,6 +436,23 @@ async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> Aler
         );
     }
     AlertConfig::new(rules, meta).with_topology(topology)
+}
+
+/// Load the DB notification channels + routing rules into the notifier. Failures degrade to
+/// the existing snapshot (warn) rather than dropping routing.
+async fn load_routing(notifier: &Notifier, notifications: &NotificationRepo) {
+    let channels = notifications
+        .list_open_channels()
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to load notification channels");
+            Vec::new()
+        });
+    let rules = notifications.list_rules().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to load routing rules");
+        Vec::new()
+    });
+    notifier.set_routing(channels, rules).await;
 }
 
 /// Connect to NATS with retry so startup ordering doesn't matter.

@@ -50,6 +50,15 @@ pub trait NotifyChannel: Send + Sync {
     async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError>;
 }
 
+/// Lets a boxed/shared trait object be used directly as the `Dispatcher`'s channel — so a
+/// router can keep a `Dispatcher<Arc<dyn NotifyChannel>>` per dynamically-configured channel.
+#[async_trait]
+impl NotifyChannel for std::sync::Arc<dyn NotifyChannel> {
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        (**self).deliver(notification).await
+    }
+}
+
 /// Errors from a channel.
 #[derive(Debug, Error)]
 pub enum NotifyError {

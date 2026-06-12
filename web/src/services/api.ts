@@ -7,6 +7,7 @@ import type {
   AlertHistoryRow,
   ApiErrorBody,
   AuthMe,
+  ChannelConfigInput,
   CollectionKind,
   CollectionTemplate,
   CredentialSummary,
@@ -21,9 +22,12 @@ import type {
   NodePage,
   NodeStatus,
   NodeSummary,
+  NotificationChannel,
   ProfileSummary,
   Role,
+  RoutingRule,
   ScopeLevel,
+  Severity,
   StoredCollectionItem,
   StoredThreshold,
   UserSummary,
@@ -321,6 +325,42 @@ export const api = {
   /** Recent alert history (default 100 rows). */
   listAlertHistory: (limit?: number): Promise<AlertHistoryRow[]> =>
     request(limit != null ? `/alerts/history?limit=${limit}` : '/alerts/history'),
+
+  /** Notification channels (metadata only; the secret config is never returned). */
+  listNotificationChannels: (): Promise<NotificationChannel[]> =>
+    request('/notification-channels'),
+
+  /** Create a notification channel (name + secret config, sealed server-side). */
+  createNotificationChannel: (body: {
+    name: string;
+    config: ChannelConfigInput;
+  }): Promise<{ id: string }> => request('/notification-channels', jsonBody('POST', body)),
+
+  /** Enable/disable a channel. */
+  setNotificationChannelEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/notification-channels/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+
+  /** Delete a channel (and drop it from any rule). */
+  deleteNotificationChannel: (id: string): Promise<void> =>
+    request(`/notification-channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Routing rules (which alerts, by severity, fan out to which channels). */
+  listRoutingRules: (): Promise<RoutingRule[]> => request('/routing-rules'),
+
+  /** Create a routing rule. `severity` null ⇒ matches all severities. */
+  createRoutingRule: (body: {
+    name: string;
+    severity: Severity | null;
+    channel_ids: string[];
+  }): Promise<{ id: string }> => request('/routing-rules', jsonBody('POST', body)),
+
+  /** Enable/disable a rule. */
+  setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/routing-rules/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+
+  /** Delete a routing rule. */
+  deleteRoutingRule: (id: string): Promise<void> =>
+    request(`/routing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
   listUsers: (): Promise<UserSummary[]> => request('/users'),

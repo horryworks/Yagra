@@ -22,6 +22,31 @@ pub struct CredentialSummary {
     pub kind: String,
 }
 
+/// Load the key-encryption-key provider from `YAGRA_KEK_FILE`, falling back to an ephemeral
+/// dev key (logged loudly — secrets won't survive a restart, dev-only). Shared by every
+/// envelope-encrypted store (credentials, notification channels) so they all use one KEK.
+pub fn load_key_provider() -> StaticKeyProvider {
+    match std::env::var("YAGRA_KEK_FILE") {
+        Ok(path) => match key_provider_from_file(Path::new(&path)) {
+            Ok(p) => {
+                tracing::info!(%path, "loaded KEK from mounted file");
+                p
+            }
+            Err(e) => {
+                tracing::error!(error = %e, %path, "KEK file load failed; using EPHEMERAL dev key");
+                StaticKeyProvider::single(rand::random::<[u8; 32]>())
+            }
+        },
+        Err(_) => {
+            tracing::warn!(
+                "YAGRA_KEK_FILE not set — using EPHEMERAL dev KEK (credentials will not \
+                 survive a restart; set a mounted KEK file for real use)"
+            );
+            StaticKeyProvider::single(rand::random::<[u8; 32]>())
+        }
+    }
+}
+
 /// PostgreSQL-backed, envelope-encrypted credential store.
 pub struct CredentialStore {
     pool: PgPool,
@@ -32,28 +57,9 @@ impl CredentialStore {
     /// Build the store, loading the KEK from `YAGRA_KEK_FILE` or falling back to an
     /// ephemeral dev key (never for production — secrets are lost on restart).
     pub fn from_env(pool: PgPool) -> Self {
-        let provider = match std::env::var("YAGRA_KEK_FILE") {
-            Ok(path) => match key_provider_from_file(Path::new(&path)) {
-                Ok(p) => {
-                    tracing::info!(%path, "loaded KEK from mounted file");
-                    p
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, %path, "KEK file load failed; using EPHEMERAL dev key");
-                    StaticKeyProvider::single(rand::random::<[u8; 32]>())
-                }
-            },
-            Err(_) => {
-                tracing::warn!(
-                    "YAGRA_KEK_FILE not set — using EPHEMERAL dev KEK (credentials will not \
-                     survive a restart; set a mounted KEK file for real use)"
-                );
-                StaticKeyProvider::single(rand::random::<[u8; 32]>())
-            }
-        };
         Self {
             pool,
-            cipher: EnvelopeCipher::new(provider),
+            cipher: EnvelopeCipher::new(load_key_provider()),
         }
     }
 
