@@ -15,6 +15,7 @@ mod auth;
 mod collection;
 mod config;
 mod history;
+mod mib;
 mod notifications;
 mod repo;
 mod scheduler;
@@ -36,6 +37,7 @@ use config::Config;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use mib::MibRepo;
 use notifications::NotificationRepo;
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
@@ -74,6 +76,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     repo.migrate().await?;
     repo.seed_demo_nodes_if_empty().await?;
     repo.seed_builtin_profiles().await?;
+    let mib = Arc::new(MibRepo::new(repo.pool()));
+    mib.seed_builtin().await?;
 
     // TSDB + bus.
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
@@ -169,6 +173,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         thresholds,
         collection,
         notifications,
+        mib,
     }));
     let sessions = Arc::new(SessionStore::new());
 
