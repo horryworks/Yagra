@@ -15,11 +15,13 @@ import type {
   DiscoveryScan,
   InterfaceRow,
   InterfaceSeries,
+  MaintenanceWindow,
   MetricAgg,
   MetricKind,
   MetricRange,
   MetricReading,
   MibCatalogEntry,
+  Mute,
   NodeDetail,
   NodePage,
   NodeStatus,
@@ -396,6 +398,41 @@ export const api = {
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
     request(`/routing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
+  listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),
+
+  /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds. */
+  createMaintenanceWindow: (body: {
+    name: string;
+    scope_level: ScopeLevel;
+    scope_id: string;
+    starts_at: string;
+    ends_at: string;
+  }): Promise<{ id: string }> => request('/maintenance-windows', jsonBody('POST', body)),
+
+  /** Enable/disable a maintenance window. */
+  setMaintenanceWindowEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/maintenance-windows/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+
+  /** Delete a maintenance window. */
+  deleteMaintenanceWindow: (id: string): Promise<void> =>
+    request(`/maintenance-windows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
+  listMutes: (): Promise<Mute[]> => request('/mutes'),
+
+  /** Create a mute. `check` omitted ⇒ the whole node; `until` is RFC 3339. */
+  createMute: (body: {
+    node_id: string;
+    check?: string;
+    until: string;
+    reason?: string;
+  }): Promise<{ id: string }> => request('/mutes', jsonBody('POST', body)),
+
+  /** Delete (lift) a mute. */
+  deleteMute: (id: string): Promise<void> =>
+    request(`/mutes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
   listUsers: (): Promise<UserSummary[]> => request('/users'),

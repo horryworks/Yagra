@@ -382,6 +382,63 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/mib-catalog');
   });
 
+  it('creates a maintenance window with the scope + RFC 3339 times', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'w1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createMaintenanceWindow({
+      name: 'fw upgrade',
+      scope_level: 'node',
+      scope_id: 'n1',
+      starts_at: '2026-06-12T00:00:00.000Z',
+      ends_at: '2026-06-12T02:00:00.000Z',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/maintenance-windows');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'fw upgrade',
+      scope_level: 'node',
+      scope_id: 'n1',
+      starts_at: '2026-06-12T00:00:00.000Z',
+      ends_at: '2026-06-12T02:00:00.000Z',
+    });
+  });
+
+  it('toggles a maintenance window via PUT', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
+    globalThis.fetch = spy;
+    await api.setMaintenanceWindowEnabled('w1', false);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/maintenance-windows/w1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ enabled: false });
+  });
+
+  it('creates a mute, omitting the optional check/reason when empty', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'm1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createMute({ node_id: 'n1', until: '2026-06-12T02:00:00.000Z' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/mutes');
+    expect(JSON.parse(init.body)).toEqual({ node_id: 'n1', until: '2026-06-12T02:00:00.000Z' });
+  });
+
+  it('lifts a mute via DELETE', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
+    globalThis.fetch = spy;
+    await api.deleteMute('m1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/mutes/m1');
+    expect(init.method).toBe('DELETE');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();
