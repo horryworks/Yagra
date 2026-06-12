@@ -12,6 +12,7 @@ import type {
   CollectionTemplate,
   CredentialSummary,
   Direction,
+  DiscoveryScan,
   InterfaceRow,
   InterfaceSeries,
   MetricAgg,
@@ -298,6 +299,21 @@ export const api = {
   /** Delete a catalog entry. */
   deleteMibEntry: (id: string): Promise<void> =>
     request(`/mib-catalog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). */
+  startDiscoveryScan: (body: {
+    targets: string[];
+    communities: string[];
+  }): Promise<{ scan_id: string }> => request('/discovery/scan', jsonBody('POST', body)),
+
+  /** Poll a discovery scan's status + candidates. */
+  getDiscoveryScan: (id: string): Promise<DiscoveryScan> =>
+    request(`/discovery/scan/${encodeURIComponent(id)}`),
+
+  /** Import selected discovered devices as nodes. */
+  importDiscovered: (
+    nodes: { address: string; name: string; profile_id?: string; credential_id?: string }[],
+  ): Promise<{ created: number }> => request('/discovery/import', jsonBody('POST', { nodes })),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>

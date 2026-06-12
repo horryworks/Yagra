@@ -10,7 +10,7 @@
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
 use crate::bus::{Bus, BusError};
-use crate::messages::{PollJob, PollResult};
+use crate::messages::{DiscoveryJob, DiscoveryResult, PollJob, PollResult};
 use crate::subjects;
 use async_nats::Client;
 use async_trait::async_trait;
@@ -83,6 +83,67 @@ impl NatsBus {
                 Ok(result) => Some(result),
                 Err(e) => {
                     tracing::warn!(error = %e, "dropping malformed PollResult from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Publish a discovery sweep job — core side.
+    pub async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&job)
+            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
+        self.client
+            .publish(subjects::discovery_jobs(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery job: {e}")))
+    }
+
+    /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
+    pub async fn subscribe_discovery_jobs(
+        &self,
+        queue: &str,
+    ) -> Result<impl Stream<Item = DiscoveryJob>, BusError> {
+        let sub = self
+            .client
+            .queue_subscribe(subjects::discovery_jobs(), queue.to_owned())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe discovery jobs: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<DiscoveryJob>(&msg.payload) {
+                Ok(job) => Some(job),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed DiscoveryJob from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Publish a discovery result — poller side.
+    pub async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&result)
+            .map_err(|e| BusError::Publish(format!("encode discovery result: {e}")))?;
+        self.client
+            .publish(subjects::discovery_results(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery result: {e}")))
+    }
+
+    /// Subscribe to discovery results — core side. Malformed messages skipped.
+    pub async fn subscribe_discovery_results(
+        &self,
+    ) -> Result<impl Stream<Item = DiscoveryResult>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::discovery_results())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe discovery results: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<DiscoveryResult>(&msg.payload) {
+                Ok(result) => Some(result),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed DiscoveryResult from bus");
                     None
                 }
             }

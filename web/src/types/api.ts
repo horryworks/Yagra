@@ -202,6 +202,23 @@ export interface CollectionTemplate {
   item_count: number;
 }
 
+/** One device a discovery scan found (`core::discovery::Candidate`). */
+export interface DiscoveryCandidate {
+  address: string;
+  reachable: boolean;
+  sysdescr: string | null;
+  sysname: string | null;
+  /** Suggested built-in profile name (classified from sysDescr), if any. */
+  suggested_profile: string | null;
+}
+
+/** A discovery scan's status (`GET /api/v1/discovery/scan/:id`). */
+export interface DiscoveryScan {
+  scan_id: string;
+  done: boolean;
+  candidates: DiscoveryCandidate[];
+}
+
 /** One curated OID-catalog entry (`GET /api/v1/mib-catalog`, core `MibEntry`). A reference
  *  metric_name → (oid, kind) so the collection editor can pick by name. */
 export interface MibCatalogEntry {
