@@ -292,6 +292,16 @@ export interface InterfaceSeries {
   out_errors: (number | null)[];
 }
 
+/** One audit-log row (`GET /api/v1/audit`, core `AuditRow`). Admin-only. `action` is
+ *  either `METHOD /api/v1/...` (mutating request) or `auth.login`; `at` is RFC 3339. */
+export interface AuditRow {
+  id: string;
+  at: string;
+  username: string;
+  action: string;
+  status: number;
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

@@ -11,6 +11,7 @@
 
 mod alerts;
 mod api;
+mod audit;
 mod auth;
 mod collection;
 mod config;
@@ -32,6 +33,7 @@ use std::time::Duration;
 
 use alerts::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
+use audit::AuditRepo;
 use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
@@ -193,6 +195,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         mib,
         discovery,
         maintenance,
+        audit: Arc::new(AuditRepo::new(repo.pool())),
     }));
     let sessions = Arc::new(SessionStore::new());
 

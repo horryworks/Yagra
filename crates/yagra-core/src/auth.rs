@@ -28,9 +28,17 @@ pub enum AuthError {
     Forbidden,
 }
 
-/// In-memory bearer-token → principal sessions.
+/// An authenticated session: the principal plus the account name it was minted for (the
+/// audit log records *who*, not just which role).
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub principal: Principal,
+    pub username: String,
+}
+
+/// In-memory bearer-token → session store.
 pub struct SessionStore {
-    sessions: Mutex<HashMap<String, Principal>>,
+    sessions: Mutex<HashMap<String, Session>>,
 }
 
 impl SessionStore {
@@ -42,19 +50,25 @@ impl SessionStore {
         }
     }
 
-    /// Mint a fresh opaque token for `principal`.
-    pub fn issue(&self, principal: Principal) -> String {
+    /// Mint a fresh opaque token for `principal` logged in as `username`.
+    pub fn issue(&self, principal: Principal, username: &str) -> String {
         let token = random_token();
         self.sessions
             .lock()
             .expect("sessions mutex poisoned")
-            .insert(token.clone(), principal);
+            .insert(
+                token.clone(),
+                Session {
+                    principal,
+                    username: username.to_owned(),
+                },
+            );
         token
     }
 
-    /// Resolve a token to its principal.
+    /// Resolve a token to its session.
     #[must_use]
-    pub fn lookup(&self, token: &str) -> Option<Principal> {
+    pub fn lookup(&self, token: &str) -> Option<Session> {
         self.sessions
             .lock()
             .expect("sessions mutex poisoned")
@@ -63,15 +77,11 @@ impl SessionStore {
     }
 
     /// Authorize a request: require a valid token whose principal has `perm`.
-    pub fn authorize(
-        &self,
-        bearer: Option<&str>,
-        perm: Permission,
-    ) -> Result<Principal, AuthError> {
+    pub fn authorize(&self, bearer: Option<&str>, perm: Permission) -> Result<Session, AuthError> {
         let token = bearer.ok_or(AuthError::Missing)?;
-        let principal = self.lookup(token).ok_or(AuthError::Invalid)?;
-        if principal.can(perm) {
-            Ok(principal)
+        let session = self.lookup(token).ok_or(AuthError::Invalid)?;
+        if session.principal.can(perm) {
+            Ok(session)
         } else {
             Err(AuthError::Forbidden)
         }
@@ -316,34 +326,37 @@ mod tests {
     #[test]
     fn issued_token_resolves_and_authorizes_by_role() {
         let store = SessionStore::new();
-        let token = store.issue(Principal::new(Role::Operator, Scope::All));
+        let token = store.issue(Principal::new(Role::Operator, Scope::All), "op1");
 
-        // Operator can ack alerts but not manage config.
-        assert!(store.authorize(Some(&token), Permission::AckAlerts).is_ok());
-        assert_eq!(
+        // Operator can ack alerts but not manage config; the session carries the username.
+        let session = store
+            .authorize(Some(&token), Permission::AckAlerts)
+            .expect("operator can ack");
+        assert_eq!(session.username, "op1");
+        assert!(matches!(
             store.authorize(Some(&token), Permission::ManageConfig),
             Err(AuthError::Forbidden)
-        );
+        ));
     }
 
     #[test]
     fn missing_and_invalid_tokens_are_rejected() {
         let store = SessionStore::new();
-        assert_eq!(
+        assert!(matches!(
             store.authorize(None, Permission::View),
             Err(AuthError::Missing)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             store.authorize(Some("deadbeef"), Permission::View),
             Err(AuthError::Invalid)
-        );
+        ));
     }
 
     #[test]
     fn tokens_are_unique_and_long() {
         let store = SessionStore::new();
-        let a = store.issue(Principal::new(Role::Viewer, Scope::All));
-        let b = store.issue(Principal::new(Role::Viewer, Scope::All));
+        let a = store.issue(Principal::new(Role::Viewer, Scope::All), "v1");
+        let b = store.issue(Principal::new(Role::Viewer, Scope::All), "v1");
         assert_ne!(a, b);
         assert_eq!(a.len(), 64);
     }

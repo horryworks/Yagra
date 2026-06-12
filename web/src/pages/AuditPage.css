@@ -1,0 +1,58 @@
+/* Audit log: a dense newest-first table + load-more pagination. */
+
+.audit-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-head,
+.audit-row {
+  display: grid;
+  grid-template-columns: 180px 140px 1fr 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.audit-head {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.audit-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.audit-row {
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.audit-row:last-child {
+  border-bottom: none;
+}
+
+.audit-time {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.audit-user {
+  font-weight: var(--weight-medium);
+}
+
+.audit-action {
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-more {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}

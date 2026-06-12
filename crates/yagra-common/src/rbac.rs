@@ -37,6 +37,8 @@ pub enum Permission {
     ManageCredentials,
     /// Manage users and role assignments.
     ManageUsers,
+    /// Read the audit log (who changed what).
+    ViewAudit,
 }
 
 impl Role {
@@ -46,9 +48,10 @@ impl Role {
         match perm {
             Permission::View => true, // every role can view within its scope
             Permission::AckAlerts | Permission::ManageMaintenance => self >= Role::Operator,
-            Permission::ManageConfig | Permission::ManageCredentials | Permission::ManageUsers => {
-                self == Role::Admin
-            }
+            Permission::ManageConfig
+            | Permission::ManageCredentials
+            | Permission::ManageUsers
+            | Permission::ViewAudit => self == Role::Admin,
         }
     }
 }
@@ -133,6 +136,10 @@ mod tests {
 
         assert!(Role::Admin.grants(Permission::ManageConfig));
         assert!(Role::Admin.grants(Permission::ManageUsers));
+
+        // The audit log is admin-only (it exposes who did what across the system).
+        assert!(!Role::Operator.grants(Permission::ViewAudit));
+        assert!(Role::Admin.grants(Permission::ViewAudit));
     }
 
     #[test]
