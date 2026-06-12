@@ -174,6 +174,7 @@ export function NodeDetailPage() {
               )}
             </Card>
             <SnmpScalarsCard nodeId={nodeId} />
+            <DeviceHealthCard nodeId={nodeId} />
             <Card title="Active alerts" className="nodedetail-span2">
               {!status || status.alerts.length === 0 ? (
                 <p className="muted">No active alerts on this node.</p>
@@ -353,6 +354,138 @@ const RANGES: { label: string; secs: number }[] = [
 ];
 const CHART_IN = '#4f8cff';
 const CHART_OUT = '#34d399';
+
+/** Vendor health metrics that read as a 0–100 percentage, by role. (cisco_mem_used/free are
+ *  bytes, and HOST-RESOURCES memory needs a used/size ratio — both out of scope here.) */
+const HEALTH_METRICS: { metric: string; role: 'cpu' | 'mem' }[] = [
+  { metric: 'huawei_cpu_usage', role: 'cpu' },
+  { metric: 'cisco_cpu_5min', role: 'cpu' },
+  { metric: 'hr_processor_load', role: 'cpu' },
+  { metric: 'huawei_mem_usage', role: 'mem' },
+];
+const HEALTH_ROLE_LABEL: Record<'cpu' | 'mem', string> = { cpu: 'CPU', mem: 'Memory' };
+const HEALTH_ROLES = ['cpu', 'mem'] as const;
+
+/** Device CPU/Memory health: node-level percentages (a query-time `max()` across the per-entity
+ *  table series) with a trend chart. The card resolves which health metrics the node actually
+ *  has from its effective collection set, and hides entirely when it has none (e.g. an ICMP-only
+ *  node, or a device without CPU/mem OIDs) — like the System (SNMP) card. */
+function DeviceHealthCard({ nodeId }: { nodeId: string }) {
+  const [picked, setPicked] = useState<{ role: 'cpu' | 'mem'; metric: string }[] | null>(null);
+  const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let names = new Set<string>();
+      try {
+        const items = await api.listNodeCollection(nodeId, true);
+        names = new Set(items.map((i) => i.metric_name));
+      } catch {
+        // admin-only endpoint not permitted → no health card
+      }
+      const out = HEALTH_ROLES.flatMap((role) => {
+        const hit = HEALTH_METRICS.find((h) => h.role === role && names.has(h.metric));
+        return hit ? [{ role, metric: hit.metric }] : [];
+      });
+      if (!cancelled) setPicked(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId]);
+
+  if (!picked || picked.length === 0) return null;
+  return (
+    <Card title="Device health" className="nodedetail-span2">
+      <div className="devhealth-windows">
+        {RANGES.map((r) => (
+          <Button
+            key={r.secs}
+            variant={rangeSecs === r.secs ? 'primary' : 'outline'}
+            onClick={() => setRangeSecs(r.secs)}
+          >
+            {r.label}
+          </Button>
+        ))}
+      </div>
+      <div className="devhealth-metrics">
+        {picked.map((p) => (
+          <HealthMetric
+            key={p.metric}
+            nodeId={nodeId}
+            metric={p.metric}
+            label={HEALTH_ROLE_LABEL[p.role]}
+            rangeSecs={rangeSecs}
+          />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/** One health metric: current % (max aggregate) + a trend chart over the selected window. */
+function HealthMetric({
+  nodeId,
+  metric,
+  label,
+  rangeSecs,
+}: {
+  nodeId: string;
+  metric: string;
+  label: string;
+  rangeSecs: number;
+}) {
+  const [value, setValue] = useState<number | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const to = Math.floor(Date.now() / 1000);
+      void Promise.allSettled([
+        api.getNodeMetric(nodeId, metric, { agg: 'max' }),
+        api.getNodeMetricRange(nodeId, metric, { from: to - rangeSecs, to, agg: 'max' }),
+      ]).then(([v, r]) => {
+        if (cancelled) return;
+        setValue(v.status === 'fulfilled' ? v.value.value : null);
+        setSeries(
+          r.status === 'fulfilled'
+            ? pointsToSeries(r.value.points)
+            : { timestamps: [], values: [] },
+        );
+      });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, metric, rangeSecs]);
+
+  return (
+    <div className="devhealth-metric">
+      <div className="devhealth-metric-head">
+        <span className="devhealth-metric-label">{label}</span>
+        <span className="devhealth-metric-value">{formatUtil(value)}</span>
+      </div>
+      {series.timestamps.length > 0 ? (
+        <MetricChart
+          title=""
+          timestamps={series.timestamps}
+          values={series.values}
+          yFormat={formatUtil}
+        />
+      ) : (
+        <p className="muted">No history yet…</p>
+      )}
+    </div>
+  );
+}
 
 /** Interfaces: master/detail — left = the interface list (status/name/util), right = charts
  *  for the selected interface. The list refreshes on an interval; the first row auto-selects. */

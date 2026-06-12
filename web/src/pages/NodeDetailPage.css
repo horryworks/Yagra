@@ -113,6 +113,48 @@
   font-weight: var(--weight-medium);
 }
 
+/* Device health: CPU%/Memory% (node-level max aggregate) with trend charts. */
+.devhealth-windows {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.devhealth-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.devhealth-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.devhealth-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.devhealth-metric-label {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.devhealth-metric-value {
+  font-size: 26px;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Interfaces tab — master/detail: list on the left, selected-interface charts on the right. */
 .iftab-split {
   display: grid;
