@@ -376,6 +376,50 @@ impl Sample {
     }
 }
 
+// ── Discovery (Phase C) — a separate job/result pair on its own subjects ────────────
+
+/// A discovery sweep request: probe each target for ICMP liveness + SNMP identity (sysDescr /
+/// sysName), trying the candidate communities. Runs on the poller (it has raw-socket ICMP).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryJob {
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Correlates the result back to the originating scan.
+    pub scan_id: Uuid,
+    /// Addresses to probe (IPv4 or IPv6).
+    pub targets: Vec<IpAddr>,
+    /// Candidate SNMP v2c communities to try; the first that answers wins.
+    #[serde(default)]
+    pub communities: Vec<String>,
+    /// Per-probe timeout in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One device found by a discovery sweep.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveredDevice {
+    /// The probed address.
+    pub address: IpAddr,
+    /// Whether it answered ICMP.
+    pub reachable: bool,
+    /// `sysDescr.0` if it answered SNMP (device-supplied — treat as untrusted).
+    #[serde(default)]
+    pub sysdescr: Option<String>,
+    /// `sysName.0` if it answered SNMP.
+    #[serde(default)]
+    pub sysname: Option<String>,
+}
+
+/// The result of one [`DiscoveryJob`]: the devices that responded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryResult {
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    pub scan_id: Uuid,
+    pub found: Vec<DiscoveredDevice>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

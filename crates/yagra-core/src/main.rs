@@ -14,6 +14,7 @@ mod api;
 mod auth;
 mod collection;
 mod config;
+mod discovery;
 mod history;
 mod mib;
 mod notifications;
@@ -34,6 +35,7 @@ use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
+use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -101,6 +103,13 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(consume_results(
             results, store, alerts, notifier, history, repo,
         ));
+    }
+
+    // Discovery: a runner that publishes sweep jobs + a consumer that folds results back in.
+    let discovery = Arc::new(DiscoveryRunner::new(bus.clone()));
+    {
+        let results = Box::pin(bus.subscribe_discovery_results().await?);
+        tokio::spawn(discovery.clone().run_consumer(results));
     }
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
@@ -174,6 +183,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         collection,
         notifications,
         mib,
+        discovery,
     }));
     let sessions = Arc::new(SessionStore::new());
 

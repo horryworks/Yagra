@@ -39,7 +39,7 @@ export const NAV: NavSection[] = [
     path: '/nodes',
     items: [
       { label: 'All nodes', path: '/nodes', implemented: true, mono: 'Al' },
-      { label: 'Discovery', path: '/nodes/discovery', implemented: false, mono: 'Di' },
+      { label: 'Discovery', path: '/nodes/discovery', implemented: true, mono: 'Di' },
       { label: 'Dependencies', path: '/nodes/dependencies', implemented: false, mono: 'Dp' },
       { label: 'Device profiles', path: '/nodes/profiles', implemented: true, mono: 'Pr' },
       {
