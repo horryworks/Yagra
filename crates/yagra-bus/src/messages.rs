@@ -209,6 +209,10 @@ pub struct SnmpV3Check {
     pub priv_key: Option<String>,
     /// OIDs to GET.
     pub oids: Vec<String>,
+    /// Scalar OIDs to GET *with an explicit metric name and kind* (configured collection
+    /// sets — mirrors [`SnmpCheck::columns`]). Defaulted for N-1 compatibility (ADR-017).
+    #[serde(default)]
+    pub columns: Vec<SnmpColumn>,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,

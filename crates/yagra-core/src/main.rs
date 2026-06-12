@@ -307,48 +307,78 @@ async fn run_scheduler(
             Ok(nodes) => {
                 tracing::debug!(count = nodes.len(), "scheduling poll round");
                 for node in nodes {
-                    // Resolve the SNMP community: the node's bound credential (decrypted)
-                    // wins; otherwise the env fallback. None ⇒ no SNMP for this node.
-                    if let Some(community) =
-                        resolve_community(&creds, &node, env_community.as_deref()).await
-                    {
-                        // Resolve the node's effective collection set (node overrides
-                        // profile); fall back to the built-in catalog so an unconfigured
-                        // node still gets the default sysUpTime + interface poll.
-                        let items = resolve_node_collection(&collection, &node).await;
-                        let (scalar, table) =
-                            scheduler::build_snmp_checks(&community, &items, 2000);
+                    // Resolve the node's SNMP auth from its bound credential (decrypted in
+                    // core, never the poller — ADR-018/020): a v2c community or a v3 USM
+                    // doc; the env community is a v2c fallback. None ⇒ no SNMP.
+                    match resolve_snmp_auth(&creds, &node, env_community.as_deref()).await {
+                        Some(SnmpAuth::V2c(community)) => {
+                            // Resolve the node's effective collection set (node overrides
+                            // profile); fall back to the built-in catalog so an unconfigured
+                            // node still gets the default sysUpTime + interface poll.
+                            let items = resolve_node_collection(&collection, &node).await;
+                            let (scalar, table) =
+                                scheduler::build_snmp_checks(&community, &items, 2000);
 
-                        if let Some(check) = scalar {
-                            let bus = bus.clone();
-                            let node = node.clone();
-                            let delay = jitter();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(delay).await;
-                                let job = scheduler::build_snmp_job(
-                                    &node,
-                                    check,
-                                    interval_secs,
-                                    Uuid::new_v4(),
-                                );
-                                publish(&bus, job, "snmp", node.id).await;
-                            });
+                            if let Some(check) = scalar {
+                                let bus = bus.clone();
+                                let node = node.clone();
+                                let delay = jitter();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(delay).await;
+                                    let job = scheduler::build_snmp_job(
+                                        &node,
+                                        check,
+                                        interval_secs,
+                                        Uuid::new_v4(),
+                                    );
+                                    publish(&bus, job, "snmp", node.id).await;
+                                });
+                            }
+                            if let Some(check) = table {
+                                let bus = bus.clone();
+                                let node = node.clone();
+                                let delay = jitter();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(delay).await;
+                                    let job = scheduler::build_snmp_table_job(
+                                        &node,
+                                        check,
+                                        interval_secs,
+                                        Uuid::new_v4(),
+                                    );
+                                    publish(&bus, job, "snmp_table", node.id).await;
+                                });
+                            }
                         }
-                        if let Some(check) = table {
-                            let bus = bus.clone();
-                            let node = node.clone();
-                            let delay = jitter();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(delay).await;
-                                let job = scheduler::build_snmp_table_job(
-                                    &node,
-                                    check,
-                                    interval_secs,
-                                    Uuid::new_v4(),
-                                );
-                                publish(&bus, job, "snmp_table", node.id).await;
-                            });
+                        Some(SnmpAuth::V3(secret)) => {
+                            // v3 polls the scalar set; table walks over v3 are a follow-up
+                            // (interface metrics need the v3 GETBULK walk).
+                            let items = resolve_node_collection(&collection, &node).await;
+                            if items
+                                .iter()
+                                .any(|i| i.kind == yagra_common::CollectionKind::Table)
+                            {
+                                tracing::debug!(node = %node.id, "v3 table items skipped (v3 walk not yet supported)");
+                            }
+                            if let Some(check) =
+                                scheduler::build_snmp_v3_check(&secret, &items, 2000)
+                            {
+                                let bus = bus.clone();
+                                let node = node.clone();
+                                let delay = jitter();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(delay).await;
+                                    let job = scheduler::build_snmp_v3_job(
+                                        &node,
+                                        check,
+                                        interval_secs,
+                                        Uuid::new_v4(),
+                                    );
+                                    publish(&bus, job, "snmp_v3", node.id).await;
+                                });
+                            }
                         }
+                        None => {}
                     }
 
                     // ICMP liveness job.
@@ -397,21 +427,41 @@ async fn resolve_node_collection(
     }
 }
 
-/// Resolve a node's SNMP community: prefer its bound credential (decrypted in core, never
-/// the poller — ADR-018/020), else the env fallback.
-async fn resolve_community(
+/// A node's resolved SNMP authentication: a v2c community string or a v3 USM document.
+enum SnmpAuth {
+    V2c(String),
+    V3(secrets::SnmpV3Secret),
+}
+
+/// Resolve a node's SNMP auth from its bound credential (decrypted in core, never the
+/// poller — ADR-018/020). The credential `kind` picks the protocol: `snmp_v3` secrets are
+/// USM JSON docs; anything else is treated as a v2c community (back-compat with
+/// credentials created before kinds were meaningful). The env community is a v2c fallback.
+async fn resolve_snmp_auth(
     creds: &CredentialStore,
     node: &yagra_common::Node,
     env_community: Option<&str>,
-) -> Option<String> {
+) -> Option<SnmpAuth> {
     if let Some(cred) = node.credential {
-        match creds.secret(cred.as_uuid()).await {
-            Ok(Some(bytes)) => return String::from_utf8(bytes).ok(),
+        match creds.open(cred.as_uuid()).await {
+            Ok(Some((kind, bytes))) => {
+                if kind == secrets::KIND_SNMP_V3 {
+                    match secrets::SnmpV3Secret::parse(&bytes) {
+                        Ok(secret) => return Some(SnmpAuth::V3(secret)),
+                        // Static reason only — never echo any part of the secret.
+                        Err(reason) => {
+                            tracing::warn!(node = %node.id, %reason, "invalid snmp_v3 credential");
+                        }
+                    }
+                } else if let Ok(community) = String::from_utf8(bytes) {
+                    return Some(SnmpAuth::V2c(community));
+                }
+            }
             Ok(None) => tracing::warn!(node = %node.id, "bound credential not found"),
             Err(e) => tracing::warn!(node = %node.id, error = %e, "credential decrypt failed"),
         }
     }
-    env_community.map(ToOwned::to_owned)
+    env_community.map(|c| SnmpAuth::V2c(c.to_owned()))
 }
 
 /// Publish a job and bump the published-jobs counter, logging failures.

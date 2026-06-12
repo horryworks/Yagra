@@ -913,6 +913,18 @@ async fn create_credential(
             "name, kind, and secret are required".to_owned(),
         );
     }
+    // An snmp_v3 secret must be a structurally valid USM document — reject at the edge so
+    // a malformed one can't silently break polling later. The reason is static text only
+    // (never any field content).
+    if body.kind.trim() == crate::secrets::KIND_SNMP_V3 {
+        if let Err(reason) = crate::secrets::SnmpV3Secret::parse(body.secret.as_bytes()) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential",
+                format!("invalid SNMPv3 credential: {reason}"),
+            );
+        }
+    }
     match admin
         .creds
         .create(body.name.trim(), body.kind.trim(), body.secret.as_bytes())

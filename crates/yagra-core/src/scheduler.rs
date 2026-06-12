@@ -5,8 +5,11 @@
 //! pool-aware dispatch (ADR-009). Jobs carry everything the poller needs (ADR-003), so
 //! this is pure given a node.
 
+use crate::secrets::SnmpV3Secret;
 use uuid::Uuid;
-use yagra_bus::{IcmpCheck, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck};
+use yagra_bus::{
+    IcmpCheck, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check,
+};
 use yagra_common::{builtin_interface_meta_columns, CollectionItem, CollectionKind, Node};
 
 /// Build an ICMP poll job targeting a node's management address.
@@ -30,6 +33,48 @@ pub fn build_snmp_table_job(
     job_id: Uuid,
 ) -> PollJob {
     PollJob::snmp_table(job_id, node.id, node.address, check, interval_secs)
+}
+
+/// Build an SNMP v3 (USM) scalar poll job targeting a node's management address.
+#[must_use]
+pub fn build_snmp_v3_job(
+    node: &Node,
+    check: SnmpV3Check,
+    interval_secs: u32,
+    job_id: Uuid,
+) -> PollJob {
+    PollJob::snmp_v3(job_id, node.id, node.address, check, interval_secs)
+}
+
+/// Build the SNMP v3 scalar check for a node from its resolved collection set and v3
+/// credential. `None` when the set has no scalar items. Table items are **not** polled
+/// over v3 yet (the v3 GETBULK walk is a follow-up) — the caller logs what was skipped.
+#[must_use]
+pub fn build_snmp_v3_check(
+    secret: &SnmpV3Secret,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Option<SnmpV3Check> {
+    let scalar: Vec<SnmpColumn> = items
+        .iter()
+        .filter(|i| i.kind == CollectionKind::Scalar)
+        .map(|i| SnmpColumn {
+            metric_name: i.metric_name.clone(),
+            oid: i.oid.clone(),
+            kind: i.metric_kind,
+        })
+        .collect();
+    (!scalar.is_empty()).then(|| SnmpV3Check {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        oids: Vec::new(),
+        columns: scalar,
+        timeout_ms,
+    })
 }
 
 /// Split a resolved collection set into the scalar GET check and the table-walk check for a
@@ -175,5 +220,62 @@ mod tests {
         let (scalar, table) = build_snmp_checks("public", &[], 2000);
         assert!(scalar.is_none());
         assert!(table.is_none());
+    }
+
+    fn v3_secret() -> SnmpV3Secret {
+        SnmpV3Secret::parse(
+            br#"{"user":"monitor","security_level":"authpriv","auth_protocol":"sha256",
+                 "auth_key":"a-pass","priv_protocol":"aes128","priv_key":"p-pass"}"#,
+        )
+        .expect("valid v3 secret")
+    }
+
+    #[test]
+    fn build_snmp_v3_check_carries_usm_params_and_scalar_columns_only() {
+        let items = [
+            item(
+                "snmp_sys_uptime_ticks",
+                "1.3.6.1.2.1.1.3.0",
+                CollectionKind::Scalar,
+            ),
+            item(
+                "if_oper_status",
+                "1.3.6.1.2.1.2.2.1.8",
+                CollectionKind::Table,
+            ),
+        ];
+        let check = build_snmp_v3_check(&v3_secret(), &items, 2000).expect("scalar check");
+        assert_eq!(check.user, "monitor");
+        assert_eq!(check.security_level, "authpriv");
+        assert_eq!(check.auth_protocol.as_deref(), Some("sha256"));
+        // Only the scalar item travels; tables are a v3 follow-up.
+        assert_eq!(check.columns.len(), 1);
+        assert_eq!(check.columns[0].metric_name, "snmp_sys_uptime_ticks");
+        assert!(check.oids.is_empty());
+    }
+
+    #[test]
+    fn build_snmp_v3_check_without_scalars_yields_none() {
+        let items = [item(
+            "if_oper_status",
+            "1.3.6.1.2.1.2.2.1.8",
+            CollectionKind::Table,
+        )];
+        assert!(build_snmp_v3_check(&v3_secret(), &items, 2000).is_none());
+    }
+
+    #[test]
+    fn snmp_v3_job_targets_node_and_tags_check() {
+        let addr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8));
+        let node = Node::new(NodeId::new(), "fw-1", addr);
+        let items = [item(
+            "snmp_sys_uptime_ticks",
+            "1.3.6.1.2.1.1.3.0",
+            CollectionKind::Scalar,
+        )];
+        let check = build_snmp_v3_check(&v3_secret(), &items, 2000).unwrap();
+        let job = build_snmp_v3_job(&node, check, 60, Uuid::nil());
+        assert_eq!(job.target, addr);
+        assert!(matches!(job.check, CheckSpec::SnmpV3(_)));
     }
 }
