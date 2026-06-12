@@ -439,6 +439,19 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('builds the audit path with limit and the before cursor', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listAudit({ limit: 100, before: '2026-06-12T00:00:00+00:00' });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/audit?limit=100&before=2026-06-12T00%3A00%3A00%2B00%3A00',
+    );
+    await api.listAudit();
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/audit');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

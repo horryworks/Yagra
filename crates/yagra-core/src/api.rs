@@ -8,6 +8,7 @@
 //! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
 
 use crate::alerts::AlertManager;
+use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::discovery::DiscoveryRunner;
@@ -20,8 +21,9 @@ use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
 use crate::thresholds::ThresholdStore;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -52,6 +54,7 @@ pub struct AdminState {
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
     pub maintenance: Arc<MaintenanceRepo>,
+    pub audit: Arc<AuditRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -187,7 +190,49 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/mutes", get(list_mutes).post(create_mute))
         .route("/api/v1/mutes/:id", delete(delete_mute))
+        .route("/api/v1/audit", get(list_audit))
+        // Audit middleware: records every mutating /api/v1 request (who + method/path +
+        // status) so new write endpoints are covered automatically (security.md).
+        .layer(middleware::from_fn_with_state(state.clone(), audit_mw))
         .with_state(state)
+}
+
+/// Username recorded when a mutating request carries no valid session.
+const AUDIT_ANONYMOUS: &str = "(unauthenticated)";
+
+/// Record one audit entry, best-effort: auditing must never take the API down, so
+/// failures are logged and swallowed.
+async fn audit_record(audit: &AuditRepo, username: &str, action: &str, status: u16) {
+    if let Err(e) = audit.record(username, action, status).await {
+        tracing::warn!(error = %e, %action, "audit record failed");
+    }
+}
+
+/// Middleware: append an audit row for every mutating `/api/v1` request. Auth endpoints
+/// are excluded here — login is recorded by its handler (with the attempted username,
+/// never the credential). Reads are not audited.
+async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let mutating = matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH");
+    let audited = mutating && path.starts_with("/api/v1/") && !path.starts_with("/api/v1/auth/");
+    // Resolve the actor before the handler runs (the request is consumed by it).
+    let username = if audited {
+        bearer(req.headers())
+            .and_then(|t| st.sessions.lookup(t))
+            .map(|s| s.username)
+    } else {
+        None
+    };
+    let resp = next.run(req).await;
+    if audited {
+        if let Some(admin) = st.admin.as_ref() {
+            let user = username.as_deref().unwrap_or(AUDIT_ANONYMOUS);
+            let action = format!("{method} {path}");
+            audit_record(&admin.audit, user, &action, resp.status().as_u16()).await;
+        }
+    }
+    resp
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access.
@@ -630,14 +675,19 @@ async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Respo
     match admin.users.verify(&body.username, &body.password).await {
         Ok(Some(principal)) => {
             let role = principal.role;
-            let token = st.sessions.issue(principal);
+            let token = st.sessions.issue(principal, &body.username);
+            // Auth events are audited with the username only — never the credential.
+            audit_record(&admin.audit, &body.username, "auth.login", 200).await;
             Json(serde_json::json!({ "token": token, "role": role })).into_response()
         }
-        Ok(None) => error_response(
-            StatusCode::UNAUTHORIZED,
-            "invalid_credentials",
-            "incorrect username or password".to_owned(),
-        ),
+        Ok(None) => {
+            audit_record(&admin.audit, &body.username, "auth.login", 401).await;
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "incorrect username or password".to_owned(),
+            )
+        }
         Err(e) => {
             tracing::error!(error = %e, "login failed");
             internal("login failed")
@@ -648,7 +698,7 @@ async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Respo
 async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     // `View` is granted to every role, so this just checks for a valid token.
     match st.sessions.authorize(bearer(&headers), Permission::View) {
-        Ok(principal) => Json(serde_json::json!({ "role": principal.role })).into_response(),
+        Ok(session) => Json(serde_json::json!({ "role": session.principal.role })).into_response(),
         Err(_) => error_response(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -2259,6 +2309,53 @@ fn last_admin() -> Response {
     )
 }
 
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+/// Audit listing query: page size + a keyset cursor (rows strictly older than `before`).
+#[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<i64>,
+    before: Option<String>,
+}
+
+async fn list_audit(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    // Admin-only: the audit log exposes who did what across the whole system.
+    if let Some(resp) = authorize(&st, &headers, Permission::ViewAudit) {
+        return resp;
+    }
+    let before = match q.before.as_deref() {
+        Some(s) => match parse_rfc3339(s) {
+            Some(t) => Some(t),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "before must be an RFC 3339 timestamp".to_owned(),
+                )
+            }
+        },
+        None => None,
+    };
+    match admin
+        .audit
+        .list(q.limit.unwrap_or(crate::audit::DEFAULT_LIMIT), before)
+        .await
+    {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list audit log failed");
+            internal("failed to list the audit log")
+        }
+    }
+}
+
 // ── Maintenance windows + mutes ──────────────────────────────────────────────
 
 /// Parse an RFC 3339 timestamp from the API edge into UTC.
@@ -2519,7 +2616,7 @@ mod tests {
     fn private_state_with(store: Arc<dyn MetricStore>) -> (ApiState, String) {
         use yagra_common::{Principal, Role, Scope};
         let sessions = Arc::new(SessionStore::new());
-        let token = sessions.issue(Principal::new(Role::Viewer, Scope::All));
+        let token = sessions.issue(Principal::new(Role::Viewer, Scope::All), "viewer1");
         let state = ApiState {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
