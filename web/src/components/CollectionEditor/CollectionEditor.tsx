@@ -6,7 +6,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, type CollectionItemInput } from '../../services/api';
-import type { CollectionKind, MetricKind, StoredCollectionItem } from '../../types/api';
+import type {
+  CollectionKind,
+  MetricKind,
+  MibCatalogEntry,
+  StoredCollectionItem,
+} from '../../types/api';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
 import './CollectionEditor.css';
@@ -32,6 +37,10 @@ export function CollectionEditor({
   const [collection, setCollection] = useState<CollectionKind>('scalar');
   const [metricKind, setMetricKind] = useState<MetricKind>('gauge');
   const [busy, setBusy] = useState(false);
+  // "Browse catalog" picker (MIB repository) — fill the form by name instead of typing OIDs.
+  const [picking, setPicking] = useState(false);
+  const [pickQuery, setPickQuery] = useState('');
+  const [picks, setPicks] = useState<MibCatalogEntry[]>([]);
 
   const load = useCallback(() => {
     const p =
@@ -47,6 +56,26 @@ export function CollectionEditor({
   useEffect(() => {
     load();
   }, [load]);
+
+  // Debounced catalog search while the picker is open.
+  useEffect(() => {
+    if (!picking) return;
+    const t = setTimeout(() => {
+      api
+        .listMibCatalog(pickQuery.trim() || undefined)
+        .then(setPicks)
+        .catch(() => setPicks([]));
+    }, 200);
+    return () => clearTimeout(t);
+  }, [picking, pickQuery]);
+
+  const pick = (e: MibCatalogEntry) => {
+    setMetricName(e.metric_name);
+    setOid(e.oid);
+    setCollection(e.collection);
+    setMetricKind(e.metric_kind);
+    setPicking(false);
+  };
 
   const valid = metricName.trim().length > 0 && OID_RE.test(oid.trim());
 
@@ -112,9 +141,38 @@ export function CollectionEditor({
             <option value="gauge">gauge</option>
             <option value="counter">counter</option>
           </Select>
+          <Button variant="ghost" onClick={() => setPicking((p) => !p)}>
+            {picking ? 'Close catalog' : 'Browse catalog'}
+          </Button>
           <Button variant="primary" onClick={add} disabled={!valid || busy}>
             Add metric
           </Button>
+        </div>
+      )}
+      {canEdit && picking && (
+        <div className="ce-picker">
+          <TextInput
+            className="ce-picker-search"
+            placeholder="Search the MIB catalog by name / OID / vendor…"
+            value={pickQuery}
+            onChange={(e) => setPickQuery(e.target.value)}
+          />
+          {picks.length === 0 ? (
+            <p className="muted">No catalog entries match.</p>
+          ) : (
+            <div className="ce-picker-list">
+              {picks.slice(0, 30).map((e) => (
+                <button type="button" className="ce-picker-row" key={e.id} onClick={() => pick(e)}>
+                  <span className="ce-picker-metric">{e.metric_name}</span>
+                  <span className="ce-picker-oid mono">{e.oid}</span>
+                  <span className="muted">
+                    {e.collection} · {e.metric_kind}
+                    {e.vendor ? ` · ${e.vendor}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {error && <p className="form-error">{error}</p>}

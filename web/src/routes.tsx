@@ -12,6 +12,7 @@ import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
+import { MibRepositoryPage } from './pages/MibRepositoryPage';
 import { CredentialsPage } from './pages/CredentialsPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
@@ -40,7 +41,7 @@ export function AppRoutes() {
         <Route path="nodes/dependencies" element={<ComingSoon />} />
         <Route path="nodes/profiles" element={<ProfilesPage />} />
         <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />
-        <Route path="nodes/mib" element={<ComingSoon />} />
+        <Route path="nodes/mib" element={<MibRepositoryPage />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
         {/* Topology — all backend-pending */}
