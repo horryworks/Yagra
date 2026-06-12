@@ -371,6 +371,17 @@ describe('api client', () => {
     });
   });
 
+  it('lists the MIB catalog with an encoded search query', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listMibCatalog('if hc');
+    expect(spy).toHaveBeenCalledWith('/api/v1/mib-catalog?q=if%20hc');
+    await api.listMibCatalog();
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/mib-catalog');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

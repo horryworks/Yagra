@@ -11,6 +11,7 @@ use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::history::AlertHistoryStore;
+use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
@@ -46,6 +47,7 @@ pub struct AdminState {
     pub thresholds: Arc<ThresholdStore>,
     pub collection: Arc<CollectionRepo>,
     pub notifications: Arc<NotificationRepo>,
+    pub mib: Arc<MibRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -163,6 +165,11 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
         )
+        .route(
+            "/api/v1/mib-catalog",
+            get(list_mib_catalog).post(create_mib_entry),
+        )
+        .route("/api/v1/mib-catalog/:id", delete(delete_mib_entry))
         .with_state(state)
 }
 
@@ -1227,6 +1234,132 @@ fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
             Err("email host/from/to required")
         }
         _ => Ok(()),
+    }
+}
+
+// ── MIB repository (curated OID catalog) — browse (View) / edit (ManageConfig) ──
+
+/// Search query for the catalog list.
+#[derive(Deserialize)]
+struct MibQuery {
+    q: Option<String>,
+}
+
+async fn list_mib_catalog(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<MibQuery>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    // Browsable by any viewer (the collection editor picks from it).
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    match admin.mib.list(needle).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list mib catalog failed");
+            internal("failed to list MIB catalog")
+        }
+    }
+}
+
+/// Create-entry body for the catalog.
+#[derive(Deserialize)]
+struct CreateMibEntry {
+    metric_name: String,
+    oid: String,
+    collection: String,
+    metric_kind: String,
+    vendor: Option<String>,
+    description: Option<String>,
+}
+
+async fn create_mib_entry(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateMibEntry>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if !is_valid_metric_name(&body.metric_name) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_name",
+            "metric_name must be a valid identifier".to_owned(),
+        );
+    }
+    if !is_valid_oid(&body.oid) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_oid",
+            "oid must be a dotted numeric OID".to_owned(),
+        );
+    }
+    if !matches!(body.collection.as_str(), "scalar" | "table")
+        || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_mib_entry",
+            "collection must be scalar|table and metric_kind gauge|counter".to_owned(),
+        );
+    }
+    match admin
+        .mib
+        .create(
+            &body.metric_name,
+            &body.oid,
+            &body.collection,
+            &body.metric_kind,
+            body.vendor.as_deref(),
+            body.description.as_deref(),
+        )
+        .await
+    {
+        Ok(Some(id)) => {
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Ok(None) => error_response(
+            StatusCode::CONFLICT,
+            "metric_name_taken",
+            format!(
+                "a catalog entry named '{}' already exists",
+                body.metric_name
+            ),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "create mib entry failed");
+            internal("failed to create MIB entry")
+        }
+    }
+}
+
+async fn delete_mib_entry(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.mib.delete(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("mib_entry_not_found", format!("no entry {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete mib entry failed");
+            internal("failed to delete MIB entry")
+        }
     }
 }
 

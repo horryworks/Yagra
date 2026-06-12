@@ -69,3 +69,57 @@
   display: flex;
   justify-self: end;
 }
+
+/* "Browse catalog" picker: a search + a scrollable list of catalog entries to click. */
+.ce-picker {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--bg-tertiary);
+}
+
+.ce-picker-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.ce-picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.ce-picker-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.6fr 1.2fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: none;
+  color: inherit;
+  text-align: left;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.ce-picker-row:last-child {
+  border-bottom: none;
+}
+
+.ce-picker-row:hover {
+  background: var(--bg-secondary);
+}
+
+.ce-picker-metric {
+  font-weight: var(--weight-medium);
+}
+
+.ce-picker-oid {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

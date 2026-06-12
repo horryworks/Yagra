@@ -202,6 +202,18 @@ export interface CollectionTemplate {
   item_count: number;
 }
 
+/** One curated OID-catalog entry (`GET /api/v1/mib-catalog`, core `MibEntry`). A reference
+ *  metric_name → (oid, kind) so the collection editor can pick by name. */
+export interface MibCatalogEntry {
+  id: string;
+  metric_name: string;
+  oid: string;
+  collection: CollectionKind;
+  metric_kind: MetricKind;
+  vendor: string | null;
+  description: string | null;
+}
+
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
 export interface NodeDetail {
   id: string;

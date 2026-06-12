@@ -18,6 +18,7 @@ import type {
   MetricKind,
   MetricRange,
   MetricReading,
+  MibCatalogEntry,
   NodeDetail,
   NodePage,
   NodeStatus,
@@ -279,6 +280,24 @@ export const api = {
   /** Delete a template (also detaches it from every profile). */
   deleteCollectionTemplate: (id: string): Promise<void> =>
     request(`/collection-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** The curated OID catalog (MIB repository), optionally filtered by a substring. */
+  listMibCatalog: (q?: string): Promise<MibCatalogEntry[]> =>
+    request(q ? `/mib-catalog?q=${encodeURIComponent(q)}` : '/mib-catalog'),
+
+  /** Add a catalog entry. 409 `metric_name_taken` if the name is in use. */
+  createMibEntry: (body: {
+    metric_name: string;
+    oid: string;
+    collection: CollectionKind;
+    metric_kind: MetricKind;
+    vendor?: string;
+    description?: string;
+  }): Promise<{ id: string }> => request('/mib-catalog', jsonBody('POST', body)),
+
+  /** Delete a catalog entry. */
+  deleteMibEntry: (id: string): Promise<void> =>
+    request(`/mib-catalog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>

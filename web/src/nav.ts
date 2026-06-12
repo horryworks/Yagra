@@ -48,7 +48,7 @@ export const NAV: NavSection[] = [
         implemented: true,
         mono: 'Ct',
       },
-      { label: 'MIB repository', path: '/nodes/mib', implemented: false, mono: 'Mb' },
+      { label: 'MIB repository', path: '/nodes/mib', implemented: true, mono: 'Mb' },
     ],
   },
   {
