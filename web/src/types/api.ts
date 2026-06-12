@@ -133,6 +133,41 @@ export interface AlertHistoryRow {
   resolved: boolean;
 }
 
+/** A notification channel kind (yagra-core `ChannelKind`). */
+export type ChannelKind = 'webhook' | 'email';
+
+/** Notification channel metadata (`GET /api/v1/notification-channels`) — the secret
+ *  connection config is sealed server-side and never returned. */
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: ChannelKind;
+  enabled: boolean;
+}
+
+/** Channel connection config supplied on create (sealed server-side; tagged by `kind`). */
+export type ChannelConfigInput =
+  | { kind: 'webhook'; url: string }
+  | {
+      kind: 'email';
+      host: string;
+      port?: number;
+      from: string;
+      to: string;
+      user?: string;
+      pass?: string;
+    };
+
+/** A routing rule (`GET /api/v1/routing-rules`): alerts of `severity` (null = any) fan out
+ *  to `channel_ids`. */
+export interface RoutingRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  severity: Severity | null;
+  channel_ids: string[];
+}
+
 /** How a collection item is gathered (yagra-common `CollectionKind`). */
 export type CollectionKind = 'scalar' | 'table';
 

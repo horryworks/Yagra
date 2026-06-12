@@ -11,6 +11,7 @@ use crate::alerts::AlertManager;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::history::AlertHistoryStore;
+use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
@@ -32,7 +33,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_common::{resolve_collection_set, IfIndex, NodeId, NodeState, Permission, SeriesKey};
+use yagra_common::{
+    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, SeriesKey, Severity,
+};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -42,6 +45,7 @@ pub struct AdminState {
     pub users: Arc<UserStore>,
     pub thresholds: Arc<ThresholdStore>,
     pub collection: Arc<CollectionRepo>,
+    pub notifications: Arc<NotificationRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -143,6 +147,22 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/alerts/history", get(list_alert_history))
         .route("/api/v1/stream/alerts", get(stream_alerts))
+        .route(
+            "/api/v1/notification-channels",
+            get(list_notification_channels).post(create_notification_channel),
+        )
+        .route(
+            "/api/v1/notification-channels/:id",
+            put(set_notification_channel_enabled).delete(delete_notification_channel),
+        )
+        .route(
+            "/api/v1/routing-rules",
+            get(list_routing_rules).post(create_routing_rule),
+        )
+        .route(
+            "/api/v1/routing-rules/:id",
+            put(set_routing_rule_enabled).delete(delete_routing_rule),
+        )
         .with_state(state)
 }
 
@@ -963,6 +983,250 @@ async fn delete_threshold(
             tracing::error!(error = %e, "delete threshold failed");
             internal("failed to delete threshold")
         }
+    }
+}
+
+// ── Notification channels + routing rules — ManageConfig only ────────────────
+
+/// Toggle body shared by channel/rule enable-disable PUTs.
+#[derive(Deserialize)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn list_notification_channels(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.notifications.list_channels().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list notification channels failed");
+            internal("failed to list notification channels")
+        }
+    }
+}
+
+/// Create-channel body: a name + the (secret) connection config (tagged by `kind`).
+#[derive(Deserialize)]
+struct CreateChannel {
+    name: String,
+    config: ChannelConfig,
+}
+
+async fn create_notification_channel(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateChannel>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_channel",
+            "name must not be empty".to_owned(),
+        );
+    }
+    if let Err(msg) = validate_channel_config(&body.config) {
+        return error_response(StatusCode::BAD_REQUEST, "invalid_channel", msg.to_owned());
+    }
+    match admin
+        .notifications
+        .create_channel(body.name.trim(), &body.config)
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create notification channel failed");
+            internal("failed to create notification channel")
+        }
+    }
+}
+
+async fn set_notification_channel_enabled(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<EnabledBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin
+        .notifications
+        .set_channel_enabled(id, body.enabled)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("channel_not_found", format!("no channel {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update notification channel failed");
+            internal("failed to update notification channel")
+        }
+    }
+}
+
+async fn delete_notification_channel(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.notifications.delete_channel(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("channel_not_found", format!("no channel {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete notification channel failed");
+            internal("failed to delete notification channel")
+        }
+    }
+}
+
+async fn list_routing_rules(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.notifications.list_rules().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list routing rules failed");
+            internal("failed to list routing rules")
+        }
+    }
+}
+
+/// Create-rule body: a name, optional severity filter (null = any), and target channels.
+#[derive(Deserialize)]
+struct CreateRule {
+    name: String,
+    severity: Option<String>,
+    channel_ids: Vec<Uuid>,
+}
+
+async fn create_routing_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateRule>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_rule",
+            "name must not be empty".to_owned(),
+        );
+    }
+    let severity = match parse_severity_opt(body.severity.as_deref()) {
+        Ok(s) => s,
+        Err(()) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_rule",
+                "severity must be critical|warning|info or null".to_owned(),
+            )
+        }
+    };
+    match admin
+        .notifications
+        .create_rule(body.name.trim(), severity, &body.channel_ids)
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create routing rule failed");
+            internal("failed to create routing rule")
+        }
+    }
+}
+
+async fn set_routing_rule_enabled(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<EnabledBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.notifications.set_rule_enabled(id, body.enabled).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("rule_not_found", format!("no rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update routing rule failed");
+            internal("failed to update routing rule")
+        }
+    }
+}
+
+async fn delete_routing_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.notifications.delete_rule(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("rule_not_found", format!("no rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete routing rule failed");
+            internal("failed to delete routing rule")
+        }
+    }
+}
+
+/// Parse an optional severity token from the API (None = any). `Err` ⇒ unknown token.
+fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
+    match s {
+        None => Ok(None),
+        Some("critical") => Ok(Some(Severity::Critical)),
+        Some("warning") => Ok(Some(Severity::Warning)),
+        Some("info") => Ok(Some(Severity::Info)),
+        Some(_) => Err(()),
+    }
+}
+
+/// Light validation of a channel's connection config at the API edge.
+fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
+    match c {
+        ChannelConfig::Webhook { url } if url.trim().is_empty() => Err("webhook url required"),
+        ChannelConfig::Email { host, from, to, .. }
+            if host.trim().is_empty() || from.trim().is_empty() || to.trim().is_empty() =>
+        {
+            Err("email host/from/to required")
+        }
+        _ => Ok(()),
     }
 }
 

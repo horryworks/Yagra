@@ -325,6 +325,52 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ template_ids: ['t1', 't2'] });
   });
 
+  it('posts a notification channel with a tagged config body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'c1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createNotificationChannel({
+      name: 'pagerduty',
+      config: { kind: 'webhook', url: 'https://hooks.test/x' },
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/notification-channels');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({
+      name: 'pagerduty',
+      config: { kind: 'webhook', url: 'https://hooks.test/x' },
+    });
+  });
+
+  it('toggles a channel via PUT and deletes via the channel endpoint', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setNotificationChannelEnabled('c1', false);
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/notification-channels/c1');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ enabled: false });
+    await api.deleteNotificationChannel('c1');
+    expect(spy.mock.calls[1][0]).toBe('/api/v1/notification-channels/c1');
+    expect(spy.mock.calls[1][1].method).toBe('DELETE');
+  });
+
+  it('creates a routing rule with severity + channels', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'r1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createRoutingRule({ name: 'crit', severity: 'critical', channel_ids: ['c1', 'c2'] });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/routing-rules');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'crit',
+      severity: 'critical',
+      channel_ids: ['c1', 'c2'],
+    });
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

@@ -19,7 +19,7 @@
 //!   still fires for the UI/history — only the duplicate page is suppressed.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
@@ -29,9 +29,11 @@ use yagra_alert::{Alert, Dispatcher, Notification, NotifyChannel, NotifyError, R
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
     resolve_effective, CheckId, EffectiveThreshold, NodeId, NodeState, ScopeLevel, ScopedThreshold,
+    Severity,
 };
 use yagra_topology::Topology;
 
+use crate::notifications::{ChannelConfig, OpenChannel, RoutingRule};
 use crate::thresholds::StoredThreshold;
 
 /// Liveness check name (distinct from any metric name).
@@ -417,33 +419,67 @@ pub struct EmailChannel {
 }
 
 impl EmailChannel {
-    /// Build from env (`YAGRA_SMTP_HOST`, `_FROM`, `_TO`, optional `_PORT`/`_USER`/`_PASS`).
-    /// Returns `None` if the required vars are missing or malformed.
-    pub fn from_env() -> Option<Self> {
+    /// Build from explicit SMTP params. Returns `None` if host/from/to are malformed.
+    pub fn new(
+        host: &str,
+        port: Option<u16>,
+        from: &str,
+        to: &str,
+        user: Option<&str>,
+        pass: Option<&str>,
+    ) -> Option<Self> {
         use lettre::transport::smtp::authentication::Credentials;
-        let host = std::env::var("YAGRA_SMTP_HOST")
-            .ok()
-            .filter(|s| !s.is_empty())?;
-        let from = std::env::var("YAGRA_SMTP_FROM").ok()?.parse().ok()?;
-        let to = std::env::var("YAGRA_SMTP_TO").ok()?.parse().ok()?;
-        let mut builder =
-            lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&host).ok()?;
-        if let Ok(port) = std::env::var("YAGRA_SMTP_PORT") {
-            if let Ok(port) = port.parse::<u16>() {
-                builder = builder.port(port);
-            }
+        if host.is_empty() {
+            return None;
         }
-        if let (Ok(user), Ok(pass)) = (
-            std::env::var("YAGRA_SMTP_USER"),
-            std::env::var("YAGRA_SMTP_PASS"),
-        ) {
-            builder = builder.credentials(Credentials::new(user, pass));
+        let from = from.parse().ok()?;
+        let to = to.parse().ok()?;
+        let mut builder = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(host).ok()?;
+        if let Some(port) = port {
+            builder = builder.port(port);
+        }
+        if let (Some(user), Some(pass)) = (user, pass) {
+            builder = builder.credentials(Credentials::new(user.to_owned(), pass.to_owned()));
         }
         Some(Self {
             mailer: builder.build(),
             from,
             to,
         })
+    }
+
+    /// Build from env (`YAGRA_SMTP_HOST`, `_FROM`, `_TO`, optional `_PORT`/`_USER`/`_PASS`).
+    /// Returns `None` if the required vars are missing or malformed.
+    pub fn from_env() -> Option<Self> {
+        let host = std::env::var("YAGRA_SMTP_HOST")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let from = std::env::var("YAGRA_SMTP_FROM").ok()?;
+        let to = std::env::var("YAGRA_SMTP_TO").ok()?;
+        let port = std::env::var("YAGRA_SMTP_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok());
+        let user = std::env::var("YAGRA_SMTP_USER").ok();
+        let pass = std::env::var("YAGRA_SMTP_PASS").ok();
+        Self::new(&host, port, &from, &to, user.as_deref(), pass.as_deref())
+    }
+}
+
+/// Build a live delivery channel from a stored channel config (None if email params are bad).
+fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
+    match config {
+        ChannelConfig::Webhook { url } => {
+            Some(Arc::new(WebhookChannel::new(url.clone())) as Arc<dyn NotifyChannel>)
+        }
+        ChannelConfig::Email {
+            host,
+            port,
+            from,
+            to,
+            user,
+            pass,
+        } => EmailChannel::new(host, *port, from, to, user.as_deref(), pass.as_deref())
+            .map(|c| Arc::new(c) as Arc<dyn NotifyChannel>),
     }
 }
 
@@ -481,17 +517,30 @@ impl NotifyChannel for MultiChannel {
     }
 }
 
+/// The live routing snapshot: the always-on env default route, the DB-configured channels
+/// (each with its own dedup+retry dispatcher), and the rules that select channels per alert.
+struct Routes {
+    /// Env-configured channels (`YAGRA_WEBHOOK_URL`/`YAGRA_SMTP_*`) — fire for *every* alert,
+    /// preserving the pre-routing behaviour. `None` if no env channel is set.
+    default: Option<Dispatcher<MultiChannel>>,
+    /// DB channels by id, each with its own dedup state (preserved across config refresh).
+    channels: HashMap<Uuid, Dispatcher<Arc<dyn NotifyChannel>>>,
+    /// Routing rules (severity → channel ids).
+    rules: Vec<RoutingRule>,
+}
+
 /// Forwards alert lifecycle to the configured channels with the engine's dedup + retry
-/// (ADR-015).
+/// (ADR-015). Channels + rules come from the database (refreshed periodically via
+/// [`Self::set_routing`]); env channels remain an always-on default route.
 pub struct Notifier {
-    dispatcher: tokio::sync::Mutex<Dispatcher<MultiChannel>>,
+    routes: tokio::sync::Mutex<Routes>,
 }
 
 impl Notifier {
-    /// Build a notifier from env: a Webhook (`YAGRA_WEBHOOK_URL`) and/or email
-    /// (`YAGRA_SMTP_*`). Returns `None` if no channel is configured.
+    /// Build a notifier with the env default route (a Webhook via `YAGRA_WEBHOOK_URL` and/or
+    /// email via `YAGRA_SMTP_*`). DB channels/rules are layered on later via `set_routing`.
     #[must_use]
-    pub fn from_env() -> Option<Self> {
+    pub fn from_env() -> Self {
         let mut channels: Vec<Box<dyn NotifyChannel>> = Vec::new();
         if let Ok(url) = std::env::var("YAGRA_WEBHOOK_URL") {
             if !url.is_empty() {
@@ -501,21 +550,44 @@ impl Notifier {
         if let Some(email) = EmailChannel::from_env() {
             channels.push(Box::new(email));
         }
-        if channels.is_empty() {
-            return None;
+        let default = (!channels.is_empty()).then(|| {
+            tracing::info!(
+                channels = channels.len(),
+                "alert notifier default route enabled"
+            );
+            Dispatcher::new(MultiChannel { channels }, RetryPolicy::default())
+        });
+        Self {
+            routes: tokio::sync::Mutex::new(Routes {
+                default,
+                channels: HashMap::new(),
+                rules: Vec::new(),
+            }),
         }
-        tracing::info!(channels = channels.len(), "alert notifier enabled");
-        Some(Self {
-            dispatcher: tokio::sync::Mutex::new(Dispatcher::new(
-                MultiChannel { channels },
-                RetryPolicy::default(),
-            )),
-        })
+    }
+
+    /// Replace the DB routing snapshot. Channels that still exist keep their dispatcher (so the
+    /// periodic refresh doesn't reset dedup and re-page active alerts); new channels get a
+    /// fresh dispatcher; removed channels are dropped. Config for an existing channel is treated
+    /// as immutable (changing it means delete + recreate).
+    pub async fn set_routing(&self, channels: Vec<OpenChannel>, rules: Vec<RoutingRule>) {
+        let mut routes = self.routes.lock().await;
+        let mut old = std::mem::take(&mut routes.channels);
+        let mut next = HashMap::new();
+        for ch in channels {
+            if let Some(disp) = old.remove(&ch.id) {
+                next.insert(ch.id, disp); // preserve dedup
+            } else if let Some(channel) = build_channel(&ch.config) {
+                next.insert(ch.id, Dispatcher::new(channel, RetryPolicy::default()));
+            }
+        }
+        routes.channels = next;
+        routes.rules = rules;
     }
 
     /// Apply one notify action (deliver a fire, or clear a resolved alert's dedup state).
     pub async fn handle(&self, action: NotifyAction) {
-        let mut d = self.dispatcher.lock().await;
+        let mut routes = self.routes.lock().await;
         match action {
             NotifyAction::Fire(alert) => {
                 // Suppressed downstream alert: it's attributed to an upstream root cause and
@@ -528,14 +600,44 @@ impl Notifier {
                 }
                 let summary = format!("node {} is {}", alert.node, alert.state);
                 let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
-                let outcome = d
-                    .dispatch(Notification::for_alert(&alert, summary, payload))
-                    .await;
-                tracing::info!(?outcome, node = %alert.node, "alert notification dispatched");
+                let notification = Notification::for_alert(&alert, summary, payload);
+
+                // Channels selected by the routing rules (severity match; None = any).
+                let matched: BTreeSet<Uuid> = routes
+                    .rules
+                    .iter()
+                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
+                    .flat_map(|r| r.channel_ids.iter().copied())
+                    .collect();
+
+                if let Some(d) = routes.default.as_mut() {
+                    let outcome = d.dispatch(notification.clone()).await;
+                    tracing::info!(?outcome, node = %alert.node, route = "default", "alert notification dispatched");
+                }
+                for id in matched {
+                    if let Some(d) = routes.channels.get_mut(&id) {
+                        let outcome = d.dispatch(notification.clone()).await;
+                        tracing::info!(?outcome, node = %alert.node, channel = %id, "alert notification dispatched");
+                    }
+                }
             }
-            NotifyAction::Resolve(alert) => d.mark_resolved(&alert.dedup_key()),
+            NotifyAction::Resolve(alert) => {
+                let key = alert.dedup_key();
+                if let Some(d) = routes.default.as_mut() {
+                    d.mark_resolved(&key);
+                }
+                for d in routes.channels.values_mut() {
+                    d.mark_resolved(&key);
+                }
+            }
         }
     }
+}
+
+/// Match a routing rule's severity against an alert's (separate fn for unit testing).
+#[must_use]
+fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severity) -> bool {
+    rule_severity.is_none_or(|s| s == alert_severity)
 }
 
 #[cfg(test)]
@@ -554,6 +656,30 @@ mod tests {
             samples: Vec::new(),
             interfaces: Vec::new(),
         }
+    }
+
+    #[test]
+    fn routing_rule_severity_match() {
+        // None severity ⇒ matches every alert severity.
+        assert!(rule_matches_severity(None, Severity::Critical));
+        assert!(rule_matches_severity(None, Severity::Warning));
+        // A specific severity matches only that one.
+        assert!(rule_matches_severity(
+            Some(Severity::Critical),
+            Severity::Critical
+        ));
+        assert!(!rule_matches_severity(
+            Some(Severity::Critical),
+            Severity::Warning
+        ));
+    }
+
+    #[test]
+    fn build_channel_makes_webhook() {
+        let ch = build_channel(&ChannelConfig::Webhook {
+            url: "http://example.test/hook".to_owned(),
+        });
+        assert!(ch.is_some());
     }
 
     #[test]
