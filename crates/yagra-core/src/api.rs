@@ -368,10 +368,27 @@ async fn get_node_status(
     Json(serde_json::json!({ "node_id": node, "state": state, "alerts": alerts })).into_response()
 }
 
+/// Optional aggregation for the metric reads. `agg=max` collapses a per-entity table gauge
+/// (e.g. CPU% per `entPhysicalIndex`) into one node-level value; absent ⇒ scalar node series.
+#[derive(Deserialize)]
+struct MetricQuery {
+    agg: Option<String>,
+}
+
+/// Reject an `agg` value we don't support (validate at the edge — security.md).
+fn invalid_agg(other: &str) -> Response {
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "invalid_agg",
+        format!("unsupported agg {other:?}; expected 'max'"),
+    )
+}
+
 async fn get_node_metric(
     State(st): State<ApiState>,
     headers: HeaderMap,
     Path((node_id, metric)): Path<(Uuid, String)>,
+    Query(q): Query<MetricQuery>,
 ) -> Response {
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
@@ -385,7 +402,12 @@ async fn get_node_metric(
     }
     let node = NodeId::from(node_id);
     let key = SeriesKey::node(node, metric.as_str());
-    match st.store.latest(&key).await {
+    let value = match q.agg.as_deref() {
+        Some("max") => st.store.aggregate_latest(&key).await,
+        Some(other) => return invalid_agg(other),
+        None => st.store.latest(&key).await,
+    };
+    match value {
         Some(value) => Json(MetricReading {
             node_id: node,
             metric,
@@ -405,6 +427,8 @@ struct RangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     step: Option<u64>,
+    /// `max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series.
+    agg: Option<String>,
 }
 
 async fn get_node_metric_range(
@@ -428,7 +452,11 @@ async fn get_node_metric_range(
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
     let step = q.step.unwrap_or(DEFAULT_STEP_SECS).max(1);
     let key = SeriesKey::node(node, metric.as_str());
-    let points = st.store.range(&key, from, to, step).await;
+    let points = match q.agg.as_deref() {
+        Some("max") => st.store.aggregate_range(&key, from, to, step).await,
+        Some(other) => return invalid_agg(other),
+        None => st.store.range(&key, from, to, step).await,
+    };
     Json(MetricRange {
         node_id: node,
         metric,

@@ -70,6 +70,35 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/icmp_rtt_ms/range');
   });
 
+  it('passes the agg param on the latest metric read', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetric('n1', 'huawei_cpu_usage', { agg: 'max' });
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/huawei_cpu_usage?agg=max');
+  });
+
+  it('omits the agg param on the latest read when not aggregating', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetric('n1', 'huawei_cpu_usage');
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/metrics/huawei_cpu_usage');
+  });
+
+  it('builds the range path with the agg param', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeMetricRange('n1', 'huawei_mem_usage', { from: 100, to: 200, agg: 'max' });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/nodes/n1/metrics/huawei_mem_usage/range?from=100&to=200&agg=max',
+    );
+  });
+
   it('fetches the public client config', async () => {
     mockFetch(200, { public_dashboard: false, auth_available: true });
     const cfg = await api.getConfig();

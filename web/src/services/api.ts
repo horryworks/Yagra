@@ -13,6 +13,7 @@ import type {
   Direction,
   InterfaceRow,
   InterfaceSeries,
+  MetricAgg,
   MetricKind,
   MetricRange,
   MetricReading,
@@ -132,19 +133,26 @@ export const api = {
   getConfig: (): Promise<ClientConfig> => request('/config'),
 
   /** Latest reading for one node metric. */
-  getNodeMetric: (nodeId: string, metric: string): Promise<MetricReading> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}`),
+  getNodeMetric: (
+    nodeId: string,
+    metric: string,
+    opts?: { agg?: MetricAgg },
+  ): Promise<MetricReading> => {
+    const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}`;
+    return request(opts?.agg ? `${path}?agg=${opts.agg}` : path);
+  },
 
   /** Time-series window for one node metric (defaults: last hour, 60s step). */
   getNodeMetricRange: (
     nodeId: string,
     metric: string,
-    opts?: { from?: number; to?: number; step?: number },
+    opts?: { from?: number; to?: number; step?: number; agg?: MetricAgg },
   ): Promise<MetricRange> => {
     const params = new URLSearchParams();
     if (opts?.from != null) params.set('from', String(opts.from));
     if (opts?.to != null) params.set('to', String(opts.to));
     if (opts?.step != null) params.set('step', String(opts.step));
+    if (opts?.agg) params.set('agg', opts.agg);
     const qs = params.toString();
     const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}/range`;
     return request(qs ? `${path}?${qs}` : path);

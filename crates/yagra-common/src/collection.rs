@@ -117,6 +117,11 @@ pub fn resolve_collection_set(items: &[ScopedCollectionItem]) -> Vec<CollectionI
 /// sysUpTime.0 — system uptime in hundredths of a second (scalar).
 pub const OID_SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
 
+/// hrProcessorLoad — HOST-RESOURCES-MIB per-processor load %, walked as a table column.
+/// The standard cross-vendor CPU metric (net-snmp/host agents); network gear that lacks
+/// HOST-RESOURCES simply returns no rows for it (skipped by the poller).
+pub const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
+
 /// The standard scalar + interface-table metrics collected by default.
 ///
 /// Scalar: sysUpTime. Table (per-interface, ifXTable/ifTable columns): 64-bit octet
@@ -157,6 +162,14 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         table(
             "if_high_speed",
             "1.3.6.1.2.1.31.1.1.1.15",
+            MetricKind::Gauge,
+        ),
+        // hrProcessorLoad — standard per-CPU load % (HOST-RESOURCES-MIB). Best-effort across
+        // vendors; absent on devices without HOST-RESOURCES (returns no rows). Surfaced as a
+        // node-level CPU% via the query-time `max()` aggregate.
+        table(
+            "hr_processor_load",
+            OID_HR_PROCESSOR_LOAD,
             MetricKind::Gauge,
         ),
     ]
@@ -337,6 +350,18 @@ mod tests {
             .expect("hc in octets present");
         assert_eq!(octets.kind, CollectionKind::Table);
         assert_eq!(octets.metric_kind, MetricKind::Counter);
+    }
+
+    #[test]
+    fn builtin_catalog_includes_standard_cpu_load() {
+        let cat = builtin_catalog();
+        let cpu = cat
+            .iter()
+            .find(|i| i.metric_name == "hr_processor_load")
+            .expect("hr_processor_load present in Standard SNMP");
+        assert_eq!(cpu.oid, OID_HR_PROCESSOR_LOAD);
+        assert_eq!(cpu.kind, CollectionKind::Table);
+        assert_eq!(cpu.metric_kind, MetricKind::Gauge);
     }
 
     #[test]
