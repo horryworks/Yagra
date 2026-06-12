@@ -69,7 +69,7 @@ export const NAV: NavSection[] = [
       { label: 'Active alerts', path: '/alerts', implemented: true, mono: 'Ac' },
       { label: 'History', path: '/alerts/history', implemented: true, mono: 'Hi' },
       { label: 'Rules & thresholds', path: '/alerts/rules', implemented: true, mono: 'Ru' },
-      { label: 'Routing & notifications', path: '/alerts/routing', implemented: false, mono: 'Rt' },
+      { label: 'Routing & notifications', path: '/alerts/routing', implemented: true, mono: 'Rt' },
       { label: 'Maintenance windows', path: '/alerts/maintenance', implemented: false, mono: 'Mw' },
       { label: 'Mutes', path: '/alerts/mutes', implemented: false, mono: 'Mu' },
     ],
