@@ -6,6 +6,7 @@ import type {
   Alert,
   AlertHistoryRow,
   ApiErrorBody,
+  AuditRow,
   AuthMe,
   ChannelConfigInput,
   CollectionKind,
@@ -455,6 +456,16 @@ export const api = {
   /** Reset a user's password (hashed server-side; never echoed back). */
   setUserPassword: (id: string, password: string): Promise<void> =>
     request(`/users/${encodeURIComponent(id)}/password`, jsonBody('PUT', { password })),
+
+  /** Audit log page, newest first (admin-only). `before` is the keyset cursor: pass the
+   *  last row's `at` to fetch the next (older) page. */
+  listAudit: (opts?: { limit?: number; before?: string }): Promise<AuditRow[]> => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.before) params.set('before', opts.before);
+    const qs = params.toString();
+    return request(qs ? `/audit?${qs}` : '/audit');
+  },
 
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => request('/auth/me'),
