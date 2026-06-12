@@ -8,7 +8,7 @@
 //! subscribers; transitions are forwarded to a [`Notifier`] (Webhook) with the engine's
 //! dedup + retry.
 //!
-//! Two more quality features are wired here on top of liveness:
+//! More quality features are wired here on top of liveness:
 //! - **Threshold alerting** — each poll sample with a resolved [`EffectiveThreshold`]
 //!   (scope inheritance via [`AlertConfig`]) is evaluated and fed through the same
 //!   hysteresis/flapping machinery as liveness.
@@ -17,6 +17,13 @@
 //!   attributed to the highest down ancestor (`root_cause`) and the downstream
 //!   notification is suppressed (rolled up into the parent incident, ADR-015). The alert
 //!   still fires for the UI/history — only the duplicate page is suppressed.
+//! - **Maintenance windows** — nodes covered by an active window (snapshot in
+//!   [`AlertConfig`]) observe `Maintenance` instead of their real state, so no alert can
+//!   fire during the window and existing alerts resolve (after the usual dwell). When the
+//!   window ends the real state flows again and surviving problems re-commit.
+//! - **Mutes** — the [`Notifier`] skips delivery for alerts matching an unexpired mute
+//!   (one node, optionally one check). The alert still fires for the UI/history — a mute
+//!   only silences the page.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
@@ -73,6 +80,8 @@ pub struct AlertConfig {
     thresholds: Vec<StoredThreshold>,
     node_meta: HashMap<NodeId, NodeMeta>,
     topology: Topology,
+    /// Nodes currently inside an active maintenance window (resolved at refresh time).
+    maintenance: BTreeSet<NodeId>,
 }
 
 impl AlertConfig {
@@ -84,6 +93,7 @@ impl AlertConfig {
             thresholds,
             node_meta,
             topology: Topology::new(),
+            maintenance: BTreeSet::new(),
         }
     }
 
@@ -91,6 +101,13 @@ impl AlertConfig {
     #[must_use]
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = topology;
+        self
+    }
+
+    /// Attach the set of nodes currently inside an active maintenance window.
+    #[must_use]
+    pub fn with_maintenance(mut self, maintenance: BTreeSet<NodeId>) -> Self {
+        self.maintenance = maintenance;
         self
     }
 
@@ -244,11 +261,26 @@ impl AlertManager {
         let node = result.node_id;
         let mut actions = Vec::new();
 
+        // Inside an active maintenance window every check observes `Maintenance` instead of
+        // its real state: no alert can fire (Maintenance carries no severity) and existing
+        // alerts resolve after the usual dwell. The real state flows again when the window
+        // ends, re-committing any surviving problem.
+        let in_maintenance = self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .maintenance
+            .contains(&node);
+
         // Liveness from the reachability outcome.
-        let raw = match result.outcome {
-            CheckOutcome::Reachable => NodeState::Ok,
-            CheckOutcome::Unreachable => NodeState::Unreachable,
-            CheckOutcome::Error => NodeState::Unknown,
+        let raw = if in_maintenance {
+            NodeState::Maintenance
+        } else {
+            match result.outcome {
+                CheckOutcome::Reachable => NodeState::Ok,
+                CheckOutcome::Unreachable => NodeState::Unreachable,
+                CheckOutcome::Error => NodeState::Unknown,
+            }
         };
         actions.extend(self.process_check(
             check_id(node, LIVENESS),
@@ -266,7 +298,11 @@ impl AlertManager {
                 config.resolve(node, &sample.metric)
             };
             if let Some(eff) = eff {
-                let raw = eff.evaluate(sample.value);
+                let raw = if in_maintenance {
+                    NodeState::Maintenance
+                } else {
+                    eff.evaluate(sample.value)
+                };
                 actions.extend(self.process_check(
                     check_id(node, &sample.metric),
                     node,
@@ -517,6 +553,35 @@ impl NotifyChannel for MultiChannel {
     }
 }
 
+/// An unexpired mute, resolved for matching: the node plus the precomputed [`CheckId`]
+/// (mutes are stored by check *name*, but an [`Alert`] only carries the id — the v5 hash
+/// is recomputed here at load time). `check: None` mutes every check on the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveMute {
+    pub node: NodeId,
+    pub check: Option<CheckId>,
+}
+
+impl ActiveMute {
+    /// Build from a stored mute row (node uuid + optional check name).
+    #[must_use]
+    pub fn new(node: Uuid, check_name: Option<&str>) -> Self {
+        let node = NodeId::from(node);
+        Self {
+            node,
+            check: check_name.map(|name| check_id(node, name)),
+        }
+    }
+}
+
+/// Whether an alert is covered by any active mute (separate fn for unit testing).
+#[must_use]
+fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
+    mutes
+        .iter()
+        .any(|m| m.node == alert.node && m.check.is_none_or(|c| c == alert.check))
+}
+
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
 /// (each with its own dedup+retry dispatcher), and the rules that select channels per alert.
 struct Routes {
@@ -527,6 +592,8 @@ struct Routes {
     channels: HashMap<Uuid, Dispatcher<Arc<dyn NotifyChannel>>>,
     /// Routing rules (severity → channel ids).
     rules: Vec<RoutingRule>,
+    /// Unexpired mutes — matching alerts are not delivered (UI/history unaffected).
+    mutes: Vec<ActiveMute>,
 }
 
 /// Forwards alert lifecycle to the configured channels with the engine's dedup + retry
@@ -562,6 +629,7 @@ impl Notifier {
                 default,
                 channels: HashMap::new(),
                 rules: Vec::new(),
+                mutes: Vec::new(),
             }),
         }
     }
@@ -585,6 +653,11 @@ impl Notifier {
         routes.rules = rules;
     }
 
+    /// Replace the unexpired-mute snapshot (refreshed alongside routing).
+    pub async fn set_mutes(&self, mutes: Vec<ActiveMute>) {
+        self.routes.lock().await.mutes = mutes;
+    }
+
     /// Apply one notify action (deliver a fire, or clear a resolved alert's dedup state).
     pub async fn handle(&self, action: NotifyAction) {
         let mut routes = self.routes.lock().await;
@@ -596,6 +669,12 @@ impl Notifier {
                 // for the UI/history; only the duplicate notification is suppressed.
                 if let Some(root) = alert.root_cause {
                     tracing::debug!(node = %alert.node, %root, "suppressing downstream alert notification (rolled up under root cause)");
+                    return;
+                }
+                // Muted: the operator asked for silence on this node/check until the mute
+                // expires. The alert itself stays live in the UI/history.
+                if mute_matches(&routes.mutes, &alert) {
+                    tracing::debug!(node = %alert.node, "suppressing muted alert notification");
                     return;
                 }
                 let summary = format!("node {} is {}", alert.node, alert.state);
@@ -819,6 +898,133 @@ mod tests {
         let alerts = mgr.alerts_for(node);
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].state, NodeState::Critical);
+    }
+
+    #[test]
+    fn maintenance_node_never_fires_and_existing_alert_resolves() {
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+
+        // Drive the node down until its liveness alert commits.
+        let mut fired = false;
+        for i in 0..DWELL_SAMPLES {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i))) {
+                if matches!(action, NotifyAction::Fire(_)) {
+                    fired = true;
+                }
+            }
+        }
+        assert!(fired);
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // The node enters a maintenance window: the active alert resolves after dwell and
+        // the display state flips to `maintenance`.
+        let mut maintenance = BTreeSet::new();
+        maintenance.insert(node);
+        mgr.set_config(AlertConfig::default().with_maintenance(maintenance));
+        let mut resolved = false;
+        for i in 0..DWELL_SAMPLES {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 100 + i64::from(i)))
+            {
+                if matches!(action, NotifyAction::Resolve(_)) {
+                    resolved = true;
+                }
+            }
+        }
+        assert!(resolved, "entering maintenance should resolve the alert");
+        assert!(mgr.active_alerts().is_empty());
+        assert_eq!(mgr.node_state(node), Some(NodeState::Maintenance));
+
+        // Still down while in maintenance ⇒ no new alert can fire.
+        for i in 0..10 {
+            assert!(mgr
+                .observe(&result(node, CheckOutcome::Unreachable, 200 + i))
+                .is_empty());
+        }
+
+        // The window ends: the real (down) state flows again and re-commits after dwell.
+        mgr.set_config(AlertConfig::default());
+        let mut refired = false;
+        for i in 0..DWELL_SAMPLES {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 300 + i64::from(i)))
+            {
+                if matches!(action, NotifyAction::Fire(_)) {
+                    refired = true;
+                }
+            }
+        }
+        assert!(refired, "surviving problem should re-fire after the window");
+    }
+
+    #[test]
+    fn maintenance_suppresses_threshold_alerts_too() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        let thresholds = vec![StoredThreshold {
+            id: Uuid::nil(),
+            level: ScopeLevel::Node,
+            scope_id: node.to_string(),
+            rule: ThresholdRule {
+                metric: "icmp_rtt_ms".into(),
+                direction: Direction::Above,
+                warning: Some(50.0),
+                critical: Some(100.0),
+                dwell_samples: 1,
+            },
+        }];
+
+        let mgr = AlertManager::new();
+        let mut maintenance = BTreeSet::new();
+        maintenance.insert(node);
+        mgr.set_config(AlertConfig::new(thresholds, meta).with_maintenance(maintenance));
+
+        // A breaching sample during maintenance must not fire.
+        let mut high = result(node, CheckOutcome::Reachable, 0);
+        high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        assert!(mgr.observe(&high).is_empty());
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn mute_matches_node_and_check() {
+        let node = NodeId::new();
+        let other = NodeId::new();
+        let alert = Alert {
+            node,
+            check: check_id(node, "icmp_rtt_ms"),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+        };
+
+        // Whole-node mute matches any check on the node; another node's mute doesn't.
+        assert!(mute_matches(
+            &[ActiveMute::new(node.as_uuid(), None)],
+            &alert
+        ));
+        assert!(!mute_matches(
+            &[ActiveMute::new(other.as_uuid(), None)],
+            &alert
+        ));
+
+        // Check-scoped mute matches only that check name (ids recomputed from the name).
+        assert!(mute_matches(
+            &[ActiveMute::new(node.as_uuid(), Some("icmp_rtt_ms"))],
+            &alert
+        ));
+        assert!(!mute_matches(
+            &[ActiveMute::new(
+                node.as_uuid(),
+                Some("snmp_sys_uptime_ticks")
+            )],
+            &alert
+        ));
     }
 
     #[test]

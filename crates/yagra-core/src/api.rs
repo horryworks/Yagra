@@ -12,6 +12,7 @@ use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, User
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::discovery::DiscoveryRunner;
 use crate::history::AlertHistoryStore;
+use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
@@ -50,6 +51,7 @@ pub struct AdminState {
     pub notifications: Arc<NotificationRepo>,
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
+    pub maintenance: Arc<MaintenanceRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -175,6 +177,16 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/discovery/scan", post(start_discovery_scan))
         .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
         .route("/api/v1/discovery/import", post(import_discovered))
+        .route(
+            "/api/v1/maintenance-windows",
+            get(list_maintenance_windows).post(create_maintenance_window),
+        )
+        .route(
+            "/api/v1/maintenance-windows/:id",
+            put(set_maintenance_window_enabled).delete(delete_maintenance_window),
+        )
+        .route("/api/v1/mutes", get(list_mutes).post(create_mute))
+        .route("/api/v1/mutes/:id", delete(delete_mute))
         .with_state(state)
 }
 
@@ -2245,6 +2257,239 @@ fn last_admin() -> Response {
         "last_admin",
         "cannot remove or demote the last admin account".to_owned(),
     )
+}
+
+// ── Maintenance windows + mutes ──────────────────────────────────────────────
+
+/// Parse an RFC 3339 timestamp from the API edge into UTC.
+fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+async fn list_maintenance_windows(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    match admin.maintenance.list_windows().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list maintenance windows failed");
+            internal("failed to list maintenance windows")
+        }
+    }
+}
+
+/// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013).
+#[derive(Deserialize)]
+struct CreateWindow {
+    name: String,
+    scope_level: String,
+    scope_id: String,
+    starts_at: String,
+    ends_at: String,
+}
+
+async fn create_maintenance_window(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateWindow>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageMaintenance) {
+        return resp;
+    }
+    if body.name.trim().is_empty()
+        || body.scope_id.trim().is_empty()
+        || !matches!(body.scope_level.as_str(), "profile" | "group" | "node")
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_window",
+            "name/scope_id must not be empty; scope_level must be profile|group|node".to_owned(),
+        );
+    }
+    let (Some(starts), Some(ends)) = (parse_rfc3339(&body.starts_at), parse_rfc3339(&body.ends_at))
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_window",
+            "starts_at/ends_at must be RFC 3339 timestamps".to_owned(),
+        );
+    };
+    if ends <= starts {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_window",
+            "ends_at must be after starts_at".to_owned(),
+        );
+    }
+    match admin
+        .maintenance
+        .create_window(
+            body.name.trim(),
+            &body.scope_level,
+            body.scope_id.trim(),
+            starts,
+            ends,
+        )
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create maintenance window failed");
+            internal("failed to create maintenance window")
+        }
+    }
+}
+
+async fn set_maintenance_window_enabled(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<EnabledBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageMaintenance) {
+        return resp;
+    }
+    match admin.maintenance.set_window_enabled(id, body.enabled).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("window_not_found", format!("no maintenance window {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update maintenance window failed");
+            internal("failed to update maintenance window")
+        }
+    }
+}
+
+async fn delete_maintenance_window(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageMaintenance) {
+        return resp;
+    }
+    match admin.maintenance.delete_window(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("window_not_found", format!("no maintenance window {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete maintenance window failed");
+            internal("failed to delete maintenance window")
+        }
+    }
+}
+
+async fn list_mutes(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    match admin.maintenance.list_mutes().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list mutes failed");
+            internal("failed to list mutes")
+        }
+    }
+}
+
+/// Create-mute body. `check` is the check *name* (a metric name, or omitted for the whole
+/// node); `until` is RFC 3339.
+#[derive(Deserialize)]
+struct CreateMute {
+    node_id: Uuid,
+    check: Option<String>,
+    until: String,
+    reason: Option<String>,
+}
+
+async fn create_mute(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateMute>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    // Mutes are an operational action (Operator and up), not a config change.
+    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    let check = body
+        .check
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if let Some(check) = check {
+        if !is_valid_metric_name(check) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_mute",
+                "check must be a valid metric name (or omitted for the whole node)".to_owned(),
+            );
+        }
+    }
+    let Some(until) = parse_rfc3339(&body.until) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_mute",
+            "until must be an RFC 3339 timestamp".to_owned(),
+        );
+    };
+    if until <= chrono::Utc::now() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_mute",
+            "until must be in the future".to_owned(),
+        );
+    }
+    match admin
+        .maintenance
+        .create_mute(body.node_id, check, until, body.reason.as_deref())
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create mute failed");
+            internal("failed to create mute")
+        }
+    }
+}
+
+async fn delete_mute(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    match admin.maintenance.delete_mute(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("mute_not_found", format!("no mute {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete mute failed");
+            internal("failed to delete mute")
+        }
+    }
 }
 
 #[cfg(test)]

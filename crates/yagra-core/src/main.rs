@@ -16,6 +16,7 @@ mod collection;
 mod config;
 mod discovery;
 mod history;
+mod maintenance;
 mod mib;
 mod notifications;
 mod repo;
@@ -29,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alerts::{AlertConfig, AlertManager, NodeMeta, Notifier};
+use alerts::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
 use auth::{SessionStore, UserStore};
 use axum::routing::get;
@@ -38,6 +39,7 @@ use config::Config;
 use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
+use maintenance::MaintenanceRepo;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
 use notifications::NotificationRepo;
@@ -140,32 +142,38 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         ));
     }
 
-    // Thresholds: snapshot into the alert engine now, then refresh periodically so edits
-    // take effect without a restart.
+    // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
+    // periodically so edits (and window start/end boundaries) take effect without a restart.
     let thresholds = Arc::new(ThresholdStore::new(repo.pool()));
-    alerts.set_config(load_alert_config(&repo, &thresholds).await);
+    let maintenance = Arc::new(MaintenanceRepo::new(repo.pool()));
+    alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance).await);
     {
         let alerts = alerts.clone();
         let repo = repo.clone();
         let thresholds = thresholds.clone();
+        let maintenance = maintenance.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                alerts.set_config(load_alert_config(&repo, &thresholds).await);
+                alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance).await);
             }
         });
     }
 
-    // Notification routing: load the DB channels/rules into the notifier now, then refresh
-    // periodically so edits take effect without a restart (env channels stay always-on).
+    // Notification routing + mutes: load the DB channels/rules into the notifier now, then
+    // refresh periodically so edits take effect without a restart (env channels stay
+    // always-on; expired mutes drop out on refresh).
     load_routing(&notifier, &notifications).await;
+    load_mutes(&notifier, &maintenance).await;
     {
         let notifier = notifier.clone();
         let notifications = notifications.clone();
+        let maintenance = maintenance.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 load_routing(&notifier, &notifications).await;
+                load_mutes(&notifier, &maintenance).await;
             }
         });
     }
@@ -184,6 +192,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         notifications,
         mib,
         discovery,
+        maintenance,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -426,15 +435,24 @@ async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow
 }
 
 /// Build the alert engine's config snapshot: all thresholds, per-node metadata (profile +
-/// group tag-values) for scope resolution, and the dependency topology (parent edges) for
-/// suppression / root-cause roll-up. Failures degrade to empty rather than crashing the
-/// refresh loop.
-async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> AlertConfig {
+/// group tag-values) for scope resolution, the dependency topology (parent edges) for
+/// suppression / root-cause roll-up, and the nodes currently inside an active maintenance
+/// window. Failures degrade to empty rather than crashing the refresh loop.
+async fn load_alert_config(
+    repo: &NodeRepo,
+    thresholds: &ThresholdStore,
+    maintenance: &MaintenanceRepo,
+) -> AlertConfig {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load thresholds");
         Vec::new()
     });
+    let scopes = maintenance.active_scopes().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to load maintenance windows");
+        Vec::new()
+    });
     let nodes = repo.list_nodes().await.unwrap_or_default();
+    let in_maintenance = maintenance::nodes_in_maintenance(&scopes, &nodes);
     let mut meta = HashMap::new();
     let mut topology = Topology::new();
     for node in nodes {
@@ -450,7 +468,24 @@ async fn load_alert_config(repo: &NodeRepo, thresholds: &ThresholdStore) -> Aler
             },
         );
     }
-    AlertConfig::new(rules, meta).with_topology(topology)
+    AlertConfig::new(rules, meta)
+        .with_topology(topology)
+        .with_maintenance(in_maintenance)
+}
+
+/// Load the unexpired mutes into the notifier (check ids recomputed from names here).
+/// Failures degrade to the existing snapshot (warn) rather than dropping mutes.
+async fn load_mutes(notifier: &Notifier, maintenance: &MaintenanceRepo) {
+    match maintenance.list_mutes().await {
+        Ok(mutes) => {
+            let active: Vec<ActiveMute> = mutes
+                .iter()
+                .map(|m| ActiveMute::new(m.node_id, m.check_name.as_deref()))
+                .collect();
+            notifier.set_mutes(active).await;
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to load mutes"),
+    }
 }
 
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
