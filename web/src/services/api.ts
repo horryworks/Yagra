@@ -355,6 +355,15 @@ export const api = {
     secret: string;
   }): Promise<{ id: string }> => request('/credentials', jsonBody('POST', body)),
 
+  /** Update a credential. `name` is required; pass `secret` (with its `kind`) only to replace the
+   *  stored secret — omit it to rename in place (the secret is never returned, so editing keeps
+   *  the existing one unless you re-enter it). */
+  updateCredential: (
+    id: string,
+    body: { name: string; kind?: string; secret?: string },
+  ): Promise<void> =>
+    request(`/credentials/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
   /** Delete a credential. */
   deleteCredential: (id: string): Promise<void> =>
     request(`/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
