@@ -119,6 +119,7 @@ mod tests {
             outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 12.5)],
             interfaces: Vec::new(),
+            sys_descr: None,
         };
         bus.publish_result(result.clone()).await.unwrap();
 

@@ -734,6 +734,7 @@ mod tests {
             outcome,
             samples: Vec::new(),
             interfaces: Vec::new(),
+            sys_descr: None,
         }
     }
 

@@ -18,6 +18,11 @@ use yagra_bus::{
 use yagra_common::{IfIndex, InterfaceField};
 use yagra_transport::Transport;
 
+/// sysDescr.0 — system description scalar (the v3 GET form).
+const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
+/// sysDescr column base — walking it yields the `.0` instance (the v2c path).
+const SYSDESCR_BASE: &str = "1.3.6.1.2.1.1.1";
+
 /// Execute one job and build its result. Pure given the transport and timestamp, so it
 /// is unit-testable without a clock or a bus.
 pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) -> PollResult {
@@ -75,7 +80,15 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                             None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
                         })
                         .collect();
-                    result(job, at_unix_ms, outcome, mapped)
+                    let mut r = result(job, at_unix_ms, outcome, mapped);
+                    // Identity probe: on a reachable poll core asked us to classify, fetch
+                    // sysDescr.0 so core can fill the node's maker/model (best-effort).
+                    if job.probe_identity && outcome == CheckOutcome::Reachable {
+                        r.sys_descr =
+                            fetch_sys_descr_v2c(job.target, &snmp.community, timeout, transport)
+                                .await;
+                    }
+                    r
                 }
                 Err(err) => {
                     tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
@@ -121,7 +134,12 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                             None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
                         })
                         .collect();
-                    result(job, at_unix_ms, outcome, mapped)
+                    let mut r = result(job, at_unix_ms, outcome, mapped);
+                    if job.probe_identity && outcome == CheckOutcome::Reachable {
+                        r.sys_descr =
+                            fetch_sys_descr_v3(job.target, &params, timeout, transport).await;
+                    }
+                    r
                 }
                 Err(err) => {
                     tracing::warn!(job_id = %job.job_id, error = %err, "snmp v3 get failed");
@@ -195,6 +213,7 @@ async fn execute_snmp_table(
         outcome,
         samples,
         interfaces,
+        sys_descr: None,
     }
 }
 
@@ -297,7 +316,45 @@ fn result(
         outcome,
         samples,
         interfaces: Vec::new(),
+        sys_descr: None,
     }
+}
+
+/// Fetch `sysDescr.0` over v2c (walk the column base → the `.0` instance). Best-effort: `None`
+/// on any transport error or an empty/missing value. Used for the identity probe (maker/model).
+async fn fetch_sys_descr_v2c(
+    target: std::net::IpAddr,
+    community: &str,
+    timeout: Duration,
+    transport: &dyn Transport,
+) -> Option<String> {
+    let bases = [SYSDESCR_BASE.to_owned()];
+    let rows = transport
+        .snmp_walk_strings(target, community, &bases, timeout)
+        .await
+        .ok()?;
+    rows.into_iter()
+        .find(|r| r.oid_base == SYSDESCR_BASE)
+        .map(|r| r.value)
+        .filter(|v| !v.is_empty())
+}
+
+/// Fetch `sysDescr.0` over v3 (scalar GET). Best-effort, like [`fetch_sys_descr_v2c`].
+async fn fetch_sys_descr_v3(
+    target: std::net::IpAddr,
+    params: &yagra_transport::SnmpV3Params,
+    timeout: Duration,
+    transport: &dyn Transport,
+) -> Option<String> {
+    let oids = [SYSDESCR_OID.to_owned()];
+    let rows = transport
+        .snmp_v3_get_strings(target, params, &oids, timeout)
+        .await
+        .ok()?;
+    rows.into_iter()
+        .find(|r| r.oid == SYSDESCR_OID)
+        .map(|r| r.value)
+        .filter(|v| !v.is_empty())
 }
 
 fn now_unix_ms() -> i64 {
@@ -422,6 +479,42 @@ mod tests {
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert!(r.samples.is_empty());
+    }
+
+    #[tokio::test]
+    async fn snmp_probe_identity_fetches_sysdescr() {
+        use yagra_transport::{SnmpSample, SnmpTableString};
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.1.1".to_owned(),
+                ifindex: 0,
+                value: "Huawei Versatile Routing Platform Software VRP USG6000".to_owned(),
+            }]);
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert_eq!(
+            r.sys_descr.as_deref(),
+            Some("Huawei Versatile Routing Platform Software VRP USG6000")
+        );
+    }
+
+    #[tokio::test]
+    async fn snmp_without_probe_identity_has_no_sysdescr() {
+        use yagra_transport::SnmpSample;
+        // probe_identity defaults false on snmp_job(); even with a sysDescr available it's not sent.
+        let t = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+            value: 1.0,
+        }]);
+        let r = execute(&snmp_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert!(r.sys_descr.is_none());
     }
 
     #[tokio::test]

@@ -43,6 +43,12 @@ pub struct PollJob {
     /// Reference to a credential in the credential store, if the check needs one.
     #[serde(default)]
     pub credential_ref: Option<Uuid>,
+    /// Ask the poller to also fetch `sysDescr.0` on this poll so core can classify the device's
+    /// maker/model (set by core only while a node's vendor is still blank). Honoured for the
+    /// scalar SNMP checks. Defaulted for N-1 compatibility (ADR-017): an older poller ignores it
+    /// and simply never probes identity.
+    #[serde(default)]
+    pub probe_identity: bool,
 }
 
 impl PollJob {
@@ -63,6 +69,7 @@ impl PollJob {
             check: CheckSpec::Icmp(check),
             interval_secs,
             credential_ref: None,
+            probe_identity: false,
         }
     }
 
@@ -83,6 +90,7 @@ impl PollJob {
             check: CheckSpec::Snmp(check),
             interval_secs,
             credential_ref: None,
+            probe_identity: false,
         }
     }
 
@@ -103,6 +111,7 @@ impl PollJob {
             check: CheckSpec::SnmpV3(check),
             interval_secs,
             credential_ref: None,
+            probe_identity: false,
         }
     }
 
@@ -123,6 +132,7 @@ impl PollJob {
             check: CheckSpec::SnmpTable(check),
             interval_secs,
             credential_ref: None,
+            probe_identity: false,
         }
     }
 }
@@ -285,6 +295,11 @@ pub struct PollResult {
     /// an older poller that doesn't send it stays N-1 compatible (ADR-017).
     #[serde(default)]
     pub interfaces: Vec<DiscoveredInterface>,
+    /// The device's SNMP `sysDescr.0`, if this poll was asked to probe identity (`probe_identity`).
+    /// Core classifies it (maker/model) and fills the node's blank vendor/model. Descriptive
+    /// device text — never a TSDB label. Defaulted so an older poller stays N-1 compatible.
+    #[serde(default)]
+    pub sys_descr: Option<String>,
 }
 
 /// An interface discovered during a table walk: its index and the descriptive metadata
@@ -523,6 +538,7 @@ mod tests {
         let job: PollJob = serde_json::from_str(json).unwrap();
         assert_eq!(job.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(job.interval_secs, 30);
+        assert!(!job.probe_identity); // N-1: absent identity-probe flag defaults off
     }
 
     #[test]
@@ -573,6 +589,7 @@ mod tests {
         }"#;
         let result: PollResult = serde_json::from_str(json).unwrap();
         assert!(result.interfaces.is_empty());
+        assert!(result.sys_descr.is_none()); // N-1: older poller sends no sysDescr
     }
 
     #[test]
