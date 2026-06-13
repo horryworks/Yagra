@@ -11,10 +11,11 @@
 }
 
 /* The configured-metrics table uses the shared `.ytable` standard; only the column template
-   and the two column-specific tweaks are page-local. */
+   and the two column-specific tweaks are page-local. Fixed/fr only (no `auto`) so the header
+   columns align over the rows — see styles/table.css. */
 .ce-table .ytable-head,
 .ce-table .ytable-row {
-  grid-template-columns: 1.4fr 1.6fr 100px 100px auto;
+  grid-template-columns: 1.4fr 1.6fr 100px 100px 90px;
 }
 
 .ce-metric {

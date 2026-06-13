@@ -121,6 +121,9 @@ pub struct UserSummary {
     pub role: String,
     /// Account creation time (RFC 3339 text; no chrono types cross the API edge).
     pub created_at: String,
+    /// Most recent successful login (RFC 3339 text), or `None` if the account has never
+    /// logged in.
+    pub last_login_at: Option<String>,
 }
 
 /// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
@@ -192,6 +195,15 @@ impl UserStore {
         let role: String = row.try_get("role")?;
         let ok = verify_password(password, &hash).unwrap_or(false);
         if ok {
+            // Record the successful login time. Best-effort metadata: a failure here must not
+            // block an otherwise-valid login.
+            if let Err(e) = sqlx::query("UPDATE users SET last_login_at = now() WHERE username = $1")
+                .bind(username)
+                .execute(&self.pool)
+                .await
+            {
+                tracing::warn!(error = %e, "failed to record last_login_at");
+            }
             // MVP: every account has unrestricted scope; group-scope filtering is Phase 2.
             Ok(Some(Principal::new(parse_role(&role), Scope::All)))
         } else {
@@ -202,7 +214,8 @@ impl UserStore {
     /// All accounts (metadata only — the password hash is never selected or returned).
     pub async fn list(&self) -> anyhow::Result<Vec<UserSummary>> {
         let rows = sqlx::query(
-            "SELECT id, username, role, created_at::text AS created_at \
+            "SELECT id, username, role, created_at::text AS created_at, \
+             last_login_at::text AS last_login_at \
              FROM users ORDER BY created_at, username",
         )
         .fetch_all(&self.pool)
@@ -214,6 +227,7 @@ impl UserStore {
                     username: row.try_get("username")?,
                     role: row.try_get("role")?,
                     created_at: row.try_get("created_at")?,
+                    last_login_at: row.try_get("last_login_at")?,
                 })
             })
             .collect()

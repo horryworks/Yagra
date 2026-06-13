@@ -95,6 +95,7 @@ export function UsersPage() {
               <div className="ytable-h">Username</div>
               <div className="ytable-h">Role</div>
               <div className="ytable-h">Created</div>
+              <div className="ytable-h">Last login</div>
               <div className="ytable-h right">Actions</div>
             </div>
             {rows.length === 0 ? (
@@ -121,6 +122,13 @@ export function UsersPage() {
                     )}
                   </div>
                   <div className="ytable-cell ellipsis users-created mono">{u.created_at}</div>
+                  <div className="ytable-cell ellipsis users-created">
+                    {u.last_login_at ? (
+                      <span className="mono">{u.last_login_at}</span>
+                    ) : (
+                      'Never'
+                    )}
+                  </div>
                   <div className="ytable-cell right users-actions">
                     {authed && (
                       <>
