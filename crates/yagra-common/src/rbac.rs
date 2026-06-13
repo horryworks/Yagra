@@ -42,6 +42,42 @@ pub enum Permission {
 }
 
 impl Role {
+    /// Every predefined role, least → most privileged (for the role/privilege matrix).
+    pub const ALL: [Role; 3] = [Role::Viewer, Role::Operator, Role::Admin];
+
+    /// Stable snake_case key (matches the serde representation).
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Role::Viewer => "viewer",
+            Role::Operator => "operator",
+            Role::Admin => "admin",
+        }
+    }
+
+    /// Short human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Role::Viewer => "Viewer",
+            Role::Operator => "Operator",
+            Role::Admin => "Admin",
+        }
+    }
+
+    /// One-line description of the role.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Role::Viewer => "Read-only: inventory, metrics, and alerts within scope.",
+            Role::Operator => {
+                "Viewer plus operational actions: acknowledge/mute alerts and \
+                               manage maintenance windows."
+            }
+            Role::Admin => "Full control: configuration, credentials, users, and the audit log.",
+        }
+    }
+
     /// Whether this role grants a permission (privilege is cumulative).
     #[must_use]
     pub fn grants(self, perm: Permission) -> bool {
@@ -52,6 +88,63 @@ impl Role {
             | Permission::ManageCredentials
             | Permission::ManageUsers
             | Permission::ViewAudit => self == Role::Admin,
+        }
+    }
+}
+
+impl Permission {
+    /// Every permission, in display order (for the role/privilege matrix).
+    pub const ALL: [Permission; 7] = [
+        Permission::View,
+        Permission::AckAlerts,
+        Permission::ManageMaintenance,
+        Permission::ManageConfig,
+        Permission::ManageCredentials,
+        Permission::ManageUsers,
+        Permission::ViewAudit,
+    ];
+
+    /// Stable snake_case key (matches the serde representation).
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Permission::View => "view",
+            Permission::AckAlerts => "ack_alerts",
+            Permission::ManageMaintenance => "manage_maintenance",
+            Permission::ManageConfig => "manage_config",
+            Permission::ManageCredentials => "manage_credentials",
+            Permission::ManageUsers => "manage_users",
+            Permission::ViewAudit => "view_audit",
+        }
+    }
+
+    /// Short human label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Permission::View => "View",
+            Permission::AckAlerts => "Acknowledge alerts",
+            Permission::ManageMaintenance => "Manage maintenance",
+            Permission::ManageConfig => "Manage configuration",
+            Permission::ManageCredentials => "Manage credentials",
+            Permission::ManageUsers => "Manage users",
+            Permission::ViewAudit => "View audit log",
+        }
+    }
+
+    /// One-line description of the capability.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Permission::View => "View inventory, metrics, and alerts within scope.",
+            Permission::AckAlerts => "Acknowledge, mute, or snooze alerts.",
+            Permission::ManageMaintenance => "Open or close maintenance windows.",
+            Permission::ManageConfig => {
+                "Create and edit nodes, profiles, thresholds, and collection."
+            }
+            Permission::ManageCredentials => "Create, edit, and rotate monitoring credentials.",
+            Permission::ManageUsers => "Manage user accounts and role assignments.",
+            Permission::ViewAudit => "Read the audit log (who changed what).",
         }
     }
 }
@@ -146,6 +239,30 @@ mod tests {
     fn role_ordering() {
         assert!(Role::Viewer < Role::Operator);
         assert!(Role::Operator < Role::Admin);
+    }
+
+    #[test]
+    fn matrix_catalog_keys_match_serde() {
+        // The matrix API serializes by the snake_case key; key() must agree with serde.
+        for role in Role::ALL {
+            let json = serde_json::to_string(&role).expect("serialize role");
+            assert_eq!(json, format!("\"{}\"", role.key()));
+        }
+        for perm in Permission::ALL {
+            let json = serde_json::to_string(&perm).expect("serialize permission");
+            assert_eq!(json, format!("\"{}\"", perm.key()));
+        }
+    }
+
+    #[test]
+    fn matrix_reflects_grants() {
+        // Viewer grants only View; Admin grants every permission.
+        let viewer_grants: Vec<_> = Permission::ALL
+            .into_iter()
+            .filter(|p| Role::Viewer.grants(*p))
+            .collect();
+        assert_eq!(viewer_grants, vec![Permission::View]);
+        assert!(Permission::ALL.into_iter().all(|p| Role::Admin.grants(p)));
     }
 
     #[test]

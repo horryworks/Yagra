@@ -30,6 +30,7 @@ import type {
   NotificationChannel,
   ProfileSummary,
   Role,
+  RoleMatrix,
   RoutingRule,
   ScopeLevel,
   Severity,
@@ -460,6 +461,9 @@ export const api = {
   /** Delete (lift) a mute. */
   deleteMute: (id: string): Promise<void> =>
     request(`/mutes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** The role-vs-privilege matrix: which permissions each role grants. Read-only (View). */
+  listRoles: (): Promise<RoleMatrix> => request('/roles'),
 
   /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
   listUsers: (): Promise<UserSummary[]> => request('/users'),
