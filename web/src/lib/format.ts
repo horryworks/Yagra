@@ -83,10 +83,12 @@ export function formatUtil(pct: number | null): string {
   return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
 }
 
-/** Format SNMP TimeTicks (hundredths of a second) as a compact human uptime, e.g. `1y2m3d12:34`.
- *  Larger zero units are dropped (so 39 days reads `1m9d00:00`, not `0y1m9d…`); hours:minutes are
- *  always shown, zero-padded. Months/years are approximate (30d / 365d) — fine for an at-a-glance
- *  uptime. Returns `—` for a missing/negative value. */
+/** Format SNMP TimeTicks (hundredths of a second) as a compact human uptime, e.g.
+ *  `1y 2mo 3d 12:34`. The date head uses distinct, spaced unit suffixes — `y` / `mo` / `d` — so
+ *  month never collides with the minutes that live after the `HH:MM` colon. Larger zero units are
+ *  dropped (39 days reads `1mo 9d 02:09`, not `0y 1mo 9d …`); `HH:MM` is always shown, zero-padded.
+ *  Months/years are approximate (30d / 365d) — fine for an at-a-glance uptime. Returns `—` for a
+ *  missing/negative value. */
 export function formatUptimeTicks(ticks: number): string {
   if (!Number.isFinite(ticks) || ticks < 0) return '—';
   let secs = Math.floor(ticks / 100);
@@ -101,12 +103,12 @@ export function formatUptimeTicks(ticks: number): string {
   const hours = Math.floor(secs / 3600);
   secs -= hours * 3600;
   const minutes = Math.floor(secs / 60);
-  let head = '';
-  if (years > 0) head += `${years}y`;
-  if (head || months > 0) head += `${months}m`;
-  if (head || days > 0) head += `${days}d`;
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years}y`);
+  if (parts.length || months > 0) parts.push(`${months}mo`);
+  if (parts.length || days > 0) parts.push(`${days}d`);
   const hm = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-  return `${head}${hm}`;
+  return parts.length ? `${parts.join(' ')} ${hm}` : hm;
 }
 
 /** Friendly display labels for known scalar SNMP metrics; falls back to the raw metric name. */
