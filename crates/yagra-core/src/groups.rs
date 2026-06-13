@@ -64,6 +64,40 @@ pub struct GroupSummary {
     pub name: String,
     pub group_type: String,
     pub parent_id: Option<Uuid>,
+    /// Manual order within the parent scope (the UI sorts siblings by this, then by name).
+    pub sort_order: f64,
+}
+
+/// A fractional sort_order that places an item between `prev` and `next` — the order values of
+/// its new neighbours in the destination scope (either side absent at an edge). Midpoint inserts
+/// keep reordering to a single-row update; values are seeded with integer spacing (migration
+/// 0015) so a long run of midpoints stays well within `f64` precision. Pure for unit tests.
+#[must_use]
+pub fn order_between(prev: Option<f64>, next: Option<f64>) -> f64 {
+    match (prev, next) {
+        (Some(p), Some(n)) => (p + n) / 2.0,
+        (Some(p), None) => p + 1.0,
+        (None, Some(n)) => n - 1.0,
+        (None, None) => 0.0,
+    }
+}
+
+/// The new sort_order for an item dropped into `siblings` — the destination scope's current
+/// items, ordered ascending and **not** including the moving item. `before`/`after` name the
+/// drop target (at most one is set); if neither matches a sibling the item is appended after the
+/// last one. Pure so the placement maths is unit-tested without a database.
+#[must_use]
+pub fn placement_order(siblings: &[(Uuid, f64)], before: Option<Uuid>, after: Option<Uuid>) -> f64 {
+    let pos = |id: Uuid| siblings.iter().position(|(s, _)| *s == id);
+    if let Some(i) = before.and_then(pos) {
+        let prev = i.checked_sub(1).map(|j| siblings[j].1);
+        order_between(prev, Some(siblings[i].1))
+    } else if let Some(i) = after.and_then(pos) {
+        let next = siblings.get(i + 1).map(|(_, o)| *o);
+        order_between(Some(siblings[i].1), next)
+    } else {
+        order_between(siblings.last().map(|(_, o)| *o), None)
+    }
 }
 
 /// Whether re-parenting `moving` under `new_parent` would create a cycle, given the current
@@ -99,10 +133,12 @@ impl GroupRepo {
         Self { pool }
     }
 
-    /// All groups, ordered by name (the UI builds the tree from the flat list).
+    /// All groups (the UI builds the tree from the flat list). Ordered by the manual sort_order
+    /// within each parent scope, then name — the same order the tree renders.
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, group_type, parent_id FROM node_groups ORDER BY name, id",
+            "SELECT id, name, group_type, parent_id, sort_order FROM node_groups \
+             ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -113,9 +149,38 @@ impl GroupRepo {
                     name: row.try_get("name")?,
                     group_type: row.try_get("group_type")?,
                     parent_id: row.try_get("parent_id")?,
+                    sort_order: row.try_get("sort_order")?,
                 })
             })
             .collect()
+    }
+
+    /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.
+    /// Feeds [`placement_order`] when a drag drops a group before/after a sibling.
+    pub async fn ordered_siblings(&self, parent: Option<Uuid>) -> anyhow::Result<Vec<(Uuid, f64)>> {
+        let rows = sqlx::query(
+            "SELECT id, sort_order FROM node_groups \
+             WHERE parent_id IS NOT DISTINCT FROM $1::uuid ORDER BY sort_order, name, id",
+        )
+        .bind(parent)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("sort_order")?)))
+            .collect()
+    }
+
+    /// Re-parent a group and set its order in one update (drag reorder/nest). The caller must
+    /// have rejected a cycle-inducing `parent` (see [`would_create_cycle`]). Returns existence.
+    pub async fn place(&self, id: Uuid, parent: Option<Uuid>, order: f64) -> anyhow::Result<bool> {
+        let res =
+            sqlx::query("UPDATE node_groups SET parent_id = $2, sort_order = $3 WHERE id = $1")
+                .bind(id)
+                .bind(parent)
+                .bind(order)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// The `(id, parent_id)` edges, for cycle checks before a move.
@@ -136,8 +201,13 @@ impl GroupRepo {
         parent: Option<Uuid>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
+        // Append to the end of the parent scope (max sort_order + 1) so a new group lands at the
+        // bottom of its siblings rather than jumping to the top (the DEFAULT 0).
         sqlx::query(
-            "INSERT INTO node_groups (id, name, group_type, parent_id) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) VALUES \
+             ($1, $2, $3, $4, \
+              (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM node_groups \
+               WHERE parent_id IS NOT DISTINCT FROM $4::uuid))",
         )
         .bind(id)
         .bind(name)
@@ -220,6 +290,41 @@ mod tests {
             serde_json::to_string(&GroupType::DeviceType).unwrap(),
             "\"device_type\""
         );
+    }
+
+    #[test]
+    fn order_between_interpolates_and_extends() {
+        // Between two neighbours → midpoint.
+        assert_eq!(order_between(Some(1.0), Some(3.0)), 2.0);
+        // Append after the last → +1.
+        assert_eq!(order_between(Some(5.0), None), 6.0);
+        // Prepend before the first → -1.
+        assert_eq!(order_between(None, Some(2.0)), 1.0);
+        // Only element.
+        assert_eq!(order_between(None, None), 0.0);
+    }
+
+    #[test]
+    fn placement_order_targets_neighbours() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        // Siblings already ordered, NOT including the moving item.
+        let sibs = [(a, 1.0), (b, 2.0), (c, 3.0)];
+
+        // Drop before b → midpoint of a and b.
+        assert_eq!(placement_order(&sibs, Some(b), None), 1.5);
+        // Drop after b → midpoint of b and c.
+        assert_eq!(placement_order(&sibs, None, Some(b)), 2.5);
+        // Drop before the first → below a.
+        assert_eq!(placement_order(&sibs, Some(a), None), 0.0);
+        // Drop after the last → above c.
+        assert_eq!(placement_order(&sibs, None, Some(c)), 4.0);
+        // No / unknown target → append to the end.
+        assert_eq!(placement_order(&sibs, None, None), 4.0);
+        assert_eq!(placement_order(&sibs, Some(Uuid::from_u128(9)), None), 4.0);
+        // Empty scope → 0.
+        assert_eq!(placement_order(&[], None, None), 0.0);
     }
 
     #[test]

@@ -135,14 +135,32 @@ export function NodesPage() {
       setError(errMsg(e, 'failed to move node')),
     );
 
-  const moveGroup = (groupId: string, parentGroupId: string | null) => {
-    const g = groups.find((x) => x.id === groupId);
-    if (!g) return;
+  // Nest a group under another (or null = top level), appending it to the end of the destination —
+  // the placement endpoint cycle-guards the move and assigns an append order in one call.
+  const moveGroup = (groupId: string, parentGroupId: string | null) =>
     api
-      .updateNodeGroup(groupId, { name: g.name, group_type: g.group_type, parent_id: parentGroupId })
+      .placeNodeGroup(groupId, { parent_id: parentGroupId })
       .then(reload)
       .catch((e: unknown) => setError(errMsg(e, 'failed to move group')));
-  };
+
+  // Drag-reorder (before/after a sibling): place the item relative to a neighbour and refresh.
+  const reorderNode = (
+    nodeId: string,
+    dest: { groupId: string | null; before?: string; after?: string },
+  ) =>
+    api
+      .placeNode(nodeId, { group_id: dest.groupId, before: dest.before, after: dest.after })
+      .then(reload)
+      .catch((e: unknown) => setError(errMsg(e, 'failed to reorder node')));
+
+  const reorderGroup = (
+    groupId: string,
+    dest: { parentId: string | null; before?: string; after?: string },
+  ) =>
+    api
+      .placeNodeGroup(groupId, { parent_id: dest.parentId, before: dest.before, after: dest.after })
+      .then(reload)
+      .catch((e: unknown) => setError(errMsg(e, 'failed to reorder group')));
 
   const nodeCount = nodes.length;
 
@@ -180,6 +198,8 @@ export function NodesPage() {
           onRequestMoveNode={(n) => setMovingNode(n)}
           onMoveNode={moveNode}
           onMoveGroup={moveGroup}
+          onReorderNode={reorderNode}
+          onReorderGroup={reorderGroup}
         />
       </Card>
 

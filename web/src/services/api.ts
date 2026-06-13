@@ -239,9 +239,18 @@ export const api = {
   ): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
 
-  /** Move a node into a group (or `null` to ungroup it) — used by the inventory tree. */
+  /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by the
+   *  "Move to…" picker and a drop directly onto a group. */
   setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/group`, jsonBody('PUT', { group_id: groupId })),
+
+  /** Drag-reorder a node: place it in `group_id` (`null` ⇒ ungrouped) next to a sibling node.
+   *  `before`/`after` name the sibling (at most one; omit both to append). */
+  placeNode: (
+    id: string,
+    body: { group_id: string | null; before?: string; after?: string },
+  ): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/placement`, jsonBody('PUT', body)),
 
   /** The node groups (the inventory folder tree; flat list with parent links). */
   listNodeGroups: (): Promise<NodeGroup[]> => request('/node-groups'),
@@ -259,6 +268,14 @@ export const api = {
     body: { name: string; group_type: GroupType; parent_id?: string | null },
   ): Promise<void> =>
     request(`/node-groups/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) next to a sibling
+   *  group. `before`/`after` name the sibling (at most one; omit both to append). Cycle-guarded. */
+  placeNodeGroup: (
+    id: string,
+    body: { parent_id: string | null; before?: string; after?: string },
+  ): Promise<void> =>
+    request(`/node-groups/${encodeURIComponent(id)}/placement`, jsonBody('PUT', body)),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
