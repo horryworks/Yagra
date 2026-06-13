@@ -91,6 +91,29 @@ export interface AuthMe {
 /** A predefined role (yagra-common `Role`, snake_case), ordered least → most privileged. */
 export type Role = 'viewer' | 'operator' | 'admin';
 
+/** One capability in the role/privilege matrix (`GET /api/v1/roles`). */
+export interface PermissionInfo {
+  key: string;
+  label: string;
+  description: string;
+}
+
+/** One role in the matrix: metadata plus the permission keys it grants. `builtin` roles are
+ *  fixed today (custom roles are not yet configurable). */
+export interface RoleInfo {
+  key: string;
+  label: string;
+  description: string;
+  builtin: boolean;
+  permissions: string[];
+}
+
+/** The role-vs-privilege matrix (`GET /api/v1/roles`): the permission catalogue + per-role grants. */
+export interface RoleMatrix {
+  permissions: PermissionInfo[];
+  roles: RoleInfo[];
+}
+
 /** A user account row (`GET /api/v1/users`, core `UserSummary`). Never includes the
  *  password hash. `created_at` is RFC 3339 text. */
 export interface UserSummary {

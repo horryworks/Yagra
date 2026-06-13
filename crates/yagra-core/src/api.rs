@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, SeriesKey, Severity,
+    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, Role, SeriesKey, Severity,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -156,6 +156,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/users/:id/password", put(set_user_password))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(auth_me))
+        .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/alerts/history", get(list_alert_history))
         .route("/api/v1/stream/alerts", get(stream_alerts))
@@ -718,6 +719,58 @@ async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
             "not authenticated".to_owned(),
         ),
     }
+}
+
+/// One permission in the role/privilege matrix (`GET /api/v1/roles`).
+#[derive(Serialize)]
+struct PermissionInfo {
+    key: &'static str,
+    label: &'static str,
+    description: &'static str,
+}
+
+/// One role in the matrix: its metadata and the permission keys it grants.
+#[derive(Serialize)]
+struct RoleInfo {
+    key: &'static str,
+    label: &'static str,
+    description: &'static str,
+    /// Built-in roles are fixed (custom roles are not configurable yet).
+    builtin: bool,
+    /// The keys of the permissions this role grants.
+    permissions: Vec<&'static str>,
+}
+
+/// The role-vs-privilege matrix: the permission catalogue plus, for each role, the permissions
+/// it grants. Read-only and informational (no secrets), so it only needs `View`. Roles are the
+/// fixed built-ins today; the shape is forward-compatible with future custom roles.
+async fn list_roles(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let permissions: Vec<PermissionInfo> = Permission::ALL
+        .into_iter()
+        .map(|p| PermissionInfo {
+            key: p.key(),
+            label: p.label(),
+            description: p.description(),
+        })
+        .collect();
+    let roles: Vec<RoleInfo> = Role::ALL
+        .into_iter()
+        .map(|r| RoleInfo {
+            key: r.key(),
+            label: r.label(),
+            description: r.description(),
+            builtin: true,
+            permissions: Permission::ALL
+                .into_iter()
+                .filter(|p| r.grants(*p))
+                .map(Permission::key)
+                .collect(),
+        })
+        .collect();
+    Json(serde_json::json!({ "permissions": permissions, "roles": roles })).into_response()
 }
 
 /// Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.
@@ -3240,6 +3293,49 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
         assert_eq!(json["nodes"][0]["id"], node.to_string());
+    }
+
+    #[tokio::test]
+    async fn roles_matrix_lists_roles_and_permissions() {
+        // The matrix is a read endpoint: gated like other reads (View), and it reflects grants().
+        let (state, token) = private_state_with(Arc::new(InMemorySink::default()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/roles")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["permissions"].as_array().unwrap().len(), 7);
+        let roles = json["roles"].as_array().unwrap();
+        assert_eq!(roles.len(), 3);
+        let admin = roles.iter().find(|r| r["key"] == "admin").unwrap();
+        let admin_perms = admin["permissions"].as_array().unwrap();
+        assert!(admin_perms.iter().any(|p| p == "manage_users"));
+        let viewer = roles.iter().find(|r| r["key"] == "viewer").unwrap();
+        assert_eq!(viewer["permissions"].as_array().unwrap(), &vec!["view"]);
+    }
+
+    #[tokio::test]
+    async fn roles_matrix_requires_auth_in_private_mode() {
+        let (state, _token) = private_state_with(Arc::new(InMemorySink::default()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/roles")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

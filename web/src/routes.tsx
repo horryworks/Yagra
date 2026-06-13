@@ -25,6 +25,7 @@ import { AuditPage } from './pages/AuditPage';
 import { MetricExplorerPage } from './pages/MetricExplorerPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { UsersPage } from './pages/UsersPage';
+import { RolesPage } from './pages/RolesPage';
 
 export function AppRoutes() {
   return (
@@ -71,6 +72,7 @@ export function AppRoutes() {
         <Route path="settings/integrations" element={<ComingSoon />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />
+        <Route path="settings/roles" element={<RolesPage />} />
         <Route path="settings/auth" element={<ComingSoon />} />
         <Route path="settings/audit" element={<AuditPage />} />
         <Route path="settings/system" element={<ComingSoon />} />
