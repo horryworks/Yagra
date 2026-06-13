@@ -62,6 +62,8 @@ export interface NodeSummary {
   model: string | null;
   /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
   group_id: string | null;
+  /** Manual order within the group (tree sorts members by this, then by name). */
+  sort_order: number;
 }
 
 /** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
@@ -74,6 +76,8 @@ export interface NodeGroup {
   group_type: GroupType;
   /** Parent group; `null` ⇒ a top-level group. */
   parent_id: string | null;
+  /** Manual order within the parent scope (tree sorts siblings by this, then by name). */
+  sort_order: number;
 }
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the

@@ -595,6 +595,28 @@ describe('api client', () => {
     expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ group_id: null });
   });
 
+  it('drag-reorders a node before a sibling (placement)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.placeNode('n1', { group_id: 'g2', before: 'n3' });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/placement');
+    expect(spy.mock.calls[0][1].method).toBe('PUT');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ group_id: 'g2', before: 'n3' });
+  });
+
+  it('drag-reorders a group after a sibling (placement)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.placeNodeGroup('g1', { parent_id: null, after: 'g2' });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/node-groups/g1/placement');
+    expect(spy.mock.calls[0][1].method).toBe('PUT');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ parent_id: null, after: 'g2' });
+  });
+
   it('lists node groups', async () => {
     const spy = vi.fn().mockResolvedValue({
       ok: true,

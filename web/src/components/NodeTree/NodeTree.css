@@ -1,4 +1,7 @@
-/* Inventory tree: groups (folders) + member nodes, with drag-drop and a context menu. */
+/* Inventory tree: groups (folders) + member nodes, with drag-drop (move + reorder) and a context
+   menu. Every row shares the same leading columns — a fixed twisty slot then a fixed icon slot —
+   so group icons and node status dots line up in one column and names sit in another, with nesting
+   shown purely by the row's left padding. */
 
 .ntree {
   display: flex;
@@ -26,7 +29,7 @@
 .ntree-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: var(--row-h);
   padding-right: 8px;
   border-radius: var(--radius);
@@ -36,9 +39,23 @@
   background: var(--bg-secondary);
 }
 
-/* Drop feedback (drag-drop): valid target highlights, invalid shows a forbidden tint. */
-.ntree-row.drop-ok,
-.ntree-ungrouped.drop-ok {
+/* The dragged row dims so the drop indicators read clearly. */
+.ntree-row.dragging {
+  opacity: 0.4;
+}
+
+/* Drop feedback. before/after draw an insertion line on the matching edge (reorder); inside
+   highlights the whole row (nest/assign); bad marks a refused move (e.g. a group into itself). */
+.ntree-row.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--accent-color);
+}
+
+.ntree-row.drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--accent-color);
+}
+
+.ntree-row.drop-inside,
+.ntree-ungrouped.drop-inside {
   outline: var(--border-width) solid var(--accent-color);
   outline-offset: -1px;
   background: var(--bg-secondary);
@@ -49,29 +66,43 @@
   outline-offset: -1px;
 }
 
-.ntree-chevron {
+/* Twisty slot: a real chevron for groups, an invisible spacer for nodes / childless groups.
+   Fixed width so the icon column that follows is identical on every row. */
+.ntree-twisty {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: none;
   color: var(--text-tertiary);
   cursor: pointer;
   font-size: 9px;
-  width: 14px;
   padding: 0;
   transition: transform var(--transition);
 }
 
-.ntree-chevron.open {
+.ntree-twisty.open {
   transform: rotate(90deg);
 }
 
-.ntree-chevron:disabled {
+.ntree-twisty:disabled {
   opacity: 0.25;
   cursor: default;
 }
 
-.ntree-grp-icon {
+.ntree-twisty-spacer {
+  cursor: inherit;
+}
+
+/* Icon slot: the group's type icon or the node's status dot. Fixed width = the alignment column. */
+.ntree-icon {
+  flex: none;
+  width: 18px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   color: var(--text-secondary);
 }
 
@@ -126,12 +157,6 @@
 .ntree-act:hover {
   color: var(--text-primary);
   background: var(--bg-tertiary);
-}
-
-.ntree-node-dot {
-  display: inline-flex;
-  width: 14px;
-  justify-content: center;
 }
 
 .ntree-node-name {
