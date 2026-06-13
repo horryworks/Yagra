@@ -25,6 +25,7 @@ export function MibRepositoryPage() {
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Add-entry form.
@@ -43,7 +44,8 @@ export function MibRepositoryPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -143,7 +145,7 @@ export function MibRepositoryPage() {
           {error && <p className="form-error">{error}</p>}
 
           {rows.length === 0 ? (
-            <p className="muted">No catalog entries match.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No catalog entries match.'}</p>
           ) : (
             <div className="mib-table">
               <div className="mib-head">

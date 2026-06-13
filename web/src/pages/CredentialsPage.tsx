@@ -239,6 +239,7 @@ export function CredentialsPage() {
   const [v3, setV3] = useState<V3State>(emptyV3);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
 
   const load = useCallback(() => {
@@ -250,7 +251,8 @@ export function CredentialsPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -333,7 +335,7 @@ export function CredentialsPage() {
           )}
           {error && <p className="form-error">{error}</p>}
           {rows.length === 0 ? (
-            <p className="muted">No credentials yet.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No credentials yet.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((c) => (

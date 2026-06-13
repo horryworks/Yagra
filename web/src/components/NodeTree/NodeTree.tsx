@@ -43,6 +43,8 @@ interface Props {
   groups: NodeGroup[];
   nodes: NodeSummary[];
   canEdit: boolean;
+  /** First inventory load in flight — show a loading placeholder, not the empty message. */
+  loading?: boolean;
   onOpenNode: (node: NodeSummary) => void;
   onAddGroup: (parentId: string | null) => void;
   onEditGroup: (group: NodeGroup) => void;
@@ -69,6 +71,7 @@ export function NodeTree({
   groups,
   nodes,
   canEdit,
+  loading,
   onOpenNode,
   onAddGroup,
   onEditGroup,
@@ -355,9 +358,13 @@ export function NodeTree({
             <span className="ntree-count">{tree.ungrouped.length}</span>
           </div>
           {tree.ungrouped.map((n) => renderNode(n, 1))}
-          {tree.roots.length === 0 && tree.ungrouped.length === 0 && (
-            <p className="muted ntree-empty">No nodes in inventory. Add one to start monitoring.</p>
-          )}
+          {tree.roots.length === 0 &&
+            tree.ungrouped.length === 0 &&
+            (loading ? (
+              <p className="muted ntree-empty">Loading nodes…</p>
+            ) : (
+              <p className="muted ntree-empty">No nodes in inventory. Add one to start monitoring.</p>
+            ))}
         </div>
       </div>
 

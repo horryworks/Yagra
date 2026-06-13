@@ -31,6 +31,7 @@ export function CollectionEditor({
   canEdit: boolean;
 }) {
   const [items, setItems] = useState<StoredCollectionItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [metricName, setMetricName] = useState('');
   const [oid, setOid] = useState('');
@@ -50,7 +51,9 @@ export function CollectionEditor({
     p.then((list) => {
       setItems(list);
       setError(null);
-    }).catch((e: unknown) => setError(errMsg(e, 'failed to load metrics')));
+    })
+      .catch((e: unknown) => setError(errMsg(e, 'failed to load metrics')))
+      .finally(() => setLoading(false));
   }, [scope, scopeId]);
 
   useEffect(() => {
@@ -178,9 +181,11 @@ export function CollectionEditor({
       {error && <p className="form-error">{error}</p>}
       {items.length === 0 ? (
         <p className="muted">
-          {scope === 'template'
-            ? 'No metrics in this template yet.'
-            : 'No node-level metrics. The profile templates / built-in defaults still apply.'}
+          {loading
+            ? 'Loading…'
+            : scope === 'template'
+              ? 'No metrics in this template yet.'
+              : 'No node-level metrics. The profile templates / built-in defaults still apply.'}
         </p>
       ) : (
         <div className="ce-table">

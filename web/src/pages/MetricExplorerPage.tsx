@@ -28,6 +28,7 @@ export function MetricExplorerPage() {
     timestamps: [],
     values: [],
   });
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,8 +37,10 @@ export function MetricExplorerPage() {
       .then((ns) => {
         setNodes(ns);
         setNode((cur) => cur || ns[0]?.id || '');
+        // Nothing to query against — stop waiting so the chart shows its empty state.
+        if (ns.length === 0) setLoading(false);
       })
-      .catch(() => undefined);
+      .catch(() => setLoading(false));
   }, []);
 
   const run = useCallback(() => {
@@ -50,7 +53,8 @@ export function MetricExplorerPage() {
       .catch((e: unknown) => {
         setSeries({ timestamps: [], values: [] });
         setError(e instanceof ApiError ? e.message : 'query failed');
-      });
+      })
+      .finally(() => setLoading(false));
   }, [node, metric, rangeSecs]);
 
   useEffect(() => {
@@ -101,7 +105,7 @@ export function MetricExplorerPage() {
       <Card title={metric} className="mx-chart-card">
         {error && <p className="form-error">{error}</p>}
         {!error && series.timestamps.length === 0 ? (
-          <p className="muted">No data for this query.</p>
+          <p className="muted">{loading ? 'Loading…' : 'No data for this query.'}</p>
         ) : (
           series.timestamps.length > 0 && (
             <MetricChart title={metric} timestamps={series.timestamps} values={series.values} />
