@@ -105,7 +105,10 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
         )
-        .route("/api/v1/credentials/:id", delete(delete_credential))
+        .route(
+            "/api/v1/credentials/:id",
+            put(update_credential).delete(delete_credential),
+        )
         .route(
             "/api/v1/thresholds",
             get(list_thresholds).post(create_threshold),
@@ -950,6 +953,79 @@ async fn list_credentials(State(st): State<ApiState>, headers: HeaderMap) -> Res
         Err(e) => {
             tracing::error!(error = %e, "list credentials failed");
             internal("failed to list credentials")
+        }
+    }
+}
+
+/// Update-credential request body. `name` is required; `secret` is optional — when present the
+/// secret is re-sealed and `kind` must accompany it (the secret format is kind-specific). With no
+/// `secret` only the name changes (rename) and the stored secret is left intact. `secret` is
+/// encrypted before storage and never logged.
+#[derive(Deserialize)]
+struct UpdateCredential {
+    name: String,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    secret: Option<String>,
+}
+
+async fn update_credential(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateCredential>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
+        return resp;
+    }
+    let name = body.name.trim();
+    if name.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_credential",
+            "name is required".to_owned(),
+        );
+    }
+    // Resolve the optional re-seal. A non-empty secret replaces the stored one and must carry a
+    // kind (the secret format is kind-specific); a missing/blank secret is a rename only.
+    let secret = body.secret.as_deref().filter(|s| !s.is_empty());
+    let reseal = match secret {
+        Some(secret) => {
+            let Some(kind) = body
+                .kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+            else {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_credential",
+                    "kind is required when changing the secret".to_owned(),
+                );
+            };
+            if kind == crate::secrets::KIND_SNMP_V3 {
+                if let Err(reason) = crate::secrets::SnmpV3Secret::parse(secret.as_bytes()) {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_credential",
+                        format!("invalid SNMPv3 credential: {reason}"),
+                    );
+                }
+            }
+            Some((kind, secret.as_bytes()))
+        }
+        None => None,
+    };
+    match admin.creds.update(id, name, reseal).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("credential_not_found", format!("no credential {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update credential failed");
+            internal("failed to update credential")
         }
     }
 }
