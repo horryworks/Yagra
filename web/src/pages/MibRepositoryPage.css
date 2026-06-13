@@ -1,4 +1,5 @@
-/* MIB repository: search toolbar, add form, and the catalog table. */
+/* MIB repository: search toolbar, add form, and the catalog table (shared `.ytable` standard —
+   only the column template + the bold metric column are page-local). */
 
 .mib-toolbar {
   margin-bottom: 12px;
@@ -16,55 +17,11 @@
   margin-bottom: 12px;
 }
 
-.mib-table {
-  display: flex;
-  flex-direction: column;
-}
-
-.mib-head,
-.mib-row {
-  display: grid;
+.mib-table .ytable-head,
+.mib-table .ytable-row {
   grid-template-columns: 1.4fr 2fr 1fr 1fr auto;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-}
-
-.mib-head {
-  border-bottom: var(--border-width) solid var(--border-color);
-}
-
-.mib-row {
-  border-bottom: var(--border-width) solid var(--border-color);
-  font-size: var(--font-sm);
-}
-
-.mib-row:last-child {
-  border-bottom: none;
-}
-
-.mib-h {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.mib-h.right {
-  justify-self: end;
 }
 
 .mib-metric {
   font-weight: var(--weight-medium);
-}
-
-.mib-oid {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mib-actions {
-  justify-self: end;
 }

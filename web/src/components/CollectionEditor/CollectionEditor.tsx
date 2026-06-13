@@ -188,21 +188,21 @@ export function CollectionEditor({
               : 'No node-level metrics. The profile templates / built-in defaults still apply.'}
         </p>
       ) : (
-        <div className="ce-table">
-          <div className="ce-head">
-            <div className="ce-h">Metric</div>
-            <div className="ce-h">OID</div>
-            <div className="ce-h">Type</div>
-            <div className="ce-h">Kind</div>
-            <div className="ce-h right">Actions</div>
+        <div className="ytable ce-table">
+          <div className="ytable-head">
+            <div className="ytable-h">Metric</div>
+            <div className="ytable-h">OID</div>
+            <div className="ytable-h">Type</div>
+            <div className="ytable-h">Kind</div>
+            <div className="ytable-h right">Actions</div>
           </div>
           {items.map((it) => (
-            <div className="ce-row" key={it.id}>
-              <span className="ce-metric">{it.metric_name}</span>
-              <span className="ce-oid mono">{it.oid}</span>
-              <span>{it.kind}</span>
-              <span>{it.metric_kind}</span>
-              <div className="ce-actions">
+            <div className="ytable-row" key={it.id}>
+              <div className="ytable-cell ellipsis ce-metric">{it.metric_name}</div>
+              <div className="ytable-cell ellipsis ce-oid mono">{it.oid}</div>
+              <div className="ytable-cell">{it.kind}</div>
+              <div className="ytable-cell">{it.metric_kind}</div>
+              <div className="ytable-cell right ce-actions">
                 {canEdit && (
                   <Button variant="ghost" onClick={() => remove(it.id)}>
                     Delete

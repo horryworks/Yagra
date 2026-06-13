@@ -147,23 +147,29 @@ export function MibRepositoryPage() {
           {rows.length === 0 ? (
             <p className="muted">{loading ? 'Loading…' : 'No catalog entries match.'}</p>
           ) : (
-            <div className="mib-table">
-              <div className="mib-head">
-                <div className="mib-h">Metric</div>
-                <div className="mib-h">OID</div>
-                <div className="mib-h">Type</div>
-                <div className="mib-h">Vendor</div>
-                <div className="mib-h right">Actions</div>
+            <div className="ytable mib-table">
+              <div className="ytable-head">
+                <div className="ytable-h">Metric</div>
+                <div className="ytable-h">OID</div>
+                <div className="ytable-h">Type</div>
+                <div className="ytable-h">Vendor</div>
+                <div className="ytable-h right">Actions</div>
               </div>
               {rows.map((e) => (
-                <div className="mib-row" key={e.id}>
-                  <span className="mib-metric">{e.metric_name}</span>
-                  <span className="mib-oid mono">{e.oid}</span>
-                  <span>
+                <div className="ytable-row" key={e.id}>
+                  <div className="ytable-cell ellipsis mib-metric">{e.metric_name}</div>
+                  <div className="ytable-cell ellipsis mib-oid mono">{e.oid}</div>
+                  <div className="ytable-cell">
                     {e.collection} · {e.metric_kind}
-                  </span>
-                  <span>{e.vendor ? <Badge tone="neutral">{e.vendor}</Badge> : <span className="muted">standard</span>}</span>
-                  <div className="mib-actions">
+                  </div>
+                  <div className="ytable-cell">
+                    {e.vendor ? (
+                      <Badge tone="neutral">{e.vendor}</Badge>
+                    ) : (
+                      <span className="muted">standard</span>
+                    )}
+                  </div>
+                  <div className="ytable-cell right mib-actions">
                     {authed && (
                       <Button variant="ghost" onClick={() => remove(e.id)}>
                         Delete

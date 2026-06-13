@@ -90,37 +90,38 @@ export function UsersPage() {
           }
         >
           {error && <p className="form-error">{error}</p>}
-          <div className="users-table">
-            <div className="users-head">
-              <div className="users-h">Username</div>
-              <div className="users-h">Role</div>
-              <div className="users-h">Created</div>
-              <div className="users-h right">Actions</div>
+          <div className="ytable users-table">
+            <div className="ytable-head">
+              <div className="ytable-h">Username</div>
+              <div className="ytable-h">Role</div>
+              <div className="ytable-h">Created</div>
+              <div className="ytable-h right">Actions</div>
             </div>
             {rows.length === 0 ? (
               <div className="users-empty">{loading ? 'Loading…' : 'No users yet.'}</div>
             ) : (
               rows.map((u) => (
-                <div className="users-row" key={u.id}>
-                  <span className="users-name">{u.username}</span>
-                  {authed ? (
-                    <Select
-                      className="users-role-select"
-                      value={u.role}
-                      onChange={(e) => changeRole(u.id, e.target.value as Role)}
-                      aria-label={`Role for ${u.username}`}
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                    </Select>
-                  ) : (
-                    <span>{u.role}</span>
-                  )}
-                  <span className="users-created mono">{u.created_at}</span>
-                  <div className="users-actions">
+                <div className="ytable-row" key={u.id}>
+                  <div className="ytable-cell ellipsis users-name">{u.username}</div>
+                  <div className="ytable-cell">
+                    {authed ? (
+                      <Select
+                        value={u.role}
+                        onChange={(e) => changeRole(u.id, e.target.value as Role)}
+                        aria-label={`Role for ${u.username}`}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <span>{u.role}</span>
+                    )}
+                  </div>
+                  <div className="ytable-cell ellipsis users-created mono">{u.created_at}</div>
+                  <div className="ytable-cell right users-actions">
                     {authed && (
                       <>
                         <Button variant="ghost" onClick={() => setPwUser(u)}>
