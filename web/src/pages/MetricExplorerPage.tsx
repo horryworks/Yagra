@@ -9,7 +9,7 @@ import type { NodeSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { TextInput, Select } from '../components/ui/Field';
+import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { MetricChart } from '../components/MetricChart/MetricChart';
 import './MetricExplorerPage.css';
 
@@ -84,7 +84,9 @@ export function MetricExplorerPage() {
               className="mono"
               value={metric}
               onChange={(e) => setMetric(e.target.value)}
+              placeholder="icmp_rtt_ms"
             />
+            <FieldHint>TSDB series name (e.g. icmp_rtt_ms, snmp_oid_*) — not a display label.</FieldHint>
           </label>
           <label className="form-label">
             Range

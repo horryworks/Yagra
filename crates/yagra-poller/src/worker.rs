@@ -281,7 +281,19 @@ async fn walk_interface_metadata(
             Ok(rows) => {
                 for row in rows {
                     let rec = ifs.entry(row.ifindex).or_insert_with(|| blank(row.ifindex));
-                    rec.if_speed = Some(row.value as i64);
+                    // ifSpeed is a non-negative gauge. Guard the f64→i64 conversion instead of
+                    // relying on a silent saturating `as` cast: a malformed/huge/non-finite
+                    // device value is dropped (logged), not stored as a bogus saturated speed.
+                    if row.value.is_finite() && (0.0..=i64::MAX as f64).contains(&row.value) {
+                        rec.if_speed = Some(row.value as i64);
+                    } else {
+                        tracing::debug!(
+                            job_id = %job.job_id,
+                            ifindex = row.ifindex,
+                            value = row.value,
+                            "ignoring out-of-range ifSpeed value"
+                        );
+                    }
                 }
             }
             Err(err) => {
@@ -656,6 +668,39 @@ mod tests {
         assert_eq!(iface.if_speed, Some(1_000_000_000));
         // ifSpeed must NOT have leaked into the TSDB samples (it's metadata, not a metric).
         assert!(!r.samples.iter().any(|s| s.metric == "1.3.6.1.2.1.2.2.1.5"));
+    }
+
+    #[tokio::test]
+    async fn snmp_table_ignores_out_of_range_if_speed() {
+        use yagra_transport::{SnmpTableSample, SnmpTableString};
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp_table(vec![
+                // One numeric metric sample so the poll counts as reachable.
+                SnmpTableSample {
+                    oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                    ifindex: 1,
+                    value: 10.0,
+                },
+                // A non-finite ifSpeed must be dropped, not silently saturated to i64::MAX.
+                SnmpTableSample {
+                    oid_base: "1.3.6.1.2.1.2.2.1.5".to_owned(),
+                    ifindex: 1,
+                    value: f64::INFINITY,
+                },
+            ])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                ifindex: 1,
+                value: "Gi0/1".to_owned(),
+            }]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        assert_eq!(r.interfaces.len(), 1);
+        let iface = &r.interfaces[0];
+        assert_eq!(iface.if_name.as_deref(), Some("Gi0/1"));
+        assert_eq!(
+            iface.if_speed, None,
+            "out-of-range ifSpeed must be dropped rather than saturated"
+        );
     }
 
     #[tokio::test]

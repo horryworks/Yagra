@@ -28,11 +28,11 @@ export function ComingSoon() {
       <PageHeader title={label} trail={trail} />
       <Card>
         <div className="comingsoon">
-          <div className="comingsoon-badge">準備中 · Not implemented yet</div>
+          <div className="comingsoon-badge">Coming soon</div>
           <p className="comingsoon-text">
-            {label} is part of the planned information architecture, but its backend endpoints
-            don't exist yet. The screen will be slotted in here once the API lands — the
-            navigation entry is kept so the structure stays stable.
+            {label} is part of the planned information architecture. Its screen will appear here
+            once the backing API lands — the navigation entry is kept so the structure stays
+            stable. Check back in a future release.
           </p>
         </div>
       </Card>

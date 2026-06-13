@@ -3,7 +3,7 @@
 // every dialog in the app matches — this is the Modals UI-consistency group. Closes on
 // overlay click and Escape.
 
-import { useEffect } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import './Modal.css';
 
@@ -16,6 +16,9 @@ interface Props {
 }
 
 export function Modal({ title, onClose, footer, children }: Props) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -24,16 +27,33 @@ export function Modal({ title, onClose, footer, children }: Props) {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Move focus into the dialog on open (so keyboard / screen-reader users start inside it) and
+  // restore it to the trigger on close. A child `autoFocus` is respected — we only take focus
+  // when nothing inside the dialog already has it.
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) {
+      dialog.focus();
+    }
+    return () => previouslyFocused?.focus?.();
+  }, []);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal"
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h2 className="modal-title">{title}</h2>
+          <h2 className="modal-title" id={titleId}>
+            {title}
+          </h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
