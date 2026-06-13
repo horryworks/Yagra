@@ -16,7 +16,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use sqlx::Row;
 use uuid::Uuid;
-use yagra_common::{CollectionKind, CredentialId, MetricKind, Node, NodeId, ProfileId};
+use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
 /// A device-class/profile row for the API (id + name).
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +48,7 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     let credential: Option<Uuid> = row.try_get("credential_id")?;
     let vendor: Option<String> = row.try_get("vendor")?;
     let model: Option<String> = row.try_get("model")?;
+    let group: Option<Uuid> = row.try_get("group_id")?;
     let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
     let address: IpAddr = address
         .parse()
@@ -62,6 +63,7 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
         credential: credential.map(CredentialId::from),
         vendor,
         model,
+        group: group.map(GroupId::from),
         tags: tags.0,
     })
 }
@@ -165,7 +167,7 @@ impl NodeRepo {
     /// Column list shared by the full and paged node queries (`host(address)` strips any
     /// netmask so the INET parses straight to IpAddr).
     const NODE_COLUMNS: &'static str = "id, name, parent_id, host(address) AS address, \
-         profile_id, pool, credential_id, vendor, model, tags";
+         profile_id, pool, credential_id, vendor, model, group_id, tags";
 
     /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
@@ -297,6 +299,17 @@ impl NodeRepo {
         .bind(model)
         .execute(&self.pool)
         .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Move a node into a group (or `None` to ungroup it). Returns whether the node exists.
+    /// Used by the inventory tree (drag/move) and the node-detail editor.
+    pub async fn set_node_group(&self, id: Uuid, group: Option<Uuid>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE nodes SET group_id = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(group)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected() > 0)
     }
 

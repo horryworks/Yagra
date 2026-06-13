@@ -163,6 +163,43 @@ impl From<Uuid> for CredentialId {
     }
 }
 
+/// Stable identifier for a node group (a folder in the hierarchical inventory tree).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroupId(pub Uuid);
+
+impl GroupId {
+    /// Generate a fresh, random group id.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    /// The underlying UUID.
+    #[must_use]
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for GroupId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Uuid> for GroupId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
 /// SNMP interface index (`ifIndex`).
 ///
 /// Identifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,

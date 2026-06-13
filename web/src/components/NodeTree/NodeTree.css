@@ -1,0 +1,217 @@
+/* Inventory tree: groups (folders) + member nodes, with drag-drop and a context menu. */
+
+.ntree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ntree-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ntree-hint {
+  font-size: var(--font-xs);
+}
+
+.ntree-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ntree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row-h);
+  padding-right: 8px;
+  border-radius: var(--radius);
+}
+
+.ntree-row:hover {
+  background: var(--bg-secondary);
+}
+
+/* Drop feedback (drag-drop): valid target highlights, invalid shows a forbidden tint. */
+.ntree-row.drop-ok,
+.ntree-ungrouped.drop-ok {
+  outline: var(--border-width) solid var(--accent-color);
+  outline-offset: -1px;
+  background: var(--bg-secondary);
+}
+
+.ntree-row.drop-bad {
+  outline: var(--border-width) solid var(--status-critical);
+  outline-offset: -1px;
+}
+
+.ntree-chevron {
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 9px;
+  width: 14px;
+  padding: 0;
+  transition: transform var(--transition);
+}
+
+.ntree-chevron.open {
+  transform: rotate(90deg);
+}
+
+.ntree-chevron:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.ntree-grp-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.grp-icon {
+  display: block;
+}
+
+.ntree-grp-name {
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.ntree-count {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border-radius: 999px;
+  padding: 0 7px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* Per-row actions appear on hover (keyboard users reach them via the context menu / Move). */
+.ntree-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.ntree-row:hover .ntree-actions {
+  display: inline-flex;
+}
+
+.ntree-act {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+  padding: 2px 5px;
+  border-radius: var(--radius);
+  line-height: 1;
+}
+
+.ntree-act:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.ntree-node-dot {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+}
+
+.ntree-node-name {
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.ntree-node-name:hover {
+  color: var(--accent-color);
+}
+
+.ntree-node-addr {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.ntree-node-meta {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.ntree-ungrouped {
+  margin-top: 6px;
+  border-top: var(--border-width) dashed var(--border-color);
+  padding-top: 6px;
+}
+
+.ntree-ungrouped-icon {
+  color: var(--text-tertiary);
+  font-size: var(--font-md);
+}
+
+.ntree-ungrouped-label {
+  color: var(--text-secondary);
+  font-weight: var(--weight-normal);
+}
+
+.ntree-empty {
+  padding: 14px 6px;
+}
+
+/* Right-click context menu (HoTTY-style). */
+.ntree-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ntree-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 14px;
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ntree-menu button:hover {
+  background: var(--bg-secondary);
+}
+
+.ntree-menu button.danger {
+  color: var(--status-critical);
+}
+
+.ntree-menu-sep {
+  height: var(--border-width);
+  background: var(--border-color);
+  margin: 4px 0;
+}

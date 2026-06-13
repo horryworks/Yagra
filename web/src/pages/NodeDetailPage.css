@@ -287,6 +287,12 @@
   margin-bottom: 6px;
 }
 
+/* Keep the unit lowercase ("bps" = bits/s, not "BPS" which reads as Bytes) despite the
+   label's uppercase transform. */
+.ifdetail-section-label .ifdetail-unit {
+  text-transform: none;
+}
+
 .ifdetail-stats {
   display: flex;
   flex-wrap: wrap;

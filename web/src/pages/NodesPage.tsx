@@ -1,56 +1,62 @@
-// Nodes / All nodes. Per the agreed scope this is a real-data flat table (not the folder
-// tree — the backend has no folder concept yet). Keyset pagination feeds the virtualized
-// DataTable: pages load on demand as the operator scrolls, so it stays usable at tens of
-// thousands of rows. Row click drills into node detail. Add-node is a focused-edit modal
-// (ManageConfig); 503 in skeleton mode is surfaced, not swallowed.
+// Nodes / All nodes. A hierarchical inventory tree (groups → member nodes), modelled on HoTTY's
+// HostTree: add/rename/delete typed groups (each type has its own icon), and move nodes/groups by
+// drag-drop, a context menu, or a "Move to…" picker. Row click drills into node detail. Add-node
+// and group edits are focused-edit modals (ManageConfig); 503 in skeleton mode is surfaced.
+//
+// Scale note: the tree needs the full group + node sets, so it loads all node pages up to a cap
+// (NODE_CAP) and flags when an inventory is larger than that — virtualized-per-group lazy loading
+// is the follow-up for very large fleets. Groups are few and load whole.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { CredentialSummary, NodeSummary, ProfileSummary } from '../types/api';
+import type {
+  CredentialSummary,
+  GroupType,
+  NodeGroup,
+  NodeSummary,
+  ProfileSummary,
+} from '../types/api';
+import { isSelfOrDescendant } from '../lib/nodeTree';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
-import { StatusDot } from '../components/ui/StatusDot';
-import { DataTable, type Column } from '../components/ui/DataTable';
+import { NodeTree } from '../components/NodeTree/NodeTree';
 
 const PAGE = 100;
+/** Max nodes the tree loads (pages of PAGE). Beyond this we flag the inventory as truncated. */
+const NODE_CAP = 5000;
 
-const COLUMNS: Column<NodeSummary>[] = [
-  { key: 'state', header: 'State', width: '120px', render: (n) => <StatusDot state={n.state} /> },
-  { key: 'name', header: 'Name', width: '1.4fr', render: (n) => n.name },
-  {
-    key: 'address',
-    header: 'Address',
-    width: '1fr',
-    render: (n) => <span className="mono">{n.address}</span>,
-  },
-  {
-    key: 'vendor',
-    header: 'Maker',
-    width: '0.9fr',
-    render: (n) => n.vendor ?? <span className="muted">—</span>,
-  },
-  {
-    key: 'model',
-    header: 'Model',
-    width: '0.9fr',
-    render: (n) => (n.model ? <span className="mono">{n.model}</span> : <span className="muted">—</span>),
-  },
+const GROUP_TYPES: { value: GroupType; label: string }[] = [
+  { value: 'site', label: 'Site' },
+  { value: 'region', label: 'Region' },
+  { value: 'device_type', label: 'Device type' },
+  { value: 'service', label: 'Service' },
+  { value: 'generic', label: 'Generic' },
 ];
+
+const errMsg = (e: unknown, fallback: string) =>
+  e instanceof ApiError ? e.message : fallback;
+
+/** Add/edit a group: name, type, and parent (parent doubles as "move"). */
+interface GroupModalState {
+  mode: 'add' | 'edit';
+  group?: NodeGroup;
+  parentId: string | null;
+}
 
 export function NodesPage() {
   const navigate = useNavigate();
   const authed = useAuthStore((s) => s.authed);
-  const [rows, setRows] = useState<NodeSummary[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const loading = useRef(false);
 
+  // Add-node modal.
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
@@ -63,46 +69,31 @@ export function NodesPage() {
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
 
-  const loadMore = useCallback(() => {
-    if (loading.current || done) return;
-    loading.current = true;
-    api
-      .listNodesPage({ cursor: cursor ?? undefined, limit: PAGE })
-      .then((page) => {
-        setRows((cur) => [...cur, ...page.nodes]);
-        setCursor(page.next_cursor);
-        if (!page.next_cursor) setDone(true);
-      })
-      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'failed to load nodes'))
-      .finally(() => {
-        loading.current = false;
-      });
-  }, [cursor, done]);
+  // Group + move modals.
+  const [groupModal, setGroupModal] = useState<GroupModalState | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
+  const [movingNode, setMovingNode] = useState<NodeSummary | null>(null);
 
-  // Reset + first page on mount.
-  const reload = useCallback(() => {
-    setRows([]);
-    setCursor(null);
-    setDone(false);
+  const reload = useCallback(async () => {
     setError(null);
-    loading.current = false;
-    api
-      .listNodesPage({ limit: PAGE })
-      .then((page) => {
-        setRows(page.nodes);
-        setCursor(page.next_cursor);
-        if (!page.next_cursor) setDone(true);
-      })
-      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'failed to load nodes'));
+    try {
+      const [g, allNodes] = await Promise.all([
+        api.listNodeGroups().catch(() => [] as NodeGroup[]),
+        loadAllNodes(),
+      ]);
+      setGroups(g);
+      setNodes(allNodes.nodes);
+      setTruncated(allNodes.truncated);
+    } catch (e: unknown) {
+      setError(errMsg(e, 'failed to load nodes'));
+    }
   }, []);
 
   useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
-  // Load the binding options (device profiles + SNMP credentials) when the modal opens, so
-  // a node can be put under monitoring with its SNMP community in one step. Best-effort:
-  // a viewer (or skeleton mode) without access just sees empty pickers.
+  // Load the binding options (profiles + SNMP credentials) when the add-node modal opens.
   useEffect(() => {
     if (!adding) return;
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
@@ -133,19 +124,34 @@ export function NodesPage() {
         setParentId('');
         setVendor('');
         setModel('');
-        reload();
+        void reload();
       })
-      .catch((e: unknown) =>
-        setAddError(e instanceof ApiError ? e.message : 'failed to add node'),
-      );
+      .catch((e: unknown) => setAddError(errMsg(e, 'failed to add node')));
   };
+
+  // Direct moves (drag-drop): assign immediately and refresh.
+  const moveNode = (nodeId: string, groupId: string | null) =>
+    api.setNodeGroup(nodeId, groupId).then(reload).catch((e: unknown) =>
+      setError(errMsg(e, 'failed to move node')),
+    );
+
+  const moveGroup = (groupId: string, parentGroupId: string | null) => {
+    const g = groups.find((x) => x.id === groupId);
+    if (!g) return;
+    api
+      .updateNodeGroup(groupId, { name: g.name, group_type: g.group_type, parent_id: parentGroupId })
+      .then(reload)
+      .catch((e: unknown) => setError(errMsg(e, 'failed to move group')));
+  };
+
+  const nodeCount = nodes.length;
 
   return (
     <div className="page-fill">
       <PageHeader
         title="All nodes"
         trail={[{ label: 'Nodes' }, { label: 'All nodes' }]}
-        note={`${rows.length}${done ? '' : '+'} nodes`}
+        note={`${nodeCount}${truncated ? '+' : ''} nodes · ${groups.length} groups`}
         actions={
           authed && (
             <Button variant="primary" onClick={() => setAdding(true)}>
@@ -156,14 +162,24 @@ export function NodesPage() {
       />
 
       <Card className="page-fill-card">
-        {error && <p className="muted">{error}</p>}
-        <DataTable
-          rows={rows}
-          columns={COLUMNS}
-          rowKey={(n) => n.id}
-          onReachEnd={loadMore}
-          onRowClick={(n) => navigate(`/nodes/${n.id}`)}
-          empty="No nodes in inventory. Add one to start monitoring."
+        {error && <p className="form-error">{error}</p>}
+        {truncated && (
+          <p className="muted">
+            Showing the first {NODE_CAP} nodes. Use search/filter for larger inventories
+            (virtualized tree loading is planned).
+          </p>
+        )}
+        <NodeTree
+          groups={groups}
+          nodes={nodes}
+          canEdit={authed}
+          onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
+          onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
+          onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
+          onDeleteGroup={(g) => setDeletingGroup(g)}
+          onRequestMoveNode={(n) => setMovingNode(n)}
+          onMoveNode={moveNode}
+          onMoveGroup={moveGroup}
         />
       </Card>
 
@@ -220,7 +236,7 @@ export function NodesPage() {
               Parent node (optional — for dependency suppression)
               <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
                 <option value="">— none —</option>
-                {rows.map((n) => (
+                {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
                     {n.name}
                   </option>
@@ -250,6 +266,244 @@ export function NodesPage() {
           </div>
         </Modal>
       )}
+
+      {groupModal && (
+        <GroupModal
+          state={groupModal}
+          groups={groups}
+          onClose={() => setGroupModal(null)}
+          onSaved={() => {
+            setGroupModal(null);
+            void reload();
+          }}
+        />
+      )}
+
+      {deletingGroup && (
+        <Modal
+          title="Delete group"
+          onClose={() => setDeletingGroup(null)}
+          footer={
+            <>
+              <Button variant="outline" onClick={() => setDeletingGroup(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() =>
+                  api
+                    .deleteNodeGroup(deletingGroup.id)
+                    .then(() => {
+                      setDeletingGroup(null);
+                      void reload();
+                    })
+                    .catch((e: unknown) => setError(errMsg(e, 'failed to delete group')))
+                }
+              >
+                Delete
+              </Button>
+            </>
+          }
+        >
+          <p>
+            Delete group <strong>{deletingGroup.name}</strong>? Its subgroups and member nodes move
+            up to the parent — <strong>no nodes are deleted</strong>.
+          </p>
+        </Modal>
+      )}
+
+      {movingNode && (
+        <MoveNodeModal
+          node={movingNode}
+          groups={groups}
+          onClose={() => setMovingNode(null)}
+          onMoved={() => {
+            setMovingNode(null);
+            void reload();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Load all node pages up to NODE_CAP, accumulating into one list for the tree. */
+async function loadAllNodes(): Promise<{ nodes: NodeSummary[]; truncated: boolean }> {
+  const out: NodeSummary[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < NODE_CAP / PAGE; i++) {
+    const page = await api.listNodesPage({ cursor, limit: PAGE });
+    out.push(...page.nodes);
+    if (!page.next_cursor) return { nodes: out, truncated: false };
+    cursor = page.next_cursor;
+  }
+  return { nodes: out, truncated: true };
+}
+
+/** Group label for a select option, indented by depth so the hierarchy reads in a flat list. */
+function groupOptions(groups: NodeGroup[]): { id: string; label: string }[] {
+  const byParent = new Map<string | null, NodeGroup[]>();
+  for (const g of groups) {
+    const k = g.parent_id;
+    byParent.set(k, [...(byParent.get(k) ?? []), g]);
+  }
+  const out: { id: string; label: string }[] = [];
+  const walk = (parent: string | null, depth: number) => {
+    for (const g of (byParent.get(parent) ?? []).sort((a, b) => a.name.localeCompare(b.name))) {
+      out.push({ id: g.id, label: `${'  '.repeat(depth)}${g.name}` });
+      walk(g.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+/** Add or edit a group (name + type + parent). Editing the parent moves the group; self and
+ *  descendants are excluded from the parent options so a move can't create a cycle. */
+function GroupModal({
+  state,
+  groups,
+  onClose,
+  onSaved,
+}: {
+  state: GroupModalState;
+  groups: NodeGroup[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const editing = state.mode === 'edit';
+  const [name, setName] = useState(state.group?.name ?? '');
+  const [type, setType] = useState<GroupType>(state.group?.group_type ?? 'generic');
+  const [parent, setParent] = useState<string>(
+    (editing ? state.group?.parent_id : state.parentId) ?? '',
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // For an edit, a group cannot be parented under itself or any of its descendants.
+  const parentChoices = groupOptions(groups).filter(
+    (o) => !(editing && state.group && isSelfOrDescendant(groups, state.group.id, o.id)),
+  );
+
+  const save = () => {
+    setBusy(true);
+    setError(null);
+    const body = { name: name.trim(), group_type: type, parent_id: parent || null };
+    const call = editing
+      ? api.updateNodeGroup(state.group!.id, body)
+      : api.createNodeGroup(body).then(() => undefined);
+    call
+      .then(onSaved)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to save group'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title={editing ? 'Edit group' : 'Add group'}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={save} disabled={!name.trim() || busy}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          Name
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </label>
+        <label className="form-label">
+          Type
+          <Select value={type} onChange={(e) => setType(e.target.value as GroupType)}>
+            {GROUP_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="form-label">
+          Parent group
+          <Select value={parent} onChange={(e) => setParent(e.target.value)}>
+            <option value="">— top level —</option>
+            {parentChoices.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </label>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Move a node into a group (or ungroup it). */
+function MoveNodeModal({
+  node,
+  groups,
+  onClose,
+  onMoved,
+}: {
+  node: NodeSummary;
+  groups: NodeGroup[];
+  onClose: () => void;
+  onMoved: () => void;
+}) {
+  const [target, setTarget] = useState<string>(node.group_id ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .setNodeGroup(node.id, target || null)
+      .then(onMoved)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to move node'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title={`Move ${node.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={save} disabled={busy}>
+            Move
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          Group
+          <Select value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">— Ungrouped —</option>
+            {groupOptions(groups).map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </label>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
   );
 }
