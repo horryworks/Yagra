@@ -9,7 +9,13 @@ import './StatusSummary.css';
 
 const ORDER: NodeState[] = ['critical', 'unreachable', 'warning', 'unknown', 'maintenance', 'ok'];
 
-export function StatusSummary({ nodes }: { nodes: NodeSummary[] }) {
+export function StatusSummary({
+  nodes,
+  loading,
+}: {
+  nodes: NodeSummary[];
+  loading?: boolean;
+}) {
   const counts = nodes.reduce<Record<string, number>>((acc, n) => {
     acc[n.state] = (acc[n.state] ?? 0) + 1;
     return acc;
@@ -23,7 +29,9 @@ export function StatusSummary({ nodes }: { nodes: NodeSummary[] }) {
         <div className="statussummary-cap">nodes</div>
       </div>
       <div className="statussummary-grid">
-        {present.length === 0 && <span className="muted">No nodes yet.</span>}
+        {present.length === 0 && (
+          <span className="muted">{loading ? 'Loading nodes…' : 'No nodes yet.'}</span>
+        )}
         {present.map((s) => (
           <div className="statussummary-item" key={s}>
             <span className="statussummary-dot" style={{ background: stateColorVar(s) }} />

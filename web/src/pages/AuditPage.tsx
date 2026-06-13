@@ -34,6 +34,7 @@ export function AuditPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [exhausted, setExhausted] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadFirst = useCallback(() => {
@@ -46,7 +47,8 @@ export function AuditPage() {
       })
       .catch((e: unknown) =>
         setError(e instanceof ApiError ? e.message : 'failed to load the audit log'),
-      );
+      )
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -82,7 +84,7 @@ export function AuditPage() {
           <>
             {error && <p className="form-error">{error}</p>}
             {rows.length === 0 ? (
-              <p className="muted">No audit entries yet.</p>
+              <p className="muted">{loading ? 'Loading…' : 'No audit entries yet.'}</p>
             ) : (
               <div className="audit-table">
                 <div className="audit-head">

@@ -45,12 +45,14 @@ const COLUMNS: Column<AlertHistoryRow>[] = [
 
 export function HistoryPage() {
   const [rows, setRows] = useState<AlertHistoryRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api
       .listAlertHistory(200)
       .then(setRows)
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -66,6 +68,7 @@ export function HistoryPage() {
           columns={COLUMNS}
           rowKey={(r) => `${r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`}
           empty="No alert history yet."
+          loading={loading}
         />
       </Card>
     </div>

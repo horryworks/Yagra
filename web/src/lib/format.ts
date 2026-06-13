@@ -83,6 +83,51 @@ export function formatUtil(pct: number | null): string {
   return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
 }
 
+/** Format SNMP TimeTicks (hundredths of a second) as a compact human uptime, e.g. `1y2m3d12:34`.
+ *  Larger zero units are dropped (so 39 days reads `1m9d00:00`, not `0y1m9d…`); hours:minutes are
+ *  always shown, zero-padded. Months/years are approximate (30d / 365d) — fine for an at-a-glance
+ *  uptime. Returns `—` for a missing/negative value. */
+export function formatUptimeTicks(ticks: number): string {
+  if (!Number.isFinite(ticks) || ticks < 0) return '—';
+  let secs = Math.floor(ticks / 100);
+  const YEAR = 365 * 86400;
+  const MONTH = 30 * 86400;
+  const years = Math.floor(secs / YEAR);
+  secs -= years * YEAR;
+  const months = Math.floor(secs / MONTH);
+  secs -= months * MONTH;
+  const days = Math.floor(secs / 86400);
+  secs -= days * 86400;
+  const hours = Math.floor(secs / 3600);
+  secs -= hours * 3600;
+  const minutes = Math.floor(secs / 60);
+  let head = '';
+  if (years > 0) head += `${years}y`;
+  if (head || months > 0) head += `${months}m`;
+  if (head || days > 0) head += `${days}d`;
+  const hm = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  return `${head}${hm}`;
+}
+
+/** Friendly display labels for known scalar SNMP metrics; falls back to the raw metric name. */
+const SCALAR_LABELS: Record<string, string> = {
+  snmp_sys_uptime_ticks: 'Uptime',
+};
+
+/** A known scalar gets a human label + formatted value (and renders in the UI font, not mono);
+ *  an unknown one keeps its raw OID-ish metric name + numeric value (mono). */
+export function scalarDisplay(metric: string, value: number): {
+  label: string;
+  value: string;
+  known: boolean;
+} {
+  if (metric === 'snmp_sys_uptime_ticks') {
+    return { label: SCALAR_LABELS[metric], value: formatUptimeTicks(value), known: true };
+  }
+  const known = metric in SCALAR_LABELS;
+  return { label: SCALAR_LABELS[metric] ?? metric, value: String(value), known };
+}
+
 /** Compact, unit-less SI suffix (k/M/G/T) for a plain number — for chart axis ticks so big
  *  values (e.g. 455000) render as "455k" instead of being clipped. */
 export function formatSi(n: number): string {

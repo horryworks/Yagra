@@ -27,6 +27,9 @@ interface Props<T> {
   /** Row click (drill-down). */
   onRowClick?: (row: T) => void;
   empty?: ReactNode;
+  /** While the first page is in flight, show a loading placeholder instead of `empty` so an
+   *  unloaded table never reads as "no rows". */
+  loading?: boolean;
 }
 
 const ROW_PX = 30; // compact row height (matches --row-h)
@@ -38,6 +41,7 @@ export function DataTable<T>({
   onReachEnd,
   onRowClick,
   empty,
+  loading,
 }: Props<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
@@ -67,7 +71,7 @@ export function DataTable<T>({
       </div>
       <div className="dt-scroll scroll-y" ref={scrollRef}>
         {rows.length === 0 ? (
-          <div className="dt-empty">{empty ?? 'No rows.'}</div>
+          <div className="dt-empty">{loading ? 'Loading…' : (empty ?? 'No rows.')}</div>
         ) : (
           <div className="dt-body" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {

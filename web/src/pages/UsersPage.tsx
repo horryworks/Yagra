@@ -28,6 +28,7 @@ export function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [forbidden, setForbidden] = useState(false);
+  const [loading, setLoading] = useState(true);
   // Open dialogs: the add form, and the user targeted by a password change / delete.
   const [adding, setAdding] = useState(false);
   const [pwUser, setPwUser] = useState<UserSummary | null>(null);
@@ -45,7 +46,8 @@ export function UsersPage() {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
         else if (e instanceof ApiError && (e.code === 'forbidden' || e.status === 403))
           setForbidden(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -96,7 +98,7 @@ export function UsersPage() {
               <div className="users-h right">Actions</div>
             </div>
             {rows.length === 0 ? (
-              <div className="users-empty">No users yet.</div>
+              <div className="users-empty">{loading ? 'Loading…' : 'No users yet.'}</div>
             ) : (
               rows.map((u) => (
                 <div className="users-row" key={u.id}>

@@ -36,6 +36,7 @@ export function MutesPage() {
   const [rows, setRows] = useState<Mute[]>([]);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [nodeId, setNodeId] = useState('');
@@ -52,7 +53,8 @@ export function MutesPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -146,7 +148,7 @@ export function MutesPage() {
           {error && <p className="form-error">{error}</p>}
 
           {rows.length === 0 ? (
-            <p className="muted">No active mutes.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No active mutes.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((m) => (

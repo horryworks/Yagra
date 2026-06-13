@@ -36,6 +36,7 @@ export function RoutingPage() {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -47,7 +48,8 @@ export function RoutingPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -76,6 +78,7 @@ export function RoutingPage() {
       <ChannelsCard
         channels={channels}
         authed={authed}
+        loading={loading}
         onChange={load}
         onError={(m) => setError(m)}
       />
@@ -83,6 +86,7 @@ export function RoutingPage() {
         rules={rules}
         channels={channels}
         authed={authed}
+        loading={loading}
         onChange={load}
         onError={(m) => setError(m)}
       />
@@ -93,11 +97,13 @@ export function RoutingPage() {
 function ChannelsCard({
   channels,
   authed,
+  loading,
   onChange,
   onError,
 }: {
   channels: NotificationChannel[];
   authed: boolean;
+  loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
 }) {
@@ -163,7 +169,9 @@ function ChannelsCard({
         </div>
       )}
       {channels.length === 0 ? (
-        <p className="muted">No channels yet. Add a webhook or email destination.</p>
+        <p className="muted">
+          {loading ? 'Loading…' : 'No channels yet. Add a webhook or email destination.'}
+        </p>
       ) : (
         <div className="crud-list">
           {channels.map((c) => (
@@ -209,12 +217,14 @@ function RulesCard({
   rules,
   channels,
   authed,
+  loading,
   onChange,
   onError,
 }: {
   rules: RoutingRule[];
   channels: NotificationChannel[];
   authed: boolean;
+  loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
 }) {
@@ -277,7 +287,11 @@ function RulesCard({
         </div>
       )}
       {rules.length === 0 ? (
-        <p className="muted">No routing rules. Without a rule, alerts only use the env default route.</p>
+        <p className="muted">
+          {loading
+            ? 'Loading…'
+            : 'No routing rules. Without a rule, alerts only use the env default route.'}
+        </p>
       ) : (
         <div className="crud-list">
           {rules.map((r) => (

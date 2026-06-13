@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatBps,
+  formatUptimeTicks,
   formatUtil,
   pointsToSeries,
+  scalarDisplay,
   severityColorVar,
   severityRank,
   stateColorVar,
@@ -53,5 +55,26 @@ describe('format', () => {
     expect(formatUtil(null)).toBe('—');
     expect(formatUtil(2.5)).toBe('2.5%');
     expect(formatUtil(73)).toBe('73%');
+  });
+
+  it('formats SNMP TimeTicks as a compact human uptime', () => {
+    // The screenshot value: 337326072 ticks ≈ 39 days 1h 1m.
+    expect(formatUptimeTicks(337326072)).toBe('1m9d01:01');
+    // Years through minutes, all populated.
+    expect(formatUptimeTicks(3702444000)).toBe('1y2m3d12:34');
+    // Sub-day uptime drops the y/m/d head and keeps zero-padded HH:MM.
+    expect(formatUptimeTicks(540000)).toBe('01:30');
+    expect(formatUptimeTicks(0)).toBe('00:00');
+    // Missing / nonsensical values fall back to a dash.
+    expect(formatUptimeTicks(-1)).toBe('—');
+    expect(formatUptimeTicks(Number.NaN)).toBe('—');
+  });
+
+  it('gives known scalars a friendly label + formatted value, unknowns the raw name', () => {
+    const up = scalarDisplay('snmp_sys_uptime_ticks', 337326072);
+    expect(up).toEqual({ label: 'Uptime', value: '1m9d01:01', known: true });
+
+    const raw = scalarDisplay('snmp_oid_1_3_6', 42);
+    expect(raw).toEqual({ label: 'snmp_oid_1_3_6', value: '42', known: false });
   });
 });

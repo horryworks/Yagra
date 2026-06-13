@@ -51,6 +51,7 @@ export function MaintenancePage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
@@ -68,7 +69,8 @@ export function MaintenancePage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -207,7 +209,7 @@ export function MaintenancePage() {
           {error && <p className="form-error">{error}</p>}
 
           {rows.length === 0 ? (
-            <p className="muted">No maintenance windows.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No maintenance windows.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((w) => {
