@@ -2,7 +2,8 @@
 // Overview (live status, latest RTT, RTT history, a System (SNMP) scalar card, active alerts),
 // Interfaces (per-interface traffic + utilization from SNMP table walks, joined with query-time
 // rate()), and Collection (per-node override of what SNMP metrics to poll). Admins can edit the
-// node's bindings (device profile + SNMP credential) from the header.
+// node (device profile + SNMP credential bindings, plus its maker/model) from the header. The
+// title reads "name (address) (maker) (model)", with the maker/model parts shown only when set.
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -33,7 +34,7 @@ import { Card } from '../components/ui/Card';
 import { Tabs } from '../components/ui/Tabs';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { Select } from '../components/ui/Field';
+import { Select, TextInput } from '../components/ui/Field';
 import { StatusDot } from '../components/ui/StatusDot';
 import { Badge } from '../components/ui/Badge';
 import { MetricChart } from '../components/MetricChart/MetricChart';
@@ -114,6 +115,10 @@ export function NodeDetailPage() {
           node ? (
             <span>
               {node.name} <span className="mono nodedetail-title-addr">({node.address})</span>
+              {node.vendor && <span className="nodedetail-title-meta"> ({node.vendor})</span>}
+              {node.model && (
+                <span className="nodedetail-title-meta mono"> ({node.model})</span>
+              )}
             </span>
           ) : (
             <span className="mono">{nodeId}</span>
@@ -129,7 +134,7 @@ export function NodeDetailPage() {
             {status && <StatusDot state={status.state} />}
             {authed && (
               <Button variant="outline" onClick={() => setEditingBindings(true)}>
-                Edit bindings
+                Edit node
               </Button>
             )}
             {authed && (
@@ -670,8 +675,9 @@ function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow })
   );
 }
 
-/** Edit a node's bindings (device profile + SNMP credential). Pre-fills the current values
- *  from the node detail; saving replaces both via the bindings endpoint. */
+/** Edit a node: device profile + SNMP credential bindings and its descriptive maker/model.
+ *  Pre-fills the current values from the node detail; saving sends all of them via the bindings
+ *  endpoint (so an unchanged field is preserved, not cleared). */
 function BindingsModal({
   nodeId,
   onClose,
@@ -685,6 +691,8 @@ function BindingsModal({
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [profileId, setProfileId] = useState('');
   const [credentialId, setCredentialId] = useState('');
+  const [vendor, setVendor] = useState('');
+  const [model, setModel] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -694,6 +702,8 @@ function BindingsModal({
       .then((n) => {
         setProfileId(n.profile_id ?? '');
         setCredentialId(n.credential_id ?? '');
+        setVendor(n.vendor ?? '');
+        setModel(n.model ?? '');
       })
       .catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
@@ -710,17 +720,19 @@ function BindingsModal({
       .setNodeBindings(nodeId, {
         profile_id: profileId || null,
         credential_id: credentialId || null,
+        vendor: vendor.trim() || null,
+        model: model.trim() || null,
       })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save bindings'));
+        setError(errMsg(e, 'failed to save node'));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Edit bindings"
+      title="Edit node"
       onClose={onClose}
       footer={
         <>
@@ -756,6 +768,25 @@ function BindingsModal({
             ))}
           </Select>
         </label>
+        <div className="form-row">
+          <label className="form-label">
+            Maker
+            <TextInput
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+              placeholder="e.g. Cisco"
+            />
+          </label>
+          <label className="form-label">
+            Model
+            <TextInput
+              className="mono"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. C2960"
+            />
+          </label>
+        </div>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

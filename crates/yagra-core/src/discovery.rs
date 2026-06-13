@@ -30,6 +30,10 @@ pub struct Candidate {
     pub sysname: Option<String>,
     /// Suggested built-in profile name (classified from sysDescr), if any.
     pub suggested_profile: Option<String>,
+    /// Maker / model best-effort parsed from sysDescr (editable on import) — pre-fills the
+    /// node's descriptive metadata so the imported node displays "name (addr) (vendor) (model)".
+    pub vendor: Option<String>,
+    pub model: Option<String>,
     /// The stored credential that answered SNMP, by reference (never the value) — the UI
     /// preselects it on import so the working secret is bound automatically.
     pub matched_credential_id: Option<Uuid>,
@@ -76,11 +80,15 @@ impl ScanState {
             .found
             .into_iter()
             .map(|d| {
-                // Vendor match from sysDescr, else "Generic SNMP" if it answered SNMP at all.
-                let suggested = d
+                // Identify maker/model/profile from sysDescr (best-effort). Fall back to a
+                // "Generic SNMP" profile if it answered SNMP at all but matched no vendor.
+                let id = d
                     .sysdescr
                     .as_deref()
-                    .and_then(yagra_discovery::classify)
+                    .map(yagra_discovery::identify)
+                    .unwrap_or_default();
+                let suggested = id
+                    .profile
                     .map(str::to_owned)
                     .or_else(|| d.sysdescr.as_ref().map(|_| "Generic SNMP".to_owned()));
                 Candidate {
@@ -89,6 +97,8 @@ impl ScanState {
                     sysdescr: d.sysdescr,
                     sysname: d.sysname,
                     suggested_profile: suggested,
+                    vendor: id.vendor,
+                    model: id.model,
                     matched_credential_id: d.matched_credential,
                 }
             })
@@ -250,8 +260,11 @@ mod tests {
         s.apply(partial(1, true, vec![device(1, Some(cred))]));
         let st = s.status(Uuid::nil());
         assert_eq!(st.candidates[0].matched_credential_id, Some(cred));
-        // sysDescr classification still happens alongside the credential mapping.
+        // sysDescr classification still happens alongside the credential mapping, and the
+        // maker/model are parsed out to pre-fill the node's descriptive metadata.
         assert!(st.candidates[0].suggested_profile.is_some());
+        assert_eq!(st.candidates[0].vendor.as_deref(), Some("Huawei"));
+        assert_eq!(st.candidates[0].model.as_deref(), Some("USG6000"));
     }
 
     #[test]

@@ -31,6 +31,11 @@ pub struct Node {
     /// Monitoring credential bound to this node (SNMP community / v3 / token), if any.
     /// The poller never reads the store; core resolves/inlines the secret (ADR-018/020).
     pub credential: Option<CredentialId>,
+    /// Maker / manufacturer, descriptive metadata (best-effort from discovery's sysDescr
+    /// classification, editable). Shown in the node display; never a TSDB label.
+    pub vendor: Option<String>,
+    /// Model / product designation, descriptive metadata (same source as `vendor`).
+    pub model: Option<String>,
     /// Arbitrary grouping attributes (site, region, role, …) used for filtering
     /// and group-scoped thresholds/visibility. Sorted for deterministic output.
     pub tags: BTreeMap<String, String>,
@@ -48,6 +53,8 @@ impl Node {
             profile: None,
             pool: None,
             credential: None,
+            vendor: None,
+            model: None,
             tags: BTreeMap::new(),
         }
     }

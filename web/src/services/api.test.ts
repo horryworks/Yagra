@@ -497,6 +497,59 @@ describe('api client', () => {
     });
   });
 
+  it('creates a node with optional maker/model', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'n1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createNode({ name: 'core-sw', address: '10.0.0.1', vendor: 'Cisco', model: 'C2960' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/nodes');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'core-sw',
+      address: '10.0.0.1',
+      vendor: 'Cisco',
+      model: 'C2960',
+    });
+  });
+
+  it('updates a node with maker/model alongside bindings', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setNodeBindings('n1', {
+      profile_id: 'p1',
+      credential_id: null,
+      vendor: 'Huawei',
+      model: 'USG6000',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/nodes/n1/bindings');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      profile_id: 'p1',
+      credential_id: null,
+      vendor: 'Huawei',
+      model: 'USG6000',
+    });
+  });
+
+  it('imports discovered nodes carrying maker/model', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ created: 1 }) } as Response);
+    globalThis.fetch = spy;
+    await api.importDiscovered([
+      { address: '10.0.0.1', name: 'fw', vendor: 'Huawei', model: 'USG6000' },
+    ]);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/discovery/import');
+    expect(JSON.parse(init.body)).toEqual({
+      nodes: [{ address: '10.0.0.1', name: 'fw', vendor: 'Huawei', model: 'USG6000' }],
+    });
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

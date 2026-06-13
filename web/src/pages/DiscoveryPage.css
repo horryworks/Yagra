@@ -67,6 +67,12 @@
   white-space: nowrap;
 }
 
+/* Parsed maker · model the import will pre-fill onto the node. */
+.disco-makermodel {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
 .disco-creds {
   display: flex;
   flex-wrap: wrap;

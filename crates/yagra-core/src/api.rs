@@ -285,6 +285,9 @@ struct NodeSummary {
     name: String,
     address: String,
     state: NodeState,
+    /// Descriptive maker/model for the "name (addr) (vendor) (model)" display.
+    vendor: Option<String>,
+    model: Option<String>,
 }
 
 /// The fixed error envelope (ADR-019).
@@ -369,6 +372,8 @@ async fn list_nodes(
                     name: n.name,
                     address: n.address.to_string(),
                     state,
+                    vendor: n.vendor,
+                    model: n.model,
                 });
             }
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
@@ -410,6 +415,9 @@ struct NodeDetail {
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
     parent_id: Option<Uuid>,
+    /// Descriptive maker/model, editable from the node detail.
+    vendor: Option<String>,
+    model: Option<String>,
 }
 
 async fn get_node(
@@ -431,6 +439,8 @@ async fn get_node(
             profile_id: node.profile.map(|p| p.0),
             credential_id: node.credential.map(|c| c.as_uuid()),
             parent_id: node.parent.map(|p| p.as_uuid()),
+            vendor: node.vendor,
+            model: node.model,
         })
         .into_response(),
         Ok(None) => not_found("node_not_found", format!("no node {node_id}")),
@@ -719,6 +729,10 @@ struct CreateNode {
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
     parent_id: Option<Uuid>,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 async fn create_node(
@@ -755,6 +769,14 @@ async fn create_node(
             body.profile_id,
             body.credential_id,
             body.parent_id,
+            body.vendor
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            body.model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
         )
         .await
     {
@@ -766,11 +788,16 @@ async fn create_node(
     }
 }
 
-/// Set/clear a node's profile + bound credential.
+/// Set/clear a node's profile + bound credential and its descriptive maker/model. The node-edit
+/// UI loads the current values and resends them, so an unchanged field is preserved.
 #[derive(Deserialize)]
 struct NodeBindings {
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 async fn set_node_bindings(
@@ -787,7 +814,19 @@ async fn set_node_bindings(
     }
     match admin
         .repo
-        .set_node_bindings(id, body.profile_id, body.credential_id)
+        .set_node_bindings(
+            id,
+            body.profile_id,
+            body.credential_id,
+            body.vendor
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            body.model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        )
         .await
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -1682,6 +1721,11 @@ struct ImportNode {
     name: String,
     profile_id: Option<String>,
     credential_id: Option<String>,
+    /// Maker/model pre-filled from discovery's sysDescr classification (editable before import).
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// Import body: the selected devices to create as nodes.
@@ -1734,7 +1778,16 @@ async fn import_discovered(
         };
         match admin
             .repo
-            .create_node(n.name.trim(), addr, None, profile, credential, None)
+            .create_node(
+                n.name.trim(),
+                addr,
+                None,
+                profile,
+                credential,
+                None,
+                n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+                n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            )
             .await
         {
             Ok(_) => created += 1,

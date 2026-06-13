@@ -82,6 +82,13 @@
   font-size: var(--font-md);
 }
 
+/* Maker / model suffix in the node title — secondary to the address. */
+.nodedetail-title-meta {
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
+  font-size: var(--font-md);
+}
+
 .nodedetail-collection-note {
   margin-bottom: 14px;
 }
