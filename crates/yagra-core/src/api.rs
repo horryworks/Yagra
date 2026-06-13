@@ -1447,12 +1447,87 @@ async fn delete_mib_entry(
 /// Most targets a single scan may sweep (keeps the sweep bounded).
 const MAX_SCAN_TARGETS: usize = 1024;
 
-/// Start-scan body: explicit target IPs (the WebUI expands a CIDR) + candidate communities.
+/// Start-scan body: explicit target IPs (the WebUI expands a CIDR), candidate stored
+/// credentials (by id — resolved server-side, ADR-018/020), and ad-hoc communities.
 #[derive(Deserialize)]
 struct StartScan {
     targets: Vec<String>,
     #[serde(default)]
     communities: Vec<String>,
+    #[serde(default)]
+    credential_ids: Vec<String>,
+}
+
+/// Resolve a scan's stored credential ids into inline candidates for the sweep job.
+/// `Err` carries a client-safe message (ids and static reasons only — never any secret
+/// content, security.md).
+async fn resolve_scan_credentials(
+    creds: &CredentialStore,
+    ids: &[String],
+) -> Result<Vec<yagra_bus::DiscoveryCredential>, Response> {
+    let mut out = Vec::with_capacity(ids.len());
+    for raw in ids {
+        let Ok(id) = raw.parse::<Uuid>() else {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential",
+                format!("'{raw}' is not a valid credential id"),
+            ));
+        };
+        let opened = match creds.open(id).await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(error = %e, credential = %id, "open scan credential failed");
+                return Err(internal("failed to resolve a scan credential"));
+            }
+        };
+        let Some((kind, secret)) = opened else {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "credential_not_found",
+                format!("no credential {id}"),
+            ));
+        };
+        if kind == crate::secrets::KIND_SNMP_V3 {
+            match crate::secrets::SnmpV3Secret::parse(&secret) {
+                Ok(v3) => out.push(yagra_bus::DiscoveryCredential {
+                    cred_ref: id,
+                    community: None,
+                    v3: Some(yagra_bus::DiscoveryV3 {
+                        user: v3.user,
+                        security_level: v3.security_level,
+                        auth_protocol: v3.auth_protocol,
+                        auth_key: v3.auth_key,
+                        priv_protocol: v3.priv_protocol,
+                        priv_key: v3.priv_key,
+                    }),
+                }),
+                Err(reason) => {
+                    return Err(error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_credential",
+                        format!("credential {id} is not usable: {reason}"),
+                    ))
+                }
+            }
+        } else {
+            match String::from_utf8(secret) {
+                Ok(community) => out.push(yagra_bus::DiscoveryCredential {
+                    cred_ref: id,
+                    community: Some(community),
+                    v3: None,
+                }),
+                Err(_) => {
+                    return Err(error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_credential",
+                        format!("credential {id} is not usable as an SNMP community"),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 async fn start_discovery_scan(
@@ -1486,7 +1561,15 @@ async fn start_discovery_scan(
             }
         }
     }
-    match admin.discovery.start(targets, body.communities).await {
+    let credentials = match resolve_scan_credentials(&admin.creds, &body.credential_ids).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match admin
+        .discovery
+        .start(targets, body.communities, credentials)
+        .await
+    {
         Ok(scan_id) => (
             StatusCode::ACCEPTED,
             Json(serde_json::json!({ "scan_id": scan_id })),

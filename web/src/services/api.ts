@@ -303,10 +303,12 @@ export const api = {
   deleteMibEntry: (id: string): Promise<void> =>
     request(`/mib-catalog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). */
+  /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). Stored
+   *  credentials go by id (resolved server-side); communities are ad-hoc extras. */
   startDiscoveryScan: (body: {
     targets: string[];
     communities: string[];
+    credential_ids: string[];
   }): Promise<{ scan_id: string }> => request('/discovery/scan', jsonBody('POST', body)),
 
   /** Poll a discovery scan's status + candidates. */

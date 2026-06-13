@@ -42,6 +42,16 @@ pub struct SnmpSample {
     pub value: f64,
 }
 
+/// One string-valued SNMP scalar (e.g. `sysDescr.0`): the instance OID it came from and
+/// its value. Used for device *identity* during discovery — metadata, never TSDB.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnmpStringSample {
+    /// The dotted instance OID, e.g. `1.3.6.1.2.1.1.1.0`.
+    pub oid: String,
+    /// The string value (lossily decoded UTF-8; device-supplied, treat as untrusted).
+    pub value: String,
+}
+
 /// One numeric value from a table walk: the column base it was walked from, the row's
 /// index (the trailing sub-identifier — the ifIndex), and the raw value. The caller maps
 /// `oid_base` back to a metric name (cardinality stays bounded that way).
@@ -113,9 +123,8 @@ pub trait Transport: Send + Sync {
         timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError>;
 
-    /// Fetch OIDs via SNMP v3 (USM). The USM crypto path is pending the net-snmp FFI
-    /// decision (ADR-021): the real transport returns `Unimplemented` until then; the
-    /// message + credential plumbing exists so v3 is representable end to end.
+    /// Fetch OIDs via SNMP v3 (USM) — pure-Rust `snmp2` backend (ADR-021). Counters are
+    /// returned raw (ADR-012); auth/priv parameters come resolved from core (ADR-018/020).
     async fn snmp_v3_get(
         &self,
         target: IpAddr,
@@ -123,6 +132,16 @@ pub trait Transport: Send + Sync {
         oids: &[String],
         timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError>;
+
+    /// Fetch string-valued scalar OIDs (e.g. `sysDescr.0` / `sysName.0`) via SNMP v3
+    /// (USM). Non-string values are skipped. Used by discovery for device identity.
+    async fn snmp_v3_get_strings(
+        &self,
+        target: IpAddr,
+        params: &SnmpV3Params,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpStringSample>, TransportError>;
 
     /// Walk one or more table *column base* OIDs via SNMP v2c GETBULK, returning the
     /// numeric value of every row, tagged with its ifIndex. A per-column walk failure is
@@ -161,6 +180,8 @@ pub struct FakeTransport {
     pub snmp_table: Vec<SnmpTableSample>,
     /// The string rows every SNMP string-table walk returns.
     pub snmp_table_strings: Vec<SnmpTableString>,
+    /// The string scalars every SNMP v3 string GET returns.
+    pub snmp_v3_strings: Vec<SnmpStringSample>,
 }
 
 impl FakeTransport {
@@ -176,6 +197,7 @@ impl FakeTransport {
             snmp: Vec::new(),
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
+            snmp_v3_strings: Vec::new(),
         }
     }
 
@@ -191,6 +213,7 @@ impl FakeTransport {
             snmp: Vec::new(),
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
+            snmp_v3_strings: Vec::new(),
         }
     }
 
@@ -212,6 +235,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_table_strings(mut self, rows: Vec<SnmpTableString>) -> Self {
         self.snmp_table_strings = rows;
+        self
+    }
+
+    /// Set the canned v3 string scalars this fake returns.
+    #[must_use]
+    pub fn with_snmp_v3_strings(mut self, rows: Vec<SnmpStringSample>) -> Self {
+        self.snmp_v3_strings = rows;
         self
     }
 }
@@ -245,6 +275,21 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
         Ok(self.snmp.clone())
+    }
+
+    async fn snmp_v3_get_strings(
+        &self,
+        _target: IpAddr,
+        _params: &SnmpV3Params,
+        oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpStringSample>, TransportError> {
+        Ok(self
+            .snmp_v3_strings
+            .iter()
+            .filter(|s| oids.iter().any(|o| o == &s.oid))
+            .cloned()
+            .collect())
     }
 
     async fn snmp_walk(

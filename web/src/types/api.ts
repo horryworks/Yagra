@@ -210,12 +210,19 @@ export interface DiscoveryCandidate {
   sysname: string | null;
   /** Suggested built-in profile name (classified from sysDescr), if any. */
   suggested_profile: string | null;
+  /** The stored credential that answered SNMP, by id — preselected on import. */
+  matched_credential_id: string | null;
 }
 
 /** A discovery scan's status (`GET /api/v1/discovery/scan/:id`). */
 export interface DiscoveryScan {
   scan_id: string;
   done: boolean;
+  /** Targets probed so far / total targets in the sweep. */
+  probed: number;
+  total: number;
+  /** The address the sweep is currently at, while running. */
+  scanning: string | null;
   candidates: DiscoveryCandidate[];
 }
 
