@@ -23,9 +23,12 @@ pub struct PollGuard {
 
 impl Drop for PollGuard {
     fn drop(&mut self) {
+        // Never panic in `drop`: a panic during unwinding aborts the whole process. Recover
+        // from a poisoned lock so the single-flight marker is still cleared (a leaked marker
+        // would block that target from ever being polled again).
         self.inflight
             .lock()
-            .expect("inflight mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.target);
     }
 }
@@ -95,6 +98,35 @@ mod tests {
         // Once the first guard drops, the target can be probed again.
         drop(g1);
         assert!(limiter.try_begin(target(1)).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn drop_recovers_from_poisoned_lock_and_clears_marker() {
+        let limiter = PollLimiter::new(8);
+        let guard = limiter.try_begin(target(1)).await.unwrap();
+
+        // Poison the inflight mutex: a separate thread panics while holding the lock.
+        // (Expect a "panicked at ... poison" line on stderr — it is intentional.)
+        let inflight = limiter.inflight.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = inflight.lock().unwrap();
+            panic!("intentionally poison the lock");
+        })
+        .join();
+
+        // Dropping the guard must NOT panic even though the lock is poisoned (a panic in
+        // `drop` during unwinding would abort the process), and it must still clear the
+        // single-flight marker.
+        drop(guard);
+
+        let set = limiter
+            .inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            !set.contains(&target(1)),
+            "marker should be cleared even after lock poisoning"
+        );
     }
 
     #[tokio::test]

@@ -17,10 +17,12 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { localTimeZone } from '../lib/format';
 import './CrudList.css';
 import './MaintenancePage.css';
 
 const LEVELS: ScopeLevel[] = ['node', 'profile', 'group'];
+const TZ = localTimeZone();
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
@@ -205,6 +207,13 @@ export function MaintenancePage() {
                 Add window
               </Button>
             </div>
+          )}
+          {authed && (
+            <p className="form-note">
+              “From”/“To” are in {TZ} (your browser’s local time) and are stored as UTC.
+              {level === 'group' &&
+                ' Scope “group” matches nodes by their group tag value (e.g. a site name).'}
+            </p>
           )}
           {error && <p className="form-error">{error}</p>}
 

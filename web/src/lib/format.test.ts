@@ -3,6 +3,7 @@ import {
   formatBps,
   formatUptimeTicks,
   formatUtil,
+  localTimeZone,
   pointsToSeries,
   scalarDisplay,
   severityColorVar,
@@ -68,6 +69,12 @@ describe('format', () => {
     // Missing / nonsensical values fall back to a dash.
     expect(formatUptimeTicks(-1)).toBe('—');
     expect(formatUptimeTicks(Number.NaN)).toBe('—');
+  });
+
+  it('returns a non-empty time-zone label for datetime hints', () => {
+    const tz = localTimeZone();
+    expect(typeof tz).toBe('string');
+    expect(tz.length).toBeGreaterThan(0);
   });
 
   it('gives known scalars a friendly label + formatted value, unknowns the raw name', () => {

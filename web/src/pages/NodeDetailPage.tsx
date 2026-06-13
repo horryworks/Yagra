@@ -285,7 +285,9 @@ function DeleteNodeModal({
     >
       <p>
         Delete node <strong>{name}</strong>? This removes its inventory entry and its
-        discovered interfaces. Collected metrics age out of the TSDB. This cannot be undone.
+        discovered interfaces. Collected metrics age out of the TSDB. If this node is a parent in
+        a dependency chain, its dependents will no longer be suppressed by it. This cannot be
+        undone.
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

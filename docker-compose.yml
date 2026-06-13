@@ -68,14 +68,14 @@ services:
     restart: unless-stopped
 
   # Message bus for core⇄poller distribution (Yagra-bus client).
-  # NATS vs gRPC is an open ADR — NATS shown here as the leading candidate.
+  # NATS (ADR-007, resolved) is the chosen core⇄poller bus; JetStream for durable jobs.
   nats:
     image: nats:2-alpine
     command: ["-js"]   # JetStream for durable job delivery
     restart: unless-stopped
 
-  # TSDB — VictoriaMetrics shown as the default candidate (open ADR:
-  # VictoriaMetrics / TimescaleDB / ClickHouse). Metrics body store.
+  # TSDB — VictoriaMetrics (ADR resolved) is the metrics body store.
+  # Retention is 12 months (single tier); see requirements §8 "確定したパラメータ".
   victoriametrics:
     image: victoriametrics/victoria-metrics:latest
     command: ["--retentionPeriod=12"]

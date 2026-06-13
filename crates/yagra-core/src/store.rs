@@ -181,7 +181,9 @@ impl VmStore {
             .iter()
             .filter_map(|pair| {
                 let arr = pair.as_array()?;
-                let t = arr.first()?.as_f64()? as i64;
+                // VM returns the timestamp as a float second; round rather than truncate so a
+                // sub-second fraction doesn't shift the point back by up to a second.
+                let t = arr.first()?.as_f64()?.round() as i64;
                 let v = arr.get(1)?.as_str()?.parse::<f64>().ok()?;
                 Some(MetricPoint { t, v })
             })

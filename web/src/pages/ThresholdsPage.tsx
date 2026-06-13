@@ -118,7 +118,13 @@ export function ThresholdsPage() {
               </Select>
               <TextInput
                 className="mono"
-                placeholder="scope id"
+                placeholder={
+                  level === 'profile'
+                    ? 'profile id'
+                    : level === 'group'
+                      ? 'group tag value'
+                      : 'node id'
+                }
                 value={scopeId}
                 onChange={(e) => setScopeId(e.target.value)}
               />
@@ -166,6 +172,17 @@ export function ThresholdsPage() {
                 Add rule
               </Button>
             </div>
+          )}
+          {authed && (
+            <p className="form-note">
+              Scope id is the{' '}
+              {level === 'profile'
+                ? 'device-profile id'
+                : level === 'group'
+                  ? 'group tag value (e.g. a site name)'
+                  : 'node id'}{' '}
+              this rule targets. Warn / crit / dwell are optional.
+            </p>
           )}
           {error && <p className="form-error">{error}</p>}
 

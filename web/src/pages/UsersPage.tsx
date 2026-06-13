@@ -13,7 +13,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import './UsersPage.css';
 
 const ROLES: Role[] = ['viewer', 'operator', 'admin'];
@@ -212,7 +212,9 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Username</label>
+        <label className="modal-field-label">
+          Username <RequiredMark />
+        </label>
         <TextInput
           value={username}
           onChange={(e) => setUsername(e.target.value)}
@@ -221,7 +223,9 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Password (min {MIN_PW} chars)</label>
+        <label className="modal-field-label">
+          Password (min {MIN_PW} chars) <RequiredMark />
+        </label>
         <TextInput
           type="password"
           value={password}
@@ -356,7 +360,8 @@ function DeleteUserModal({
       }
     >
       <p className="modal-confirm-text">
-        Delete user <strong>{user.username}</strong>? This cannot be undone.
+        Delete user <strong>{user.username}</strong>? Their audit-log entries remain for the
+        record, but the account cannot be recovered.
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
