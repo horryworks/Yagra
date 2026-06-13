@@ -6,7 +6,7 @@
 //! `pool` attribute (location-affinity pools, ADR-009).
 
 use crate::address::AddressFamily;
-use crate::ids::{CredentialId, NodeId, ProfileId};
+use crate::ids::{CredentialId, GroupId, NodeId, ProfileId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -36,6 +36,9 @@ pub struct Node {
     pub vendor: Option<String>,
     /// Model / product designation, descriptive metadata (same source as `vendor`).
     pub model: Option<String>,
+    /// The hierarchical group (folder) this node belongs to, if any. `None` ⇒ ungrouped
+    /// (shown at the tree root). A node belongs to at most one group.
+    pub group: Option<GroupId>,
     /// Arbitrary grouping attributes (site, region, role, …) used for filtering
     /// and group-scoped thresholds/visibility. Sorted for deterministic output.
     pub tags: BTreeMap<String, String>,
@@ -55,6 +58,7 @@ impl Node {
             credential: None,
             vendor: None,
             model: None,
+            group: None,
             tags: BTreeMap::new(),
         }
     }

@@ -244,6 +244,7 @@ mod tests {
             credential: None,
             vendor: None,
             model: None,
+            group: None,
             tags: tags
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))

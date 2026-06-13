@@ -16,6 +16,7 @@ mod auth;
 mod collection;
 mod config;
 mod discovery;
+mod groups;
 mod history;
 mod maintenance;
 mod mib;
@@ -195,6 +196,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         mib,
         discovery,
         maintenance,
+        groups: Arc::new(groups::GroupRepo::new(repo.pool())),
         audit: Arc::new(AuditRepo::new(repo.pool())),
     }));
     let sessions = Arc::new(SessionStore::new());

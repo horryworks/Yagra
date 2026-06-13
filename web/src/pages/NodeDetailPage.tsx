@@ -621,7 +621,9 @@ function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow })
       </div>
 
       <div className="ifdetail-section">
-        <div className="ifdetail-section-label">Throughput (In / Out, bps)</div>
+        <div className="ifdetail-section-label">
+          Throughput (In / Out, <span className="ifdetail-unit">bps</span>)
+        </div>
         {hasData ? (
           <MetricChart
             title=""
@@ -638,7 +640,9 @@ function InterfaceDetail({ nodeId, row }: { nodeId: string; row: InterfaceRow })
       </div>
 
       <div className="ifdetail-section">
-        <div className="ifdetail-section-label">Errors (In / Out, /s)</div>
+        <div className="ifdetail-section-label">
+          Errors (In / Out, <span className="ifdetail-unit">/s</span>)
+        </div>
         {hasData ? (
           <MetricChart
             title=""

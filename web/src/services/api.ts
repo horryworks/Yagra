@@ -14,6 +14,7 @@ import type {
   CredentialSummary,
   Direction,
   DiscoveryScan,
+  GroupType,
   InterfaceRow,
   InterfaceSeries,
   MaintenanceWindow,
@@ -24,6 +25,7 @@ import type {
   MibCatalogEntry,
   Mute,
   NodeDetail,
+  NodeGroup,
   NodePage,
   NodeStatus,
   NodeSummary,
@@ -236,6 +238,31 @@ export const api = {
     },
   ): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
+
+  /** Move a node into a group (or `null` to ungroup it) — used by the inventory tree. */
+  setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/group`, jsonBody('PUT', { group_id: groupId })),
+
+  /** The node groups (the inventory folder tree; flat list with parent links). */
+  listNodeGroups: (): Promise<NodeGroup[]> => request('/node-groups'),
+
+  /** Create a node group. `parent_id` nests it under another group. */
+  createNodeGroup: (body: {
+    name: string;
+    group_type: GroupType;
+    parent_id?: string | null;
+  }): Promise<{ id: string }> => request('/node-groups', jsonBody('POST', body)),
+
+  /** Rename / re-type / re-parent (move) a node group. */
+  updateNodeGroup: (
+    id: string,
+    body: { name: string; group_type: GroupType; parent_id?: string | null },
+  ): Promise<void> =>
+    request(`/node-groups/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
+  deleteNodeGroup: (id: string): Promise<void> =>
+    request(`/node-groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Device-class profiles. */
   listProfiles: (): Promise<ProfileSummary[]> => request('/profiles'),
