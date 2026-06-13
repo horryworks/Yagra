@@ -3817,6 +3817,7 @@ name = "yagra-poller"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "futures",
  "metrics",
  "metrics-exporter-prometheus",
