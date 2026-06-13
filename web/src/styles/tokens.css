@@ -76,6 +76,10 @@
   --text-secondary: #57534c;
   --text-tertiary: #8c867c;
   --overlay: rgba(35, 35, 35, 0.4);
+  /* Faint per-column wash for data tables (§ tables): a translucent ink so it reads correctly
+     over whatever surface the table sits on, in either theme. Kept subtle — column separation,
+     not stripes that fight the data. */
+  --table-col-tint: rgba(35, 35, 35, 0.04);
   /* Ink that sits on the fixed orange brand surface (login panel / seal). */
   --on-brand: var(--brand-mark);
 }
@@ -90,6 +94,7 @@
   --text-secondary: #a7aebb;
   --text-tertiary: #757e8c;
   --overlay: rgba(0, 0, 0, 0.55);
+  --table-col-tint: rgba(255, 255, 255, 0.04);
 
   /* Brand nudged brighter for dark readability (§1.5). Seal/login stay --brand-fixed. */
   --brand: #f26a12;

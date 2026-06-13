@@ -3,6 +3,7 @@
    only the document reset, base element styling, and a few cross-cutting utilities. */
 
 @import './styles/tokens.css';
+@import './styles/table.css';
 
 * {
   box-sizing: border-box;

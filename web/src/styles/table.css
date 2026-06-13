@@ -1,0 +1,90 @@
+/* Data-table standard (the one table look, reused everywhere). A grid table whose chrome —
+   uppercase header on the tertiary surface, 0.5px row dividers, a faint alternating-column tint,
+   and a whole-row hover — is defined once here. Each table only declares its own
+   `grid-template-columns` (per table, since column counts differ).
+
+   Structure:
+     <div class="ytable">                       container (border + radius)
+       <div class="ytable-head">                 header row
+         <div class="ytable-h">…</div>            one per column (add `.right` to end-align)
+       <div class="ytable-row">                   one per data row
+         <div class="ytable-cell">…</div>          one per column (`.right`, `.mono`, `.ellipsis`)
+
+   Cells stretch to the full row height so the column tint reads as a continuous band; content is
+   vertically centred inside. In-cell dropdowns size to their content (never the whole cell). */
+
+.ytable {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.ytable-head,
+.ytable-row {
+  display: grid;
+  align-items: stretch;
+}
+
+.ytable-head {
+  min-height: 32px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.ytable-row {
+  min-height: var(--row-h);
+  border-bottom: var(--border-width) solid var(--border-color);
+  font-size: var(--font-md);
+}
+
+.ytable-row:last-child {
+  border-bottom: none;
+}
+
+.ytable-h,
+.ytable-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0; /* let ellipsis cells shrink inside their grid track */
+  padding: 0 12px;
+}
+
+.ytable-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.ytable-h.right,
+.ytable-cell.right {
+  justify-content: flex-end;
+}
+
+/* Alternating column tint — even columns get a faint, even wash so columns separate without
+   stripes. Body only; the header keeps its single tertiary band. */
+.ytable-row > :nth-child(even) {
+  background: var(--table-col-tint);
+}
+
+/* Whole-row hover wins over the column tint (one continuous highlight). */
+.ytable-row:hover > * {
+  background: var(--bg-tertiary);
+}
+
+/* Truncate-with-ellipsis cell, and let a single child (e.g. a mono span) truncate too. */
+.ytable-cell.ellipsis,
+.ytable-cell.ellipsis > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Compact in-table dropdown: natural width, sized to its content — never stretched to the cell. */
+.ytable-cell .field {
+  width: auto;
+  min-width: 96px;
+  max-width: 100%;
+}

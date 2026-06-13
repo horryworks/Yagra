@@ -86,19 +86,21 @@ export function AuditPage() {
             {rows.length === 0 ? (
               <p className="muted">{loading ? 'Loading…' : 'No audit entries yet.'}</p>
             ) : (
-              <div className="audit-table">
-                <div className="audit-head">
-                  <span className="audit-h">Time</span>
-                  <span className="audit-h">User</span>
-                  <span className="audit-h">Action</span>
-                  <span className="audit-h">Status</span>
+              <div className="ytable audit-table">
+                <div className="ytable-head">
+                  <div className="ytable-h">Time</div>
+                  <div className="ytable-h">User</div>
+                  <div className="ytable-h">Action</div>
+                  <div className="ytable-h">Status</div>
                 </div>
                 {rows.map((r) => (
-                  <div className="audit-row" key={r.id}>
-                    <span className="mono audit-time">{fmtTime(r.at)}</span>
-                    <span className="audit-user">{r.username}</span>
-                    <span className="mono audit-action">{r.action}</span>
-                    <Badge tone={statusTone(r.status)}>{r.status}</Badge>
+                  <div className="ytable-row" key={r.id}>
+                    <div className="ytable-cell mono audit-time">{fmtTime(r.at)}</div>
+                    <div className="ytable-cell ellipsis audit-user">{r.username}</div>
+                    <div className="ytable-cell ellipsis mono audit-action">{r.action}</div>
+                    <div className="ytable-cell">
+                      <Badge tone={statusTone(r.status)}>{r.status}</Badge>
+                    </div>
                   </div>
                 ))}
               </div>
