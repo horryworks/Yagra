@@ -471,6 +471,32 @@ describe('api client', () => {
     });
   });
 
+  it('renames a credential (name only, secret left intact)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.updateCredential('c1', { name: 'core-ro' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/credentials/c1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ name: 'core-ro' });
+  });
+
+  it('replaces a credential secret (carries kind + secret)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.updateCredential('c1', { name: 'core-ro', kind: 'snmp_v2c', secret: 'public2' });
+    const [, init] = spy.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'core-ro',
+      kind: 'snmp_v2c',
+      secret: 'public2',
+    });
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

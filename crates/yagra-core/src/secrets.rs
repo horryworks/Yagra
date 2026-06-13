@@ -157,6 +157,50 @@ impl CredentialStore {
             .collect()
     }
 
+    /// Update a credential. The name is always set; `reseal` carries `(kind, secret)` when the
+    /// caller is replacing the secret — it is sealed (encrypted) before it touches the database
+    /// and never logged, exactly like [`create`](Self::create). When `reseal` is `None` only the
+    /// name changes and the sealed secret/kind are left intact (rename-only). Returns whether a
+    /// row matched.
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        reseal: Option<(&str, &[u8])>,
+    ) -> anyhow::Result<bool> {
+        let res = match reseal {
+            Some((kind, secret)) => {
+                let sealed = self
+                    .cipher
+                    .seal(secret)
+                    .map_err(|e| anyhow::anyhow!("seal credential: {e}"))?;
+                sqlx::query(
+                    "UPDATE credentials SET name = $2, kind = $3, key_id = $4, \
+                     wrapped_dek = $5, dek_nonce = $6, ciphertext = $7, ct_nonce = $8 \
+                     WHERE id = $1",
+                )
+                .bind(id)
+                .bind(name)
+                .bind(kind)
+                .bind(i64::from(sealed.key_id))
+                .bind(&sealed.wrapped_dek)
+                .bind(&sealed.dek_nonce)
+                .bind(&sealed.ciphertext)
+                .bind(&sealed.ct_nonce)
+                .execute(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query("UPDATE credentials SET name = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(name)
+                    .execute(&self.pool)
+                    .await?
+            }
+        };
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Delete a credential. Returns whether a row was removed.
     pub async fn delete(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM credentials WHERE id = $1")
