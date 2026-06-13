@@ -1,0 +1,123 @@
+/* Roles & privileges: role descriptions + a role-vs-privilege matrix grid. */
+
+.roles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.roles-role {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.roles-role:last-child {
+  border-bottom: none;
+}
+
+.roles-role-name {
+  font-weight: var(--weight-medium);
+  min-width: 80px;
+}
+
+.roles-role-key {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.roles-builtin {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+}
+
+.roles-role-desc {
+  flex: 1;
+  min-width: 200px;
+  font-size: var(--font-sm);
+}
+
+.roles-matrix-card {
+  margin-top: 16px;
+}
+
+.roles-matrix {
+  display: grid;
+  align-items: stretch;
+}
+
+.roles-h {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+  padding: 8px 10px;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.roles-h-role {
+  text-align: center;
+}
+
+.roles-cell {
+  padding: 10px;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.roles-cell-perm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.roles-perm-label {
+  font-weight: var(--weight-medium);
+  font-size: var(--font-sm);
+}
+
+.roles-perm-desc {
+  font-size: var(--font-xs);
+}
+
+.roles-cell-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-md);
+}
+
+.roles-granted {
+  color: var(--status-ok);
+  font-weight: var(--weight-medium);
+}
+
+.roles-denied {
+  color: var(--text-tertiary);
+}
+
+/* Visually-hidden text paired with the ✓/— glyph so status isn't conveyed by colour alone. */
+.roles-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.roles-note {
+  margin-top: 14px;
+  font-size: var(--font-sm);
+}

@@ -550,6 +550,22 @@ describe('api client', () => {
     });
   });
 
+  it('fetches the role/privilege matrix', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        permissions: [{ key: 'view', label: 'View', description: '…' }],
+        roles: [{ key: 'admin', label: 'Admin', description: '…', builtin: true, permissions: ['view'] }],
+      }),
+    } as Response);
+    globalThis.fetch = spy;
+    const matrix = await api.listRoles();
+    expect(spy).toHaveBeenCalledWith('/api/v1/roles');
+    expect(matrix.roles[0].key).toBe('admin');
+    expect(matrix.permissions[0].key).toBe('view');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

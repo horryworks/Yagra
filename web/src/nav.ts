@@ -98,6 +98,7 @@ export const NAV: NavSection[] = [
         mono: 'Cr',
       },
       { label: 'Users & roles', path: '/settings/users', implemented: true, mono: 'Us' },
+      { label: 'Roles & privileges', path: '/settings/roles', implemented: true, mono: 'Rl' },
       { label: 'Authentication', path: '/settings/auth', implemented: false, mono: 'Au' },
       { label: 'Audit log', path: '/settings/audit', implemented: true, mono: 'Ad' },
       {
