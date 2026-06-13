@@ -356,6 +356,28 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Fill a node's **blank** vendor/model from an SNMP identity probe — `COALESCE` keeps any
+    /// existing (manually set or already-classified) value, so this never clobbers operator input;
+    /// it only writes a column that is currently NULL. A `None` argument leaves that column alone.
+    /// Returns whether the node exists. Used by the poll-result consumer after `identify()`.
+    pub async fn fill_node_identity(
+        &self,
+        id: Uuid,
+        vendor: Option<&str>,
+        model: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE nodes SET vendor = COALESCE(vendor, $2), model = COALESCE(model, $3), \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(vendor)
+        .bind(model)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// The `sort_order` of each of the given node ids (for the inventory tree, which orders nodes
     /// within their group). Ids absent from the map default to 0 at the call site. One query.
     pub async fn node_sort_orders(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, f64>> {
