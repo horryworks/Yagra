@@ -109,6 +109,16 @@ impl Transport for SurgePingTransport {
         crate::snmp_v3::snmp_get_v3(target, params, oids, timeout).await
     }
 
+    async fn snmp_v3_get_strings(
+        &self,
+        target: IpAddr,
+        params: &crate::SnmpV3Params,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<crate::SnmpStringSample>, TransportError> {
+        crate::snmp_v3::snmp_get_v3_strings(target, params, oids, timeout).await
+    }
+
     async fn snmp_walk(
         &self,
         target: IpAddr,

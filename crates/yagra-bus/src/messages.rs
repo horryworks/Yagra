@@ -383,7 +383,8 @@ impl Sample {
 // ── Discovery (Phase C) — a separate job/result pair on its own subjects ────────────
 
 /// A discovery sweep request: probe each target for ICMP liveness + SNMP identity (sysDescr /
-/// sysName), trying the candidate communities. Runs on the poller (it has raw-socket ICMP).
+/// sysName), trying the candidate credentials and communities. Runs on the poller (it has
+/// raw-socket ICMP).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryJob {
     #[serde(default = "default_version")]
@@ -395,9 +396,47 @@ pub struct DiscoveryJob {
     /// Candidate SNMP v2c communities to try; the first that answers wins.
     #[serde(default)]
     pub communities: Vec<String>,
+    /// Candidate stored credentials (v2c or v3), resolved/decrypted by core and inlined
+    /// (ADR-018/020). Tried before the ad-hoc `communities`; the first that answers wins
+    /// and its `cred_ref` is echoed back so import can bind it by reference. Defaulted for
+    /// N-1 compatibility (an older poller ignores this field and uses `communities` only).
+    #[serde(default)]
+    pub credentials: Vec<DiscoveryCredential>,
     /// Per-probe timeout in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
+}
+
+/// One candidate credential for a discovery sweep. Exactly one of `community` / `v3` is
+/// set (kind-dependent); the secret is resolved/decrypted by core and inlined over the
+/// bus (ADR-018/020) — the poller never reads the secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryCredential {
+    /// Credential-store id, echoed back on a match (the matched credential is bound to
+    /// the imported node **by reference**, never by value — security.md).
+    pub cred_ref: Uuid,
+    /// SNMP v2c community (non-v3 credential kinds).
+    #[serde(default)]
+    pub community: Option<String>,
+    /// SNMP v3 USM parameters (`snmp_v3` credential kind).
+    #[serde(default)]
+    pub v3: Option<DiscoveryV3>,
+}
+
+/// SNMP v3 USM parameters for a discovery probe (mirrors [`SnmpV3Check`]'s tokens:
+/// `security_level` ∈ noauth|auth|authpriv, lowercase protocol tokens).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryV3 {
+    pub user: String,
+    pub security_level: String,
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    #[serde(default)]
+    pub priv_key: Option<String>,
 }
 
 /// One device found by a discovery sweep.
@@ -413,15 +452,37 @@ pub struct DiscoveredDevice {
     /// `sysName.0` if it answered SNMP.
     #[serde(default)]
     pub sysname: Option<String>,
+    /// The stored credential that answered SNMP, by reference (never the value). `None`
+    /// when an ad-hoc community matched or nothing answered.
+    #[serde(default)]
+    pub matched_credential: Option<Uuid>,
 }
 
-/// The result of one [`DiscoveryJob`]: the devices that responded.
+/// A (possibly partial) result of one [`DiscoveryJob`]. The poller publishes progress as
+/// it sweeps: each message carries the **cumulative** `found` list so any single message
+/// is a complete snapshot (an older core that treats the first message as final still
+/// converges on correct data — ADR-017).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryResult {
     #[serde(default = "default_version")]
     pub schema_version: u16,
     pub scan_id: Uuid,
+    /// All devices found so far (cumulative).
     pub found: Vec<DiscoveredDevice>,
+    /// Targets probed so far. Defaults to 0 for an older poller's single final message.
+    #[serde(default)]
+    pub probed: u32,
+    /// Total targets in the sweep.
+    #[serde(default)]
+    pub total: u32,
+    /// Whether the sweep has finished. Defaults to **true** so an older poller's single
+    /// result message still completes the scan (ADR-017).
+    #[serde(default = "default_true")]
+    pub done: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -523,6 +584,65 @@ mod tests {
         let i = Sample::interface("if_hc_in_octets", IfIndex(4), 9.0, MetricKind::Counter);
         assert_eq!(i.ifindex, Some(IfIndex(4)));
         assert_eq!(i.kind, MetricKind::Counter);
+    }
+
+    #[test]
+    fn discovery_job_with_credentials_round_trips() {
+        let job = DiscoveryJob {
+            schema_version: BUS_SCHEMA_VERSION,
+            scan_id: Uuid::nil(),
+            targets: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))],
+            communities: vec!["public".into()],
+            credentials: vec![
+                DiscoveryCredential {
+                    cred_ref: Uuid::nil(),
+                    community: Some("secret-community".into()),
+                    v3: None,
+                },
+                DiscoveryCredential {
+                    cred_ref: Uuid::nil(),
+                    community: None,
+                    v3: Some(DiscoveryV3 {
+                        user: "monitor".into(),
+                        security_level: "authpriv".into(),
+                        auth_protocol: Some("sha256".into()),
+                        auth_key: Some("a-pass".into()),
+                        priv_protocol: Some("aes256".into()),
+                        priv_key: Some("p-pass".into()),
+                    }),
+                },
+            ],
+            timeout_ms: 2000,
+        };
+        let json = serde_json::to_string(&job).unwrap();
+        let back: DiscoveryJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(job, back);
+    }
+
+    #[test]
+    fn old_discovery_messages_default_new_fields() {
+        // N-1 (ADR-017): an older core's job has no `credentials`; an older poller's
+        // single result has no progress fields — it must read as a *final* snapshot.
+        let job: DiscoveryJob = serde_json::from_str(
+            r#"{
+                "scan_id": "00000000-0000-0000-0000-000000000000",
+                "targets": ["10.0.0.1"],
+                "communities": ["public"]
+            }"#,
+        )
+        .unwrap();
+        assert!(job.credentials.is_empty());
+
+        let result: DiscoveryResult = serde_json::from_str(
+            r#"{
+                "scan_id": "00000000-0000-0000-0000-000000000000",
+                "found": [{"address": "10.0.0.1", "reachable": true}]
+            }"#,
+        )
+        .unwrap();
+        assert!(result.done, "missing done must default to true");
+        assert_eq!(result.probed, 0);
+        assert_eq!(result.found[0].matched_credential, None);
     }
 
     #[test]

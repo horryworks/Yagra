@@ -23,7 +23,8 @@ anyhow = { workspace = true }
 futures = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-uuid = { workspace = true }
 tokio-stream = { workspace = true }
+async-trait = { workspace = true }

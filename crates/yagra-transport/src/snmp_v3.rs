@@ -7,13 +7,32 @@
 //! (counters included) — rates are derived at query time (ADR-012). Live-only (needs a
 //! device + UDP); the parameter mapping is unit-tested.
 
-use crate::{SnmpSample, SnmpV3Params, TransportError};
+use crate::{SnmpSample, SnmpStringSample, SnmpV3Params, TransportError};
 use snmp2::{v3, AsyncSession, Oid, Value};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 /// Standard SNMP agent port.
 const SNMP_PORT: u16 = 161;
+
+/// Open a v3 session against `target` and run engine discovery (id/boots/time) — required
+/// before authenticated requests.
+async fn open_session(
+    target: IpAddr,
+    params: &SnmpV3Params,
+    timeout: Duration,
+) -> Result<AsyncSession, TransportError> {
+    let security = build_security(params).map_err(TransportError::Io)?;
+    let addr = SocketAddr::new(target, SNMP_PORT);
+    let mut session = AsyncSession::new_v3(addr, 0, security)
+        .await
+        .map_err(|e| TransportError::Io(format!("snmp v3 connect {addr}: {e}")))?;
+    tokio::time::timeout(timeout, session.init())
+        .await
+        .map_err(|_| TransportError::Io(format!("snmp v3 engine discovery {addr}: timeout")))?
+        .map_err(|e| TransportError::Io(format!("snmp v3 engine discovery {addr}: {e}")))?;
+    Ok(session)
+}
 
 /// Fetch `oids` from `target` via SNMP v3 (USM). Per-OID failures are logged and skipped
 /// so a single bad OID doesn't fail the whole poll; an auth/engine failure fails the call.
@@ -23,17 +42,7 @@ pub async fn snmp_get_v3(
     oids: &[String],
     timeout: Duration,
 ) -> Result<Vec<SnmpSample>, TransportError> {
-    let security = build_security(params).map_err(TransportError::Io)?;
-    let addr = SocketAddr::new(target, SNMP_PORT);
-    let mut session = AsyncSession::new_v3(addr, 0, security)
-        .await
-        .map_err(|e| TransportError::Io(format!("snmp v3 connect {addr}: {e}")))?;
-    // Engine discovery (id/boots/time) — required before authenticated requests.
-    tokio::time::timeout(timeout, session.init())
-        .await
-        .map_err(|_| TransportError::Io(format!("snmp v3 engine discovery {addr}: timeout")))?
-        .map_err(|e| TransportError::Io(format!("snmp v3 engine discovery {addr}: {e}")))?;
-
+    let mut session = open_session(target, params, timeout).await?;
     let mut samples = Vec::with_capacity(oids.len());
     for oid_str in oids {
         let Some(oid) = parse_oid(oid_str) else {
@@ -53,6 +62,39 @@ pub async fn snmp_get_v3(
             }
             Ok(Err(e)) => tracing::debug!(%oid_str, error = %e, "snmp v3 get failed"),
             Err(_) => tracing::debug!(%oid_str, "snmp v3 get timed out"),
+        }
+    }
+    Ok(samples)
+}
+
+/// Fetch string-valued scalar `oids` (e.g. `sysDescr.0` / `sysName.0`) from `target` via
+/// SNMP v3 (USM). Non-string values are skipped. Used by discovery for device identity.
+pub async fn snmp_get_v3_strings(
+    target: IpAddr,
+    params: &SnmpV3Params,
+    oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpStringSample>, TransportError> {
+    let mut session = open_session(target, params, timeout).await?;
+    let mut samples = Vec::with_capacity(oids.len());
+    for oid_str in oids {
+        let Some(oid) = parse_oid(oid_str) else {
+            tracing::warn!(%oid_str, "skipping malformed OID");
+            continue;
+        };
+        match tokio::time::timeout(timeout, session.get(&oid)).await {
+            Ok(Ok(pdu)) => {
+                for (_, value) in pdu.varbinds {
+                    if let Some(v) = string_value(&value) {
+                        samples.push(SnmpStringSample {
+                            oid: oid_str.clone(),
+                            value: v,
+                        });
+                    }
+                }
+            }
+            Ok(Err(e)) => tracing::debug!(%oid_str, error = %e, "snmp v3 string get failed"),
+            Err(_) => tracing::debug!(%oid_str, "snmp v3 string get timed out"),
         }
     }
     Ok(samples)
@@ -138,6 +180,15 @@ fn numeric(value: &Value) -> Option<f64> {
     }
 }
 
+/// Map a string SNMP value (octet string, lossily decoded UTF-8 — device-supplied, treat
+/// as untrusted); non-string values yield `None` (skipped).
+fn string_value(value: &Value) -> Option<String> {
+    match value {
+        Value::OctetString(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +269,20 @@ mod tests {
         assert_eq!(numeric(&Value::Timeticks(42)), Some(42.0));
         assert_eq!(numeric(&Value::OctetString(b"x")), None);
         assert_eq!(numeric(&Value::NoSuchObject), None);
+    }
+
+    #[test]
+    fn maps_string_values_and_skips_others() {
+        assert_eq!(
+            string_value(&Value::OctetString(b"Huawei USG")),
+            Some("Huawei USG".to_owned())
+        );
+        // Invalid UTF-8 decodes lossily rather than failing (device data is untrusted).
+        assert_eq!(
+            string_value(&Value::OctetString(b"fw\xff01")),
+            Some("fw\u{fffd}01".to_owned())
+        );
+        assert_eq!(string_value(&Value::Integer(1)), None);
+        assert_eq!(string_value(&Value::NoSuchObject), None);
     }
 }

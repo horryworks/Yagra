@@ -1,6 +1,8 @@
 // Discovery (Nodes ▸ Discovery). Sweep a subnet for live + SNMP-speaking devices, review the
 // candidates (classified into a suggested profile from sysDescr), and import the chosen ones as
 // nodes. The sweep runs on the poller (raw-socket ICMP); core correlates results by scan id.
+// Stored credentials (v2c/v3) are selectable as scan candidates; the one that answers is
+// preselected on the row so import binds it automatically.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -17,6 +19,9 @@ import './DiscoveryPage.css';
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
+/** Credential kinds that make sense as SNMP scan candidates. */
+const SNMP_KINDS = ['snmp_v2c', 'snmp_v3'];
+
 interface RowState {
   selected: boolean;
   name: string;
@@ -28,10 +33,14 @@ export function DiscoveryPage() {
   const authed = useAuthStore((s) => s.authed);
   const [cidr, setCidr] = useState('192.168.1.0/24');
   const [communities, setCommunities] = useState('public');
+  const [credSel, setCredSel] = useState<Record<string, boolean>>({});
   const [scanId, setScanId] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
+  const [imported, setImported] = useState<Record<string, boolean>>({});
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -40,13 +49,27 @@ export function DiscoveryPage() {
 
   useEffect(() => {
     api.listProfiles().then(setProfiles).catch(() => undefined);
-    api.listCredentials().then(setCreds).catch(() => undefined);
+    api
+      .listCredentials()
+      .then((list) => {
+        setCreds(list);
+        // Preselect every SNMP credential — the common case is "try all my secrets".
+        setCredSel(
+          Object.fromEntries(
+            list.filter((c) => SNMP_KINDS.includes(c.kind)).map((c) => [c.id, true]),
+          ),
+        );
+      })
+      .catch(() => undefined);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
 
-  // Seed per-row form state when new candidates arrive (suggested profile preselected by name).
+  const snmpCreds = creds.filter((c) => SNMP_KINDS.includes(c.kind));
+
+  // Seed per-row form state when new candidates arrive (suggested profile + matched
+  // credential preselected so import binds the working secret automatically).
   const seedRows = useCallback(
     (list: DiscoveryCandidate[]) => {
       setRowState((cur) => {
@@ -58,7 +81,7 @@ export function DiscoveryPage() {
             selected: false,
             name: c.sysname?.trim() || c.address,
             profile_id: prof?.id ?? '',
-            credential_id: '',
+            credential_id: c.matched_credential_id ?? '',
           };
         }
         return next;
@@ -70,6 +93,8 @@ export function DiscoveryPage() {
   const startScan = () => {
     setError(null);
     setNote(null);
+    setImportNote(null);
+    setImportError(null);
     const targets = expandCidr(cidr);
     if (targets.length === 0) {
       setError('Enter a single IP or an IPv4 CIDR of /22 or smaller (≤1024 hosts).');
@@ -79,11 +104,13 @@ export function DiscoveryPage() {
       .split(',')
       .map((c) => c.trim())
       .filter(Boolean);
+    const credentialIds = snmpCreds.filter((c) => credSel[c.id]).map((c) => c.id);
     setCandidates([]);
     setRowState({});
+    setImported({});
     setDone(false);
     api
-      .startDiscoveryScan({ targets, communities: comms })
+      .startDiscoveryScan({ targets, communities: comms, credential_ids: credentialIds })
       .then(({ scan_id }) => {
         setScanId(scan_id);
         setNote(`Scanning ${targets.length} addresses…`);
@@ -107,6 +134,9 @@ export function DiscoveryPage() {
             clearInterval(pollRef.current);
             pollRef.current = null;
           }
+        } else {
+          const at = s.scanning ? ` — now at ${s.scanning}` : '';
+          setNote(`Scanning… ${s.probed}/${s.total} addresses probed${at}`);
         }
       })
       .catch(() => undefined);
@@ -116,9 +146,10 @@ export function DiscoveryPage() {
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
 
   const importSelected = () => {
-    setError(null);
+    setImportNote(null);
+    setImportError(null);
     const nodes = candidates
-      .filter((c) => rowState[c.address]?.selected)
+      .filter((c) => rowState[c.address]?.selected && !imported[c.address])
       .map((c) => {
         const r = rowState[c.address];
         return {
@@ -129,24 +160,31 @@ export function DiscoveryPage() {
         };
       });
     if (nodes.length === 0) {
-      setError('Select at least one device to import.');
+      setImportError('Select at least one device to import.');
       return;
     }
     api
       .importDiscovered(nodes)
       .then(({ created }) => {
-        setNote(`Imported ${created} node(s). They will start polling shortly.`);
-        // Clear the imported rows' selection.
+        setImportNote(`Imported ${created} node(s) — they will start polling shortly.`);
+        // Mark the imported rows and clear their selection (no double-import).
+        setImported((cur) => {
+          const next = { ...cur };
+          for (const n of nodes) next[n.address] = true;
+          return next;
+        });
         setRowState((cur) => {
           const next = { ...cur };
           for (const n of nodes) if (next[n.address]) next[n.address].selected = false;
           return next;
         });
       })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to import')));
+      .catch((e: unknown) => setImportError(errMsg(e, 'failed to import')));
   };
 
-  const selectedCount = candidates.filter((c) => rowState[c.address]?.selected).length;
+  const selectedCount = candidates.filter(
+    (c) => rowState[c.address]?.selected && !imported[c.address],
+  ).length;
 
   return (
     <div>
@@ -158,23 +196,43 @@ export function DiscoveryPage() {
 
       <Card title="Scan a subnet">
         {authed ? (
-          <div className="disco-form form-row">
-            <TextInput
-              className="mono"
-              placeholder="CIDR or IP (e.g. 192.168.1.0/24)"
-              value={cidr}
-              onChange={(e) => setCidr(e.target.value)}
-            />
-            <TextInput
-              className="mono"
-              placeholder="SNMP communities (comma-separated)"
-              value={communities}
-              onChange={(e) => setCommunities(e.target.value)}
-            />
-            <Button variant="primary" onClick={startScan} disabled={!!scanId && !done}>
-              {scanId && !done ? 'Scanning…' : 'Scan'}
-            </Button>
-          </div>
+          <>
+            <div className="disco-form form-row">
+              <TextInput
+                className="mono"
+                placeholder="CIDR or IP (e.g. 192.168.1.0/24)"
+                value={cidr}
+                onChange={(e) => setCidr(e.target.value)}
+              />
+              <TextInput
+                className="mono"
+                placeholder="Ad-hoc SNMP communities (comma-separated, optional)"
+                value={communities}
+                onChange={(e) => setCommunities(e.target.value)}
+              />
+              <Button variant="primary" onClick={startScan} disabled={!!scanId && !done}>
+                {scanId && !done ? 'Scanning…' : 'Scan'}
+              </Button>
+            </div>
+            {snmpCreds.length > 0 && (
+              <div className="disco-creds">
+                <span className="disco-creds-label">Try stored credentials:</span>
+                {snmpCreds.map((c) => (
+                  <label className="disco-cred" key={c.id}>
+                    <input
+                      type="checkbox"
+                      checked={!!credSel[c.id]}
+                      onChange={(e) =>
+                        setCredSel((cur) => ({ ...cur, [c.id]: e.target.checked }))
+                      }
+                    />
+                    <span>{c.name}</span>
+                    <span className="disco-cred-kind mono">{c.kind}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <p className="muted">Sign in as an admin to run discovery.</p>
         )}
@@ -196,16 +254,20 @@ export function DiscoveryPage() {
             {candidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
+              const isImported = !!imported[c.address];
               return (
                 <div className="disco-row" key={c.address}>
                   <input
                     type="checkbox"
                     checked={r.selected}
+                    disabled={isImported}
                     onChange={(e) => patchRow(c.address, { selected: e.target.checked })}
                   />
                   <span className="mono">
                     {c.address}{' '}
-                    {c.reachable ? (
+                    {isImported ? (
+                      <Badge tone="up">imported</Badge>
+                    ) : c.reachable ? (
                       <Badge tone="up">ping</Badge>
                     ) : (
                       <span className="muted">no ping</span>
@@ -244,6 +306,7 @@ export function DiscoveryPage() {
                     {creds.map((cr) => (
                       <option key={cr.id} value={cr.id}>
                         {cr.name}
+                        {cr.id === c.matched_credential_id ? ' ✓ matched' : ''}
                       </option>
                     ))}
                   </Select>
@@ -253,6 +316,8 @@ export function DiscoveryPage() {
           </div>
           {authed && (
             <div className="disco-import">
+              {importNote && <span className="disco-import-ok">✓ {importNote}</span>}
+              {importError && <span className="disco-import-err">{importError}</span>}
               <Button variant="primary" onClick={importSelected} disabled={selectedCount === 0}>
                 Import {selectedCount > 0 ? `${selectedCount} ` : ''}selected
               </Button>
