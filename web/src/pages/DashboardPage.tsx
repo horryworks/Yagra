@@ -24,6 +24,7 @@ export function DashboardPage() {
   useAlertStream();
   const navigate = useNavigate();
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [nodesLoading, setNodesLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -40,7 +41,10 @@ export function DashboardPage() {
         setNodes(ns);
         setSelected((cur) => cur ?? ns[0]?.id ?? null);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setNodesLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -75,7 +79,7 @@ export function DashboardPage() {
 
       <div className="dash-grid">
         <Card title="Status summary" className="dash-span2">
-          <StatusSummary nodes={nodes} />
+          <StatusSummary nodes={nodes} loading={nodesLoading} />
         </Card>
 
         <Card

@@ -54,6 +54,7 @@ export function NodesPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Add-node modal.
@@ -86,6 +87,8 @@ export function NodesPage() {
       setTruncated(allNodes.truncated);
     } catch (e: unknown) {
       setError(errMsg(e, 'failed to load nodes'));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -191,6 +194,7 @@ export function NodesPage() {
           groups={groups}
           nodes={nodes}
           canEdit={authed}
+          loading={loading}
           onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
           onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
           onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}

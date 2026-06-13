@@ -27,6 +27,7 @@ export function ThresholdsPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<StoredThreshold[]>([]);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [level, setLevel] = useState<ScopeLevel>('profile');
@@ -46,7 +47,8 @@ export function ThresholdsPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -168,7 +170,7 @@ export function ThresholdsPage() {
           {error && <p className="form-error">{error}</p>}
 
           {rows.length === 0 ? (
-            <p className="muted">No threshold rules yet.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No threshold rules yet.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((t) => (

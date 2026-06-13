@@ -3,7 +3,8 @@
 // Interfaces (per-interface traffic + utilization from SNMP table walks, joined with query-time
 // rate()), and Collection (per-node override of what SNMP metrics to poll). Admins can edit the
 // node (device profile + SNMP credential bindings, plus its maker/model) from the header. The
-// title reads "name (address) (maker) (model)", with the maker/model parts shown only when set.
+// title reads "name (address) maker model" (maker/model un-bracketed, single-space separated),
+// with the maker/model parts shown only when set.
 
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -14,6 +15,7 @@ import {
   formatTimestamp,
   formatUtil,
   pointsToSeries,
+  scalarDisplay,
   severityColorVar,
   stateLabel,
 } from '../lib/format';
@@ -115,10 +117,8 @@ export function NodeDetailPage() {
           node ? (
             <span>
               {node.name} <span className="mono nodedetail-title-addr">({node.address})</span>
-              {node.vendor && <span className="nodedetail-title-meta"> ({node.vendor})</span>}
-              {node.model && (
-                <span className="nodedetail-title-meta mono"> ({node.model})</span>
-              )}
+              {node.vendor && <span className="nodedetail-title-meta"> {node.vendor}</span>}
+              {node.model && <span className="nodedetail-title-meta mono"> {node.model}</span>}
             </span>
           ) : (
             <span className="mono">{nodeId}</span>
@@ -328,12 +328,15 @@ function SnmpScalarsCard({ nodeId }: { nodeId: string }) {
   return (
     <Card title="System (SNMP)">
       <div className="nodedetail-scalars">
-        {readings.map((r) => (
-          <div className="nodedetail-scalar" key={r.name}>
-            <span className="nodedetail-scalar-name mono">{r.name}</span>
-            <span className="nodedetail-scalar-value">{r.value}</span>
-          </div>
-        ))}
+        {readings.map((r) => {
+          const d = scalarDisplay(r.name, r.value);
+          return (
+            <div className="nodedetail-scalar" key={r.name}>
+              <span className={`nodedetail-scalar-name${d.known ? '' : ' mono'}`}>{d.label}</span>
+              <span className={`nodedetail-scalar-value${d.known ? '' : ' mono'}`}>{d.value}</span>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );

@@ -23,6 +23,7 @@ export function CollectionTemplatesPage() {
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [openItems, setOpenItems] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -34,7 +35,8 @@ export function CollectionTemplatesPage() {
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -97,7 +99,7 @@ export function CollectionTemplatesPage() {
           )}
           {error && <p className="form-error">{error}</p>}
           {rows.length === 0 ? (
-            <p className="muted">No collection templates yet.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No collection templates yet.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((t) => (

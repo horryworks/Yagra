@@ -22,6 +22,7 @@ export function ProfilesPage() {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
   // Which profile's template attachments are expanded (one at a time).
   const [openTemplates, setOpenTemplates] = useState<string | null>(null);
 
@@ -35,7 +36,8 @@ export function ProfilesPage() {
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
         else if (e instanceof ApiError && e.status === 401) setUnavailable(false);
-      });
+      })
+      .finally(() => setLoading(false));
     api.listCollectionTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
 
@@ -90,7 +92,7 @@ export function ProfilesPage() {
           )}
           {error && <p className="form-error">{error}</p>}
           {rows.length === 0 ? (
-            <p className="muted">No profiles yet.</p>
+            <p className="muted">{loading ? 'Loading…' : 'No profiles yet.'}</p>
           ) : (
             <div className="crud-list">
               {rows.map((p) => (
