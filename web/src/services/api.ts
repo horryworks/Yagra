@@ -181,7 +181,7 @@ export const api = {
     return request(qs ? `/nodes?${qs}` : '/nodes');
   },
 
-  /** Create a node. Optional profile/credential/parent bindings. */
+  /** Create a node. Optional profile/credential/parent bindings + descriptive maker/model. */
   createNode: (body: {
     name: string;
     address: string;
@@ -189,6 +189,8 @@ export const api = {
     profile_id?: string;
     credential_id?: string;
     parent_id?: string;
+    vendor?: string;
+    model?: string;
   }): Promise<{ id: string }> => request('/nodes', jsonBody('POST', body)),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
@@ -221,10 +223,16 @@ export const api = {
   deleteNode: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /** Set or clear a node's device-profile + bound credential. */
+  /** Set or clear a node's device-profile + bound credential and its maker/model. The node-edit
+   *  UI loads the current values and resends them, so an unchanged field is preserved. */
   setNodeBindings: (
     id: string,
-    body: { profile_id?: string | null; credential_id?: string | null },
+    body: {
+      profile_id?: string | null;
+      credential_id?: string | null;
+      vendor?: string | null;
+      model?: string | null;
+    },
   ): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
 
@@ -317,7 +325,14 @@ export const api = {
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (
-    nodes: { address: string; name: string; profile_id?: string; credential_id?: string }[],
+    nodes: {
+      address: string;
+      name: string;
+      profile_id?: string;
+      credential_id?: string;
+      vendor?: string;
+      model?: string;
+    }[],
   ): Promise<{ created: number }> => request('/discovery/import', jsonBody('POST', { nodes })),
 
   /** The metrics in a template. */

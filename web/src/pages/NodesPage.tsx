@@ -28,6 +28,18 @@ const COLUMNS: Column<NodeSummary>[] = [
     width: '1fr',
     render: (n) => <span className="mono">{n.address}</span>,
   },
+  {
+    key: 'vendor',
+    header: 'Maker',
+    width: '0.9fr',
+    render: (n) => n.vendor ?? <span className="muted">—</span>,
+  },
+  {
+    key: 'model',
+    header: 'Model',
+    width: '0.9fr',
+    render: (n) => (n.model ? <span className="mono">{n.model}</span> : <span className="muted">—</span>),
+  },
 ];
 
 export function NodesPage() {
@@ -45,6 +57,8 @@ export function NodesPage() {
   const [profileId, setProfileId] = useState('');
   const [credentialId, setCredentialId] = useState('');
   const [parentId, setParentId] = useState('');
+  const [vendor, setVendor] = useState('');
+  const [model, setModel] = useState('');
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
@@ -107,6 +121,8 @@ export function NodesPage() {
         profile_id: profileId || undefined,
         credential_id: credentialId || undefined,
         parent_id: parentId || undefined,
+        vendor: vendor.trim() || undefined,
+        model: model.trim() || undefined,
       })
       .then(() => {
         setAdding(false);
@@ -115,6 +131,8 @@ export function NodesPage() {
         setProfileId('');
         setCredentialId('');
         setParentId('');
+        setVendor('');
+        setModel('');
         reload();
       })
       .catch((e: unknown) =>
@@ -209,6 +227,25 @@ export function NodesPage() {
                 ))}
               </Select>
             </label>
+            <div className="form-row">
+              <label className="form-label">
+                Maker (optional)
+                <TextInput
+                  value={vendor}
+                  onChange={(e) => setVendor(e.target.value)}
+                  placeholder="e.g. Cisco"
+                />
+              </label>
+              <label className="form-label">
+                Model (optional)
+                <TextInput
+                  className="mono"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="e.g. C2960"
+                />
+              </label>
+            </div>
             {addError && <p className="form-error">{addError}</p>}
           </div>
         </Modal>

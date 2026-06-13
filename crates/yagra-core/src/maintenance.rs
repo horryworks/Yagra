@@ -242,6 +242,8 @@ mod tests {
             profile,
             pool: None,
             credential: None,
+            vendor: None,
+            model: None,
             tags: tags
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
