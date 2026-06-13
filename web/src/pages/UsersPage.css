@@ -3,9 +3,13 @@
    here; the chrome, alternating-column tint, hover, and compact role dropdown come from
    `.ytable*`. The modal form fields below are local to this page. */
 
+/* No `auto` track: header and each row are independent grids, so a content-sized column would
+   resolve to different widths in the header vs the rows and knock every column out of alignment.
+   Fixed + fr only → identical tracks top-to-bottom (Role header sits over the dropdown, Actions
+   over its buttons). */
 .users-table .ytable-head,
 .users-table .ytable-row {
-  grid-template-columns: 1.4fr 150px 1fr auto;
+  grid-template-columns: 1.4fr 132px 1fr 1fr 230px;
 }
 
 .users-name {

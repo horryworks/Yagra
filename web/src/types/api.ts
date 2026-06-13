@@ -133,12 +133,14 @@ export interface RoleMatrix {
 }
 
 /** A user account row (`GET /api/v1/users`, core `UserSummary`). Never includes the
- *  password hash. `created_at` is RFC 3339 text. */
+ *  password hash. `created_at` is RFC 3339 text; `last_login_at` is RFC 3339 text or null
+ *  (the account has never logged in). */
 export interface UserSummary {
   id: string;
   username: string;
   role: Role;
   created_at: string;
+  last_login_at: string | null;
 }
 
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). */
