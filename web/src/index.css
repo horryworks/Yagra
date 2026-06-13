@@ -106,3 +106,29 @@ code,
   font-size: var(--font-sm);
   color: var(--status-critical);
 }
+
+/* Required-field marker (RequiredMark): red asterisk, no underline. */
+.form-req {
+  margin-left: 3px;
+  color: var(--status-critical);
+  text-decoration: none;
+  cursor: help;
+}
+
+/* Per-field helper / inline validation text (FieldHint). */
+.form-hint {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-normal);
+  color: var(--text-tertiary);
+}
+
+.form-hint-error {
+  color: var(--status-critical);
+}
+
+/* Small muted note under an inline form (e.g. timezone clarification, scope-id meaning). */
+.form-note {
+  margin: 8px 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}

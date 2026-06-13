@@ -60,6 +60,17 @@ export function formatTimestamp(unixMs: number): string {
   return new Date(unixMs).toLocaleString();
 }
 
+/** The browser's IANA time-zone name (e.g. "Asia/Tokyo"), used to label datetime-local
+ *  inputs so operators know they're entering local time (stored as UTC). Falls back to a
+ *  generic phrase if the runtime can't resolve a zone. */
+export function localTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'your local time';
+  } catch {
+    return 'your local time';
+  }
+}
+
 /** Format a millisecond RTT value. */
 export function formatRtt(ms: number): string {
   return `${ms.toFixed(1)} ms`;

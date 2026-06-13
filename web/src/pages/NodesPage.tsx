@@ -23,7 +23,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { NodeTree } from '../components/NodeTree/NodeTree';
 
 const PAGE = 100;
@@ -222,11 +222,15 @@ export function NodesPage() {
         >
           <div className="form-stack">
             <label className="form-label">
-              Name
+              <span>
+                Name <RequiredMark />
+              </span>
               <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
             </label>
             <label className="form-label">
-              IP address
+              <span>
+                IP address <RequiredMark />
+              </span>
               <TextInput
                 className="mono"
                 value={address}
@@ -330,8 +334,9 @@ export function NodesPage() {
           }
         >
           <p>
-            Delete group <strong>{deletingGroup.name}</strong>? Its subgroups and member nodes move
-            up to the parent — <strong>no nodes are deleted</strong>.
+            Delete group <strong>{deletingGroup.name}</strong>?{' '}
+            {groupDeletionImpact(groups, nodes, deletingGroup)} —{' '}
+            <strong>no nodes are deleted</strong>.
           </p>
         </Modal>
       )}
@@ -362,6 +367,15 @@ async function loadAllNodes(): Promise<{ nodes: NodeSummary[]; truncated: boolea
     cursor = page.next_cursor;
   }
   return { nodes: out, truncated: true };
+}
+
+/** One-line impact summary for deleting a group: how many direct subgroups and member nodes
+ *  will be re-parented (nothing is deleted). Pluralised for readability. */
+function groupDeletionImpact(groups: NodeGroup[], nodes: NodeSummary[], g: NodeGroup): string {
+  const subs = groups.filter((x) => x.parent_id === g.id).length;
+  const members = nodes.filter((n) => n.group_id === g.id).length;
+  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  return `${count(subs, 'subgroup')} and ${count(members, 'member node')} move up to the parent`;
 }
 
 /** Group label for a select option, indented by depth so the hierarchy reads in a flat list. */
@@ -441,7 +455,9 @@ function GroupModal({
     >
       <div className="form-stack">
         <label className="form-label">
-          Name
+          <span>
+            Name <RequiredMark />
+          </span>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </label>
         <label className="form-label">

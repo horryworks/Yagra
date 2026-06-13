@@ -27,10 +27,20 @@ export function ActiveAlertsPage() {
           empty="No active alerts."
           actions={() => (
             <>
-              <Button variant="ghost" disabled title="Mutes backend not wired yet">
+              <Button
+                variant="ghost"
+                disabled
+                aria-label="Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now"
+                title="Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now"
+              >
                 Mute
               </Button>
-              <Button variant="ghost" disabled title="Routing integrations not configured">
+              <Button
+                variant="ghost"
+                disabled
+                aria-label="No external routing integration is configured yet (PagerDuty / JSM)"
+                title="No external routing integration is configured yet (PagerDuty / JSM)"
+              >
                 Open external
               </Button>
             </>

@@ -11,8 +11,11 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { localTimeZone } from '../lib/format';
 import './CrudList.css';
 import './MutesPage.css';
+
+const TZ = localTimeZone();
 
 // Check-name presets: the liveness check plus the common polled metrics.
 const CHECK_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
@@ -144,6 +147,11 @@ export function MutesPage() {
                 Mute
               </Button>
             </div>
+          )}
+          {authed && (
+            <p className="form-note">
+              “Until” is in {TZ} (your browser’s local time) and is stored as UTC.
+            </p>
           )}
           {error && <p className="form-error">{error}</p>}
 

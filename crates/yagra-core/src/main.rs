@@ -328,7 +328,9 @@ async fn run_scheduler(
     collection: Arc<CollectionRepo>,
 ) {
     let interval = Duration::from_secs(u64::from(interval_secs));
-    let window_ms = interval.as_millis().max(1) as u64;
+    // Clamp to [1, u64::MAX] before narrowing u128→u64 so an extreme interval can't wrap to a
+    // tiny jitter window (which would defeat the anti-stampede spread).
+    let window_ms = interval.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
     let jitter = || Duration::from_millis(rand::random::<u64>() % window_ms);
     loop {
         match repo.list_nodes().await {
