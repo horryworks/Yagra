@@ -11,7 +11,12 @@
          <div class="ytable-cell">…</div>          one per column (`.right`, `.mono`, `.ellipsis`)
 
    Cells stretch to the full row height so the column tint reads as a continuous band; content is
-   vertically centred inside. In-cell dropdowns size to their content (never the whole cell). */
+   vertically centred inside. In-cell dropdowns size to their content (never the whole cell).
+
+   IMPORTANT — column templates must use fixed/`fr` tracks only, never `auto`: the header and each
+   row are *independent* grids, so a content-sized (`auto`) track resolves to a different width in
+   the header than in the rows, which throws every column out of alignment. For an actions column,
+   give it a fixed width (the buttons are right-aligned inside it). */
 
 .ytable {
   border: var(--border-width) solid var(--border-color);

@@ -17,9 +17,10 @@
   margin-bottom: 12px;
 }
 
+/* Fixed/fr only (no `auto`) so the header columns align over the rows — see styles/table.css. */
 .mib-table .ytable-head,
 .mib-table .ytable-row {
-  grid-template-columns: 1.4fr 2fr 1fr 1fr auto;
+  grid-template-columns: 1.4fr 2fr 1fr 1fr 90px;
 }
 
 .mib-metric {
