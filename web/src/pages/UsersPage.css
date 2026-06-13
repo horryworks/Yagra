@@ -12,6 +12,15 @@
   grid-template-columns: 1.4fr 132px 1fr 1fr 230px;
 }
 
+/* Centre every column (header + cell) on this table — overrides the standard's left/right
+   defaults; the `.right` variants are listed so their higher specificity doesn't win. */
+.users-table .ytable-h,
+.users-table .ytable-cell,
+.users-table .ytable-h.right,
+.users-table .ytable-cell.right {
+  justify-content: center;
+}
+
 .users-name {
   font-weight: var(--weight-medium);
 }
