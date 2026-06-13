@@ -302,15 +302,73 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Move a node into a group (or `None` to ungroup it). Returns whether the node exists.
-    /// Used by the inventory tree (drag/move) and the node-detail editor.
+    /// Move a node into a group (or `None` to ungroup it), appending it to the **end** of the
+    /// destination scope (max sort_order + 1) so it lands predictably at the bottom. Returns
+    /// whether the node exists. Used by the "Move to…" picker and a drop directly onto a group;
+    /// drag-reorder between siblings goes through [`Self::place_node`] instead.
     pub async fn set_node_group(&self, id: Uuid, group: Option<Uuid>) -> anyhow::Result<bool> {
-        let res = sqlx::query("UPDATE nodes SET group_id = $2, updated_at = now() WHERE id = $1")
-            .bind(id)
-            .bind(group)
-            .execute(&self.pool)
-            .await?;
+        let res = sqlx::query(
+            "UPDATE nodes SET group_id = $2, updated_at = now(), \
+             sort_order = (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM nodes \
+                           WHERE group_id IS NOT DISTINCT FROM $2::uuid AND id <> $1) \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(group)
+        .execute(&self.pool)
+        .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// The `(id, sort_order)` of the nodes in `group` (NULL ⇒ ungrouped), ordered. Feeds
+    /// [`crate::groups::placement_order`] when a drag drops a node before/after a sibling.
+    pub async fn ordered_nodes_in_group(
+        &self,
+        group: Option<Uuid>,
+    ) -> anyhow::Result<Vec<(Uuid, f64)>> {
+        let rows = sqlx::query(
+            "SELECT id, sort_order FROM nodes \
+             WHERE group_id IS NOT DISTINCT FROM $1::uuid ORDER BY sort_order, name, id",
+        )
+        .bind(group)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("sort_order")?)))
+            .collect()
+    }
+
+    /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
+    pub async fn place_node(
+        &self,
+        id: Uuid,
+        group: Option<Uuid>,
+        order: f64,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE nodes SET group_id = $2, sort_order = $3, updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(group)
+        .bind(order)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// The `sort_order` of each of the given node ids (for the inventory tree, which orders nodes
+    /// within their group). Ids absent from the map default to 0 at the call site. One query.
+    pub async fn node_sort_orders(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, f64>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query("SELECT id, sort_order FROM nodes WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("sort_order")?)))
+            .collect()
     }
 
     /// Upsert an interface discovered during a table walk: insert it, or refresh its

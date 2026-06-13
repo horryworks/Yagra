@@ -12,7 +12,7 @@ use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::discovery::DiscoveryRunner;
-use crate::groups::{would_create_cycle, GroupRepo, GroupType};
+use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
 use crate::history::AlertHistoryStore;
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
@@ -94,6 +94,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
+        .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
             "/api/v1/node-groups",
             get(list_node_groups).post(create_node_group),
@@ -102,6 +103,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/node-groups/:id",
             put(update_node_group).delete(delete_node_group),
         )
+        .route("/api/v1/node-groups/:id/placement", put(place_group))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route("/api/v1/profiles/:id", delete(delete_profile))
         .route(
@@ -302,6 +304,8 @@ struct NodeSummary {
     model: Option<String>,
     /// The group this node belongs to (for the inventory tree); `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
+    /// Manual order within the group (the tree sorts members by this, then by name).
+    sort_order: f64,
 }
 
 /// The fixed error envelope (ADR-019).
@@ -375,12 +379,21 @@ async fn list_nodes(
             // with any active threshold alert). Nodes the engine hasn't observed yet fall
             // back to a coarse store probe (a recent RTT ⇒ ok, else unknown).
             let states = st.alerts.node_states();
+            // Per-node tree order (admin/live only; skeleton mode has no order → 0 = name order).
+            let orders = match st.admin.as_ref() {
+                Some(admin) => {
+                    let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+                    admin.repo.node_sort_orders(&ids).await.unwrap_or_default()
+                }
+                None => std::collections::HashMap::new(),
+            };
             let mut out = Vec::with_capacity(nodes.len());
             for n in nodes {
                 let state = match states.get(&n.id) {
                     Some(s) => *s,
                     None => derive_fallback_state(&st, n.id).await,
                 };
+                let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
                 out.push(NodeSummary {
                     id: n.id,
                     name: n.name,
@@ -389,6 +402,7 @@ async fn list_nodes(
                     vendor: n.vendor,
                     model: n.model,
                     group_id: n.group.map(|g| g.as_uuid()),
+                    sort_order,
                 });
             }
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
@@ -936,6 +950,61 @@ async fn set_node_group(
     }
 }
 
+/// Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.
+/// `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling
+/// to land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
+#[derive(Deserialize)]
+struct NodePlacement {
+    #[serde(default)]
+    group_id: Option<Uuid>,
+    #[serde(default)]
+    before: Option<Uuid>,
+    #[serde(default)]
+    after: Option<Uuid>,
+}
+
+async fn place_node(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NodePlacement>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.before.is_some() && body.after.is_some() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_placement",
+            "specify at most one of before/after".to_owned(),
+        );
+    }
+    // Order among the destination group's current members, excluding the moving node so it
+    // doesn't anchor against itself, then interpolate a fractional order next to the target.
+    let siblings = match admin.repo.ordered_nodes_in_group(body.group_id).await {
+        Ok(s) => s
+            .into_iter()
+            .filter(|(sid, _)| *sid != id)
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            tracing::error!(error = %e, "load node siblings failed");
+            return internal("failed to move node");
+        }
+    };
+    let order = placement_order(&siblings, body.before, body.after);
+    match admin.repo.place_node(id, body.group_id, order).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "place node failed");
+            internal("failed to move node")
+        }
+    }
+}
+
 // ── Node groups (the inventory folder tree) — ManageConfig writes, View reads ─
 
 async fn list_node_groups(State(st): State<ApiState>, headers: HeaderMap) -> Response {
@@ -1045,6 +1114,73 @@ async fn update_node_group(
         Err(e) => {
             tracing::error!(error = %e, "update node group failed");
             internal("failed to update group")
+        }
+    }
+}
+
+/// Drag-reorder a group, re-parenting it under `parent_id` (`null` ⇒ top level) and positioning
+/// it relative to a sibling group. `before`/`after` name the sibling (both omitted ⇒ append).
+/// Refuses a move that would nest the group inside its own subtree (cycle guard).
+#[derive(Deserialize)]
+struct GroupPlacement {
+    #[serde(default)]
+    parent_id: Option<Uuid>,
+    #[serde(default)]
+    before: Option<Uuid>,
+    #[serde(default)]
+    after: Option<Uuid>,
+}
+
+async fn place_group(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupPlacement>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.before.is_some() && body.after.is_some() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_placement",
+            "specify at most one of before/after".to_owned(),
+        );
+    }
+    let edges = match admin.groups.edges().await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "load group edges failed");
+            return internal("failed to move group");
+        }
+    };
+    if would_create_cycle(&edges, id, body.parent_id) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_group",
+            "that move would nest the group inside itself".to_owned(),
+        );
+    }
+    let siblings = match admin.groups.ordered_siblings(body.parent_id).await {
+        Ok(s) => s
+            .into_iter()
+            .filter(|(sid, _)| *sid != id)
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            tracing::error!(error = %e, "load group siblings failed");
+            return internal("failed to move group");
+        }
+    };
+    let order = placement_order(&siblings, body.before, body.after);
+    match admin.groups.place(id, body.parent_id, order).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("group_not_found", format!("no group {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "place group failed");
+            internal("failed to move group")
         }
     }
 }
@@ -3601,6 +3737,38 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let json = body_json(resp).await;
         assert_eq!(json["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn placement_routes_unavailable_without_admin() {
+        // Both drag-reorder routes are wired; in skeleton mode (admin: None) they are 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let node_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/nodes/00000000-0000-0000-0000-000000000000/placement")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"group_id":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(node_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let group_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/node-groups/00000000-0000-0000-0000-000000000000/placement")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"parent_id":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(group_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

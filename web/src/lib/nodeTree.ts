@@ -16,13 +16,15 @@ export interface NodeTreeData {
   ungrouped: NodeSummary[];
 }
 
-const byName = <T extends { name: string }>(a: T, b: T) =>
-  a.name.localeCompare(b.name);
+/** Order siblings by their manual `sort_order` (drag-reorder), falling back to name so equal or
+ *  unset orders stay stable. */
+const byOrder = <T extends { sort_order: number; name: string }>(a: T, b: T) =>
+  a.sort_order - b.sort_order || a.name.localeCompare(b.name);
 
 /** Build the nested tree from the flat group + node lists. Nodes whose `group_id` is null or
  *  points at an unknown group fall into `ungrouped`; groups whose `parent_id` is unknown are
  *  treated as top-level (so a stale reference can never hide a row). Children and nodes are
- *  name-sorted for stable display. */
+ *  ordered by their manual `sort_order` (then name) for stable display. */
 export function buildNodeTree(groups: NodeGroup[], nodes: NodeSummary[]): NodeTreeData {
   const byId = new Map<string, TreeGroup>();
   for (const g of groups) byId.set(g.id, { ...g, children: [], nodes: [] });
@@ -42,11 +44,11 @@ export function buildNodeTree(groups: NodeGroup[], nodes: NodeSummary[]): NodeTr
   }
 
   for (const g of byId.values()) {
-    g.children.sort(byName);
-    g.nodes.sort(byName);
+    g.children.sort(byOrder);
+    g.nodes.sort(byOrder);
   }
-  roots.sort(byName);
-  ungrouped.sort(byName);
+  roots.sort(byOrder);
+  ungrouped.sort(byOrder);
   return { roots, ungrouped };
 }
 

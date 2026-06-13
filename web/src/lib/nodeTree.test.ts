@@ -2,14 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { buildNodeTree, isSelfOrDescendant } from './nodeTree';
 import type { NodeGroup, NodeSummary } from '../types/api';
 
-const group = (id: string, name: string, parent: string | null = null): NodeGroup => ({
+const group = (
+  id: string,
+  name: string,
+  parent: string | null = null,
+  sort_order = 0,
+): NodeGroup => ({
   id,
   name,
   group_type: 'generic',
   parent_id: parent,
+  sort_order,
 });
 
-const node = (id: string, name: string, groupId: string | null): NodeSummary => ({
+const node = (
+  id: string,
+  name: string,
+  groupId: string | null,
+  sort_order = 0,
+): NodeSummary => ({
   id,
   name,
   address: '10.0.0.1',
@@ -17,6 +28,7 @@ const node = (id: string, name: string, groupId: string | null): NodeSummary => 
   vendor: null,
   model: null,
   group_id: groupId,
+  sort_order,
 });
 
 describe('buildNodeTree', () => {
@@ -40,12 +52,21 @@ describe('buildNodeTree', () => {
     expect(tree.ungrouped.map((n) => n.id)).toEqual(['n1']);
   });
 
-  it('sorts children and nodes by name', () => {
+  it('falls back to name order when sort_order is equal/unset', () => {
     const groups = [group('a', 'Zeta'), group('b', 'Alpha')];
     const nodes = [node('n2', 'zzz', null), node('n1', 'aaa', null)];
     const tree = buildNodeTree(groups, nodes);
     expect(tree.roots.map((g) => g.name)).toEqual(['Alpha', 'Zeta']);
     expect(tree.ungrouped.map((n) => n.name)).toEqual(['aaa', 'zzz']);
+  });
+
+  it('orders siblings by sort_order ahead of name (manual drag order wins)', () => {
+    // Alphabetically Alpha < Zeta, but the manual order puts Zeta first.
+    const groups = [group('a', 'Zeta', null, 1), group('b', 'Alpha', null, 2)];
+    const nodes = [node('n1', 'aaa', null, 2), node('n2', 'zzz', null, 1)];
+    const tree = buildNodeTree(groups, nodes);
+    expect(tree.roots.map((g) => g.name)).toEqual(['Zeta', 'Alpha']);
+    expect(tree.ungrouped.map((n) => n.name)).toEqual(['zzz', 'aaa']);
   });
 });
 
