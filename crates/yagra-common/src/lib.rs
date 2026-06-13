@@ -25,7 +25,7 @@ pub use collection::{
     resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
     InterfaceField, ScopedCollectionItem, TEMPLATE_STANDARD_SNMP,
 };
-pub use ids::{CheckId, CredentialId, IfIndex, NodeId, ProfileId};
+pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
 pub use metric::{MetricKind, SeriesKey};
 pub use node::Node;
 pub use profile::Profile;

@@ -12,6 +12,7 @@ use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::discovery::DiscoveryRunner;
+use crate::groups::{would_create_cycle, GroupRepo, GroupType};
 use crate::history::AlertHistoryStore;
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
@@ -54,6 +55,7 @@ pub struct AdminState {
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
     pub maintenance: Arc<MaintenanceRepo>,
+    pub groups: Arc<GroupRepo>,
     pub audit: Arc<AuditRepo>,
 }
 
@@ -91,6 +93,15 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
+        .route("/api/v1/nodes/:node_id/group", put(set_node_group))
+        .route(
+            "/api/v1/node-groups",
+            get(list_node_groups).post(create_node_group),
+        )
+        .route(
+            "/api/v1/node-groups/:id",
+            put(update_node_group).delete(delete_node_group),
+        )
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route("/api/v1/profiles/:id", delete(delete_profile))
         .route(
@@ -289,6 +300,8 @@ struct NodeSummary {
     /// Descriptive maker/model for the "name (addr) (vendor) (model)" display.
     vendor: Option<String>,
     model: Option<String>,
+    /// The group this node belongs to (for the inventory tree); `null` ⇒ ungrouped.
+    group_id: Option<Uuid>,
 }
 
 /// The fixed error envelope (ADR-019).
@@ -375,6 +388,7 @@ async fn list_nodes(
                     state,
                     vendor: n.vendor,
                     model: n.model,
+                    group_id: n.group.map(|g| g.as_uuid()),
                 });
             }
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
@@ -419,6 +433,8 @@ struct NodeDetail {
     /// Descriptive maker/model, editable from the node detail.
     vendor: Option<String>,
     model: Option<String>,
+    /// The group this node belongs to; `null` ⇒ ungrouped.
+    group_id: Option<Uuid>,
 }
 
 async fn get_node(
@@ -442,6 +458,7 @@ async fn get_node(
             parent_id: node.parent.map(|p| p.as_uuid()),
             vendor: node.vendor,
             model: node.model,
+            group_id: node.group.map(|g| g.as_uuid()),
         })
         .into_response(),
         Ok(None) => not_found("node_not_found", format!("no node {node_id}")),
@@ -887,6 +904,168 @@ async fn set_node_bindings(
         Err(e) => {
             tracing::error!(error = %e, "set node bindings failed");
             internal("failed to update node")
+        }
+    }
+}
+
+/// Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).
+#[derive(Deserialize)]
+struct NodeGroupAssignment {
+    group_id: Option<Uuid>,
+}
+
+async fn set_node_group(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NodeGroupAssignment>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.repo.set_node_group(id, body.group_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set node group failed");
+            internal("failed to move node")
+        }
+    }
+}
+
+// ── Node groups (the inventory folder tree) — ManageConfig writes, View reads ─
+
+async fn list_node_groups(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.groups.list().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list node groups failed");
+            internal("failed to list node groups")
+        }
+    }
+}
+
+/// Create/update body for a group. `group_type` is a validated [`GroupType`] key.
+#[derive(Deserialize)]
+struct GroupBody {
+    name: String,
+    group_type: String,
+    #[serde(default)]
+    parent_id: Option<Uuid>,
+}
+
+/// Validate the request: non-empty name + a known group type. Returns the parsed type, or a
+/// client-safe message for a 400 (kept as a `String` so the `Err` stays small).
+fn parse_group_body(body: &GroupBody) -> Result<GroupType, String> {
+    if body.name.trim().is_empty() {
+        return Err("group name must not be empty".to_owned());
+    }
+    GroupType::from_key(body.group_type.trim())
+        .ok_or_else(|| format!("unknown group type {:?}", body.group_type))
+}
+
+async fn create_node_group(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<GroupBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let group_type = match parse_group_body(&body) {
+        Ok(t) => t,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
+    };
+    match admin
+        .groups
+        .create(body.name.trim(), group_type, body.parent_id)
+        .await
+    {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create node group failed");
+            internal("failed to create group")
+        }
+    }
+}
+
+async fn update_node_group(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let group_type = match parse_group_body(&body) {
+        Ok(t) => t,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
+    };
+    // Reject a re-parent that would create a cycle (a group can't be its own ancestor).
+    if body.parent_id.is_some() {
+        match admin.groups.edges().await {
+            Ok(edges) => {
+                if would_create_cycle(&edges, id, body.parent_id) {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_group",
+                        "that move would nest the group inside itself".to_owned(),
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "load group edges failed");
+                return internal("failed to update group");
+            }
+        }
+    }
+    match admin
+        .groups
+        .update(id, body.name.trim(), group_type, body.parent_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("group_not_found", format!("no group {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update node group failed");
+            internal("failed to update group")
+        }
+    }
+}
+
+async fn delete_node_group(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.groups.delete(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("group_not_found", format!("no group {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete node group failed");
+            internal("failed to delete group")
         }
     }
 }
@@ -3395,6 +3574,26 @@ mod tests {
                     .body(Body::from(
                         r#"{"username":"alice","password":"hunter2hunter2","role":"viewer"}"#,
                     ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn create_node_group_unavailable_without_admin() {
+        // The route is wired; in skeleton mode (admin: None) group management is 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/node-groups")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"Tokyo","group_type":"site"}"#))
                     .unwrap(),
             )
             .await

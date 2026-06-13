@@ -60,6 +60,20 @@ export interface NodeSummary {
   /** Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
   vendor: string | null;
   model: string | null;
+  /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
+  group_id: string | null;
+}
+
+/** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
+export type GroupType = 'site' | 'region' | 'device_type' | 'service' | 'generic';
+
+/** One node group (folder) in the hierarchical inventory tree (`GET /api/v1/node-groups`). */
+export interface NodeGroup {
+  id: string;
+  name: string;
+  group_type: GroupType;
+  /** Parent group; `null` ⇒ a top-level group. */
+  parent_id: string | null;
 }
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the

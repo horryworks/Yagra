@@ -566,6 +566,47 @@ describe('api client', () => {
     expect(matrix.permissions[0].key).toBe('view');
   });
 
+  it('creates a node group with a parent', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'g2' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createNodeGroup({ name: 'Rack A', group_type: 'device_type', parent_id: 'g1' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/node-groups');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Rack A',
+      group_type: 'device_type',
+      parent_id: 'g1',
+    });
+  });
+
+  it('moves a node into a group (and can ungroup with null)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setNodeGroup('n1', 'g2');
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/group');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ group_id: 'g2' });
+
+    await api.setNodeGroup('n1', null);
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ group_id: null });
+  });
+
+  it('lists node groups', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ id: 'g1', name: 'Tokyo', group_type: 'site', parent_id: null }],
+    } as Response);
+    globalThis.fetch = spy;
+    const groups = await api.listNodeGroups();
+    expect(spy).toHaveBeenCalledWith('/api/v1/node-groups');
+    expect(groups[0].group_type).toBe('site');
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

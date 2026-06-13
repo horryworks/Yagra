@@ -1,0 +1,242 @@
+//! Hierarchical node groups (the inventory folder tree).
+//!
+//! A group has a [`GroupType`] (rendered with its own icon in the UI) and an optional parent,
+//! forming a tree. Nodes reference a group via `nodes.group_id` (see [`crate::repo`]). This
+//! module owns group CRUD; node↔group assignment lives on [`crate::repo::NodeRepo`].
+//!
+//! **Delete is non-destructive to nodes:** [`GroupRepo::delete`] re-parents a group's direct
+//! child groups and member nodes up to the group's own parent (NULL ⇒ root) in one transaction,
+//! then removes the row. Re-parenting a group guards against cycles via [`would_create_cycle`].
+
+use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
+use uuid::Uuid;
+
+/// The kind of a group — drives the icon and is purely organizational (not a polling concept).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupType {
+    /// A physical site / location.
+    Site,
+    /// A geographic region (a set of sites).
+    Region,
+    /// A class of device (routers, switches, firewalls, …).
+    DeviceType,
+    /// A logical service the nodes deliver.
+    Service,
+    /// A generic folder with no special meaning.
+    Generic,
+}
+
+impl GroupType {
+    /// Every group type, for the type picker.
+    pub const ALL: [GroupType; 5] = [
+        GroupType::Site,
+        GroupType::Region,
+        GroupType::DeviceType,
+        GroupType::Service,
+        GroupType::Generic,
+    ];
+
+    /// Stable snake_case key (matches the serde representation and the stored value).
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            GroupType::Site => "site",
+            GroupType::Region => "region",
+            GroupType::DeviceType => "device_type",
+            GroupType::Service => "service",
+            GroupType::Generic => "generic",
+        }
+    }
+
+    /// Parse a stored/edge key back into a type (validation at the API edge).
+    #[must_use]
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.key() == s)
+    }
+}
+
+/// One group row returned by the API. `group_type` is the snake_case key.
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub group_type: String,
+    pub parent_id: Option<Uuid>,
+}
+
+/// Whether re-parenting `moving` under `new_parent` would create a cycle, given the current
+/// `(id, parent_id)` edges. A group cannot become its own ancestor (or its own parent). Pure so
+/// it can be unit-tested without a database; the API calls it before persisting a move.
+#[must_use]
+pub fn would_create_cycle(
+    edges: &[(Uuid, Option<Uuid>)],
+    moving: Uuid,
+    new_parent: Option<Uuid>,
+) -> bool {
+    let parent_of = |id: Uuid| edges.iter().find(|(e, _)| *e == id).and_then(|(_, p)| *p);
+    let mut cur = new_parent;
+    // Bound the walk by the edge count so malformed (already-cyclic) data can't loop forever.
+    for _ in 0..=edges.len() {
+        match cur {
+            None => return false,
+            Some(p) if p == moving => return true,
+            Some(p) => cur = parent_of(p),
+        }
+    }
+    true
+}
+
+/// PostgreSQL-backed group store.
+pub struct GroupRepo {
+    pool: PgPool,
+}
+
+impl GroupRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// All groups, ordered by name (the UI builds the tree from the flat list).
+    pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
+        let rows = sqlx::query(
+            "SELECT id, name, group_type, parent_id FROM node_groups ORDER BY name, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(GroupSummary {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    group_type: row.try_get("group_type")?,
+                    parent_id: row.try_get("parent_id")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The `(id, parent_id)` edges, for cycle checks before a move.
+    pub async fn edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        let rows = sqlx::query("SELECT id, parent_id FROM node_groups")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("parent_id")?)))
+            .collect()
+    }
+
+    /// Create a group; returns its id.
+    pub async fn create(
+        &self,
+        name: &str,
+        group_type: GroupType,
+        parent: Option<Uuid>,
+    ) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO node_groups (id, name, group_type, parent_id) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(group_type.key())
+        .bind(parent)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    /// Rename / re-type / re-parent a group. Returns whether the group exists. The caller must
+    /// have already rejected a cycle-inducing `parent` (see [`would_create_cycle`]).
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        group_type: GroupType,
+        parent: Option<Uuid>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE node_groups SET name = $2, group_type = $3, parent_id = $4 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(group_type.key())
+        .bind(parent)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Delete a group, re-parenting its direct child groups and member nodes up to the group's
+    /// own parent (NULL ⇒ root) so **no node is ever deleted**. Atomic. Returns whether the
+    /// group existed.
+    pub async fn delete(&self, id: Uuid) -> anyhow::Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        // Resolve the group's parent (and confirm it exists). `query_scalar` over the nullable
+        // column yields Option<Option<Uuid>>: outer = row found, inner = the parent value.
+        let found: Option<Option<Uuid>> =
+            sqlx::query_scalar("SELECT parent_id FROM node_groups WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(parent) = found else {
+            return Ok(false);
+        };
+        // Child groups move up to the parent.
+        sqlx::query("UPDATE node_groups SET parent_id = $2 WHERE parent_id = $1")
+            .bind(id)
+            .bind(parent)
+            .execute(&mut *tx)
+            .await?;
+        // Member nodes move up to the parent (never deleted).
+        sqlx::query("UPDATE nodes SET group_id = $2, updated_at = now() WHERE group_id = $1")
+            .bind(id)
+            .bind(parent)
+            .execute(&mut *tx)
+            .await?;
+        let res = sqlx::query("DELETE FROM node_groups WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(res.rows_affected() > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_type_keys_round_trip() {
+        for t in GroupType::ALL {
+            assert_eq!(GroupType::from_key(t.key()), Some(t));
+        }
+        assert_eq!(GroupType::from_key("nope"), None);
+        // Keys agree with the serde wire form.
+        assert_eq!(
+            serde_json::to_string(&GroupType::DeviceType).unwrap(),
+            "\"device_type\""
+        );
+    }
+
+    #[test]
+    fn cycle_detection() {
+        // a → b → c  (c's parent is b, b's parent is a, a is root)
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let edges = vec![(a, None), (b, Some(a)), (c, Some(b))];
+
+        // Moving a under c would make a a descendant of itself → cycle.
+        assert!(would_create_cycle(&edges, a, Some(c)));
+        // A group cannot be its own parent.
+        assert!(would_create_cycle(&edges, b, Some(b)));
+        // Moving c under a (a is not below c) is fine.
+        assert!(!would_create_cycle(&edges, c, Some(a)));
+        // Moving to root is always fine.
+        assert!(!would_create_cycle(&edges, b, None));
+    }
+}
