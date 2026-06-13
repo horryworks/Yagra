@@ -227,6 +227,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         outcome: yagra_bus::CheckOutcome::Reachable,
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
         interfaces: Vec::new(),
+        sys_descr: None,
     });
     let state = ApiState {
         store: sink,
@@ -274,6 +275,31 @@ async fn consume_results<S>(
                 .await
             {
                 tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interface");
+            }
+        }
+        // Identity probe: if the poll fetched sysDescr, classify it and fill the node's blank
+        // vendor/model. `fill_node_identity` uses COALESCE so a manually-set value is never
+        // clobbered; we only classify when something useful was extracted. Best-effort.
+        if let Some(descr) = result.sys_descr.as_deref() {
+            let id = yagra_discovery::identify(descr);
+            if id.vendor.is_some() || id.model.is_some() {
+                match repo
+                    .fill_node_identity(
+                        result.node_id.as_uuid(),
+                        id.vendor.as_deref(),
+                        id.model.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(true) => tracing::info!(
+                        node = %result.node_id, vendor = ?id.vendor, model = ?id.model,
+                        "classified node maker/model from sysDescr"
+                    ),
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(node = %result.node_id, error = %e, "failed to fill node identity");
+                    }
+                }
             }
         }
         for action in alerts.observe(&result) {
@@ -327,12 +353,15 @@ async fn run_scheduler(
                                 let delay = jitter();
                                 tokio::spawn(async move {
                                     tokio::time::sleep(delay).await;
-                                    let job = scheduler::build_snmp_job(
+                                    let mut job = scheduler::build_snmp_job(
                                         &node,
                                         check,
                                         interval_secs,
                                         Uuid::new_v4(),
                                     );
+                                    // Probe identity (sysDescr) only while the maker is unknown —
+                                    // once classified, stop fetching it every poll.
+                                    job.probe_identity = node.vendor.is_none();
                                     publish(&bus, job, "snmp", node.id).await;
                                 });
                             }
@@ -370,12 +399,13 @@ async fn run_scheduler(
                                 let delay = jitter();
                                 tokio::spawn(async move {
                                     tokio::time::sleep(delay).await;
-                                    let job = scheduler::build_snmp_v3_job(
+                                    let mut job = scheduler::build_snmp_v3_job(
                                         &node,
                                         check,
                                         interval_secs,
                                         Uuid::new_v4(),
                                     );
+                                    job.probe_identity = node.vendor.is_none();
                                     publish(&bus, job, "snmp_v3", node.id).await;
                                 });
                             }
