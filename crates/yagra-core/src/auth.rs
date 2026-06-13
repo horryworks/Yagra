@@ -197,11 +197,11 @@ impl UserStore {
         if ok {
             // Record the successful login time. Best-effort metadata: a failure here must not
             // block an otherwise-valid login.
-            if let Err(e) = sqlx::query("UPDATE users SET last_login_at = now() WHERE username = $1")
+            let touch = sqlx::query("UPDATE users SET last_login_at = now() WHERE username = $1")
                 .bind(username)
                 .execute(&self.pool)
-                .await
-            {
+                .await;
+            if let Err(e) = touch {
                 tracing::warn!(error = %e, "failed to record last_login_at");
             }
             // MVP: every account has unrestricted scope; group-scope filtering is Phase 2.
