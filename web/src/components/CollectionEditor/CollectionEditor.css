@@ -10,47 +10,11 @@
   flex: 1;
 }
 
-.ce-table {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.ce-head,
-.ce-row {
-  display: grid;
+/* The configured-metrics table uses the shared `.ytable` standard; only the column template
+   and the two column-specific tweaks are page-local. */
+.ce-table .ytable-head,
+.ce-table .ytable-row {
   grid-template-columns: 1.4fr 1.6fr 100px 100px auto;
-  align-items: center;
-  gap: 12px;
-  padding: 0 14px;
-}
-
-.ce-head {
-  height: 32px;
-  background: var(--bg-tertiary);
-  border-bottom: var(--border-width) solid var(--border-color);
-}
-
-.ce-h {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.ce-h.right {
-  justify-self: end;
-}
-
-.ce-row {
-  min-height: var(--row-h);
-  border-bottom: var(--border-width) solid var(--border-color);
-  font-size: var(--font-md);
-}
-
-.ce-row:last-child {
-  border-bottom: none;
 }
 
 .ce-metric {
@@ -60,14 +24,6 @@
 .ce-oid {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ce-actions {
-  display: flex;
-  justify-self: end;
 }
 
 /* "Browse catalog" picker: a search + a scrollable list of catalog entries to click. */

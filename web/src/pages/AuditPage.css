@@ -1,38 +1,9 @@
-/* Audit log: a dense newest-first table + load-more pagination. */
+/* Audit log: a dense newest-first table (shared `.ytable` standard) + load-more pagination.
+   Only the column template, the column-specific type tweaks, and the pager live here. */
 
-.audit-table {
-  display: flex;
-  flex-direction: column;
-}
-
-.audit-head,
-.audit-row {
-  display: grid;
+.audit-table .ytable-head,
+.audit-table .ytable-row {
   grid-template-columns: 180px 140px 1fr 64px;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 0;
-}
-
-.audit-head {
-  border-bottom: var(--border-width) solid var(--border-color);
-}
-
-.audit-h {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.audit-row {
-  border-bottom: var(--border-width) solid var(--border-color);
-  font-size: var(--font-sm);
-}
-
-.audit-row:last-child {
-  border-bottom: none;
 }
 
 .audit-time {
@@ -46,9 +17,6 @@
 
 .audit-action {
   font-size: var(--font-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .audit-more {
