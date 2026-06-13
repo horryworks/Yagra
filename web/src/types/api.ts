@@ -57,6 +57,9 @@ export interface NodeSummary {
   name: string;
   address: string;
   state: NodeState;
+  /** Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
+  vendor: string | null;
+  model: string | null;
 }
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
@@ -210,6 +213,9 @@ export interface DiscoveryCandidate {
   sysname: string | null;
   /** Suggested built-in profile name (classified from sysDescr), if any. */
   suggested_profile: string | null;
+  /** Maker/model best-effort parsed from sysDescr — pre-fills the import row. */
+  vendor: string | null;
+  model: string | null;
   /** The stored credential that answered SNMP, by id — preselected on import. */
   matched_credential_id: string | null;
 }
@@ -270,6 +276,9 @@ export interface NodeDetail {
   profile_id: string | null;
   credential_id: string | null;
   parent_id: string | null;
+  /** Descriptive maker/model, editable from the node detail. */
+  vendor: string | null;
+  model: string | null;
 }
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).

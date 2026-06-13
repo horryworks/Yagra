@@ -27,6 +27,8 @@ interface RowState {
   name: string;
   profile_id: string;
   credential_id: string;
+  vendor: string;
+  model: string;
 }
 
 export function DiscoveryPage() {
@@ -82,6 +84,8 @@ export function DiscoveryPage() {
             name: c.sysname?.trim() || c.address,
             profile_id: prof?.id ?? '',
             credential_id: c.matched_credential_id ?? '',
+            vendor: c.vendor ?? '',
+            model: c.model ?? '',
           };
         }
         return next;
@@ -157,6 +161,8 @@ export function DiscoveryPage() {
           name: r.name.trim() || c.address,
           profile_id: r.profile_id || undefined,
           credential_id: r.credential_id || undefined,
+          vendor: r.vendor.trim() || undefined,
+          model: r.model.trim() || undefined,
         };
       });
     if (nodes.length === 0) {
@@ -281,6 +287,11 @@ export function DiscoveryPage() {
                       </span>
                     ) : (
                       <span className="muted">no SNMP</span>
+                    )}
+                    {(c.vendor || c.model) && (
+                      <span className="disco-makermodel">
+                        {[c.vendor, c.model].filter(Boolean).join(' · ')}
+                      </span>
                     )}
                   </span>
                   <TextInput

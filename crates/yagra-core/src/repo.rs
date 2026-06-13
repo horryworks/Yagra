@@ -46,6 +46,8 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     let profile: Option<Uuid> = row.try_get("profile_id")?;
     let pool: Option<String> = row.try_get("pool")?;
     let credential: Option<Uuid> = row.try_get("credential_id")?;
+    let vendor: Option<String> = row.try_get("vendor")?;
+    let model: Option<String> = row.try_get("model")?;
     let tags: Json<BTreeMap<String, String>> = row.try_get("tags")?;
     let address: IpAddr = address
         .parse()
@@ -58,6 +60,8 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
         profile: profile.map(ProfileId::from),
         pool,
         credential: credential.map(CredentialId::from),
+        vendor,
+        model,
         tags: tags.0,
     })
 }
@@ -160,8 +164,8 @@ impl NodeRepo {
 
     /// Column list shared by the full and paged node queries (`host(address)` strips any
     /// netmask so the INET parses straight to IpAddr).
-    const NODE_COLUMNS: &'static str =
-        "id, name, parent_id, host(address) AS address, profile_id, pool, credential_id, tags";
+    const NODE_COLUMNS: &'static str = "id, name, parent_id, host(address) AS address, \
+         profile_id, pool, credential_id, vendor, model, tags";
 
     /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
@@ -237,7 +241,9 @@ impl NodeRepo {
         rows.iter().map(node_from_row).collect()
     }
 
-    /// Create a node; returns its new id. Optional profile, bound credential, and parent.
+    /// Create a node; returns its new id. Optional profile, bound credential, parent, and
+    /// descriptive vendor/model metadata.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_node(
         &self,
         name: &str,
@@ -246,11 +252,14 @@ impl NodeRepo {
         profile: Option<Uuid>,
         credential: Option<Uuid>,
         parent: Option<Uuid>,
+        vendor: Option<&str>,
+        model: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO nodes (id, name, address, pool, profile_id, credential_id, parent_id) \
-             VALUES ($1, $2, $3::inet, $4, $5, $6, $7)",
+            "INSERT INTO nodes \
+             (id, name, address, pool, profile_id, credential_id, parent_id, vendor, model) \
+             VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9)",
         )
         .bind(id)
         .bind(name)
@@ -259,25 +268,33 @@ impl NodeRepo {
         .bind(profile)
         .bind(credential)
         .bind(parent)
+        .bind(vendor)
+        .bind(model)
         .execute(&self.pool)
         .await?;
         Ok(id)
     }
 
-    /// Set (or clear) a node's profile and bound credential. Returns whether the node exists.
+    /// Set (or clear) a node's profile, bound credential, and vendor/model metadata. Returns
+    /// whether the node exists. All fields are set to the passed value (a `None` clears) — the
+    /// node-edit UI loads the current values and resends them, so an unchanged field is preserved.
     pub async fn set_node_bindings(
         &self,
         id: Uuid,
         profile: Option<Uuid>,
         credential: Option<Uuid>,
+        vendor: Option<&str>,
+        model: Option<&str>,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE nodes SET profile_id = $2, credential_id = $3, updated_at = now() \
-             WHERE id = $1",
+            "UPDATE nodes SET profile_id = $2, credential_id = $3, vendor = $4, model = $5, \
+             updated_at = now() WHERE id = $1",
         )
         .bind(id)
         .bind(profile)
         .bind(credential)
+        .bind(vendor)
+        .bind(model)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
