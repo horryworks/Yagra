@@ -1,32 +1,3 @@
-/* Mutes: add form + active-mute list rows. */
-
-.mutes-form {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.mutes-until {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.mutes-until-label {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.mutes-until-at {
-  font-size: var(--font-xs);
-}
-
-.mutes-reason {
-  flex: 1;
-  font-size: var(--font-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* Mutes — data-table standard v2. The chrome (toolbar, sticky header, badges, hover actions,
+   reason ellipsis) comes from styles/table.css and the add/lift dialogs from the shared Modal
+   scaffolding; no page-local styling is needed here. */

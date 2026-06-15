@@ -124,6 +124,9 @@ pub struct UserSummary {
     /// Most recent successful login (RFC 3339 text), or `None` if the account has never
     /// logged in.
     pub last_login_at: Option<String>,
+    /// Account status: a disabled account is retained for the audit trail but cannot
+    /// authenticate (defaults to `true` for accounts created before this column existed).
+    pub enabled: bool,
 }
 
 /// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
@@ -184,13 +187,19 @@ impl UserStore {
         username: &str,
         password: &str,
     ) -> anyhow::Result<Option<Principal>> {
-        let row = sqlx::query("SELECT password_hash, role FROM users WHERE username = $1")
+        let row = sqlx::query("SELECT password_hash, role, enabled FROM users WHERE username = $1")
             .bind(username)
             .fetch_optional(&self.pool)
             .await?;
         let Some(row) = row else {
             return Ok(None);
         };
+        // A disabled account cannot authenticate. Treat it like a credential miss so we don't
+        // leak account state to an unauthenticated caller.
+        let enabled: bool = row.try_get("enabled")?;
+        if !enabled {
+            return Ok(None);
+        }
         let hash: String = row.try_get("password_hash")?;
         let role: String = row.try_get("role")?;
         let ok = verify_password(password, &hash).unwrap_or(false);
@@ -215,7 +224,7 @@ impl UserStore {
     pub async fn list(&self) -> anyhow::Result<Vec<UserSummary>> {
         let rows = sqlx::query(
             "SELECT id, username, role, created_at::text AS created_at, \
-             last_login_at::text AS last_login_at \
+             last_login_at::text AS last_login_at, enabled \
              FROM users ORDER BY created_at, username",
         )
         .fetch_all(&self.pool)
@@ -228,6 +237,7 @@ impl UserStore {
                     role: row.try_get("role")?,
                     created_at: row.try_get("created_at")?,
                     last_login_at: row.try_get("last_login_at")?,
+                    enabled: row.try_get("enabled")?,
                 })
             })
             .collect()
@@ -311,6 +321,37 @@ impl UserStore {
         Ok(UserMutation::Done)
     }
 
+    /// Enable or disable an account, refusing to disable the **last** account that can still
+    /// administer the system (the only enabled admin) — same lock-out guard as
+    /// [`Self::set_role`]/[`Self::delete`]. Enabling is always allowed.
+    pub async fn set_enabled(&self, id: Uuid, enabled: bool) -> anyhow::Result<UserMutation> {
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query("SELECT role, enabled FROM users WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(UserMutation::NotFound);
+        };
+        let role: String = row.try_get("role")?;
+        let currently_enabled: bool = row.try_get("enabled")?;
+        // Disabling the only remaining enabled admin would lock everyone out of management.
+        if !enabled
+            && currently_enabled
+            && role == "admin"
+            && enabled_admin_count(&mut tx).await? <= 1
+        {
+            return Ok(UserMutation::LastAdmin);
+        }
+        sqlx::query("UPDATE users SET enabled = $2 WHERE id = $1")
+            .bind(id)
+            .bind(enabled)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(UserMutation::Done)
+    }
+
     /// Reset an account's password (Argon2id-hashed; the plaintext is never stored or logged).
     /// Returns whether the account exists.
     pub async fn set_password(&self, id: Uuid, password: &str) -> anyhow::Result<bool> {
@@ -327,6 +368,18 @@ impl UserStore {
 /// Count of admin accounts within an open transaction (lock-out guard helper).
 async fn admin_count(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> anyhow::Result<i64> {
     let n: i64 = sqlx::query("SELECT count(*) AS n FROM users WHERE role = 'admin'")
+        .fetch_one(&mut **tx)
+        .await?
+        .try_get("n")?;
+    Ok(n)
+}
+
+/// Count of admins that can still authenticate (enabled) — the guard for disabling an account,
+/// since a disabled admin can't log in to manage the system.
+async fn enabled_admin_count(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> anyhow::Result<i64> {
+    let n: i64 = sqlx::query("SELECT count(*) AS n FROM users WHERE role = 'admin' AND enabled")
         .fetch_one(&mut **tx)
         .await?
         .try_get("n")?;

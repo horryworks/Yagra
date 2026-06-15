@@ -14,6 +14,8 @@ import type {
 } from '../../types/api';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { TrashIcon } from '../ui/icons';
 import './CollectionEditor.css';
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -204,9 +206,11 @@ export function CollectionEditor({
               <div className="ytable-cell">{it.metric_kind}</div>
               <div className="ytable-cell right ce-actions">
                 {canEdit && (
-                  <Button variant="ghost" onClick={() => remove(it.id)}>
-                    Delete
-                  </Button>
+                  <span className="ytable-actions">
+                    <IconButton title="Delete metric" danger onClick={() => remove(it.id)}>
+                      <TrashIcon />
+                    </IconButton>
+                  </span>
                 )}
               </div>
             </div>

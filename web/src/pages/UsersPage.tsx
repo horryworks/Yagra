@@ -1,23 +1,34 @@
-// Users & roles (Settings ▸ Users & roles). Admin-only CRUD over local auth accounts,
-// presented as a headered table: create via an "Add user" modal, change role inline, change
-// password and delete via modals (delete behind a confirmation, per ui-conventions). The
-// server enforces ManageUsers (admin) and guards against removing/demoting the last admin
-// (409 last_admin); the UI surfaces those typed errors. Passwords are write-only — the API
-// never returns a hash.
+// Users & roles (Settings ▸ Users & roles). Admin-only CRUD over local auth accounts, rendered
+// as the "identity list" (data-table standard v2, variant B): a roomy row per account with a
+// role-colored monogram, inline instant role change, account status, and hover row-actions
+// (change password / enable-disable / delete). The server enforces ManageUsers (admin) and guards
+// against removing/demoting/disabling the last admin (409 last_admin); the UI surfaces those typed
+// errors and reverts. Passwords are write-only — the API never returns a hash.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Role, UserSummary } from '../types/api';
+import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { IconButton } from '../components/ui/IconButton';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { Monogram } from '../components/ui/tableCells';
+import { KeyIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './UsersPage.css';
 
 const ROLES: Role[] = ['viewer', 'operator', 'admin'];
 const MIN_PW = 8;
+const SEGMENTS: [string, string][] = [
+  ['all', 'All'],
+  ['admin', 'Admins'],
+  ['operator', 'Operators'],
+  ['viewer', 'Viewers'],
+];
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
@@ -25,11 +36,14 @@ const errMsg = (e: unknown, fallback: string) =>
 export function UsersPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<UserSummary[]>([]);
+  const [me, setMe] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [forbidden, setForbidden] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Open dialogs: the add form, and the user targeted by a password change / delete.
+  // Open dialogs: add form, and the user targeted by a password change / delete.
   const [adding, setAdding] = useState(false);
   const [pwUser, setPwUser] = useState<UserSummary | null>(null);
   const [delUser, setDelUser] = useState<UserSummary | null>(null);
@@ -52,6 +66,7 @@ export function UsersPage() {
 
   useEffect(() => {
     load();
+    api.me().then((m) => setMe(m.username)).catch(() => setMe(null));
   }, [load]);
 
   const changeRole = (id: string, next: Role) => {
@@ -59,8 +74,28 @@ export function UsersPage() {
     api
       .setUserRole(id, next)
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to change role')));
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to change role'));
+        load(); // revert the optimistic-looking select to the server's truth
+      });
   };
+
+  const toggleEnabled = (u: UserSummary) => {
+    setError(null);
+    api
+      .setUserEnabled(u.id, !u.enabled)
+      .then(load)
+      .catch((e: unknown) => setError(errMsg(e, 'failed to change account status')));
+  };
+
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter(
+      (u) =>
+        (q === '' || u.username.toLowerCase().includes(q)) &&
+        (roleFilter === 'all' || u.role === roleFilter),
+    );
+  }, [rows, query, roleFilter]);
 
   return (
     <div>
@@ -79,73 +114,102 @@ export function UsersPage() {
           <p className="muted">Managing users requires an admin account.</p>
         </Card>
       ) : (
-        <Card
-          title="Accounts"
-          actions={
-            authed && (
+        <>
+          <TableToolbar>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder="Search username…"
+              ariaLabel="Search users"
+            />
+            <div className="segmented" role="group" aria-label="Filter by role">
+              {SEGMENTS.map(([key, label]) => (
+                <button
+                  key={key}
+                  className={roleFilter === key ? 'on' : ''}
+                  onClick={() => setRoleFilter(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <TableSpacer />
+            <ResultCount shown={list.length} total={rows.length} noun="users" />
+            {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + Add user
               </Button>
-            )
-          }
-        >
-          {error && <p className="form-error">{error}</p>}
-          <div className="ytable users-table">
-            <div className="ytable-head">
-              <div className="ytable-h">Username</div>
-              <div className="ytable-h">Role</div>
-              <div className="ytable-h">Created</div>
-              <div className="ytable-h">Last login</div>
-              <div className="ytable-h right">Actions</div>
-            </div>
-            {rows.length === 0 ? (
-              <div className="users-empty">{loading ? 'Loading…' : 'No users yet.'}</div>
+            )}
+          </TableToolbar>
+
+          {error && <p className="form-error users-error">{error}</p>}
+
+          <div className="identity-list">
+            {list.length === 0 ? (
+              <div className="il-empty">
+                {loading ? 'Loading…' : rows.length === 0 ? 'No users yet.' : 'No users match.'}
+              </div>
             ) : (
-              rows.map((u) => (
-                <div className="ytable-row" key={u.id}>
-                  <div className="ytable-cell ellipsis users-name">{u.username}</div>
-                  <div className="ytable-cell">
-                    {authed ? (
-                      <Select
-                        value={u.role}
-                        onChange={(e) => changeRole(u.id, e.target.value as Role)}
-                        aria-label={`Role for ${u.username}`}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </Select>
-                    ) : (
-                      <span>{u.role}</span>
-                    )}
+              list.map((u) => {
+                const last = relativeTime(u.last_login_at);
+                return (
+                  <div className={u.enabled ? 'il-row' : 'il-row is-muted'} key={u.id}>
+                    <Monogram name={u.username} role={u.role} lg />
+                    <div className="il-id">
+                      <div className="il-line1">
+                        <span className="il-name">{u.username}</span>
+                        {me === u.username && <span className="you-pill">You</span>}
+                        <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
+                          <span className="yt-status-dot" />
+                          {u.enabled ? 'Active' : 'Disabled'}
+                        </span>
+                      </div>
+                      <div className="il-line2">
+                        <span>Created {dateOnly(u.created_at)}</span>
+                        <span className="il-meta-sep">·</span>
+                        <span title={u.last_login_at ?? undefined}>Last login {last}</span>
+                      </div>
+                    </div>
+                    <div className="il-right">
+                      {authed ? (
+                        <select
+                          className={`role-select role-${u.role}`}
+                          value={u.role}
+                          onChange={(e) => changeRole(u.id, e.target.value as Role)}
+                          aria-label={`Role for ${u.username}`}
+                        >
+                          {ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {r}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="muted">{u.role}</span>
+                      )}
+                      {authed && (
+                        <div className="il-actions">
+                          <IconButton
+                            title={u.enabled ? 'Disable account' : 'Enable account'}
+                            onClick={() => toggleEnabled(u)}
+                          >
+                            <PowerIcon />
+                          </IconButton>
+                          <IconButton title="Change password" onClick={() => setPwUser(u)}>
+                            <KeyIcon />
+                          </IconButton>
+                          <IconButton title="Delete user" danger onClick={() => setDelUser(u)}>
+                            <TrashIcon />
+                          </IconButton>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="ytable-cell ellipsis users-created mono">{u.created_at}</div>
-                  <div className="ytable-cell ellipsis users-created">
-                    {u.last_login_at ? (
-                      <span className="mono">{u.last_login_at}</span>
-                    ) : (
-                      'Never'
-                    )}
-                  </div>
-                  <div className="ytable-cell right users-actions">
-                    {authed && (
-                      <>
-                        <Button variant="ghost" onClick={() => setPwUser(u)}>
-                          Change password
-                        </Button>
-                        <Button variant="ghost" onClick={() => setDelUser(u)}>
-                          Delete
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
-        </Card>
+        </>
       )}
 
       {adding && (
@@ -202,7 +266,7 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       onClose={onClose}
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
@@ -285,7 +349,7 @@ function ChangePasswordModal({
       onClose={onClose}
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
@@ -350,7 +414,7 @@ function DeleteUserModal({
       onClose={onClose}
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>

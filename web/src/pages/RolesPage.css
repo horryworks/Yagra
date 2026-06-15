@@ -56,8 +56,7 @@
 
 .roles-h {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.01em;
   color: var(--text-tertiary);
   font-weight: var(--weight-medium);
   padding: 8px 10px;

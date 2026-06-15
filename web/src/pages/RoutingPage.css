@@ -1,42 +1,34 @@
-/* Routing & notifications: channel + rule forms and rows. */
+/* Routing & notifications — data-table standard v2 (styles/table.css). Two sections (channels +
+   rules), each a section header + toolbar + `.ytable`. Page-local: section title, spacing, and
+   the channel checkbox picks inside the add-rule modal. */
 
-.routing-form {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+.routing-error {
+  margin-bottom: 10px;
 }
 
-.routing-grow {
-  flex: 1;
-  min-width: 220px;
+/* Section title that sits in the toolbar row, left of the spacer. */
+.table-section-title {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
 }
 
-.routing-actions {
+/* Separate the second section (rules) from the first (channels). */
+.routing-rules-section {
+  margin-top: 24px;
+}
+
+/* Channel multi-select inside the add-rule modal. */
+.routing-picks {
   display: flex;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.routing-channel-picks {
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 12px;
+  padding: 8px 0 2px;
 }
 
 .routing-pick {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: var(--font-sm);
   cursor: pointer;
-}
-
-.routing-rule-channels {
-  font-size: var(--font-sm);
-}
-
-.routing-rules-card {
-  margin-top: 16px;
 }

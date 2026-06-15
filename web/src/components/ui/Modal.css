@@ -63,6 +63,38 @@
   border-top: var(--border-width) solid var(--border-color);
 }
 
+/* Shared modal form scaffolding (the Modals UI-consistency group): stacked, labelled,
+   full-width fields with an optional hint. Every add/edit modal uses these so they match. */
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.modal-field:last-child {
+  margin-bottom: 0;
+}
+
+.modal-field-label {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.modal-field .field {
+  width: 100%;
+}
+
+.modal-hint {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.modal-confirm-text {
+  font-size: var(--font-md);
+  line-height: 1.5;
+}
+
 @keyframes modal-fade {
   from {
     opacity: 0;
