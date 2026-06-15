@@ -60,6 +60,55 @@ export function formatTimestamp(unixMs: number): string {
   return new Date(unixMs).toLocaleString();
 }
 
+/** Exact timestamp as a stable, locale-independent `YYYY-MM-DD HH:MM:SS` in the browser's
+ *  local zone (sv-SE renders ISO-like regardless of the user's locale). For forensic screens
+ *  (audit) where the precise instant is the primary value. */
+export function formatExactTime(iso: string): string {
+  return new Date(iso).toLocaleString('sv-SE').replace('T', ' ');
+}
+
+/** Date-only `YYYY-MM-DD` in the local zone (en-CA renders ISO-like). */
+export function dateOnly(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-CA');
+}
+
+/** Compact relative time ("just now" / "5m ago" / "3h ago" / "Yesterday" / "12d ago"), or
+ *  "Never" for a null timestamp. `now` is injectable so callers/tests are deterministic. */
+export function relativeTime(iso: string | null, now: number = Date.now()): string {
+  if (!iso) return 'Never';
+  const mins = Math.floor((now - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+  if (mins < 2880) return 'Yesterday';
+  return `${Math.floor(mins / 1440)}d ago`;
+}
+
+/** Tone for an HTTP status code, on the status palette only (2xx up / 4xx warning / 5xx
+ *  critical). Used by the audit log; the method/path is categorical and never tone-colored. */
+export function httpStatusTone(status: number): 'up' | 'warning' | 'critical' {
+  if (status < 300) return 'up';
+  if (status < 500) return 'warning';
+  return 'critical';
+}
+
+/** Short human label for an HTTP status (paired with the code + dot so it's not color-alone). */
+export function httpStatusLabel(status: number): string {
+  if (status < 300) return 'OK';
+  if (status === 401 || status === 403) return 'Denied';
+  if (status === 409) return 'Conflict';
+  if (status < 500) return 'Client error';
+  return 'Server error';
+}
+
+/** Up to two initials for a monogram avatar. Splits on `.`/`-`/`_`; `unknown`/empty ⇒ "?". */
+export function initials(name: string): string {
+  if (!name || name === 'unknown') return '?';
+  const parts = name.replace(/[^a-zA-Z0-9.\-_]/g, '').split(/[.\-_]/).filter(Boolean);
+  const pick = parts.length >= 2 ? parts[0][0] + parts[1][0] : name.slice(0, 2);
+  return pick.toUpperCase();
+}
+
 /** The browser's IANA time-zone name (e.g. "Asia/Tokyo"), used to label datetime-local
  *  inputs so operators know they're entering local time (stored as UTC). Falls back to a
  *  generic phrase if the runtime can't resolve a zone. */

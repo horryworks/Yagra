@@ -1,62 +1,8 @@
-/* Users & roles — a small accounts list rendered with the shared data-table standard
-   (styles/table.css): only the column template and a couple of column-specific tweaks live
-   here; the chrome, alternating-column tint, hover, and compact role dropdown come from
-   `.ytable*`. The modal form fields below are local to this page. */
+/* Users & roles — the "identity list" (variant B). The list chrome, monogram, role select,
+   status/you pills, and segmented filter all come from the table standard (styles/table.css);
+   only the error spacing is page-local. The modal form fields use the shared `.modal-*` classes
+   defined on the Modal component. */
 
-/* No `auto` track: header and each row are independent grids, so a content-sized column would
-   resolve to different widths in the header vs the rows and knock every column out of alignment.
-   Fixed + fr only → identical tracks top-to-bottom (Role header sits over the dropdown, Actions
-   over its buttons). */
-.users-table .ytable-head,
-.users-table .ytable-row {
-  grid-template-columns: 1.4fr 132px 1fr 1fr 230px;
-}
-
-/* Centre every column (header + cell) on this table — overrides the standard's left/right
-   defaults; the `.right` variants are listed so their higher specificity doesn't win. */
-.users-table .ytable-h,
-.users-table .ytable-cell,
-.users-table .ytable-h.right,
-.users-table .ytable-cell.right {
-  justify-content: center;
-}
-
-.users-name {
-  font-weight: var(--weight-medium);
-}
-
-.users-created {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-}
-
-.users-empty {
-  padding: 20px 14px;
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-}
-
-/* Labelled, stacked, full-width fields inside the Add user / Change password modals. */
-.modal-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-
-.modal-field:last-of-type {
-  margin-bottom: 0;
-}
-
-.modal-field-label {
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.modal-field .field {
-  width: 100%;
-}
-
-.modal-confirm-text {
-  font-size: var(--font-md);
+.users-error {
+  margin-bottom: 10px;
 }

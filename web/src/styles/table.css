@@ -1,43 +1,87 @@
-/* Data-table standard (the one table look, reused everywhere). A grid table whose chrome —
-   uppercase header on the tertiary surface, 0.5px row dividers, a faint alternating-column tint,
-   and a whole-row hover — is defined once here. Each table only declares its own
-   `grid-template-columns` (per table, since column counts differ).
+/* Data-table standard v2 — the one table look, reused on every list screen (credentials,
+   audit, users, mutes, thresholds, maintenance, routing, MIB, profiles, templates, …).
 
-   Structure:
-     <div class="ytable">                       container (border + radius)
-       <div class="ytable-head">                 header row
-         <div class="ytable-h">…</div>            one per column (add `.right` to end-align)
-       <div class="ytable-row">                   one per data row
-         <div class="ytable-cell">…</div>          one per column (`.right`, `.mono`, `.ellipsis`)
+   Replaces the older two looks (the ALL-CAPS zebra `.ytable` and the flat `.crud-list` rows)
+   with one polished, dense, accessible standard. Built strictly on the tokens in tokens.css —
+   no hardcoded color/size here. Compliance with design-system.md:
+     §1.4  sentence-case headers (NO all-caps — fixes the old `.ytable` defect)
+     §1.1  brand orange = active/focus/selected/sort chrome ONLY
+     §1.3  status = dot + status-palette color only; categorical things (type/method/role) stay neutral
+     §4    high-density rows, sticky header (server paging / virtual scroll for tens of thousands)
 
-   Cells stretch to the full row height so the column tint reads as a continuous band; content is
-   vertically centred inside. In-cell dropdowns size to their content (never the whole cell).
+   Structure (per-screen `grid-template-columns` lives in the page CSS):
+     <div class="ytable">
+       <div class="ytable-scroll">                  optional sticky-scroll region (long lists)
+         <div class="ytable-head"> <div class="ytable-h">…</div> …
+         <div class="ytable-row">  <div class="ytable-cell">…</div> …
 
-   IMPORTANT — column templates must use fixed/`fr` tracks only, never `auto`: the header and each
-   row are *independent* grids, so a content-sized (`auto`) track resolves to a different width in
-   the header than in the rows, which throws every column out of alignment. For an actions column,
-   give it a fixed width (the buttons are right-aligned inside it). */
+   IMPORTANT — column templates must use fixed/`fr` tracks only, never `auto`: the header and
+   each row are independent grids, so an `auto` track resolves to different widths in the header
+   vs the rows and throws every column out of alignment. Give an actions column a fixed width. */
 
+/* ============================================================ container + rows */
 .ytable {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+/* Long lists wrap their rows in this so the header stays put while the body scrolls. */
+.ytable-scroll {
+  max-height: 520px;
+  overflow-y: auto;
 }
 
 .ytable-head,
 .ytable-row {
   display: grid;
-  align-items: stretch;
+  align-items: center;
 }
 
+/* Sentence-case header (NO all-caps), medium weight, sticky for virtual scroll / server paging. */
 .ytable-head {
-  min-height: 32px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 38px;
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
+.ytable-h {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px;
+  min-width: 0;
+  font-size: var(--font-xs);
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.ytable-h.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.ytable-h.sortable:hover {
+  color: var(--text-secondary);
+}
+
+.ytable-arrow {
+  font-size: 9px;
+  color: var(--accent-color);
+}
+
+.ytable-h.right,
+.ytable-cell.right {
+  justify-content: flex-end;
+}
+
 .ytable-row {
-  min-height: var(--row-h);
+  min-height: 44px;
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-md);
 }
@@ -46,37 +90,32 @@
   border-bottom: none;
 }
 
-.ytable-h,
+/* Whole-row hover (no zebra: row hover + 0.5px dividers carry separation; flat reads cleaner). */
+.ytable-row:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Disabled / inactive row. */
+.ytable-row.is-muted {
+  opacity: 0.6;
+}
+
 .ytable-cell {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0; /* let ellipsis cells shrink inside their grid track */
-  padding: 0 12px;
+  padding: 0 14px;
+  min-width: 0;
 }
 
-.ytable-h {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.ytable-h.right,
 .ytable-cell.right {
-  justify-content: flex-end;
+  gap: 4px;
 }
 
-/* Alternating column tint — even columns get a faint, even wash so columns separate without
-   stripes. Body only; the header keeps its single tertiary band. */
-.ytable-row > :nth-child(even) {
-  background: var(--table-col-tint);
-}
-
-/* Whole-row hover wins over the column tint (one continuous highlight). */
-.ytable-row:hover > * {
-  background: var(--bg-tertiary);
+.ytable-cell.mono {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
 }
 
 /* Truncate-with-ellipsis cell, and let a single child (e.g. a mono span) truncate too. */
@@ -87,9 +126,652 @@
   white-space: nowrap;
 }
 
-/* Compact in-table dropdown: natural width, sized to its content — never stretched to the cell. */
+/* Compact in-cell dropdown: sized to its content, never stretched to the cell. */
 .ytable-cell .field {
   width: auto;
   min-width: 96px;
   max-width: 100%;
+}
+
+/* Row actions: icon buttons revealed on row hover, right-aligned. */
+.ytable-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.ytable-row:hover .ytable-actions,
+.il-row:hover .il-actions {
+  opacity: 1;
+}
+
+/* Keyboard focus inside a hidden action group must still be visible. */
+.ytable-row:focus-within .ytable-actions,
+.il-row:focus-within .il-actions {
+  opacity: 1;
+}
+
+/* ============================================================ cell vocabulary */
+/* Primary identifier: optional type-icon tile + name (medium) + optional mono sub-label. */
+.yt-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.yt-name-txt {
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yt-name-sub {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  flex: none;
+}
+
+/* Type-icon tile (outline glyph, neutral — categorical, NOT a status color). */
+.yt-typeicon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+}
+
+.yt-typeicon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Type / kind chip (neutral outline + small leading icon — kind is categorical). */
+.yt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-primary);
+  white-space: nowrap;
+}
+
+.yt-chip svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+/* Sealed-secret indicator — secrets are NEVER shown; this reassures + reinforces. */
+.yt-sealed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+}
+
+.yt-sealed svg {
+  width: 13px;
+  height: 13px;
+}
+
+.yt-dots {
+  font-family: var(--font-family);
+  letter-spacing: 1px;
+}
+
+/* Mono id with copy-on-hover. */
+.yt-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.yt-copy-id {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yt-copy-btn {
+  opacity: 0;
+  flex: none;
+}
+
+.ytable-row:hover .yt-copy-btn,
+.yt-copy:focus-within .yt-copy-btn {
+  opacity: 1;
+}
+
+/* Usage count ("184 nodes" / "Unused"). */
+.yt-usage {
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.yt-usage.zero {
+  color: var(--text-tertiary);
+}
+
+/* Status dot + label (§1.3 — status palette only). */
+.yt-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.yt-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.yt-status.enabled {
+  color: var(--status-up);
+}
+
+.yt-status.enabled .yt-status-dot {
+  background: var(--status-up);
+}
+
+.yt-status.disabled {
+  color: var(--text-tertiary);
+}
+
+.yt-status.disabled .yt-status-dot {
+  background: var(--status-unknown);
+}
+
+/* HTTP status: dot + mono code + label (status palette §1.3). */
+.yt-http {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.yt-http-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.yt-http-code {
+  font-family: var(--font-family);
+}
+
+.yt-http-label {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.yt-http.up {
+  color: var(--status-up);
+}
+.yt-http.up .yt-http-dot {
+  background: var(--status-up);
+}
+.yt-http.warning {
+  color: var(--status-warning);
+}
+.yt-http.warning .yt-http-dot {
+  background: var(--status-warning);
+}
+.yt-http.critical {
+  color: var(--status-critical);
+}
+.yt-http.critical .yt-http-dot {
+  background: var(--status-critical);
+}
+
+/* HTTP method chip (neutral mono — method is categorical, not a status). */
+.yt-method {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 52px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.yt-path {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two-line timestamp: exact (mono) + relative (muted). */
+.yt-time {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.yt-time-exact {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+
+.yt-time-rel {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* Monogram avatar (audit user cell + identity list). Colored by role where applicable. */
+.yt-avatar {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  border: var(--border-width) solid currentColor;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+.yt-avatar.lg {
+  width: 38px;
+  height: 38px;
+  font-size: 13px;
+}
+
+.yt-avatar-txt {
+  /* keep initials in readable ink even when the border is role-colored */
+  color: var(--text-primary);
+}
+
+.yt-avatar.role-admin {
+  color: var(--role-admin);
+}
+.yt-avatar.role-operator {
+  color: var(--role-operator);
+}
+.yt-avatar.role-viewer {
+  color: var(--role-viewer);
+}
+
+.yt-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.yt-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yt-user.system .yt-avatar {
+  border-style: dashed;
+}
+
+/* ============================================================ states */
+.yt-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.yt-empty-title {
+  font-size: var(--font-md);
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.yt-empty-sub {
+  font-size: var(--font-sm);
+  margin: 0;
+}
+
+.yt-skel-bar {
+  height: 10px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary),
+    var(--border-color),
+    var(--bg-tertiary)
+  );
+  background-size: 200% 100%;
+  animation: yt-shimmer 1.3s linear infinite;
+}
+
+@keyframes yt-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yt-skel-bar {
+    animation: none;
+  }
+}
+
+/* ============================================================ toolbar (one bar across screens) */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.table-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.table-search svg {
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.table-search input {
+  height: 30px;
+  width: 240px;
+  max-width: 100%;
+  padding: 0 10px 0 28px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+}
+
+.table-search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.table-search input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.table-spacer {
+  flex: 1;
+}
+
+.table-count {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.table-count strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+/* Centered ghost pager under read-only / append-only logs ("Load older entries"). */
+.table-more {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+/* ============================================================ segmented control (role filter) */
+.segmented {
+  display: inline-flex;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented button {
+  height: 30px;
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  border: none;
+  border-left: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--transition),
+    color var(--transition);
+}
+
+.segmented button:first-child {
+  border-left: none;
+}
+
+.segmented button:hover {
+  color: var(--text-primary);
+}
+
+.segmented button.on {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  box-shadow: inset 0 -2px 0 var(--accent-color);
+}
+
+/* ============================================================ identity list (Users & roles) */
+.identity-list {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.il-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  transition: background var(--transition);
+}
+
+.il-row:last-child {
+  border-bottom: none;
+}
+
+.il-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.il-row.is-muted {
+  opacity: 0.62;
+}
+
+.il-id {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.il-line1 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.il-name {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.il-line2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+  flex-wrap: wrap;
+}
+
+.il-meta-sep {
+  color: var(--border-color);
+}
+
+.il-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.il-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.il-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* Inline role select (compact, instant) with a left bar in the role color. */
+.role-select {
+  height: 28px;
+  padding: 0 26px 0 9px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-color);
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  text-transform: capitalize;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238c867c' stroke-width='1.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+
+.role-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.role-select.role-admin {
+  box-shadow: inset 2px 0 0 var(--role-admin);
+}
+.role-select.role-operator {
+  box-shadow: inset 2px 0 0 var(--role-operator);
+}
+.role-select.role-viewer {
+  box-shadow: inset 2px 0 0 var(--role-viewer);
+}
+
+.role-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Account-status pill (active / disabled). */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border-radius: 10px;
+  font-size: var(--font-xs);
+  border: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.status-pill .yt-status-dot {
+  width: 7px;
+  height: 7px;
+}
+
+.status-pill.active {
+  color: var(--status-up);
+  border-color: color-mix(in srgb, var(--status-up) 45%, transparent);
+}
+
+.status-pill.active .yt-status-dot {
+  background: var(--status-up);
+}
+
+.status-pill.disabled {
+  color: var(--text-tertiary);
+}
+
+.status-pill.disabled .yt-status-dot {
+  background: var(--status-unknown);
+}
+
+/* "You" pill on the current user's row. */
+.you-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--brand);
+  border: var(--border-width) solid var(--brand);
 }

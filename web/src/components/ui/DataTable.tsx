@@ -16,6 +16,8 @@ export interface Column<T> {
   render: (row: T) => ReactNode;
   /** CSS grid track (e.g. '1fr', '120px'). */
   width?: string;
+  /** End-align the header + cells (counts, actions). */
+  align?: 'right';
 }
 
 interface Props<T> {
@@ -32,7 +34,7 @@ interface Props<T> {
   loading?: boolean;
 }
 
-const ROW_PX = 30; // compact row height (matches --row-h)
+const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
 
 export function DataTable<T>({
   rows,
@@ -64,7 +66,7 @@ export function DataTable<T>({
     <div className="dt">
       <div className="dt-head" style={{ gridTemplateColumns: template }}>
         {columns.map((c) => (
-          <div key={c.key} className="dt-h">
+          <div key={c.key} className={c.align === 'right' ? 'dt-h right' : 'dt-h'}>
             {c.header}
           </div>
         ))}
@@ -87,7 +89,7 @@ export function DataTable<T>({
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
                   {columns.map((c) => (
-                    <div key={c.key} className="dt-cell">
+                    <div key={c.key} className={c.align === 'right' ? 'dt-cell right' : 'dt-cell'}>
                       {c.render(row)}
                     </div>
                   ))}

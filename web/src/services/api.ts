@@ -528,6 +528,11 @@ export const api = {
   setUserRole: (id: string, role: Role): Promise<void> =>
     request(`/users/${encodeURIComponent(id)}/role`, jsonBody('PUT', { role })),
 
+  /** Enable or disable a user account. Refused (409 `last_admin`) when disabling the last
+   *  admin that can still log in. A disabled account is kept for the audit trail. */
+  setUserEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/users/${encodeURIComponent(id)}/status`, jsonBody('PUT', { enabled })),
+
   /** Reset a user's password (hashed server-side; never echoed back). */
   setUserPassword: (id: string, password: string): Promise<void> =>
     request(`/users/${encodeURIComponent(id)}/password`, jsonBody('PUT', { password })),

@@ -3,8 +3,12 @@ import {
   formatBps,
   formatUptimeTicks,
   formatUtil,
+  httpStatusLabel,
+  httpStatusTone,
+  initials,
   localTimeZone,
   pointsToSeries,
+  relativeTime,
   scalarDisplay,
   severityColorVar,
   severityRank,
@@ -75,6 +79,41 @@ describe('format', () => {
     const tz = localTimeZone();
     expect(typeof tz).toBe('string');
     expect(tz.length).toBeGreaterThan(0);
+  });
+
+  it('maps HTTP status to the status-palette tone (2xx/4xx/5xx)', () => {
+    expect(httpStatusTone(200)).toBe('up');
+    expect(httpStatusTone(201)).toBe('up');
+    expect(httpStatusTone(401)).toBe('warning');
+    expect(httpStatusTone(409)).toBe('warning');
+    expect(httpStatusTone(500)).toBe('critical');
+  });
+
+  it('labels HTTP status codes for humans', () => {
+    expect(httpStatusLabel(200)).toBe('OK');
+    expect(httpStatusLabel(401)).toBe('Denied');
+    expect(httpStatusLabel(403)).toBe('Denied');
+    expect(httpStatusLabel(409)).toBe('Conflict');
+    expect(httpStatusLabel(404)).toBe('Client error');
+    expect(httpStatusLabel(503)).toBe('Server error');
+  });
+
+  it('derives up to two monogram initials', () => {
+    expect(initials('k.tanaka')).toBe('KT');
+    expect(initials('noc-shift')).toBe('NS');
+    expect(initials('admin')).toBe('AD');
+    expect(initials('unknown')).toBe('?');
+    expect(initials('')).toBe('?');
+  });
+
+  it('formats relative time against an injected now', () => {
+    const now = Date.UTC(2026, 5, 15, 9, 0, 0); // 2026-06-15T09:00:00Z
+    expect(relativeTime(null, now)).toBe('Never');
+    expect(relativeTime('2026-06-15T08:59:40Z', now)).toBe('just now');
+    expect(relativeTime('2026-06-15T08:42:00Z', now)).toBe('18m ago');
+    expect(relativeTime('2026-06-15T07:00:00Z', now)).toBe('2h ago');
+    expect(relativeTime('2026-06-14T06:00:00Z', now)).toBe('Yesterday'); // 27h → 24-48h band
+    expect(relativeTime('2026-06-10T09:00:00Z', now)).toBe('5d ago');
   });
 
   it('gives known scalars a friendly label + formatted value, unknowns the raw name', () => {

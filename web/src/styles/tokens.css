@@ -1,5 +1,5 @@
 /* Yagra design tokens — the single source of truth for color/type/space.
-   Authoritative per design-system.md §1 (UI implementation contract): implement tokens as
+   Authoritative per .claude/docs/design-system.md §1 (UI implementation contract): implement tokens as
    CSS variables, not prose. Components reference these via var(); never hardcode a hex
    outside this file (uPlot canvas strokes are the one exemption — see ui-conventions.md).
 
@@ -32,6 +32,12 @@
   --series-6: #7c9b4c; /* 苔   (extension) */
   /* Severity 'info' is not a network status — borrow the categorical blue, not a status. */
   --severity-info: var(--series-1);
+
+  /* ---- role (categorical) — a user's role is neither a status nor a graph series, so it
+     borrows the series palette to keep the status and brand channels clean (design-system). ---- */
+  --role-admin: var(--series-2); /* 紫 */
+  --role-operator: var(--series-1); /* 青 */
+  --role-viewer: var(--series-3); /* 青緑 */
 
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
   --status-up: #2e7d32;
@@ -108,4 +114,5 @@
 
   --series-1: #5b9bdb;
   --series-2: #ab91de;
+  --series-3: #5bc0ab;
 }

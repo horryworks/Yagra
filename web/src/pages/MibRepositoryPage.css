@@ -1,27 +1,6 @@
-/* MIB repository: search toolbar, add form, and the catalog table (shared `.ytable` standard —
-   only the column template + the bold metric column are page-local). */
-
-.mib-toolbar {
-  margin-bottom: 12px;
-}
-
-.mib-search {
-  width: 100%;
-  max-width: 420px;
-}
-
-.mib-add {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-/* Fixed/fr only (no `auto`) so the header columns align over the rows — see styles/table.css. */
-.mib-table .ytable-head,
-.mib-table .ytable-row {
-  grid-template-columns: 1.4fr 2fr 1fr 1fr 90px;
-}
+/* MIB repository — data-table standard v2. The chrome (toolbar, sticky header, cells, hover
+   actions) comes from styles/table.css; the column template is applied inline via COLS. Only the
+   bold metric column is page-local. */
 
 .mib-metric {
   font-weight: var(--weight-medium);

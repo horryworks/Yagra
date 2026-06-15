@@ -2,6 +2,9 @@
 // (node / profile / group, like thresholds) for a time range: covered nodes observe
 // `maintenance` — no alerts fire and existing ones resolve — until the window ends.
 // The engine refreshes its snapshot every ~30s, so boundaries take effect within that.
+//
+// Data-table standard v2: a toolbar (count + "+ Add window") over the shared `.ytable`.
+// Add and delete both go through modals; enable/disable is an immediate row action.
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -15,14 +18,19 @@ import type {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { IconButton } from '../components/ui/IconButton';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { localTimeZone } from '../lib/format';
-import './CrudList.css';
 import './MaintenancePage.css';
 
 const LEVELS: ScopeLevel[] = ['node', 'profile', 'group'];
 const TZ = localTimeZone();
+
+const COLS = '120px 1.4fr 1fr 230px 120px';
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
@@ -47,6 +55,196 @@ function windowStatus(w: MaintenanceWindow): { label: string; tone: 'info' | 'ne
   return { label: 'scheduled', tone: 'neutral' };
 }
 
+/** Create a maintenance window (scope-driven focused-editing modal). */
+function AddWindowModal({
+  nodes,
+  profiles,
+  onClose,
+  onSaved,
+}: {
+  nodes: NodeSummary[];
+  profiles: ProfileSummary[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [level, setLevel] = useState<ScopeLevel>('node');
+  const [scopeId, setScopeId] = useState('');
+  const [startsAt, setStartsAt] = useState('');
+  const [endsAt, setEndsAt] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const ready = !(!name.trim() || !scopeId.trim() || !startsAt || !endsAt);
+
+  const submit = () => {
+    if (!ready) return;
+    setBusy(true);
+    setError(null);
+    api
+      .createMaintenanceWindow({
+        name: name.trim(),
+        scope_level: level,
+        scope_id: scopeId.trim(),
+        starts_at: toRfc3339(startsAt),
+        ends_at: toRfc3339(endsAt),
+      })
+      .then(() => {
+        onSaved();
+        onClose();
+      })
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to add window'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Add maintenance window"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
+            Add window
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">Name</label>
+        <TextInput
+          placeholder="e.g. core switch firmware"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Scope level</label>
+        <Select
+          value={level}
+          onChange={(e) => {
+            setLevel(e.target.value as ScopeLevel);
+            setScopeId('');
+          }}
+        >
+          {LEVELS.map((l) => (
+            <option key={l} value={l}>
+              {l}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Scope</label>
+        {level === 'node' ? (
+          <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+            <option value="">(pick a node)</option>
+            {nodes.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name}
+              </option>
+            ))}
+          </Select>
+        ) : level === 'profile' ? (
+          <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+            <option value="">(pick a profile)</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <TextInput
+            className="mono"
+            placeholder="group (tag value)"
+            value={scopeId}
+            onChange={(e) => setScopeId(e.target.value)}
+          />
+        )}
+        {level === 'group' && (
+          <span className="modal-hint">
+            Scope “group” matches nodes by their group tag value (e.g. a site name).
+          </span>
+        )}
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">From</label>
+        <TextInput
+          type="datetime-local"
+          value={startsAt}
+          onChange={(e) => setStartsAt(e.target.value)}
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">To</label>
+        <TextInput
+          type="datetime-local"
+          value={endsAt}
+          onChange={(e) => setEndsAt(e.target.value)}
+        />
+        <span className="modal-hint">
+          “From”/“To” are in {TZ} (your browser’s local time) and are stored as UTC.
+        </span>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Confirm + delete a maintenance window (destructive-consent modal). */
+function DeleteWindowModal({
+  win,
+  onClose,
+  onDone,
+}: {
+  win: MaintenanceWindow;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteMaintenanceWindow(win.id)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete window'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete maintenance window"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-confirm-text">
+        Delete maintenance window <strong>{win.name}</strong>? This cannot be undone.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
 export function MaintenancePage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
@@ -55,12 +253,8 @@ export function MaintenancePage() {
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [name, setName] = useState('');
-  const [level, setLevel] = useState<ScopeLevel>('node');
-  const [scopeId, setScopeId] = useState('');
-  const [startsAt, setStartsAt] = useState('');
-  const [endsAt, setEndsAt] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
 
   const load = useCallback(() => {
     api
@@ -81,39 +275,11 @@ export function MaintenancePage() {
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, [load]);
 
-  const add = () => {
-    setError(null);
-    if (!startsAt || !endsAt) {
-      setError('Start and end times are required.');
-      return;
-    }
-    api
-      .createMaintenanceWindow({
-        name: name.trim(),
-        scope_level: level,
-        scope_id: scopeId.trim(),
-        starts_at: toRfc3339(startsAt),
-        ends_at: toRfc3339(endsAt),
-      })
-      .then(() => {
-        setName('');
-        setScopeId('');
-        load();
-      })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to add window')));
-  };
-
   const setEnabled = (id: string, enabled: boolean) =>
     api
       .setMaintenanceWindowEnabled(id, enabled)
       .then(load)
       .catch((e: unknown) => setError(errMsg(e, 'failed to update window')));
-
-  const remove = (id: string) =>
-    api
-      .deleteMaintenanceWindow(id)
-      .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to delete window')));
 
   // Human label for a scope id (node/profile names resolved when known).
   const scopeLabel = (w: MaintenanceWindow): string => {
@@ -136,120 +302,99 @@ export function MaintenancePage() {
           <p className="muted">Maintenance management is unavailable in skeleton mode.</p>
         </Card>
       ) : (
-        <Card title="Windows">
-          {authed && (
-            <div className="maint-form form-row crud-add">
-              <TextInput
-                placeholder="name (e.g. core switch firmware)"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <Select
-                value={level}
-                onChange={(e) => {
-                  setLevel(e.target.value as ScopeLevel);
-                  setScopeId('');
-                }}
-              >
-                {LEVELS.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
-              {level === 'node' ? (
-                <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                  <option value="">(pick a node)</option>
-                  {nodes.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.name}
-                    </option>
-                  ))}
-                </Select>
-              ) : level === 'profile' ? (
-                <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                  <option value="">(pick a profile)</option>
-                  {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                <TextInput
-                  className="mono"
-                  placeholder="group (tag value)"
-                  value={scopeId}
-                  onChange={(e) => setScopeId(e.target.value)}
-                />
-              )}
-              <label className="maint-time">
-                <span className="maint-time-label">from</span>
-                <TextInput
-                  type="datetime-local"
-                  value={startsAt}
-                  onChange={(e) => setStartsAt(e.target.value)}
-                />
-              </label>
-              <label className="maint-time">
-                <span className="maint-time-label">to</span>
-                <TextInput
-                  type="datetime-local"
-                  value={endsAt}
-                  onChange={(e) => setEndsAt(e.target.value)}
-                />
-              </label>
-              <Button
-                variant="primary"
-                onClick={add}
-                disabled={!name.trim() || !scopeId.trim() || !startsAt || !endsAt}
-              >
-                Add window
+        <>
+          <TableToolbar>
+            <TableSpacer />
+            <ResultCount shown={rows.length} noun="windows" />
+            {authed && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + Add window
               </Button>
-            </div>
-          )}
-          {authed && (
-            <p className="form-note">
-              “From”/“To” are in {TZ} (your browser’s local time) and are stored as UTC.
-              {level === 'group' &&
-                ' Scope “group” matches nodes by their group tag value (e.g. a site name).'}
-            </p>
-          )}
+            )}
+          </TableToolbar>
+
           {error && <p className="form-error">{error}</p>}
 
-          {rows.length === 0 ? (
-            <p className="muted">{loading ? 'Loading…' : 'No maintenance windows.'}</p>
-          ) : (
-            <div className="crud-list">
-              {rows.map((w) => {
+          <div className="ytable">
+            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
+              <div className="ytable-h">Status</div>
+              <div className="ytable-h">Name</div>
+              <div className="ytable-h">Scope</div>
+              <div className="ytable-h">Range</div>
+              <div className="ytable-h right">Actions</div>
+            </div>
+
+            {rows.length === 0 ? (
+              <div className="yt-empty">
+                <p className="yt-empty-title">
+                  {loading ? 'Loading…' : 'No maintenance windows'}
+                </p>
+                {!loading && (
+                  <p className="yt-empty-sub">
+                    Schedule planned work so covered nodes raise no alerts.
+                  </p>
+                )}
+              </div>
+            ) : (
+              rows.map((w) => {
                 const status = windowStatus(w);
                 return (
-                  <div className="crud-row maint-row" key={w.id}>
-                    <Badge tone={status.tone}>{status.label}</Badge>
-                    <span className="crud-name">{w.name}</span>
-                    <span className="maint-scope">
-                      <Badge tone="neutral">{w.level}</Badge>
-                      <span className="maint-scope-name">{scopeLabel(w)}</span>
-                    </span>
-                    <span className="muted maint-range mono">
+                  <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={w.id}>
+                    <div className="ytable-cell">
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                    </div>
+                    <div className="ytable-cell">
+                      <span className="yt-name-txt">{w.name}</span>
+                    </div>
+                    <div className="ytable-cell">
+                      <span className="maint-scope">
+                        <Badge>{w.level}</Badge>
+                        <span>{scopeLabel(w)}</span>
+                      </span>
+                    </div>
+                    <div className="ytable-cell mono">
                       {fmtTime(w.starts_at)} → {fmtTime(w.ends_at)}
-                    </span>
-                    {authed && (
-                      <>
-                        <Button variant="ghost" onClick={() => setEnabled(w.id, !w.enabled)}>
-                          {w.enabled ? 'Disable' : 'Enable'}
-                        </Button>
-                        <Button variant="ghost" onClick={() => remove(w.id)}>
-                          Delete
-                        </Button>
-                      </>
-                    )}
+                    </div>
+                    <div className="ytable-cell right">
+                      {authed && (
+                        <span className="ytable-actions">
+                          <IconButton
+                            title={w.enabled ? 'Disable' : 'Enable'}
+                            onClick={() => setEnabled(w.id, !w.enabled)}
+                          >
+                            <PowerIcon />
+                          </IconButton>
+                          <IconButton title="Delete" danger onClick={() => setDeleting(w)}>
+                            <TrashIcon />
+                          </IconButton>
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
-              })}
-            </div>
-          )}
-        </Card>
+              })
+            )}
+          </div>
+        </>
+      )}
+
+      {adding && (
+        <AddWindowModal
+          nodes={nodes}
+          profiles={profiles}
+          onClose={() => setAdding(false)}
+          onSaved={load}
+        />
+      )}
+      {deleting && (
+        <DeleteWindowModal
+          win={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            load();
+          }}
+        />
       )}
     </div>
   );

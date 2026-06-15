@@ -1,40 +1,9 @@
-/* Maintenance windows: add form + window list rows. */
+/* Maintenance windows — data-table standard v2. The chrome (toolbar, header, badges, hover
+   actions) comes from styles/table.css; only the scope cell's inline layout lives here. */
 
-.maint-form {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.maint-time {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.maint-time-label {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.maint-row {
-  flex-wrap: wrap;
-}
-
+/* Scope cell: level badge + resolved name on one line. */
 .maint-scope {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 160px;
-}
-
-.maint-scope-name {
-  font-size: var(--font-sm);
-}
-
-.maint-range {
-  flex: 1;
-  font-size: var(--font-xs);
 }

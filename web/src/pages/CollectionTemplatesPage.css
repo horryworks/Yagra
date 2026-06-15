@@ -1,0 +1,8 @@
+/* Collection templates — data-table standard v2 (styles/table.css). Only the per-row expander
+   (the Collection-set editor) is page-local. */
+
+.templates-table .crud-collection {
+  padding: 12px 16px 16px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
