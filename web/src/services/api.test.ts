@@ -566,6 +566,55 @@ describe('api client', () => {
     });
   });
 
+  it('lists classification rules', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listClassificationRules();
+    expect(spy).toHaveBeenCalledWith('/api/v1/classification-rules');
+  });
+
+  it('creates a classification rule as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'cr1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createClassificationRule({
+      priority: 100,
+      sysobjectid_prefix: '1.3.6.1.4.1.9.',
+      sysdescr_regex: '(?i)cisco',
+      profile_id: 'p1',
+      enabled: true,
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/classification-rules');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({
+      priority: 100,
+      sysobjectid_prefix: '1.3.6.1.4.1.9.',
+      profile_id: 'p1',
+      enabled: true,
+    });
+  });
+
+  it('updates and deletes a classification rule via its id (url-encoded)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.updateClassificationRule('r/1', {
+      priority: 110,
+      profile_id: 'p1',
+      enabled: false,
+    });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/classification-rules/r%2F1');
+    expect(spy.mock.calls[0][1].method).toBe('PUT');
+    await api.deleteClassificationRule('r1');
+    expect(spy.mock.calls[1][0]).toBe('/api/v1/classification-rules/r1');
+    expect(spy.mock.calls[1][1].method).toBe('DELETE');
+  });
+
   it('fetches the role/privilege matrix', async () => {
     const spy = vi.fn().mockResolvedValue({
       ok: true,

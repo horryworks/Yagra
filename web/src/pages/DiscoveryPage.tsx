@@ -67,29 +67,27 @@ export function DiscoveryPage() {
 
   const snmpCreds = creds.filter((c) => SNMP_KINDS.includes(c.kind));
 
-  // Seed per-row form state when new candidates arrive (suggested profile + matched
-  // credential preselected so import binds the working secret automatically).
-  const seedRows = useCallback(
-    (list: DiscoveryCandidate[]) => {
-      setRowState((cur) => {
-        const next = { ...cur };
-        for (const c of list) {
-          if (next[c.address]) continue;
-          const prof = profiles.find((p) => p.name === c.suggested_profile);
-          next[c.address] = {
-            selected: false,
-            name: c.sysname?.trim() || c.address,
-            profile_id: prof?.id ?? '',
-            credential_id: c.matched_credential_id ?? '',
-            vendor: c.vendor ?? '',
-            model: c.model ?? '',
-          };
-        }
-        return next;
-      });
-    },
-    [profiles],
-  );
+  // Seed per-row form state when new candidates arrive. The suggested profile is resolved
+  // server-side (by sysObjectID/sysDescr → classification rules) and arrives as an id, so we
+  // pre-select it directly — robust to profile renames. The matched credential is preselected
+  // too, so import binds the working secret automatically.
+  const seedRows = useCallback((list: DiscoveryCandidate[]) => {
+    setRowState((cur) => {
+      const next = { ...cur };
+      for (const c of list) {
+        if (next[c.address]) continue;
+        next[c.address] = {
+          selected: false,
+          name: c.sysname?.trim() || c.address,
+          profile_id: c.suggested_profile_id ?? '',
+          credential_id: c.matched_credential_id ?? '',
+          vendor: c.vendor ?? '',
+          model: c.model ?? '',
+        };
+      }
+      return next;
+    });
+  }, []);
 
   const startScan = () => {
     setError(null);
@@ -277,6 +275,11 @@ export function DiscoveryPage() {
                     {(c.vendor || c.model) && (
                       <span className="disco-makermodel">
                         {[c.vendor, c.model].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                    {c.sysobjectid && (
+                      <span className="muted mono disco-sysoid" title="sysObjectID">
+                        {c.sysobjectid}
                       </span>
                     )}
                   </span>

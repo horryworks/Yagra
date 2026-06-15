@@ -144,11 +144,13 @@ fn ifindex_of(oid: &ObjectIdentifier, base: &ObjectIdentifier) -> Option<u32> {
     }
 }
 
-/// Map an SNMP string value (`OCTET STRING`) to a Rust `String` (lossy UTF-8). Other value
-/// types yield `None`. Device-supplied — callers must treat the result as untrusted.
+/// Map an SNMP string-ish value to a Rust `String`: `OCTET STRING` (lossy UTF-8) or
+/// `OBJECT IDENTIFIER` (dotted decimal — e.g. `sysObjectID`). Other value types yield
+/// `None`. Device-supplied — callers must treat the result as untrusted.
 fn string_value(value: &ObjectValue) -> Option<String> {
     match value {
         ObjectValue::String(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        ObjectValue::ObjectId(oid) => Some(oid.to_string()),
         _ => None,
     }
 }
@@ -217,5 +219,15 @@ mod tests {
             Some("Gi0/1".to_owned())
         );
         assert_eq!(string_value(&ObjectValue::Counter32(5)), None);
+    }
+
+    #[test]
+    fn string_value_renders_object_id_as_dotted_decimal() {
+        // sysObjectID comes back as an OBJECT IDENTIFIER — render it dotted for classification.
+        let oid = parse_oid("1.3.6.1.4.1.9.1.516").unwrap();
+        assert_eq!(
+            string_value(&ObjectValue::ObjectId(oid)),
+            Some("1.3.6.1.4.1.9.1.516".to_owned())
+        );
     }
 }

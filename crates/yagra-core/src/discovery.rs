@@ -18,6 +18,8 @@ use serde::Serialize;
 use uuid::Uuid;
 use yagra_bus::{DiscoveryCredential, DiscoveryJob, DiscoveryResult, NatsBus, BUS_SCHEMA_VERSION};
 
+use crate::classification::Classifier;
+
 /// Per-probe timeout pushed to the poller (ms).
 const SCAN_TIMEOUT_MS: u32 = 2000;
 
@@ -28,8 +30,13 @@ pub struct Candidate {
     pub reachable: bool,
     pub sysdescr: Option<String>,
     pub sysname: Option<String>,
-    /// Suggested built-in profile name (classified from sysDescr), if any.
-    pub suggested_profile: Option<String>,
+    /// `sysObjectID` (dotted) if it answered SNMP — the authoritative device-type signal the
+    /// classifier prefers. Shown to the operator and useful for authoring rules.
+    pub sysobjectid: Option<String>,
+    /// Suggested device profile, resolved **server-side** via the classification rules (by
+    /// sysObjectID prefix, else sysDescr regex, else "Generic SNMP" when SNMP answered). An id,
+    /// not a name, so the UI binds it robustly even if the profile was renamed.
+    pub suggested_profile_id: Option<Uuid>,
     /// Maker / model best-effort parsed from sysDescr (editable on import) — pre-fills the
     /// node's descriptive metadata so the imported node displays "name (addr) (vendor) (model)".
     pub vendor: Option<String>,
@@ -71,8 +78,9 @@ impl ScanState {
 
     /// Fold a (possibly partial) poller result in. Each message carries the cumulative
     /// found list, so candidates are replaced, not appended. Progress never regresses
-    /// (guards against out-of-order delivery).
-    fn apply(&mut self, result: DiscoveryResult) {
+    /// (guards against out-of-order delivery). The classifier resolves each device's
+    /// suggested profile server-side from its sysObjectID / sysDescr.
+    fn apply(&mut self, result: DiscoveryResult, classifier: &Classifier) {
         if result.probed < self.probed && !result.done {
             return;
         }
@@ -80,25 +88,33 @@ impl ScanState {
             .found
             .into_iter()
             .map(|d| {
-                // Identify maker/model/profile from sysDescr (best-effort). Fall back to a
-                // "Generic SNMP" profile if it answered SNMP at all but matched no vendor.
-                let id = d
+                // Authoritative profile suggestion from the classification rules (sysObjectID
+                // first, then sysDescr, then the Generic-SNMP fallback when SNMP answered).
+                let matched = classifier.classify(d.sysobjectid.as_deref(), d.sysdescr.as_deref());
+                // Maker/model: a matching rule may pin them; otherwise fall back to the
+                // best-effort sysDescr parse (editable by the operator on import).
+                let parsed = d
                     .sysdescr
                     .as_deref()
                     .map(yagra_discovery::identify)
                     .unwrap_or_default();
-                let suggested = id
-                    .profile
-                    .map(str::to_owned)
-                    .or_else(|| d.sysdescr.as_ref().map(|_| "Generic SNMP".to_owned()));
+                let vendor = matched
+                    .as_ref()
+                    .and_then(|m| m.vendor.clone())
+                    .or(parsed.vendor);
+                let model = matched
+                    .as_ref()
+                    .and_then(|m| m.model.clone())
+                    .or(parsed.model);
                 Candidate {
                     address: d.address.to_string(),
                     reachable: d.reachable,
                     sysdescr: d.sysdescr,
                     sysname: d.sysname,
-                    suggested_profile: suggested,
-                    vendor: id.vendor,
-                    model: id.model,
+                    sysobjectid: d.sysobjectid,
+                    suggested_profile_id: matched.map(|m| m.profile_id),
+                    vendor,
+                    model,
                     matched_credential_id: d.matched_credential,
                 }
             })
@@ -130,14 +146,16 @@ impl ScanState {
 /// Orchestrates discovery scans: publishes jobs, accumulates results, exposes status.
 pub struct DiscoveryRunner {
     bus: Arc<NatsBus>,
+    classifier: Arc<Classifier>,
     scans: Mutex<HashMap<Uuid, ScanState>>,
 }
 
 impl DiscoveryRunner {
     #[must_use]
-    pub fn new(bus: Arc<NatsBus>) -> Self {
+    pub fn new(bus: Arc<NatsBus>, classifier: Arc<Classifier>) -> Self {
         Self {
             bus,
+            classifier,
             scans: Mutex::new(HashMap::new()),
         }
     }
@@ -191,7 +209,7 @@ impl DiscoveryRunner {
             );
             let mut g = self.scans.lock().expect("scans mutex poisoned");
             if let Some(s) = g.get_mut(&r.scan_id) {
-                s.apply(r);
+                s.apply(r, &self.classifier);
             }
         }
         tracing::warn!("discovery result stream ended");
@@ -203,6 +221,27 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
     use yagra_bus::DiscoveredDevice;
+    use yagra_common::ClassificationRule;
+
+    /// Stable test profile id the Huawei rule maps to.
+    const HUAWEI_PROFILE: u128 = 0x4A1;
+    const GENERIC_PROFILE: u128 = 0x9E2E61C;
+
+    /// A classifier with one Huawei sysObjectID-prefix rule + a Generic-SNMP fallback, so the
+    /// fixture devices (Huawei sysObjectID) classify deterministically without a database.
+    fn classifier() -> Classifier {
+        let huawei = ClassificationRule {
+            id: Uuid::from_u128(1),
+            priority: 100,
+            sysobjectid_prefix: Some("1.3.6.1.4.1.2011.".to_owned()),
+            sysdescr_regex: None,
+            profile_id: Uuid::from_u128(HUAWEI_PROFILE).into(),
+            vendor: None,
+            model: None,
+            enabled: true,
+        };
+        Classifier::from_rules(vec![huawei], Some(Uuid::from_u128(GENERIC_PROFILE)))
+    }
 
     fn targets(n: u8) -> Vec<IpAddr> {
         (1..=n)
@@ -227,25 +266,27 @@ mod tests {
             reachable: true,
             sysdescr: Some("Huawei Versatile Routing Platform USG6000".to_owned()),
             sysname: Some(format!("dev{last_octet}")),
+            sysobjectid: Some("1.3.6.1.4.1.2011.2.1".to_owned()),
             matched_credential: cred,
         }
     }
 
     #[test]
     fn progress_advances_and_reports_current_address() {
+        let c = classifier();
         let mut s = ScanState::new(targets(4));
         let st = s.status(Uuid::nil());
         assert_eq!((st.probed, st.total), (0, 4));
         assert_eq!(st.scanning.as_deref(), Some("10.0.0.1"));
 
-        s.apply(partial(2, false, vec![device(1, None)]));
+        s.apply(partial(2, false, vec![device(1, None)]), &c);
         let st = s.status(Uuid::nil());
         assert!(!st.done);
         assert_eq!(st.probed, 2);
         assert_eq!(st.scanning.as_deref(), Some("10.0.0.3"));
         assert_eq!(st.candidates.len(), 1);
 
-        s.apply(partial(4, true, vec![device(1, None), device(3, None)]));
+        s.apply(partial(4, true, vec![device(1, None), device(3, None)]), &c);
         let st = s.status(Uuid::nil());
         assert!(st.done);
         assert_eq!(st.probed, 4);
@@ -257,22 +298,53 @@ mod tests {
     fn matched_credential_is_carried_into_the_candidate() {
         let cred = Uuid::from_u128(42);
         let mut s = ScanState::new(targets(1));
-        s.apply(partial(1, true, vec![device(1, Some(cred))]));
+        s.apply(partial(1, true, vec![device(1, Some(cred))]), &classifier());
         let st = s.status(Uuid::nil());
         assert_eq!(st.candidates[0].matched_credential_id, Some(cred));
-        // sysDescr classification still happens alongside the credential mapping, and the
-        // maker/model are parsed out to pre-fill the node's descriptive metadata.
-        assert!(st.candidates[0].suggested_profile.is_some());
+        // The device's sysObjectID resolves (server-side) to the Huawei profile by id, and the
+        // maker/model are parsed from sysDescr to pre-fill the node's descriptive metadata.
+        assert_eq!(
+            st.candidates[0].suggested_profile_id,
+            Some(Uuid::from_u128(HUAWEI_PROFILE))
+        );
+        assert_eq!(
+            st.candidates[0].sysobjectid.as_deref(),
+            Some("1.3.6.1.4.1.2011.2.1")
+        );
         assert_eq!(st.candidates[0].vendor.as_deref(), Some("Huawei"));
         assert_eq!(st.candidates[0].model.as_deref(), Some("USG6000"));
     }
 
     #[test]
+    fn snmp_device_with_no_rule_match_falls_back_to_generic_profile() {
+        // No sysObjectID, sysDescr matches no rule → the Generic-SNMP fallback id (by id).
+        let mut s = ScanState::new(targets(1));
+        let dev = DiscoveredDevice {
+            address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            reachable: true,
+            sysdescr: Some("Linux server 5.10 net-snmp".to_owned()),
+            sysname: Some("srv01".to_owned()),
+            sysobjectid: None,
+            matched_credential: None,
+        };
+        s.apply(partial(1, true, vec![dev]), &classifier());
+        let st = s.status(Uuid::nil());
+        assert_eq!(
+            st.candidates[0].suggested_profile_id,
+            Some(Uuid::from_u128(GENERIC_PROFILE))
+        );
+    }
+
+    #[test]
     fn stale_or_reordered_partials_never_regress_progress() {
+        let c = classifier();
         let mut s = ScanState::new(targets(4));
-        s.apply(partial(4, false, vec![device(1, None), device(2, None)]));
+        s.apply(
+            partial(4, false, vec![device(1, None), device(2, None)]),
+            &c,
+        );
         // A late, out-of-order partial with lower progress must be ignored.
-        s.apply(partial(2, false, vec![device(1, None)]));
+        s.apply(partial(2, false, vec![device(1, None)]), &c);
         let st = s.status(Uuid::nil());
         assert_eq!(st.probed, 4);
         assert_eq!(st.candidates.len(), 2);
@@ -281,18 +353,35 @@ mod tests {
     #[test]
     fn old_poller_single_result_completes_the_scan() {
         // N-1 (ADR-017): an older poller sends one final message with default progress
-        // fields (probed 0, done true) — the scan must still complete with its devices.
+        // fields (probed 0, done true) and no sysObjectID — the scan must still complete and
+        // classify via the sysDescr fallback.
         let mut s = ScanState::new(targets(2));
-        s.apply(DiscoveryResult {
-            schema_version: BUS_SCHEMA_VERSION,
-            scan_id: Uuid::nil(),
-            found: vec![device(1, None)],
-            probed: 0,
-            total: 0,
-            done: true,
-        });
+        s.apply(
+            DiscoveryResult {
+                schema_version: BUS_SCHEMA_VERSION,
+                scan_id: Uuid::nil(),
+                found: vec![DiscoveredDevice {
+                    address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                    reachable: true,
+                    sysdescr: Some("Huawei VRP USG6000".to_owned()),
+                    sysname: Some("dev1".to_owned()),
+                    sysobjectid: None,
+                    matched_credential: None,
+                }],
+                probed: 0,
+                total: 0,
+                done: true,
+            },
+            &classifier(),
+        );
         let st = s.status(Uuid::nil());
         assert!(st.done);
         assert_eq!(st.candidates.len(), 1);
+        // Old poller sent no sysObjectID, so it falls back to the Generic-SNMP profile (the
+        // Huawei rule here is sysObjectID-only). The classifier still resolves a suggestion.
+        assert_eq!(
+            st.candidates[0].suggested_profile_id,
+            Some(Uuid::from_u128(GENERIC_PROFILE))
+        );
     }
 }

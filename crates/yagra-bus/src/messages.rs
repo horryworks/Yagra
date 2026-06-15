@@ -467,6 +467,12 @@ pub struct DiscoveredDevice {
     /// `sysName.0` if it answered SNMP.
     #[serde(default)]
     pub sysname: Option<String>,
+    /// `sysObjectID.0` if it answered SNMP — the vendor-assigned enterprise OID that
+    /// authoritatively identifies the device type (e.g. `1.3.6.1.4.1.9.1.516`). Preferred
+    /// over the free-form `sysdescr` for profile classification. `None` for an older poller
+    /// that didn't probe it (ADR-017 N-1: core falls back to `sysdescr`).
+    #[serde(default)]
+    pub sysobjectid: Option<String>,
     /// The stored credential that answered SNMP, by reference (never the value). `None`
     /// when an ad-hoc community matched or nothing answered.
     #[serde(default)]

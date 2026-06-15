@@ -10,6 +10,7 @@
 use crate::alerts::AlertManager;
 use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
+use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
@@ -55,6 +56,10 @@ pub struct AdminState {
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
     pub maintenance: Arc<MaintenanceRepo>,
+    /// Operator-editable device-classification rules (CRUD) + the in-memory classifier the
+    /// discovery runner consults; handlers reload the classifier after a rule edit.
+    pub classification: Arc<ClassificationRepo>,
+    pub classifier: Arc<Classifier>,
     pub groups: Arc<GroupRepo>,
     pub audit: Arc<AuditRepo>,
 }
@@ -198,6 +203,14 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/discovery/scan", post(start_discovery_scan))
         .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
         .route("/api/v1/discovery/import", post(import_discovered))
+        .route(
+            "/api/v1/classification-rules",
+            get(list_classification_rules).post(create_classification_rule),
+        )
+        .route(
+            "/api/v1/classification-rules/:id",
+            put(update_classification_rule).delete(delete_classification_rule),
+        )
         .route(
             "/api/v1/maintenance-windows",
             get(list_maintenance_windows).post(create_maintenance_window),
@@ -2175,6 +2188,252 @@ async fn import_discovered(
         Json(serde_json::json!({ "created": created })),
     )
         .into_response()
+}
+
+// ── Classification rules (discovery → suggested profile) — ManageConfig only ─
+
+/// Create/update body for a classification rule. `profile_id` is a UUID string; at least one
+/// of `sysobjectid_prefix` / `sysdescr_regex` must be present (validated below).
+#[derive(Deserialize)]
+struct ClassificationRuleBody {
+    priority: i32,
+    #[serde(default)]
+    sysobjectid_prefix: Option<String>,
+    #[serde(default)]
+    sysdescr_regex: Option<String>,
+    profile_id: String,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
+/// A validated, normalized classification rule ready for the repo (empty strings dropped to
+/// `None`, regex compiled-checked, prefix shape-checked, profile existence confirmed).
+struct NormalizedRule {
+    priority: i32,
+    prefix: Option<String>,
+    regex: Option<String>,
+    profile_id: Uuid,
+    vendor: Option<String>,
+    model: Option<String>,
+    enabled: bool,
+}
+
+/// A dotted-OID prefix: dot-separated non-empty numeric arcs, with an optional trailing dot
+/// (a trailing dot is the safe form so `1.3.6.1.4.1.9.` can't also match `...91`).
+fn is_valid_oid_prefix(s: &str) -> bool {
+    let core = s.strip_suffix('.').unwrap_or(s);
+    !core.is_empty()
+        && core
+            .split('.')
+            .all(|arc| !arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Validate + normalize a rule body. Errors are client-safe 400s (security.md: parse into
+/// strong, bounded types at the edge; the regex engine is linear-time so a pattern can't ReDoS).
+async fn normalize_classification_rule(
+    repo: &ClassificationRepo,
+    body: ClassificationRuleBody,
+) -> Result<NormalizedRule, Response> {
+    let trim_opt = |v: Option<String>| -> Option<String> {
+        v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    };
+    let prefix = trim_opt(body.sysobjectid_prefix);
+    let regex = trim_opt(body.sysdescr_regex);
+    let vendor = trim_opt(body.vendor);
+    let model = trim_opt(body.model);
+
+    if prefix.is_none() && regex.is_none() {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_rule",
+            "a rule needs a sysObjectID prefix and/or a sysDescr regex".to_owned(),
+        ));
+    }
+    if let Some(p) = &prefix {
+        if !is_valid_oid_prefix(p) {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_prefix",
+                "sysObjectID prefix must be a dotted-numeric OID (e.g. 1.3.6.1.4.1.9.)".to_owned(),
+            ));
+        }
+    }
+    if let Some(re) = &regex {
+        if let Err(e) = regex::Regex::new(re) {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_regex",
+                format!("sysDescr regex does not compile: {e}"),
+            ));
+        }
+    }
+    let Ok(profile_id) = body.profile_id.parse::<Uuid>() else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_profile",
+            format!("'{}' is not a valid profile id", body.profile_id),
+        ));
+    };
+    match repo.profile_exists(profile_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "profile_not_found",
+                format!("no profile {profile_id}"),
+            ))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "profile existence check failed");
+            return Err(internal("failed to validate the profile"));
+        }
+    }
+    Ok(NormalizedRule {
+        priority: body.priority,
+        prefix,
+        regex,
+        profile_id,
+        vendor,
+        model,
+        enabled: body.enabled,
+    })
+}
+
+async fn list_classification_rules(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.classification.list_rules().await {
+        Ok(rules) => Json(rules).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list classification rules failed");
+            internal("failed to list classification rules")
+        }
+    }
+}
+
+async fn create_classification_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ClassificationRuleBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let r = match normalize_classification_rule(&admin.classification, body).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    match admin
+        .classification
+        .create_rule(
+            r.priority,
+            r.prefix.as_deref(),
+            r.regex.as_deref(),
+            r.profile_id,
+            r.vendor.as_deref(),
+            r.model.as_deref(),
+            r.enabled,
+        )
+        .await
+    {
+        Ok(id) => {
+            reload_classifier(admin).await;
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "create classification rule failed");
+            internal("failed to create classification rule")
+        }
+    }
+}
+
+async fn update_classification_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ClassificationRuleBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let r = match normalize_classification_rule(&admin.classification, body).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    match admin
+        .classification
+        .update_rule(
+            id,
+            r.priority,
+            r.prefix.as_deref(),
+            r.regex.as_deref(),
+            r.profile_id,
+            r.vendor.as_deref(),
+            r.model.as_deref(),
+            r.enabled,
+        )
+        .await
+    {
+        Ok(true) => {
+            reload_classifier(admin).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("rule_not_found", format!("no classification rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update classification rule failed");
+            internal("failed to update classification rule")
+        }
+    }
+}
+
+async fn delete_classification_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.classification.delete_rule(id).await {
+        Ok(true) => {
+            reload_classifier(admin).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("rule_not_found", format!("no classification rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete classification rule failed");
+            internal("failed to delete classification rule")
+        }
+    }
+}
+
+/// Reload the in-memory classifier after a rule edit so the change takes effect immediately
+/// (best-effort: the periodic refresh would pick it up anyway, so a failure only delays it).
+async fn reload_classifier(admin: &AdminState) {
+    if let Err(e) = admin.classifier.reload(&admin.classification).await {
+        tracing::warn!(error = %e, "failed to reload classifier after rule edit");
+    }
 }
 
 // ── Collection sets (what to poll, per profile/node) — ManageConfig only ─────

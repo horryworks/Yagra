@@ -180,11 +180,13 @@ fn numeric(value: &Value) -> Option<f64> {
     }
 }
 
-/// Map a string SNMP value (octet string, lossily decoded UTF-8 — device-supplied, treat
-/// as untrusted); non-string values yield `None` (skipped).
+/// Map a string-ish SNMP value to a `String`: octet string (lossy UTF-8) or object
+/// identifier (dotted decimal — e.g. `sysObjectID`). Device-supplied, treat as untrusted;
+/// other value types yield `None` (skipped).
 fn string_value(value: &Value) -> Option<String> {
     match value {
         Value::OctetString(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        Value::ObjectIdentifier(oid) => Some(oid.to_id_string()),
         _ => None,
     }
 }
@@ -284,5 +286,15 @@ mod tests {
         );
         assert_eq!(string_value(&Value::Integer(1)), None);
         assert_eq!(string_value(&Value::NoSuchObject), None);
+    }
+
+    #[test]
+    fn string_value_renders_object_id_as_dotted_decimal() {
+        // sysObjectID comes back as an OBJECT IDENTIFIER — render it dotted for classification.
+        let oid = parse_oid("1.3.6.1.4.1.2011.2.1").unwrap();
+        assert_eq!(
+            string_value(&Value::ObjectIdentifier(oid)),
+            Some("1.3.6.1.4.1.2011.2.1".to_owned())
+        );
     }
 }
