@@ -13,6 +13,7 @@ mod alerts;
 mod api;
 mod audit;
 mod auth;
+mod classification;
 mod collection;
 mod config;
 mod discovery;
@@ -86,6 +87,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let mib = Arc::new(MibRepo::new(repo.pool()));
     mib.seed_builtin().await?;
 
+    // Device classification: the operator-editable rules that map a discovered device's
+    // sysObjectID / sysDescr to a suggested profile. Loaded into an in-memory classifier that
+    // discovery consults per candidate; reloaded on a refresh loop + after a rule edit.
+    let classification = Arc::new(classification::ClassificationRepo::new(repo.pool()));
+    let classifier = Arc::new(classification::Classifier::empty());
+    if let Err(e) = classifier.reload(&classification).await {
+        tracing::warn!(error = %e, "failed to load classification rules; discovery will use the generic fallback");
+    }
+
     // TSDB + bus.
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
@@ -110,8 +120,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         ));
     }
 
-    // Discovery: a runner that publishes sweep jobs + a consumer that folds results back in.
-    let discovery = Arc::new(DiscoveryRunner::new(bus.clone()));
+    // Discovery: a runner that publishes sweep jobs + a consumer that folds results back in,
+    // classifying each found device into a suggested profile via the shared classifier.
+    let discovery = Arc::new(DiscoveryRunner::new(bus.clone(), classifier.clone()));
     {
         let results = Box::pin(bus.subscribe_discovery_results().await?);
         tokio::spawn(discovery.clone().run_consumer(results));
@@ -155,10 +166,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let repo = repo.clone();
         let thresholds = thresholds.clone();
         let maintenance = maintenance.clone();
+        let classifier = classifier.clone();
+        let classification = classification.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance).await);
+                // Pick up classification-rule edits without a restart (also reloaded inline by
+                // the rule-edit handlers; this catches any drift / multi-instance future).
+                if let Err(e) = classifier.reload(&classification).await {
+                    tracing::warn!(error = %e, "failed to refresh classification rules");
+                }
             }
         });
     }
@@ -196,6 +214,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         mib,
         discovery,
         maintenance,
+        classification,
+        classifier,
         groups: Arc::new(groups::GroupRepo::new(repo.pool())),
         audit: Arc::new(AuditRepo::new(repo.pool())),
     }));

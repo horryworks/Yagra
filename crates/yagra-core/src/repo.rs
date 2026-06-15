@@ -566,8 +566,10 @@ impl NodeRepo {
         }
 
         // 2. Profiles + their template links; drop any legacy profile-scope collection items.
+        let mut profile_id_by_name: HashMap<&'static str, Uuid> = HashMap::new();
         for (i, profile) in yagra_common::builtin_profiles().into_iter().enumerate() {
             let profile_id = Uuid::from_u128(PROFILE_ID_BASE + i as u128);
+            profile_id_by_name.insert(profile.name, profile_id);
             sqlx::query(
                 "INSERT INTO profiles (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
             )
@@ -595,7 +597,40 @@ impl NodeRepo {
                 }
             }
         }
-        tracing::info!("seeded built-in collection templates + device profiles");
+        // 3. Built-in classification rules (discovery → suggested profile). Stable ids +
+        //    ON CONFLICT DO NOTHING so operator edits survive restarts; references the profile
+        //    ids seeded just above. Rules for an unknown profile name are skipped defensively.
+        const RULE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_8000;
+        for (i, rule) in yagra_common::builtin_classification_rules()
+            .into_iter()
+            .enumerate()
+        {
+            let Some(&profile_id) = profile_id_by_name.get(rule.profile_name) else {
+                tracing::warn!(
+                    profile = rule.profile_name,
+                    "skipping seed rule for unknown profile"
+                );
+                continue;
+            };
+            let rule_id = Uuid::from_u128(RULE_ID_BASE + i as u128);
+            sqlx::query(
+                "INSERT INTO classification_rules \
+                    (id, priority, sysobjectid_prefix, sysdescr_regex, profile_id, vendor, model) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(rule_id)
+            .bind(rule.priority)
+            .bind(rule.sysobjectid_prefix)
+            .bind(rule.sysdescr_regex)
+            .bind(profile_id)
+            .bind(rule.vendor)
+            .bind(rule.model)
+            .execute(&self.pool)
+            .await?;
+        }
+        tracing::info!(
+            "seeded built-in collection templates + device profiles + classification rules"
+        );
         Ok(())
     }
 }

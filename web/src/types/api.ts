@@ -260,13 +260,44 @@ export interface DiscoveryCandidate {
   reachable: boolean;
   sysdescr: string | null;
   sysname: string | null;
-  /** Suggested built-in profile name (classified from sysDescr), if any. */
-  suggested_profile: string | null;
-  /** Maker/model best-effort parsed from sysDescr — pre-fills the import row. */
+  /** `sysObjectID` (dotted) if it answered SNMP — the authoritative device-type signal. */
+  sysobjectid: string | null;
+  /** Suggested profile **id**, resolved server-side via the classification rules (by
+   *  sysObjectID prefix, else sysDescr regex, else Generic SNMP). An id, not a name, so the
+   *  row pre-selects robustly even if the profile was renamed. */
+  suggested_profile_id: string | null;
+  /** Maker/model (rule-pinned or best-effort from sysDescr) — pre-fills the import row. */
   vendor: string | null;
   model: string | null;
   /** The stored credential that answered SNMP, by id — preselected on import. */
   matched_credential_id: string | null;
+}
+
+/** A device-classification rule (`GET /api/v1/classification-rules`, `yagra_common::ClassificationRule`).
+ *  Maps a discovered device's SNMP signature to a profile; evaluated by ascending priority. */
+export interface ClassificationRule {
+  id: string;
+  priority: number;
+  /** Dotted-OID prefix matched against sysObjectID (authoritative), e.g. `1.3.6.1.4.1.9.`. */
+  sysobjectid_prefix: string | null;
+  /** Regex matched against sysDescr (fallback). */
+  sysdescr_regex: string | null;
+  /** Profile this rule suggests. */
+  profile_id: string;
+  vendor: string | null;
+  model: string | null;
+  enabled: boolean;
+}
+
+/** Create/update body for a classification rule. */
+export interface ClassificationRuleInput {
+  priority: number;
+  sysobjectid_prefix?: string | null;
+  sysdescr_regex?: string | null;
+  profile_id: string;
+  vendor?: string | null;
+  model?: string | null;
+  enabled: boolean;
 }
 
 /** A discovery scan's status (`GET /api/v1/discovery/scan/:id`). */

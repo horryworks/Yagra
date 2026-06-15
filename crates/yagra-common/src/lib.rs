@@ -9,6 +9,7 @@
 //! explicit, exhaustive node state machine (monitoring-conventions).
 
 pub mod address;
+pub mod classification;
 pub mod collection;
 pub mod ids;
 pub mod metric;
@@ -20,6 +21,9 @@ pub mod state;
 pub mod thresholds;
 
 pub use address::AddressFamily;
+pub use classification::{
+    builtin_classification_rules, BuiltinClassificationRule, ClassificationRule,
+};
 pub use collection::{
     builtin_catalog, builtin_interface_meta_columns, builtin_profiles, builtin_templates,
     resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,

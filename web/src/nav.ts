@@ -1,4 +1,4 @@
-// Navigation IA — the single source of truth for the site map (design-system.md §2.2,
+// Navigation IA — the single source of truth for the site map (.claude/docs/design-system.md §2.2,
 // decision log §6). The top bar renders SECTIONS (text-only tabs); the sidebar renders the
 // selected section's ITEMS. `implemented: false` items route to the ComingSoon placeholder
 // (their backend endpoints don't exist yet) but still appear so the information architecture
@@ -42,6 +42,12 @@ export const NAV: NavSection[] = [
       { label: 'Discovery', path: '/nodes/discovery', implemented: true, mono: 'Di' },
       { label: 'Dependencies', path: '/nodes/dependencies', implemented: false, mono: 'Dp' },
       { label: 'Device profiles', path: '/nodes/profiles', implemented: true, mono: 'Pr' },
+      {
+        label: 'Classification rules',
+        path: '/nodes/classification-rules',
+        implemented: true,
+        mono: 'Cl',
+      },
       {
         label: 'Collection templates',
         path: '/nodes/collection-templates',
