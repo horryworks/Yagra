@@ -1,0 +1,31 @@
+/* Device profiles — data-table standard v2 (styles/table.css). Only the per-row expander
+   (template-attachment checklist) is page-local. */
+
+/* Inline editor revealed under a profile row when "Templates" is toggled. */
+.profiles-table .crud-collection {
+  padding: 12px 16px 16px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.profile-templates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-template-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.profile-template-name {
+  font-weight: var(--weight-medium);
+}
+
+.profile-template-meta {
+  font-size: var(--font-xs);
+}

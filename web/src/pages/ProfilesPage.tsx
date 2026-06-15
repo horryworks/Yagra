@@ -2,16 +2,26 @@
 // collection sets by *attaching Collection templates* (profiles hold no raw OIDs themselves —
 // edit a template once and every profile using it updates). CRUD against /profiles;
 // template links via /profiles/:id/templates. ManageConfig-gated; 503 in skeleton surfaced.
+//
+// Data-table standard v2: a toolbar (count + "+ Add profile") over the shared `.ytable`; add via
+// modal, delete via confirm modal. Each row expands to a Collection-template attachment checklist.
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { TextInput } from '../components/ui/Field';
-import './CrudList.css';
+import { Modal } from '../components/ui/Modal';
+import { TextInput, RequiredMark } from '../components/ui/Field';
+import { IconButton } from '../components/ui/IconButton';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { CopyableId } from '../components/ui/tableCells';
+import { TrashIcon } from '../components/ui/icons';
+import './ProfilesPage.css';
+
+const COLS = '1.6fr 1.4fr 150px 72px';
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
@@ -19,10 +29,10 @@ export function ProfilesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
-  const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<ProfileSummary | null>(null);
   // Which profile's template attachments are expanded (one at a time).
   const [openTemplates, setOpenTemplates] = useState<string | null>(null);
 
@@ -45,23 +55,6 @@ export function ProfilesPage() {
     load();
   }, [load]);
 
-  const add = () => {
-    setError(null);
-    api
-      .createProfile(name.trim())
-      .then(() => {
-        setName('');
-        load();
-      })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to add profile')));
-  };
-
-  const remove = (id: string) =>
-    api
-      .deleteProfile(id)
-      .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to delete profile')));
-
   return (
     <div>
       <PageHeader
@@ -77,53 +70,194 @@ export function ProfilesPage() {
           </p>
         </Card>
       ) : (
-        <Card title="Profiles">
-          {authed && (
-            <div className="crud-add form-row">
-              <TextInput
-                placeholder="Profile name (e.g. Cisco IOS switch)"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <Button variant="primary" onClick={add} disabled={!name.trim()}>
-                Add profile
+        <>
+          <TableToolbar>
+            <TableSpacer />
+            <ResultCount shown={rows.length} noun="profiles" />
+            {authed && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + Add profile
               </Button>
+            )}
+          </TableToolbar>
+
+          <div className="ytable profiles-table">
+            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
+              <div className="ytable-h">Name</div>
+              <div className="ytable-h">Profile ID</div>
+              <div className="ytable-h">Templates</div>
+              <div className="ytable-h right">Actions</div>
             </div>
-          )}
-          {error && <p className="form-error">{error}</p>}
-          {rows.length === 0 ? (
-            <p className="muted">{loading ? 'Loading…' : 'No profiles yet.'}</p>
-          ) : (
-            <div className="crud-list">
-              {rows.map((p) => (
-                <div key={p.id}>
-                  <div className="crud-row">
-                    <span className="crud-name">{p.name}</span>
-                    <span className="crud-id mono">{p.id}</span>
-                    <Button
-                      variant="ghost"
-                      onClick={() => setOpenTemplates((cur) => (cur === p.id ? null : p.id))}
-                    >
-                      {openTemplates === p.id ? 'Hide templates' : 'Templates'}
-                    </Button>
-                    {authed && (
-                      <Button variant="ghost" onClick={() => remove(p.id)}>
-                        Delete
-                      </Button>
-                    )}
-                  </div>
-                  {openTemplates === p.id && (
-                    <div className="crud-collection">
-                      <ProfileTemplates profileId={p.id} templates={templates} canEdit={authed} />
+
+            {rows.length === 0 ? (
+              <div className="yt-empty">
+                <p className="yt-empty-title">{loading ? 'Loading…' : 'No profiles yet'}</p>
+                {!loading && (
+                  <p className="yt-empty-sub">Add a device-class profile (e.g. “Cisco IOS switch”).</p>
+                )}
+              </div>
+            ) : (
+              rows.map((p) => {
+                const open = openTemplates === p.id;
+                return (
+                  <Fragment key={p.id}>
+                    <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
+                      <div className="ytable-cell">
+                        <span className="yt-name-txt">{p.name}</span>
+                      </div>
+                      <div className="ytable-cell">
+                        <CopyableId id={p.id} />
+                      </div>
+                      <div className="ytable-cell">
+                        <Button
+                          variant="ghost"
+                          onClick={() => setOpenTemplates((cur) => (cur === p.id ? null : p.id))}
+                        >
+                          {open ? 'Hide templates' : 'Templates'}
+                        </Button>
+                      </div>
+                      <div className="ytable-cell right">
+                        {authed && (
+                          <span className="ytable-actions">
+                            <IconButton title="Delete profile" danger onClick={() => setDeleting(p)}>
+                              <TrashIcon />
+                            </IconButton>
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+                    {open && (
+                      <div className="crud-collection">
+                        <ProfileTemplates profileId={p.id} templates={templates} canEdit={authed} />
+                      </div>
+                    )}
+                  </Fragment>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
+
+      {adding && (
+        <AddProfileModal
+          onClose={() => setAdding(false)}
+          onDone={() => {
+            setAdding(false);
+            load();
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteProfileModal
+          profile={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            load();
+          }}
+        />
       )}
     </div>
+  );
+}
+
+/** Create a profile (focused-editing modal — just a name). */
+function AddProfileModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError(null);
+    api
+      .createProfile(name.trim())
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to add profile'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Add device profile"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
+            Add profile
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">
+          Name <RequiredMark />
+        </label>
+        <TextInput
+          placeholder="e.g. Cisco IOS switch"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+        />
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Confirm + delete a profile (destructive-consent modal). */
+function DeleteProfileModal({
+  profile,
+  onClose,
+  onDone,
+}: {
+  profile: ProfileSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteProfile(profile.id)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete profile'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete profile"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-confirm-text">
+        Delete profile <strong>{profile.name}</strong>? Nodes using it keep running but lose this
+        class's collection defaults.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
   );
 }
 

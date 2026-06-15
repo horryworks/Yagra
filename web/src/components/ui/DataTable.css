@@ -1,3 +1,7 @@
+/* Virtualized data table — same v2 look as the shared `.ytable` standard (styles/table.css):
+   sentence-case sticky header on the tertiary surface, 0.5px dividers, whole-row hover, no
+   zebra. Windowed for tens of thousands of rows (§4). */
+
 .dt {
   display: flex;
   flex-direction: column;
@@ -6,12 +10,13 @@
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   overflow: hidden;
+  background: var(--bg-secondary);
 }
 
 .dt-head {
   display: grid;
-  align-items: stretch;
-  height: 32px;
+  align-items: center;
+  height: 38px;
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);
 }
@@ -20,12 +25,15 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 0 12px;
+  padding: 0 14px;
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.01em;
   color: var(--text-tertiary);
   font-weight: var(--weight-medium);
+}
+
+.dt-h.right {
+  justify-content: flex-end;
 }
 
 .dt-scroll {
@@ -42,9 +50,9 @@
   top: 0;
   left: 0;
   width: 100%;
-  height: var(--row-h);
+  height: 44px;
   display: grid;
-  align-items: stretch;
+  align-items: center;
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-md);
 }
@@ -53,11 +61,19 @@
   cursor: pointer;
 }
 
+.dt-row:hover {
+  background: var(--bg-tertiary);
+}
+
 .dt-cell {
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 0 12px;
+  padding: 0 14px;
+}
+
+.dt-cell.right {
+  justify-content: flex-end;
 }
 
 /* Let a single child (e.g. a mono span) truncate within the cell. */
@@ -68,18 +84,9 @@
   white-space: nowrap;
 }
 
-/* Alternating column tint (body only), matching the shared `.ytable` standard. */
-.dt-cell:nth-child(even) {
-  background: var(--table-col-tint);
-}
-
-/* Whole-row hover wins over the column tint. */
-.dt-row.clickable:hover .dt-cell {
-  background: var(--bg-tertiary);
-}
-
 .dt-empty {
-  padding: 24px 12px;
+  padding: 40px 16px;
+  text-align: center;
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }

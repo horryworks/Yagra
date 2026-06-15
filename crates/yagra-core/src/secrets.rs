@@ -20,6 +20,9 @@ pub struct CredentialSummary {
     pub id: Uuid,
     pub name: String,
     pub kind: String,
+    /// How many nodes reference this credential — answers "is it safe to delete?". Counted at
+    /// list time from `nodes.credential_id`; `0` means the credential is unused.
+    pub used_by: i64,
 }
 
 /// Credential kind for SNMP v3 USM parameters (the secret is a [`SnmpV3Secret`] JSON doc).
@@ -143,15 +146,22 @@ impl CredentialStore {
 
     /// Credential metadata (no secret values).
     pub async fn list(&self) -> anyhow::Result<Vec<CredentialSummary>> {
-        let rows = sqlx::query("SELECT id, name, kind FROM credentials ORDER BY created_at")
-            .fetch_all(&self.pool)
-            .await?;
+        // LEFT JOIN so unused credentials still appear (used_by = 0). Grouping by the credential
+        // PK lets us order by its created_at (functionally dependent on the PK in PostgreSQL).
+        let rows = sqlx::query(
+            "SELECT c.id, c.name, c.kind, count(n.id) AS used_by \
+             FROM credentials c LEFT JOIN nodes n ON n.credential_id = c.id \
+             GROUP BY c.id ORDER BY c.created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(CredentialSummary {
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
                     kind: row.try_get("kind")?,
+                    used_by: row.try_get("used_by")?,
                 })
             })
             .collect()

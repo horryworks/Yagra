@@ -2,6 +2,9 @@
 // (OID, kind, vendor). Seeded from the built-in standard + vendor OID sets; admins can add
 // their own. The collection editor picks from this so operators choose metrics by name instead
 // of typing raw OIDs.
+//
+// Data-table standard v2: a toolbar (debounced server search + count + "+ Add entry") over the
+// shared `.ytable`. Add and delete go through modals (focused-editing / destructive-consent).
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -10,9 +13,12 @@ import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import './CrudList.css';
+import { IconButton } from '../components/ui/IconButton';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TrashIcon } from '../components/ui/icons';
 import './MibRepositoryPage.css';
 
 const errMsg = (e: unknown, fallback: string) =>
@@ -20,20 +26,163 @@ const errMsg = (e: unknown, fallback: string) =>
 
 const OID_RE = /^[0-9]+(\.[0-9]+)*$/;
 
+const COLS = '1.4fr 2fr 1fr 1fr 92px';
+
+/** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
+function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [metricName, setMetricName] = useState('');
+  const [oid, setOid] = useState('');
+  const [collection, setCollection] = useState<CollectionKind>('scalar');
+  const [metricKind, setMetricKind] = useState<MetricKind>('gauge');
+  const [vendor, setVendor] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const valid = metricName.trim().length > 0 && OID_RE.test(oid.trim());
+
+  const submit = () => {
+    if (!valid) return;
+    setBusy(true);
+    setError(null);
+    api
+      .createMibEntry({
+        metric_name: metricName.trim(),
+        oid: oid.trim(),
+        collection,
+        metric_kind: metricKind,
+        vendor: vendor.trim() || undefined,
+      })
+      .then(() => {
+        onSaved();
+        onClose();
+      })
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to add entry'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Add catalog entry"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
+            Add entry
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">Metric name</label>
+        <TextInput
+          placeholder="metric_name"
+          value={metricName}
+          onChange={(e) => setMetricName(e.target.value)}
+          autoFocus
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">OID</label>
+        <TextInput
+          className="mono"
+          placeholder="OID (e.g. 1.3.6.1.2.1.1.3.0)"
+          value={oid}
+          onChange={(e) => setOid(e.target.value)}
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Collection</label>
+        <Select
+          value={collection}
+          onChange={(e) => setCollection(e.target.value as CollectionKind)}
+        >
+          <option value="scalar">scalar</option>
+          <option value="table">table</option>
+        </Select>
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Metric kind</label>
+        <Select value={metricKind} onChange={(e) => setMetricKind(e.target.value as MetricKind)}>
+          <option value="gauge">gauge</option>
+          <option value="counter">counter</option>
+        </Select>
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Vendor</label>
+        <TextInput
+          placeholder="vendor (optional)"
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value)}
+        />
+        <span className="modal-hint">Leave blank for a standard (non-vendor) OID.</span>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Confirm + delete a catalog entry (destructive-consent modal). */
+function DeleteMibEntryModal({
+  entry,
+  onClose,
+  onDone,
+}: {
+  entry: MibCatalogEntry;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteMibEntry(entry.id)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete entry'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete catalog entry"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-confirm-text">
+        Delete catalog entry <strong>{entry.metric_name}</strong>? Collections referencing it by
+        name will no longer resolve from the catalog. This cannot be undone.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
 export function MibRepositoryPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Add-entry form.
-  const [metricName, setMetricName] = useState('');
-  const [oid, setOid] = useState('');
-  const [collection, setCollection] = useState<CollectionKind>('scalar');
-  const [metricKind, setMetricKind] = useState<MetricKind>('gauge');
-  const [vendor, setVendor] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<MibCatalogEntry | null>(null);
 
   const load = useCallback((q: string) => {
     api
@@ -53,33 +202,6 @@ export function MibRepositoryPage() {
     return () => clearTimeout(t);
   }, [load, query]);
 
-  const valid = metricName.trim().length > 0 && OID_RE.test(oid.trim());
-
-  const add = () => {
-    setError(null);
-    api
-      .createMibEntry({
-        metric_name: metricName.trim(),
-        oid: oid.trim(),
-        collection,
-        metric_kind: metricKind,
-        vendor: vendor.trim() || undefined,
-      })
-      .then(() => {
-        setMetricName('');
-        setOid('');
-        setVendor('');
-        load(query);
-      })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to add entry')));
-  };
-
-  const remove = (id: string) =>
-    api
-      .deleteMibEntry(id)
-      .then(() => load(query))
-      .catch((e: unknown) => setError(errMsg(e, 'failed to delete entry')));
-
   return (
     <div>
       <PageHeader
@@ -93,94 +215,84 @@ export function MibRepositoryPage() {
           <p className="muted">The MIB catalog is unavailable in skeleton mode.</p>
         </Card>
       ) : (
-        <Card title="OID catalog">
-          <div className="mib-toolbar">
-            <TextInput
-              className="mib-search"
-              placeholder="Search metric / OID / vendor…"
+        <>
+          <TableToolbar>
+            <SearchInput
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={setQuery}
+              placeholder="Search metric / OID / vendor…"
+              ariaLabel="Search MIB catalog"
             />
-          </div>
-
-          {authed && (
-            <div className="mib-add form-row">
-              <TextInput
-                placeholder="metric_name"
-                value={metricName}
-                onChange={(e) => setMetricName(e.target.value)}
-              />
-              <TextInput
-                className="mono"
-                placeholder="OID (e.g. 1.3.6.1.2.1.1.3.0)"
-                value={oid}
-                onChange={(e) => setOid(e.target.value)}
-              />
-              <Select
-                value={collection}
-                onChange={(e) => setCollection(e.target.value as CollectionKind)}
-                aria-label="Collection kind"
-              >
-                <option value="scalar">scalar</option>
-                <option value="table">table</option>
-              </Select>
-              <Select
-                value={metricKind}
-                onChange={(e) => setMetricKind(e.target.value as MetricKind)}
-                aria-label="Metric kind"
-              >
-                <option value="gauge">gauge</option>
-                <option value="counter">counter</option>
-              </Select>
-              <TextInput
-                placeholder="vendor (optional)"
-                value={vendor}
-                onChange={(e) => setVendor(e.target.value)}
-              />
-              <Button variant="primary" onClick={add} disabled={!valid}>
-                Add
+            <TableSpacer />
+            <ResultCount shown={rows.length} noun="entries" />
+            {authed && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + Add entry
               </Button>
-            </div>
-          )}
-          {error && <p className="form-error">{error}</p>}
+            )}
+          </TableToolbar>
 
-          {rows.length === 0 ? (
-            <p className="muted">{loading ? 'Loading…' : 'No catalog entries match.'}</p>
-          ) : (
-            <div className="ytable mib-table">
-              <div className="ytable-head">
+          <div className="ytable">
+            <div className="ytable-scroll">
+              <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
                 <div className="ytable-h">Metric</div>
                 <div className="ytable-h">OID</div>
                 <div className="ytable-h">Type</div>
                 <div className="ytable-h">Vendor</div>
                 <div className="ytable-h right">Actions</div>
               </div>
-              {rows.map((e) => (
-                <div className="ytable-row" key={e.id}>
-                  <div className="ytable-cell ellipsis mib-metric">{e.metric_name}</div>
-                  <div className="ytable-cell ellipsis mib-oid mono">{e.oid}</div>
-                  <div className="ytable-cell">
-                    {e.collection} · {e.metric_kind}
-                  </div>
-                  <div className="ytable-cell">
-                    {e.vendor ? (
-                      <Badge tone="neutral">{e.vendor}</Badge>
-                    ) : (
-                      <span className="muted">standard</span>
-                    )}
-                  </div>
-                  <div className="ytable-cell right mib-actions">
-                    {authed && (
-                      <Button variant="ghost" onClick={() => remove(e.id)}>
-                        Delete
-                      </Button>
-                    )}
-                  </div>
+
+              {rows.length === 0 ? (
+                <div className="yt-empty">
+                  <p className="yt-empty-title">
+                    {loading ? 'Loading…' : 'No catalog entries match'}
+                  </p>
+                  {!loading && <p className="yt-empty-sub">Try a different search.</p>}
                 </div>
-              ))}
+              ) : (
+                rows.map((e) => (
+                  <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={e.id}>
+                    <div className="ytable-cell mib-metric">{e.metric_name}</div>
+                    <div className="ytable-cell mono ellipsis">{e.oid}</div>
+                    <div className="ytable-cell">
+                      {e.collection} · {e.metric_kind}
+                    </div>
+                    <div className="ytable-cell">
+                      {e.vendor ? (
+                        <Badge tone="neutral">{e.vendor}</Badge>
+                      ) : (
+                        <span className="muted">standard</span>
+                      )}
+                    </div>
+                    <div className="ytable-cell right">
+                      {authed && (
+                        <span className="ytable-actions">
+                          <IconButton title="Delete" danger onClick={() => setDeleting(e)}>
+                            <TrashIcon />
+                          </IconButton>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-          )}
-        </Card>
+          </div>
+        </>
+      )}
+
+      {adding && (
+        <AddMibEntryModal onClose={() => setAdding(false)} onSaved={() => load(query)} />
+      )}
+      {deleting && (
+        <DeleteMibEntryModal
+          entry={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            load(query);
+          }}
+        />
       )}
     </div>
   );

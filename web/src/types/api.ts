@@ -93,6 +93,8 @@ export interface CredentialSummary {
   id: string;
   name: string;
   kind: string;
+  /** How many nodes reference this credential (0 ⇒ unused, safe to delete). */
+  used_by: number;
 }
 
 /** A page of the keyset-paginated node list (`GET /api/v1/nodes`). */
@@ -104,6 +106,8 @@ export interface NodePage {
 /** Current principal (`GET /api/v1/auth/me`). */
 export interface AuthMe {
   role: string;
+  /** The signed-in account's username — lets the UI mark "you" in the user list. */
+  username: string;
 }
 
 /** A predefined role (yagra-common `Role`, snake_case), ordered least → most privileged. */
@@ -141,6 +145,8 @@ export interface UserSummary {
   role: Role;
   created_at: string;
   last_login_at: string | null;
+  /** Account status: a disabled account is kept for the record but cannot authenticate. */
+  enabled: boolean;
 }
 
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). */

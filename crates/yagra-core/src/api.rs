@@ -166,6 +166,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id", delete(delete_user))
         .route("/api/v1/users/:id/role", put(set_user_role))
+        .route("/api/v1/users/:id/status", put(set_user_status))
         .route("/api/v1/users/:id/password", put(set_user_password))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(auth_me))
@@ -743,7 +744,11 @@ async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Respo
 async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     // `View` is granted to every role, so this just checks for a valid token.
     match st.sessions.authorize(bearer(&headers), Permission::View) {
-        Ok(session) => Json(serde_json::json!({ "role": session.principal.role })).into_response(),
+        Ok(session) => Json(serde_json::json!({
+            "role": session.principal.role,
+            "username": session.username,
+        }))
+        .into_response(),
         Err(_) => error_response(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -2857,6 +2862,35 @@ async fn set_user_role(
     }
 }
 
+/// Enable/disable-account request body.
+#[derive(Deserialize)]
+struct SetStatus {
+    enabled: bool,
+}
+
+async fn set_user_status(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetStatus>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
+        return resp;
+    }
+    match admin.users.set_enabled(id, body.enabled).await {
+        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
+        Ok(UserMutation::LastAdmin) => last_admin(),
+        Err(e) => {
+            tracing::error!(error = %e, "set user status failed");
+            internal("failed to update user status")
+        }
+    }
+}
+
 /// Reset-password request body. The password is hashed before storage and never logged.
 #[derive(Deserialize)]
 struct SetPassword {
@@ -2897,7 +2931,7 @@ fn last_admin() -> Response {
     error_response(
         StatusCode::CONFLICT,
         "last_admin",
-        "cannot remove or demote the last admin account".to_owned(),
+        "cannot remove, demote, or disable the last admin account".to_owned(),
     )
 }
 
@@ -3690,6 +3724,26 @@ mod tests {
                 Request::builder()
                     .uri("/api/v1/users")
                     .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn set_user_status_unavailable_without_admin() {
+        // The status-toggle route is wired; in skeleton mode (admin: None) it is 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/users/00000000-0000-0000-0000-000000000000/status")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":false}"#))
                     .unwrap(),
             )
             .await

@@ -1,3 +1,8 @@
+/* Rules & thresholds — data-table standard v2. The chrome (toolbar, sticky header, hover
+   actions, empty state) comes from styles/table.css; only the page-local bits live here: the
+   blue-left-border explainer card, the compact number inputs in the add modal, and the W/C
+   badge pairing used by both the modal and the Bounds cell. */
+
 .thresholds-note-card {
   margin-bottom: 16px;
   border-left: 2px solid var(--status-maintenance);
@@ -10,31 +15,13 @@
   line-height: 1.6;
 }
 
-.thresholds-form .thresholds-num {
+/* Compact warn/crit/dwell inputs (add modal). */
+.thresholds-num {
   width: 72px;
 }
 
-.thresholds-row {
-  gap: 10px;
-}
-
-.thresholds-scope {
-  min-width: 120px;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.thresholds-metric {
-  min-width: 140px;
-}
-
+/* W/C badge pairing — shared by the modal bounds row and the Bounds table cell. */
 .thresholds-bounds {
   display: flex;
   gap: 6px;
-  margin-left: auto;
-}
-
-.thresholds-dwell {
-  font-size: var(--font-xs);
-  white-space: nowrap;
 }
