@@ -471,6 +471,22 @@ describe('api client', () => {
     });
   });
 
+  it('starts a discovery scan with stored credentials only (no ad-hoc communities)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 202, json: async () => ({ scan_id: 's2' }) } as Response);
+    globalThis.fetch = spy;
+    await api.startDiscoveryScan({
+      targets: ['192.168.1.1'],
+      credential_ids: ['c1'],
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/discovery/scan');
+    const body = JSON.parse(init.body);
+    expect(body).toEqual({ targets: ['192.168.1.1'], credential_ids: ['c1'] });
+    expect('communities' in body).toBe(false);
+  });
+
   it('renames a credential (name only, secret left intact)', async () => {
     const spy = vi
       .fn()

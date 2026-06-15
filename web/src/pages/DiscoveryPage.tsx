@@ -5,15 +5,17 @@
 // preselected on the row so import binds it automatically.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary, DiscoveryCandidate, ProfileSummary } from '../types/api';
-import { expandCidr } from '../lib/cidr';
+import { expandTargets } from '../lib/cidr';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { CredentialPicker } from '../components/ui/CredentialPicker';
 import './DiscoveryPage.css';
 
 const errMsg = (e: unknown, fallback: string) =>
@@ -33,9 +35,8 @@ interface RowState {
 
 export function DiscoveryPage() {
   const authed = useAuthStore((s) => s.authed);
-  const [cidr, setCidr] = useState('192.168.1.0/24');
-  const [communities, setCommunities] = useState('public');
-  const [credSel, setCredSel] = useState<Record<string, boolean>>({});
+  const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
+  const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
@@ -56,11 +57,7 @@ export function DiscoveryPage() {
       .then((list) => {
         setCreds(list);
         // Preselect every SNMP credential — the common case is "try all my secrets".
-        setCredSel(
-          Object.fromEntries(
-            list.filter((c) => SNMP_KINDS.includes(c.kind)).map((c) => [c.id, true]),
-          ),
-        );
+        setSelectedCredIds(list.filter((c) => SNMP_KINDS.includes(c.kind)).map((c) => c.id));
       })
       .catch(() => undefined);
     return () => {
@@ -99,22 +96,19 @@ export function DiscoveryPage() {
     setNote(null);
     setImportNote(null);
     setImportError(null);
-    const targets = expandCidr(cidr);
+    const targets = expandTargets(targetSpec);
     if (targets.length === 0) {
-      setError('Enter a single IP or an IPv4 CIDR of /22 or smaller (≤1024 hosts).');
+      setError(
+        'Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.',
+      );
       return;
     }
-    const comms = communities
-      .split(',')
-      .map((c) => c.trim())
-      .filter(Boolean);
-    const credentialIds = snmpCreds.filter((c) => credSel[c.id]).map((c) => c.id);
     setCandidates([]);
     setRowState({});
     setImported({});
     setDone(false);
     api
-      .startDiscoveryScan({ targets, communities: comms, credential_ids: credentialIds })
+      .startDiscoveryScan({ targets, credential_ids: selectedCredIds })
       .then(({ scan_id }) => {
         setScanId(scan_id);
         setNote(`Scanning ${targets.length} addresses…`);
@@ -206,38 +200,30 @@ export function DiscoveryPage() {
             <div className="disco-form form-row">
               <TextInput
                 className="mono"
-                placeholder="CIDR or IP (e.g. 192.168.1.0/24)"
-                value={cidr}
-                onChange={(e) => setCidr(e.target.value)}
+                placeholder="CIDR, range or list (e.g. 192.168.1.0/24, 10.0.0.5, 192.168.1.10-20)"
+                value={targetSpec}
+                onChange={(e) => setTargetSpec(e.target.value)}
               />
-              <TextInput
-                className="mono"
-                placeholder="Ad-hoc SNMP communities (comma-separated, optional)"
-                value={communities}
-                onChange={(e) => setCommunities(e.target.value)}
+              <CredentialPicker
+                options={snmpCreds}
+                selected={selectedCredIds}
+                onChange={setSelectedCredIds}
+                disabled={!!scanId && !done}
               />
               <Button variant="primary" onClick={startScan} disabled={!!scanId && !done}>
                 {scanId && !done ? 'Scanning…' : 'Scan'}
               </Button>
             </div>
-            {snmpCreds.length > 0 && (
-              <div className="disco-creds">
-                <span className="disco-creds-label">Try stored credentials:</span>
-                {snmpCreds.map((c) => (
-                  <label className="disco-cred" key={c.id}>
-                    <input
-                      type="checkbox"
-                      checked={!!credSel[c.id]}
-                      onChange={(e) =>
-                        setCredSel((cur) => ({ ...cur, [c.id]: e.target.checked }))
-                      }
-                    />
-                    <span>{c.name}</span>
-                    <span className="disco-cred-kind mono">{c.kind}</span>
-                  </label>
-                ))}
-              </div>
-            )}
+            <p className="disco-target-hint">
+              Examples: <span className="mono">192.168.1.0/24</span> ·{' '}
+              <span className="mono">10.0.0.5</span> ·{' '}
+              <span className="mono">192.168.1.10-20</span> ·{' '}
+              <span className="mono">192.168.1.10-192.168.1.20</span> — comma-separate for multiple.
+            </p>
+            <p className="disco-creds-link">
+              Discovery uses your stored credentials.{' '}
+              <Link to="/settings/credentials">Manage credentials →</Link>
+            </p>
           </>
         ) : (
           <p className="muted">Sign in as an admin to run discovery.</p>

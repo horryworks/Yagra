@@ -357,10 +357,11 @@ export const api = {
     request(`/mib-catalog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). Stored
-   *  credentials go by id (resolved server-side); communities are ad-hoc extras. */
+   *  credentials go by id (resolved server-side). The WebUI scans with stored credentials
+   *  only; `communities` remains an optional ad-hoc extra for external automation. */
   startDiscoveryScan: (body: {
     targets: string[];
-    communities: string[];
+    communities?: string[];
     credential_ids: string[];
   }): Promise<{ scan_id: string }> => request('/discovery/scan', jsonBody('POST', body)),
 
