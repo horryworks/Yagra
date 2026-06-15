@@ -6,7 +6,8 @@
   gap: 10px;
 }
 
-.disco-form .field {
+.disco-form .field,
+.disco-form .cred-picker {
   min-width: 240px;
   flex: 1;
 }
@@ -73,33 +74,31 @@
   color: var(--text-secondary);
 }
 
-.disco-creds {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 10px;
-}
-
-.disco-creds-label {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.disco-cred {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* Accepted target formats, shown under the scan row. */
+.disco-target-hint {
+  margin-top: 8px;
   font-size: var(--font-sm);
-  cursor: pointer;
+  color: var(--text-tertiary);
 }
 
-.disco-cred-kind {
-  font-size: var(--font-xs);
+.disco-target-hint .mono {
+  color: var(--text-secondary);
+}
+
+/* Page-level pointer to Credentials & secrets (add a credential without leaving discovery). */
+.disco-creds-link {
+  margin-top: 6px;
+  font-size: var(--font-sm);
   color: var(--text-tertiary);
+}
+
+.disco-creds-link a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.disco-creds-link a:hover {
+  color: var(--accent-hover);
 }
 
 .disco-import {
