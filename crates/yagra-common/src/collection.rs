@@ -229,6 +229,17 @@ fn vendor_table(metric: &str, oid: &str) -> CollectionItem {
     }
 }
 
+/// A vendor scalar gauge (a `.0`-instance OID fetched with GET — e.g. FortiGate's
+/// `fgSysCpuUsage`). The OID must include the trailing instance (usually `.0`).
+fn vendor_scalar(metric: &str, oid: &str) -> CollectionItem {
+    CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: oid.to_owned(),
+        kind: CollectionKind::Scalar,
+        metric_kind: MetricKind::Gauge,
+    }
+}
+
 /// Standard SNMP template name — the cross-vendor system + interface set most profiles use.
 pub const TEMPLATE_STANDARD_SNMP: &str = "Standard SNMP";
 
@@ -259,13 +270,51 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
             ],
         },
+        BuiltinTemplate {
+            name: "Juniper device health",
+            description: "Juniper jnxOperating CPU (1-min) and buffer/memory utilization %.",
+            items: vec![
+                vendor_table("juniper_cpu_1min", "1.3.6.1.4.1.2636.3.1.13.1.8"),
+                vendor_table("juniper_buffer_util", "1.3.6.1.4.1.2636.3.1.13.1.11"),
+            ],
+        },
+        BuiltinTemplate {
+            name: "Fortinet device health",
+            description: "FortiGate system CPU and memory usage % (fgSysCpu/MemUsage scalars).",
+            items: vec![
+                vendor_scalar("fortinet_cpu_usage", "1.3.6.1.4.1.12356.101.4.1.3.0"),
+                vendor_scalar("fortinet_mem_usage", "1.3.6.1.4.1.12356.101.4.1.4.0"),
+            ],
+        },
+        BuiltinTemplate {
+            name: "Net-SNMP host",
+            description: "Linux/Unix Net-SNMP (UCD) CPU idle % and real-memory total/available.",
+            items: vec![
+                vendor_scalar("ucd_cpu_idle_pct", "1.3.6.1.4.1.2021.11.11.0"),
+                vendor_scalar("ucd_mem_total_kb", "1.3.6.1.4.1.2021.4.5.0"),
+                vendor_scalar("ucd_mem_avail_kb", "1.3.6.1.4.1.2021.4.6.0"),
+            ],
+        },
     ]
 }
 
 /// The built-in device profiles and the templates each references.
+///
+/// **Append-only:** the first four profiles have stable seed ids (a node may already be bound
+/// to one) — never reorder or rename them; add new device classes at the end. Every SNMP
+/// profile attaches "Standard SNMP" (system uptime + interface counters/errors/status + generic
+/// `hrProcessorLoad` CPU), which works on virtually any agent; vendors with reliable vendor-MIB
+/// CPU/memory OIDs also attach a vendor-health template. This is what makes discovery's profile
+/// auto-suggestion useful out of the box across a broad range of network devices.
 #[must_use]
 pub fn builtin_profiles() -> Vec<BuiltinProfile> {
+    // Most profiles need only the cross-vendor standard set.
+    let std_only = |name: &'static str| BuiltinProfile {
+        name,
+        templates: vec![TEMPLATE_STANDARD_SNMP],
+    };
     vec![
+        // ── Stable originals (indices 0–3; do not reorder/rename) ──
         // ICMP-only: no templates (for devices without a usable SNMP agent).
         BuiltinProfile {
             name: "Generic ping",
@@ -283,12 +332,54 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             name: "Huawei USG firewall",
             templates: vec![TEMPLATE_STANDARD_SNMP, "Huawei device health"],
         },
+        // ── Appended device classes (vendor-health where reliably available) ──
+        BuiltinProfile {
+            name: "Juniper router/switch",
+            templates: vec![TEMPLATE_STANDARD_SNMP, "Juniper device health"],
+        },
+        BuiltinProfile {
+            name: "Fortinet FortiGate",
+            templates: vec![TEMPLATE_STANDARD_SNMP, "Fortinet device health"],
+        },
+        BuiltinProfile {
+            name: "Linux server (Net-SNMP)",
+            templates: vec![TEMPLATE_STANDARD_SNMP, "Net-SNMP host"],
+        },
+        std_only("Arista switch"),
+        std_only("MikroTik RouterOS"),
+        std_only("Ubiquiti device"),
+        std_only("Palo Alto firewall"),
+        std_only("Aruba / HPE switch"),
+        std_only("Dell switch"),
+        std_only("Extreme Networks switch"),
+        std_only("Brocade / Ruckus device"),
+        std_only("Check Point firewall"),
+        std_only("F5 BIG-IP"),
+        std_only("Citrix ADC (NetScaler)"),
+        std_only("Nokia / Alcatel-Lucent router"),
+        std_only("Zyxel device"),
+        std_only("NETGEAR switch"),
+        std_only("D-Link switch"),
+        std_only("TP-Link device"),
+        std_only("Windows server"),
+        std_only("VMware ESXi host"),
+        std_only("Synology NAS"),
+        std_only("APC UPS"),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_profile_names_are_unique() {
+        let names: Vec<&str> = builtin_profiles().into_iter().map(|p| p.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "duplicate built-in profile name");
+    }
 
     fn item(metric: &str, oid: &str) -> CollectionItem {
         CollectionItem {
@@ -402,9 +493,11 @@ mod tests {
     fn builtin_profiles_reference_existing_templates() {
         let profiles = builtin_profiles();
         let names: Vec<&str> = profiles.iter().map(|p| p.name).collect();
+        // The first four have stable seed ids — they must stay first and unchanged (newer
+        // device classes are appended after them).
         assert_eq!(
-            names,
-            vec![
+            &names[..4],
+            &[
                 "Generic ping",
                 "Generic SNMP",
                 "Cisco IOS router",

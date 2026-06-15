@@ -73,6 +73,14 @@
   color: var(--text-secondary);
 }
 
+/* sysObjectID — the authoritative device-type OID, shown small + monospace under identity. */
+.disco-sysoid {
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Accepted target formats, shown under the scan row. */
 .disco-target-hint {
   margin-top: 8px;

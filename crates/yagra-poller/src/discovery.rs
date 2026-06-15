@@ -17,10 +17,14 @@ use yagra_transport::{SnmpV3Params, Transport};
 
 /// sysDescr column base — walking it yields the `.0` scalar instance (v2c path).
 const SYSDESCR_BASE: &str = "1.3.6.1.2.1.1.1";
+/// sysObjectID column base — the vendor-assigned enterprise OID identifying device type.
+const SYSOBJECTID_BASE: &str = "1.3.6.1.2.1.1.2";
 /// sysName column base.
 const SYSNAME_BASE: &str = "1.3.6.1.2.1.1.5";
 /// sysDescr.0 instance OID (scalar GET form, v3 path).
 const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
+/// sysObjectID.0 instance OID.
+const SYSOBJECTID_OID: &str = "1.3.6.1.2.1.1.2.0";
 /// sysName.0 instance OID.
 const SYSNAME_OID: &str = "1.3.6.1.2.1.1.5.0";
 /// Targets probed concurrently within a chunk.
@@ -176,24 +180,27 @@ async fn probe_one(
         .map(|p| p.reachable)
         .unwrap_or(false);
 
-    let mut sysdescr = None;
-    let mut sysname = None;
+    let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
     for cand in candidates {
-        if let Some((descr, name)) = try_candidate(target, cand, timeout, transport).await {
-            sysdescr = descr;
-            sysname = name;
+        if let Some(id) = try_candidate(target, cand, timeout, transport).await {
+            identity = id;
             matched_credential = cand.cred_ref();
             break;
         }
     }
 
-    if reachable || sysdescr.is_some() || sysname.is_some() {
+    if reachable
+        || identity.sysdescr.is_some()
+        || identity.sysobjectid.is_some()
+        || identity.sysname.is_some()
+    {
         Some(DiscoveredDevice {
             address: target,
             reachable,
-            sysdescr,
-            sysname,
+            sysdescr: identity.sysdescr,
+            sysname: identity.sysname,
+            sysobjectid: identity.sysobjectid,
             matched_credential,
         })
     } else {
@@ -201,17 +208,31 @@ async fn probe_one(
     }
 }
 
-/// Try one candidate credential against a target. `Some` (the identity strings, possibly
+/// SNMP identity scalars a discovery probe collects from a device (each optional — a device
+/// may answer some but not all). `sysObjectID` is the authoritative device-type signal;
+/// `sysDescr`/`sysName` are free-form. All are device-supplied — treat as untrusted.
+#[derive(Default)]
+struct SnmpIdentity {
+    sysdescr: Option<String>,
+    sysobjectid: Option<String>,
+    sysname: Option<String>,
+}
+
+/// Try one candidate credential against a target. `Some` (the identity scalars, possibly
 /// partial) iff the device answered SNMP under this credential.
 async fn try_candidate(
     target: IpAddr,
     cand: &SnmpCandidate,
     timeout: Duration,
     transport: &dyn Transport,
-) -> Option<(Option<String>, Option<String>)> {
+) -> Option<SnmpIdentity> {
     match cand {
         SnmpCandidate::V2c { community, .. } => {
-            let bases = [SYSDESCR_BASE.to_owned(), SYSNAME_BASE.to_owned()];
+            let bases = [
+                SYSDESCR_BASE.to_owned(),
+                SYSOBJECTID_BASE.to_owned(),
+                SYSNAME_BASE.to_owned(),
+            ];
             let rows = transport
                 .snmp_walk_strings(target, community, &bases, timeout)
                 .await
@@ -219,19 +240,23 @@ async fn try_candidate(
             if rows.is_empty() {
                 return None;
             }
-            let mut descr = None;
-            let mut name = None;
+            let mut id = SnmpIdentity::default();
             for r in rows {
-                if r.oid_base == SYSDESCR_BASE {
-                    descr = Some(r.value);
-                } else if r.oid_base == SYSNAME_BASE {
-                    name = Some(r.value);
+                match r.oid_base.as_str() {
+                    SYSDESCR_BASE => id.sysdescr = Some(r.value),
+                    SYSOBJECTID_BASE => id.sysobjectid = Some(r.value),
+                    SYSNAME_BASE => id.sysname = Some(r.value),
+                    _ => {}
                 }
             }
-            Some((descr, name))
+            Some(id)
         }
         SnmpCandidate::V3 { params, .. } => {
-            let oids = [SYSDESCR_OID.to_owned(), SYSNAME_OID.to_owned()];
+            let oids = [
+                SYSDESCR_OID.to_owned(),
+                SYSOBJECTID_OID.to_owned(),
+                SYSNAME_OID.to_owned(),
+            ];
             let rows = transport
                 .snmp_v3_get_strings(target, params, &oids, timeout)
                 .await
@@ -239,16 +264,16 @@ async fn try_candidate(
             if rows.is_empty() {
                 return None;
             }
-            let mut descr = None;
-            let mut name = None;
+            let mut id = SnmpIdentity::default();
             for r in rows {
-                if r.oid == SYSDESCR_OID {
-                    descr = Some(r.value);
-                } else if r.oid == SYSNAME_OID {
-                    name = Some(r.value);
+                match r.oid.as_str() {
+                    SYSDESCR_OID => id.sysdescr = Some(r.value),
+                    SYSOBJECTID_OID => id.sysobjectid = Some(r.value),
+                    SYSNAME_OID => id.sysname = Some(r.value),
+                    _ => {}
                 }
             }
-            Some((descr, name))
+            Some(id)
         }
     }
 }
@@ -318,10 +343,10 @@ mod tests {
                     .iter()
                     .map(|o| SnmpStringSample {
                         oid: o.clone(),
-                        value: if o == SYSDESCR_OID {
-                            "Huawei USG6000".to_owned()
-                        } else {
-                            "fw01".to_owned()
+                        value: match o.as_str() {
+                            SYSDESCR_OID => "Huawei USG6000".to_owned(),
+                            SYSOBJECTID_OID => "1.3.6.1.4.1.2011.2.1".to_owned(),
+                            _ => "fw01".to_owned(),
                         },
                     })
                     .collect())
@@ -353,10 +378,10 @@ mod tests {
                     .map(|b| SnmpTableString {
                         oid_base: b.clone(),
                         ifindex: 0,
-                        value: if b == SYSDESCR_BASE {
-                            "Cisco IOS Software".to_owned()
-                        } else {
-                            "sw01".to_owned()
+                        value: match b.as_str() {
+                            SYSDESCR_BASE => "Cisco IOS Software".to_owned(),
+                            SYSOBJECTID_BASE => "1.3.6.1.4.1.9.1.516".to_owned(),
+                            _ => "sw01".to_owned(),
                         },
                     })
                     .collect())
@@ -419,6 +444,8 @@ mod tests {
         assert_eq!(d.matched_credential, Some(id));
         assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
         assert_eq!(d.sysname.as_deref(), Some("sw01"));
+        // sysObjectID (OID-typed) is rendered dotted and carried for classification.
+        assert_eq!(d.sysobjectid.as_deref(), Some("1.3.6.1.4.1.9.1.516"));
     }
 
     #[tokio::test]
@@ -440,6 +467,7 @@ mod tests {
             .expect("device answers v3");
         assert_eq!(d.matched_credential, Some(v3));
         assert_eq!(d.sysdescr.as_deref(), Some("Huawei USG6000"));
+        assert_eq!(d.sysobjectid.as_deref(), Some("1.3.6.1.4.1.2011.2.1"));
         assert!(!d.reachable, "SNMP-only answer still reports the device");
     }
 

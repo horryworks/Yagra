@@ -9,6 +9,8 @@ import type {
   AuditRow,
   AuthMe,
   ChannelConfigInput,
+  ClassificationRule,
+  ClassificationRuleInput,
   CollectionKind,
   CollectionTemplate,
   CredentialSummary,
@@ -380,6 +382,21 @@ export const api = {
       model?: string;
     }[],
   ): Promise<{ created: number }> => request('/discovery/import', jsonBody('POST', { nodes })),
+
+  /** Device-classification rules (discovery → suggested profile), ascending by priority. */
+  listClassificationRules: (): Promise<ClassificationRule[]> => request('/classification-rules'),
+
+  /** Create a classification rule. 400s on bad regex/prefix/profile. */
+  createClassificationRule: (body: ClassificationRuleInput): Promise<{ id: string }> =>
+    request('/classification-rules', jsonBody('POST', body)),
+
+  /** Update a classification rule in place. */
+  updateClassificationRule: (id: string, body: ClassificationRuleInput): Promise<void> =>
+    request(`/classification-rules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete a classification rule. */
+  deleteClassificationRule: (id: string): Promise<void> =>
+    request(`/classification-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>

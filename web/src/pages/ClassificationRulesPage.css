@@ -1,0 +1,49 @@
+/* Classification rules table — signature cell stacks the OID prefix / sysDescr regex, each
+   tagged with a small kind chip. Inherits the shared `.ytable` look (data-table standard v2). */
+
+.classrules-match {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.classrules-sig {
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Small "OID" / "descr" chip prefixing each signature line. */
+.classrules-sig-kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-2xs, var(--font-xs));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Multi-field row in the add/edit modal (priority + maker + model). */
+.modal-field-row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.modal-field-row .modal-field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Enabled checkbox row in the modal. */
+.classrules-enabled {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  cursor: pointer;
+}
