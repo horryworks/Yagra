@@ -60,8 +60,10 @@ describe('format', () => {
 
   it('formats utilization percentage and a dash when unknown', () => {
     expect(formatUtil(null)).toBe('—');
+    expect(formatUtil(0)).toBe('0%');
     expect(formatUtil(2.5)).toBe('2.5%');
     expect(formatUtil(73)).toBe('73%');
+    expect(formatUtil(100)).toBe('100%');
   });
 
   it('formats byte counts with binary-scaled units and a dash when unknown', () => {
