@@ -4,9 +4,11 @@
 // node has no such data, so a simple ICMP-only node shows just sparkline + facts, while a fully
 // monitored device shows everything. Nothing from the old detail page is dropped, only restyled.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../services/api';
 import {
+  deriveMem,
+  formatBytes,
   formatTimestamp,
   formatUptimeTicks,
   formatUtil,
@@ -17,6 +19,7 @@ import {
 } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
 import type {
+  MetricPoint,
   NodeDetail,
   NodeGroup,
   NodeState,
@@ -201,22 +204,61 @@ export const RANGES: { label: string; secs: number }[] = [
   { label: '24h', secs: 24 * 3600 },
 ];
 
-/** Vendor/host health gauges that read as 0–100%, by role (cisco_mem_used/free are bytes and
- *  HOST-RESOURCES memory needs a used/size ratio — both out of scope here). */
-const HEALTH_METRICS: { metric: string; role: 'cpu' | 'mem' }[] = [
-  { metric: 'huawei_cpu_usage', role: 'cpu' },
-  { metric: 'cisco_cpu_5min', role: 'cpu' },
-  { metric: 'hr_processor_load', role: 'cpu' },
-  { metric: 'huawei_mem_usage', role: 'mem' },
+/** A bounded gauge's Y range — CPU/Mem read as 0–100%, so the chart baseline is 0, not the
+ *  window's min. Module-level + stable so MetricChart isn't rebuilt on every refresh. */
+const PCT_RANGE: [number, number] = [0, 100];
+
+/** CPU% candidates (vendor/host gauges that read 0–100); the first one the node collects wins. */
+const CPU_METRICS = ['huawei_cpu_usage', 'cisco_cpu_5min', 'hr_processor_load'];
+
+type MemId = 'huawei' | 'cisco' | 'ucd';
+
+/** Memory sources, in priority order — the first whose `require` metrics are all collected wins.
+ *  Each yields a current utilization % and, where the size is collected, a total byte count shown
+ *  alongside it (e.g. "62% / 32 GB"). The per-`id` math lives in `deriveMem` (lib/format). Table
+ *  metrics are collapsed node-wide via `max` (consistent with the CPU gauge); for multi-pool Cisco
+ *  this approximates the dominant (Processor) pool. */
+interface MemSpec {
+  id: MemId;
+  /** Metrics that must all be present for this source to apply (also the % inputs). */
+  require: string[];
+  /** Metrics + unit that yield the total size; absent on the node ⇒ % only, no total. */
+  total: { metrics: string[]; unitToBytes: number };
+}
+const MEM_SPECS: MemSpec[] = [
+  {
+    id: 'huawei',
+    require: ['huawei_mem_usage'],
+    total: { metrics: ['huawei_mem_size'], unitToBytes: 1 },
+  },
+  {
+    id: 'cisco',
+    require: ['cisco_mem_used', 'cisco_mem_free'],
+    total: { metrics: ['cisco_mem_used', 'cisco_mem_free'], unitToBytes: 1 },
+  },
+  {
+    id: 'ucd',
+    require: ['ucd_mem_total_kb', 'ucd_mem_avail_kb'],
+    total: { metrics: ['ucd_mem_total_kb'], unitToBytes: 1024 },
+  },
 ];
-const HEALTH_ROLE_LABEL: Record<'cpu' | 'mem', string> = { cpu: 'CPU', mem: 'Memory' };
-const HEALTH_ROLES = ['cpu', 'mem'] as const;
+
+/** A memory source resolved against a node's collection set: the % inputs, whichever total
+ *  metrics it actually has (empty ⇒ no total), and the unit scale. */
+interface ResolvedMem {
+  id: MemId;
+  metrics: string[];
+  totalMetrics: string[];
+  totalUnitToBytes: number;
+}
 
 /** Device CPU/Memory health: node-level percentages (query-time `max()` across the per-entity
- *  table) with a trend chart. Resolves which health metrics the node actually has from its
- *  effective collection set and hides entirely when it has none. */
+ *  table) with a 0–100% trend chart. Resolves which CPU metric and memory source the node
+ *  actually has from its effective collection set, and hides entirely when it has neither. */
 function DeviceHealth({ nodeId }: { nodeId: string }) {
-  const [picked, setPicked] = useState<{ role: 'cpu' | 'mem'; metric: string }[] | null>(null);
+  // `undefined` = still resolving; `null` = resolved, none present.
+  const [cpuMetric, setCpuMetric] = useState<string | null | undefined>(undefined);
+  const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
   const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
 
   useEffect(() => {
@@ -229,18 +271,29 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
       } catch {
         // admin-only endpoint not permitted → no health card
       }
-      const out = HEALTH_ROLES.flatMap((role) => {
-        const hit = HEALTH_METRICS.find((h) => h.role === role && names.has(h.metric));
-        return hit ? [{ role, metric: hit.metric }] : [];
-      });
-      if (!cancelled) setPicked(out);
+      const cpu = CPU_METRICS.find((m) => names.has(m)) ?? null;
+      const spec = MEM_SPECS.find((s) => s.require.every((m) => names.has(m)));
+      const resolvedMem: ResolvedMem | null = spec
+        ? {
+            id: spec.id,
+            metrics: spec.require,
+            totalMetrics: spec.total.metrics.every((m) => names.has(m)) ? spec.total.metrics : [],
+            totalUnitToBytes: spec.total.unitToBytes,
+          }
+        : null;
+      if (!cancelled) {
+        setCpuMetric(cpu);
+        setMem(resolvedMem);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [nodeId]);
 
-  if (!picked || picked.length === 0) return null;
+  if (cpuMetric === undefined || mem === undefined) return null; // still resolving
+  if (!cpuMetric && !mem) return null; // nothing to show
+
   return (
     <section>
       <div className="nd-section-head">
@@ -258,30 +311,21 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
         </div>
       </div>
       <div className="nd-health-metrics">
-        {picked.map((p) => (
-          <HealthMetric
-            key={p.metric}
-            nodeId={nodeId}
-            metric={p.metric}
-            label={HEALTH_ROLE_LABEL[p.role]}
-            rangeSecs={rangeSecs}
-          />
-        ))}
+        {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} rangeSecs={rangeSecs} />}
+        {mem && <MemHealth nodeId={nodeId} mem={mem} rangeSecs={rangeSecs} />}
       </div>
     </section>
   );
 }
 
-/** One health metric: current % (max aggregate) + a trend chart over the selected window. */
-function HealthMetric({
+/** CPU health: current % (max aggregate) + a 0–100% trend chart over the selected window. */
+function CpuHealth({
   nodeId,
   metric,
-  label,
   rangeSecs,
 }: {
   nodeId: string;
   metric: string;
-  label: string;
   rangeSecs: number;
 }) {
   const [value, setValue] = useState<number | null>(null);
@@ -316,16 +360,138 @@ function HealthMetric({
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">{label}</span>
+        <span className="nd-health-metric-label">CPU</span>
         <span className="nd-health-metric-value">{formatUtil(value)}</span>
       </div>
       {series.timestamps.length > 0 ? (
-        <MetricChart title="" timestamps={series.timestamps} values={series.values} yFormat={formatUtil} />
+        <MetricChart
+          title=""
+          timestamps={series.timestamps}
+          values={series.values}
+          yFormat={formatUtil}
+          yRange={PCT_RANGE}
+        />
       ) : (
         <p className="nd-muted">No history yet…</p>
       )}
     </div>
   );
+}
+
+/** Memory health: current utilization % plus the total size (e.g. "62% / 32 GB") and a 0–100%
+ *  trend chart. The %/total derive per source shape (`deriveMem`); the chart derives % per point
+ *  by aligning the source's input series on their timestamps. */
+function MemHealth({
+  nodeId,
+  mem,
+  rangeSecs,
+}: {
+  nodeId: string;
+  mem: ResolvedMem;
+  rangeSecs: number;
+}) {
+  const [pct, setPct] = useState<number | null>(null);
+  const [totalBytes, setTotalBytes] = useState<number | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+
+  // Scalars to fetch for the current gauge: the % inputs plus any total metrics present.
+  const gaugeMetrics = useMemo(
+    () => Array.from(new Set([...mem.metrics, ...mem.totalMetrics])),
+    [mem],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const to = Math.floor(Date.now() / 1000);
+      void Promise.all([
+        Promise.allSettled(gaugeMetrics.map((m) => api.getNodeMetric(nodeId, m, { agg: 'max' }))),
+        Promise.allSettled(
+          mem.metrics.map((m) =>
+            api.getNodeMetricRange(nodeId, m, { from: to - rangeSecs, to, agg: 'max' }),
+          ),
+        ),
+      ]).then(([scalars, ranges]) => {
+        if (cancelled) return;
+        // Current gauge: name → latest value → derive % + total.
+        const vals: Record<string, number | null> = {};
+        gaugeMetrics.forEach((m, i) => {
+          const s = scalars[i];
+          vals[m] = s.status === 'fulfilled' ? s.value.value : null;
+        });
+        const d = deriveMem(mem.id, vals, mem.totalUnitToBytes);
+        setPct(d.pct);
+        setTotalBytes(mem.totalMetrics.length > 0 ? d.totalBytes : null);
+        // Trend: name → points, then derive % per aligned timestamp.
+        const byMetric: Record<string, MetricPoint[]> = {};
+        mem.metrics.forEach((m, i) => {
+          const r = ranges[i];
+          byMetric[m] = r.status === 'fulfilled' ? r.value.points : [];
+        });
+        setSeries(memPctSeries(mem, byMetric));
+      });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, mem, rangeSecs, gaugeMetrics]);
+
+  return (
+    <div className="nd-health-metric">
+      <div className="nd-health-metric-head">
+        <span className="nd-health-metric-label">Memory</span>
+        <span className="nd-health-metric-value">
+          {formatUtil(pct)}
+          {totalBytes != null && (
+            <span className="nd-health-metric-sub"> / {formatBytes(totalBytes)}</span>
+          )}
+        </span>
+      </div>
+      {series.timestamps.length > 0 ? (
+        <MetricChart
+          title=""
+          timestamps={series.timestamps}
+          values={series.values}
+          yFormat={formatUtil}
+          yRange={PCT_RANGE}
+        />
+      ) : (
+        <p className="nd-muted">No history yet…</p>
+      )}
+    </div>
+  );
+}
+
+/** Build the memory utilization % series from a source's input ranges. A single-input source
+ *  (Huawei) is already a %, so it passes through; a two-input source (Cisco used/free, UCD
+ *  total/avail) aligns its inputs on shared timestamps and derives % per point. */
+function memPctSeries(
+  mem: ResolvedMem,
+  byMetric: Record<string, MetricPoint[]>,
+): { timestamps: number[]; values: number[] } {
+  if (mem.metrics.length === 1) {
+    return pointsToSeries(byMetric[mem.metrics[0]] ?? []);
+  }
+  const [a, b] = mem.metrics;
+  const bById = new Map<number, number>();
+  for (const p of byMetric[b] ?? []) bById.set(p.t, p.v);
+  const timestamps: number[] = [];
+  const values: number[] = [];
+  for (const p of byMetric[a] ?? []) {
+    const vb = bById.get(p.t);
+    if (vb == null) continue;
+    const { pct } = deriveMem(mem.id, { [a]: p.v, [b]: vb }, mem.totalUnitToBytes);
+    if (pct == null) continue;
+    timestamps.push(p.t);
+    values.push(pct);
+  }
+  return { timestamps, values };
 }
 
 /** Scalars always probed for the System card, on top of any configured ones. */
