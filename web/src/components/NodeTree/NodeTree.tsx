@@ -16,12 +16,29 @@
 
 import { useEffect, useState } from 'react';
 import type { NodeGroup, NodeSummary } from '../../types/api';
-import { buildNodeTree, isSelfOrDescendant, type TreeGroup } from '../../lib/nodeTree';
+import {
+  buildNodeTree,
+  descendantNodes,
+  isSelfOrDescendant,
+  type TreeGroup,
+} from '../../lib/nodeTree';
 import { usePrefsStore } from '../../prefs';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
+import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
+
+/** What the inventory currently has selected (drives the split's detail pane). */
+export type TreeSelection = { kind: 'node' | 'group'; id: string } | null;
+
+/** Whether a group's subtree contains anything matching the filter (its own name, a descendant
+ *  group's name, or a member node's name) — so ancestor groups stay visible to reveal matches. */
+function subtreeMatches(group: TreeGroup, q: string): boolean {
+  if (group.name.toLowerCase().includes(q)) return true;
+  if (group.nodes.some((n) => n.name.toLowerCase().includes(q))) return true;
+  return group.children.some((c) => subtreeMatches(c, q));
+}
 
 /** Pixels of indent per tree depth. */
 const INDENT = 16;
@@ -46,6 +63,15 @@ interface Props {
   canEdit: boolean;
   /** First inventory load in flight — show a loading placeholder, not the empty message. */
   loading?: boolean;
+  /** Currently-selected row (highlighted with the inset accent bar); drives the split detail pane. */
+  selected?: TreeSelection;
+  /** Select a node/group row (single-click). Falls back to `onOpenNode` when not provided. */
+  onSelectNode?: (node: NodeSummary) => void;
+  onSelectGroup?: (group: NodeGroup) => void;
+  /** Case-insensitive name filter; non-empty force-expands and hides non-matching rows. */
+  filter?: string;
+  /** Render the internal Add-group / drag-hint toolbar (the split hosts Add-group in its pane head). */
+  showToolbar?: boolean;
   onOpenNode: (node: NodeSummary) => void;
   onAddGroup: (parentId: string | null) => void;
   onEditGroup: (group: NodeGroup) => void;
@@ -73,6 +99,11 @@ export function NodeTree({
   nodes,
   canEdit,
   loading,
+  selected,
+  onSelectNode,
+  onSelectGroup,
+  filter,
+  showToolbar = true,
   onOpenNode,
   onAddGroup,
   onEditGroup,
@@ -92,6 +123,15 @@ export function NodeTree({
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
+
+  // Active name filter (case-insensitive). While filtering, every group is force-expanded and
+  // non-matching rows are hidden, so matches are always revealed.
+  const q = (filter ?? '').trim().toLowerCase();
+  const filtering = q.length > 0;
+  // Row click selects (drives the split detail pane); without a select handler, fall back to the
+  // legacy "open node" behaviour so the tree still works on its own.
+  const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
+  const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
 
   // Close the context menu on any outside click / Escape.
   useEffect(() => {
@@ -188,16 +228,32 @@ export function NodeTree({
     return dropTarget.ok ? ` drop-${dropTarget.position}` : ' drop-bad';
   };
 
-  const renderGroup = (group: TreeGroup, depth: number): React.ReactNode => {
-    const isOpen = !collapsed[group.id];
-    const count = group.children.length + group.nodes.length;
+  const renderGroup = (
+    group: TreeGroup,
+    depth: number,
+    ancestorMatch = false,
+  ): React.ReactNode => {
+    const selfMatch = filtering && group.name.toLowerCase().includes(q);
+    // A matched group (self or via an ancestor) reveals all its members; otherwise only the
+    // matching descendants show. Hide a group entirely when nothing under it matches.
+    const effMatch = ancestorMatch || selfMatch;
+    if (filtering && !effMatch && !subtreeMatches(group, q)) return null;
+
+    const isOpen = filtering ? true : !collapsed[group.id];
+    const hasChildren = group.children.length + group.nodes.length > 0;
+    const members = descendantNodes(group);
+    const isSel = selected?.kind === 'group' && selected.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id };
+    const visibleNodes = group.nodes.filter(
+      (n) => !filtering || effMatch || n.name.toLowerCase().includes(q),
+    );
     return (
       <div className="ntree-group" key={group.id}>
         <div
-          className={`ntree-row ntree-grow${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
+          className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
           style={{ paddingLeft: depth * INDENT + BASE_PAD }}
           draggable={canEdit}
+          onClick={() => selectGroup(group)}
           onDragStart={(e) => {
             e.stopPropagation();
             e.dataTransfer.effectAllowed = 'move';
@@ -215,26 +271,40 @@ export function NodeTree({
           <button
             type="button"
             className={`ntree-twisty${isOpen ? ' open' : ''}`}
-            onClick={() => toggle(group.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggle(group.id);
+            }}
             aria-label={isOpen ? 'Collapse' : 'Expand'}
-            disabled={count === 0}
+            disabled={!hasChildren}
           >
             ▶
           </button>
           <span className="ntree-icon">
             <GroupIcon type={group.group_type} />
           </span>
-          <button type="button" className="ntree-grp-name" onClick={() => toggle(group.id)}>
+          <button
+            type="button"
+            className="ntree-grp-name"
+            onClick={(e) => {
+              e.stopPropagation();
+              selectGroup(group);
+            }}
+          >
             {group.name}
           </button>
-          <span className="ntree-count">{count}</span>
+          <HealthBar nodes={members} className="ntree-health" />
+          <span className="ntree-count">{members.length}</span>
           {canEdit && (
             <span className="ntree-actions">
               <button
                 type="button"
                 className="ntree-act"
                 title="Add subgroup"
-                onClick={() => onAddGroup(group.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddGroup(group.id);
+                }}
               >
                 ＋
               </button>
@@ -242,7 +312,10 @@ export function NodeTree({
                 type="button"
                 className="ntree-act"
                 title="Edit / move group"
-                onClick={() => onEditGroup(group)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditGroup(group);
+                }}
               >
                 ✎
               </button>
@@ -250,7 +323,10 @@ export function NodeTree({
                 type="button"
                 className="ntree-act"
                 title="Delete group"
-                onClick={() => onDeleteGroup(group)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteGroup(group);
+                }}
               >
                 🗑
               </button>
@@ -259,8 +335,8 @@ export function NodeTree({
         </div>
         {isOpen && (
           <div className="ntree-children">
-            {group.children.map((c) => renderGroup(c, depth + 1))}
-            {group.nodes.map((n) => renderNode(n, depth + 1))}
+            {group.children.map((c) => renderGroup(c, depth + 1, effMatch))}
+            {visibleNodes.map((n) => renderNode(n, depth + 1))}
           </div>
         )}
       </div>
@@ -269,12 +345,14 @@ export function NodeTree({
 
   const renderNode = (node: NodeSummary, depth: number): React.ReactNode => {
     const target: Target = { kind: 'node', id: node.id, scope: node.group_id };
+    const isSel = selected?.kind === 'node' && selected.id === node.id;
     return (
       <div
-        className={`ntree-row ntree-node${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
+        className={`ntree-row ntree-node${isSel ? ' sel' : ''}${dropClass(node.id)}${drag?.id === node.id ? ' dragging' : ''}`}
         key={node.id}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
         draggable={canEdit}
+        onClick={() => selectNode(node)}
         onDragStart={(e) => {
           e.stopPropagation();
           e.dataTransfer.effectAllowed = 'move';
@@ -294,20 +372,26 @@ export function NodeTree({
         <span className="ntree-icon">
           <StatusDot state={node.state} withLabel={false} />
         </span>
-        <button type="button" className="ntree-node-name" onClick={() => onOpenNode(node)}>
+        <button
+          type="button"
+          className="ntree-node-name"
+          onClick={(e) => {
+            e.stopPropagation();
+            selectNode(node);
+          }}
+        >
           {node.name}
         </button>
-        <span className="ntree-node-addr mono">{node.address}</span>
-        {(node.vendor || node.model) && (
-          <span className="ntree-node-meta">{[node.vendor, node.model].filter(Boolean).join(' · ')}</span>
-        )}
         {canEdit && (
           <span className="ntree-actions">
             <button
               type="button"
               className="ntree-act"
               title="Move to group…"
-              onClick={() => onRequestMoveNode(node)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRequestMoveNode(node);
+              }}
             >
               ↗
             </button>
@@ -319,9 +403,13 @@ export function NodeTree({
 
   const rootDropActive = dropTarget?.id === 'root' && !!drag;
 
+  const ungroupedShown = filtering
+    ? tree.ungrouped.filter((n) => n.name.toLowerCase().includes(q))
+    : tree.ungrouped;
+
   return (
     <div className="ntree">
-      {canEdit && (
+      {showToolbar && canEdit && (
         <div className="ntree-toolbar">
           <Button variant="outline" onClick={() => onAddGroup(null)}>
             ＋ Add group
@@ -335,34 +423,37 @@ export function NodeTree({
       <div className="ntree-body">
         {tree.roots.map((g) => renderGroup(g, 0))}
 
-        {/* Ungrouped nodes + the root drop zone. */}
-        <div
-          className={`ntree-ungrouped${rootDropActive ? ' drop-inside' : ''}`}
-          onDragOver={(e) => {
-            if (!drag) return;
-            e.preventDefault();
-            setDropTarget({ id: 'root', position: 'inside', ok: true });
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            dropOnRoot();
-          }}
-        >
-          <div className="ntree-row ntree-ungrouped-head" style={{ paddingLeft: BASE_PAD }}>
-            <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
-            <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
-            <span className="ntree-grp-name ntree-ungrouped-label">Ungrouped</span>
-            <span className="ntree-count">{tree.ungrouped.length}</span>
+        {/* Ungrouped nodes + the root drop zone (hidden while filtering with no matches). */}
+        {(!filtering || ungroupedShown.length > 0) && (
+          <div
+            className={`ntree-ungrouped${rootDropActive ? ' drop-inside' : ''}`}
+            onDragOver={(e) => {
+              if (!drag) return;
+              e.preventDefault();
+              setDropTarget({ id: 'root', position: 'inside', ok: true });
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              dropOnRoot();
+            }}
+          >
+            <div className="ntree-row ntree-ungrouped-head" style={{ paddingLeft: BASE_PAD }}>
+              <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
+              <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
+              <span className="ntree-grp-name ntree-ungrouped-label">Ungrouped</span>
+              <span className="ntree-count">{tree.ungrouped.length}</span>
+            </div>
+            {ungroupedShown.map((n) => renderNode(n, 1))}
           </div>
-          {tree.ungrouped.map((n) => renderNode(n, 1))}
-          {tree.roots.length === 0 &&
-            tree.ungrouped.length === 0 &&
-            (loading ? (
-              <p className="muted ntree-empty">Loading nodes…</p>
-            ) : (
-              <p className="muted ntree-empty">No nodes in inventory. Add one to start monitoring.</p>
-            ))}
-        </div>
+        )}
+
+        {tree.roots.length === 0 &&
+          tree.ungrouped.length === 0 &&
+          (loading ? (
+            <p className="muted ntree-empty">Loading nodes…</p>
+          ) : (
+            <p className="muted ntree-empty">No nodes in inventory. Add one to start monitoring.</p>
+          ))}
       </div>
 
       {menu && (

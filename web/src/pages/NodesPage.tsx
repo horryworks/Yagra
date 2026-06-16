@@ -1,11 +1,13 @@
-// Nodes / All nodes. A hierarchical inventory tree (groups → member nodes), modelled on HoTTY's
-// HostTree: add/rename/delete typed groups (each type has its own icon), and move nodes/groups by
-// drag-drop, a context menu, or a "Move to…" picker. Row click drills into node detail. Add-node
-// and group edits are focused-edit modals (ManageConfig); 503 in skeleton mode is surfaced.
+// Nodes / All nodes — a two-pane split. The left pane is the inventory tree (groups → member
+// nodes) with a per-group health rollup; selecting a row drives the right pane, which shows the
+// chosen node's live detail (the shared <NodeDetail>, the same component as the /nodes/:id route)
+// or a selected group's rollup. Triage and drill-in happen without leaving the inventory: pick a
+// node, read its tabs, Poll now, move on. Add/rename/delete/move of groups and nodes runs through
+// focused-edit modals (ManageConfig); 503 in skeleton mode is surfaced.
 //
 // Scale note: the tree needs the full group + node sets, so it loads all node pages up to a cap
-// (NODE_CAP) and flags when an inventory is larger than that — virtualized-per-group lazy loading
-// is the follow-up for very large fleets. Groups are few and load whole.
+// (NODE_CAP) and flags when an inventory is larger than that — virtualized lazy loading is the
+// follow-up for very large fleets.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -18,13 +20,16 @@ import type {
   NodeSummary,
   ProfileSummary,
 } from '../types/api';
-import { isSelfOrDescendant } from '../lib/nodeTree';
+import { groupOptions, isSelfOrDescendant, tallyStates } from '../lib/nodeTree';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
-import { NodeTree } from '../components/NodeTree/NodeTree';
+import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
+import { NodeDetail } from '../components/NodeDetail/NodeDetail';
+import { GroupDetail } from '../components/NodeDetail/GroupDetail';
+import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
+import './NodesPage.css';
 
 const PAGE = 100;
 /** Max nodes the tree loads (pages of PAGE). Beyond this we flag the inventory as truncated. */
@@ -37,6 +42,8 @@ const GROUP_TYPES: { value: GroupType; label: string }[] = [
   { value: 'service', label: 'Service' },
   { value: 'generic', label: 'Generic' },
 ];
+
+const PROBLEM_STATES = new Set<NodeSummary['state']>(['warning', 'critical', 'unreachable']);
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
@@ -56,6 +63,12 @@ export function NodesPage() {
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Split selection (drives the right pane) + the left-pane search filter.
+  const [selected, setSelected] = useState<TreeSelection>(null);
+  const [filter, setFilter] = useState('');
+  // Inline detail's active tab (local; resets to Overview when the selection changes).
+  const [tab, setTab] = useState('overview');
 
   // Add-node modal.
   const [adding, setAdding] = useState(false);
@@ -95,6 +108,28 @@ export function NodesPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Default + validate the selection: keep the current row if it still exists, otherwise fall back
+  // to the first problem node (warning/critical/unreachable), else nothing (empty-state prompt).
+  useEffect(() => {
+    if (loading) return;
+    setSelected((cur) => {
+      if (cur) {
+        const exists =
+          cur.kind === 'node'
+            ? nodes.some((n) => n.id === cur.id)
+            : groups.some((g) => g.id === cur.id);
+        if (exists) return cur;
+      }
+      const problem = nodes.find((n) => PROBLEM_STATES.has(n.state));
+      return problem ? { kind: 'node', id: problem.id } : null;
+    });
+  }, [loading, nodes, groups]);
+
+  // Reset the inline tab whenever the selected entity changes.
+  useEffect(() => {
+    setTab('overview');
+  }, [selected?.kind, selected?.id]);
 
   // Load the binding options (profiles + SNMP credentials) when the add-node modal opens.
   useEffect(() => {
@@ -166,13 +201,24 @@ export function NodesPage() {
       .catch((e: unknown) => setError(errMsg(e, 'failed to reorder group')));
 
   const nodeCount = nodes.length;
+  const attention = tallyStates(nodes).needAttention;
+  const selectedNode =
+    selected?.kind === 'node' ? nodes.find((n) => n.id === selected.id) ?? null : null;
+  const selectedGroup =
+    selected?.kind === 'group' ? groups.find((g) => g.id === selected.id) ?? null : null;
 
   return (
     <div className="page-fill">
       <PageHeader
         title="All nodes"
         trail={[{ label: 'Nodes' }, { label: 'All nodes' }]}
-        note={`${nodeCount}${truncated ? '+' : ''} nodes · ${groups.length} groups`}
+        note={
+          <>
+            {nodeCount}
+            {truncated ? '+' : ''} nodes · {groups.length} groups
+            {attention > 0 && <> · <span className="nodes-attention">{attention} need attention</span></>}
+          </>
+        }
         actions={
           authed && (
             <Button variant="primary" onClick={() => setAdding(true)}>
@@ -182,30 +228,89 @@ export function NodesPage() {
         }
       />
 
-      <Card className="page-fill-card">
-        {error && <p className="form-error">{error}</p>}
-        {truncated && (
-          <p className="muted">
-            Showing the first {NODE_CAP} nodes. Use search/filter for larger inventories
-            (virtualized tree loading is planned).
-          </p>
-        )}
-        <NodeTree
-          groups={groups}
-          nodes={nodes}
-          canEdit={authed}
-          loading={loading}
-          onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
-          onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
-          onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
-          onDeleteGroup={(g) => setDeletingGroup(g)}
-          onRequestMoveNode={(n) => setMovingNode(n)}
-          onMoveNode={moveNode}
-          onMoveGroup={moveGroup}
-          onReorderNode={reorderNode}
-          onReorderGroup={reorderGroup}
-        />
-      </Card>
+      {error && <p className="form-error">{error}</p>}
+      {truncated && (
+        <p className="muted nodes-truncated">
+          Showing the first {NODE_CAP} nodes. Use search/filter for larger inventories (virtualized
+          tree loading is planned).
+        </p>
+      )}
+
+      <div className="nodes-split">
+        <div className="nodes-pane">
+          <div className="nodes-pane-head">
+            <span className="nodes-pane-title">Inventory</span>
+            <div className="nodes-pane-tools">
+              {authed && (
+                <Button
+                  variant="outline"
+                  className="nodes-pane-add"
+                  title="Add group"
+                  onClick={() => setGroupModal({ mode: 'add', parentId: null })}
+                >
+                  ＋
+                </Button>
+              )}
+              <TextInput
+                className="nodes-pane-search"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Search…"
+              />
+            </div>
+          </div>
+          <NodeTree
+            groups={groups}
+            nodes={nodes}
+            canEdit={authed}
+            loading={loading}
+            showToolbar={false}
+            selected={selected}
+            filter={filter}
+            onSelectNode={(n) => setSelected({ kind: 'node', id: n.id })}
+            onSelectGroup={(g) => setSelected({ kind: 'group', id: g.id })}
+            onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
+            onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
+            onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
+            onDeleteGroup={(g) => setDeletingGroup(g)}
+            onRequestMoveNode={(n) => setMovingNode(n)}
+            onMoveNode={moveNode}
+            onMoveGroup={moveGroup}
+            onReorderNode={reorderNode}
+            onReorderGroup={reorderGroup}
+          />
+        </div>
+
+        <div className="nodes-pane nodes-detail-pane">
+          {selectedNode ? (
+            <NodeDetail
+              key={selectedNode.id}
+              nodeId={selectedNode.id}
+              variant="inline"
+              canEdit={authed}
+              tab={tab}
+              onTabChange={setTab}
+              groups={groups}
+              nodes={nodes}
+              onMove={() => setMovingNode(selectedNode)}
+              onOpenDetail={() => navigate(`/nodes/${selectedNode.id}`)}
+            />
+          ) : selectedGroup ? (
+            <GroupDetail
+              group={selectedGroup}
+              groups={groups}
+              nodes={nodes}
+              canEdit={authed}
+              onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
+              onAddNode={() => setAdding(true)}
+            />
+          ) : (
+            <div className="nd-empty">
+              {loading ? 'Loading inventory…' : 'Select a node or group to see its detail.'}
+            </div>
+          )}
+        </div>
+      </div>
 
       {adding && (
         <Modal
@@ -378,24 +483,6 @@ function groupDeletionImpact(groups: NodeGroup[], nodes: NodeSummary[], g: NodeG
   return `${count(subs, 'subgroup')} and ${count(members, 'member node')} move up to the parent`;
 }
 
-/** Group label for a select option, indented by depth so the hierarchy reads in a flat list. */
-function groupOptions(groups: NodeGroup[]): { id: string; label: string }[] {
-  const byParent = new Map<string | null, NodeGroup[]>();
-  for (const g of groups) {
-    const k = g.parent_id;
-    byParent.set(k, [...(byParent.get(k) ?? []), g]);
-  }
-  const out: { id: string; label: string }[] = [];
-  const walk = (parent: string | null, depth: number) => {
-    for (const g of (byParent.get(parent) ?? []).sort((a, b) => a.name.localeCompare(b.name))) {
-      out.push({ id: g.id, label: `${'  '.repeat(depth)}${g.name}` });
-      walk(g.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return out;
-}
-
 /** Add or edit a group (name + type + parent). Editing the parent moves the group; self and
  *  descendants are excluded from the parent options so a move can't create a cycle. */
 function GroupModal({
@@ -475,67 +562,6 @@ function GroupModal({
           <Select value={parent} onChange={(e) => setParent(e.target.value)}>
             <option value="">— top level —</option>
             {parentChoices.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </label>
-        {error && <p className="form-error">{error}</p>}
-      </div>
-    </Modal>
-  );
-}
-
-/** Move a node into a group (or ungroup it). */
-function MoveNodeModal({
-  node,
-  groups,
-  onClose,
-  onMoved,
-}: {
-  node: NodeSummary;
-  groups: NodeGroup[];
-  onClose: () => void;
-  onMoved: () => void;
-}) {
-  const [target, setTarget] = useState<string>(node.group_id ?? '');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setNodeGroup(node.id, target || null)
-      .then(onMoved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to move node'));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title={`Move ${node.name}`}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
-            Move
-          </Button>
-        </>
-      }
-    >
-      <div className="form-stack">
-        <label className="form-label">
-          Group
-          <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-            <option value="">— Ungrouped —</option>
-            {groupOptions(groups).map((o) => (
               <option key={o.id} value={o.id}>
                 {o.label}
               </option>
