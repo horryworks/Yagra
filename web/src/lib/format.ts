@@ -143,6 +143,64 @@ export function formatUtil(pct: number | null): string {
   return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
 }
 
+/** Format a byte count with binary-scaled units rendered with familiar GB-style suffixes
+ *  (memory totals read naturally as e.g. "32 GB"), or `—` when unknown/negative. Whole values
+ *  drop the decimal (`32 GB`, not `32.0 GB`); fractional ones keep one place under 100. */
+export function formatBytes(bytes: number | null): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let v = bytes;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  const digits = u === 0 || Number.isInteger(v) || v >= 100 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[u]}`;
+}
+
+/** Per-source memory math: derive utilization % and total bytes from a node's raw metric
+ *  values, keyed by metric name. Each built-in memory source exposes a different shape:
+ *   - `huawei`: hwEntityMemUsage is already a %, hwEntityMemSize the total (bytes).
+ *   - `cisco` : CISCO-MEMORY-POOL used/free bytes → % = used/(used+free), total = used+free.
+ *   - `ucd`   : UCD real-memory total/avail KB → % = (total−avail)/total, total = total·unit.
+ *  `unitToBytes` scales the size metric to bytes (1 for byte OIDs, 1024 for KB). Returns null
+ *  fields when the inputs needed for that field are missing/non-finite. */
+export function deriveMem(
+  id: 'huawei' | 'cisco' | 'ucd',
+  vals: Record<string, number | null | undefined>,
+  unitToBytes = 1,
+): { pct: number | null; totalBytes: number | null } {
+  const num = (k: string): number | null => {
+    const x = vals[k];
+    return typeof x === 'number' && Number.isFinite(x) ? x : null;
+  };
+  if (id === 'huawei') {
+    const size = num('huawei_mem_size');
+    return {
+      pct: num('huawei_mem_usage'),
+      totalBytes: size == null ? null : size * unitToBytes,
+    };
+  }
+  if (id === 'cisco') {
+    const used = num('cisco_mem_used');
+    const free = num('cisco_mem_free');
+    if (used == null || free == null) return { pct: null, totalBytes: null };
+    const total = used + free;
+    return {
+      pct: total > 0 ? (used / total) * 100 : null,
+      totalBytes: total * unitToBytes,
+    };
+  }
+  const total = num('ucd_mem_total_kb');
+  const avail = num('ucd_mem_avail_kb');
+  if (total == null || avail == null) return { pct: null, totalBytes: null };
+  return {
+    pct: total > 0 ? ((total - avail) / total) * 100 : null,
+    totalBytes: total * unitToBytes,
+  };
+}
+
 /** Format SNMP TimeTicks (hundredths of a second) as a compact human uptime, e.g.
  *  `1y 2mo 3d 12:34`. The date head uses distinct, spaced unit suffixes — `y` / `mo` / `d` — so
  *  month never collides with the minutes that live after the `HH:MM` colon. Larger zero units are

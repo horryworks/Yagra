@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deriveMem,
   formatBps,
+  formatBytes,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -60,6 +62,45 @@ describe('format', () => {
     expect(formatUtil(null)).toBe('—');
     expect(formatUtil(2.5)).toBe('2.5%');
     expect(formatUtil(73)).toBe('73%');
+  });
+
+  it('formats byte counts with binary-scaled units and a dash when unknown', () => {
+    expect(formatBytes(null)).toBe('—');
+    expect(formatBytes(-1)).toBe('—');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1024)).toBe('1 KB');
+    expect(formatBytes(32 * 1024 ** 3)).toBe('32 GB');
+    expect(formatBytes(1.5 * 1024 ** 3)).toBe('1.5 GB');
+    expect(formatBytes(128 * 1024 ** 3)).toBe('128 GB');
+  });
+
+  it('derives memory % and total bytes per source shape', () => {
+    // Huawei: usage is already a %, size is the total (bytes).
+    expect(deriveMem('huawei', { huawei_mem_usage: 62, huawei_mem_size: 32 * 1024 ** 3 })).toEqual({
+      pct: 62,
+      totalBytes: 32 * 1024 ** 3,
+    });
+    // Size OID absent ⇒ % still derives, total is null.
+    expect(deriveMem('huawei', { huawei_mem_usage: 40 })).toEqual({ pct: 40, totalBytes: null });
+
+    // Cisco: % = used/(used+free), total = used + free.
+    expect(deriveMem('cisco', { cisco_mem_used: 750, cisco_mem_free: 250 })).toEqual({
+      pct: 75,
+      totalBytes: 1000,
+    });
+
+    // UCD: KB inputs, % = (total−avail)/total, total scaled to bytes.
+    expect(deriveMem('ucd', { ucd_mem_total_kb: 1000, ucd_mem_avail_kb: 250 }, 1024)).toEqual({
+      pct: 75,
+      totalBytes: 1000 * 1024,
+    });
+
+    // Missing inputs ⇒ null fields, no divide-by-zero.
+    expect(deriveMem('cisco', { cisco_mem_used: 100 })).toEqual({ pct: null, totalBytes: null });
+    expect(deriveMem('ucd', { ucd_mem_total_kb: 0, ucd_mem_avail_kb: 0 }, 1024)).toEqual({
+      pct: null,
+      totalBytes: 0,
+    });
   });
 
   it('formats SNMP TimeTicks as a compact human uptime (mo + HH:MM)', () => {

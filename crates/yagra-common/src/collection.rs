@@ -380,10 +380,14 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         },
         BuiltinTemplate {
             name: T_HUAWEI,
-            description: "Huawei VRP entity CPU, memory usage, and temperature (hwEntity*).",
+            description:
+                "Huawei VRP entity CPU, memory usage % + total size, and temperature (hwEntity*).",
             items: vec![
                 vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
                 vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
+                // hwEntityMemSize — total physical memory in bytes (pairs with the usage % so the
+                // UI can show "62% · 32 GB"). Per-entity like the usage column; collapsed via max.
+                vendor_table("huawei_mem_size", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.6"),
                 vendor_table("huawei_temp", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11"),
             ],
         },
@@ -883,10 +887,13 @@ mod tests {
         let cisco = &by_name("Cisco IOS/IOS-XE health").items;
         assert!(cisco.iter().any(|i| i.metric_name == "cisco_cpu_5min"));
         assert!(!cisco.iter().any(|i| i.metric_name == "if_hc_in_octets"));
-        assert!(by_name("Huawei VRP health")
-            .items
-            .iter()
-            .any(|i| i.metric_name == "huawei_cpu_usage"));
+        let huawei = &by_name("Huawei VRP health").items;
+        assert!(huawei.iter().any(|i| i.metric_name == "huawei_cpu_usage"));
+        // Memory usage % is paired with its total size (hwEntityMemSize) so the UI can show both.
+        assert!(huawei.iter().any(|i| i.metric_name == "huawei_mem_usage"));
+        assert!(huawei.iter().any(|i| i.metric_name == "huawei_mem_size"
+            && i.kind == CollectionKind::Table
+            && i.metric_kind == MetricKind::Gauge));
     }
 
     #[test]
