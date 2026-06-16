@@ -35,6 +35,9 @@ interface Props {
    *  CPU/Mem % pass `[0, 100]` so the baseline is 0, not the data's min. Pass a stable reference
    *  (e.g. a module-level constant) so the chart isn't rebuilt on every render. */
   yRange?: [number, number];
+  /** Formatter for the cursor-legend value (the "Value" readout on hover). Use it to show a unit
+   *  the compact axis omits (e.g. ms / bps). Falls back to `yFormat` when not given. */
+  legendFormat?: (v: number) => string;
 }
 
 export function MetricChart({
@@ -45,6 +48,7 @@ export function MetricChart({
   height = 220,
   yFormat,
   yRange,
+  legendFormat,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -72,6 +76,8 @@ export function MetricChart({
             splits.map((s) => (s == null ? '' : yFormat(s))),
         }
       : axis;
+    // Cursor-legend value formatter: an explicit one (units the axis omits) else the axis one.
+    const legendFmt = legendFormat ?? yFormat;
 
     const opts: uPlot.Options = {
       title,
@@ -86,6 +92,10 @@ export function MetricChart({
           label: s.label,
           stroke: s.color ?? PALETTE[i % PALETTE.length],
           width: 2,
+          // Cursor-legend "Value" readout — format with units so a hover reads "75%" / "12 ms",
+          // not a bare number. Prefer an explicit legend formatter, else the axis formatter.
+          value: (_u: uPlot, v: number | null) =>
+            v == null ? '--' : legendFmt ? legendFmt(v) : `${v}`,
         })),
       ],
     };
@@ -103,7 +113,7 @@ export function MetricChart({
       ro.disconnect();
       plot.destroy();
     };
-  }, [title, timestamps, values, series, height, yFormat, yRange]);
+  }, [title, timestamps, values, series, height, yFormat, yRange, legendFormat]);
 
   return <div ref={ref} />;
 }

@@ -76,32 +76,41 @@ describe('format', () => {
     expect(formatBytes(128 * 1024 ** 3)).toBe('128 GB');
   });
 
-  it('derives memory % and total bytes per source shape', () => {
-    // Huawei: usage is already a %, size is the total (bytes).
-    expect(deriveMem('huawei', { huawei_mem_usage: 62, huawei_mem_size: 32 * 1024 ** 3 })).toEqual({
-      pct: 62,
-      totalBytes: 32 * 1024 ** 3,
-    });
-    // Size OID absent ⇒ % still derives, total is null.
-    expect(deriveMem('huawei', { huawei_mem_usage: 40 })).toEqual({ pct: 40, totalBytes: null });
+  it('derives memory used/total bytes and % per source shape', () => {
+    // Huawei: total + free (bytes) → used = total − free.
+    expect(
+      deriveMem('huawei', { huawei_mem_total: 4_000_000_000, huawei_mem_free: 1_000_000_000 }),
+    ).toEqual({ usedBytes: 3_000_000_000, totalBytes: 4_000_000_000, pct: 75 });
 
-    // Cisco: % = used/(used+free), total = used + free.
+    // Cisco: used + free → total = used + free.
     expect(deriveMem('cisco', { cisco_mem_used: 750, cisco_mem_free: 250 })).toEqual({
-      pct: 75,
+      usedBytes: 750,
       totalBytes: 1000,
-    });
-
-    // UCD: KB inputs, % = (total−avail)/total, total scaled to bytes.
-    expect(deriveMem('ucd', { ucd_mem_total_kb: 1000, ucd_mem_avail_kb: 250 }, 1024)).toEqual({
       pct: 75,
-      totalBytes: 1000 * 1024,
     });
 
-    // Missing inputs ⇒ null fields, no divide-by-zero.
-    expect(deriveMem('cisco', { cisco_mem_used: 100 })).toEqual({ pct: null, totalBytes: null });
-    expect(deriveMem('ucd', { ucd_mem_total_kb: 0, ucd_mem_avail_kb: 0 }, 1024)).toEqual({
+    // UCD: KB inputs scaled to bytes; used = total − avail.
+    expect(deriveMem('ucd', { ucd_mem_total_kb: 1000, ucd_mem_avail_kb: 250 }, 1024)).toEqual({
+      usedBytes: 750 * 1024,
+      totalBytes: 1000 * 1024,
+      pct: 75,
+    });
+
+    // Partial inputs ⇒ derive what's possible, null the rest; no divide-by-zero.
+    expect(deriveMem('huawei', { huawei_mem_total: 4_000_000_000 })).toEqual({
+      usedBytes: null,
+      totalBytes: 4_000_000_000,
       pct: null,
+    });
+    expect(deriveMem('cisco', { cisco_mem_used: 100 })).toEqual({
+      usedBytes: 100,
+      totalBytes: null,
+      pct: null,
+    });
+    expect(deriveMem('ucd', { ucd_mem_total_kb: 0, ucd_mem_avail_kb: 0 }, 1024)).toEqual({
+      usedBytes: 0,
       totalBytes: 0,
+      pct: null,
     });
   });
 

@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { pointsToSeries } from '../lib/format';
+import { formatRtt, pointsToSeries } from '../lib/format';
 import { api, ApiError } from '../services/api';
 import { useAlertStream } from '../hooks/useAlertStream';
 import type { NodeSummary } from '../types/api';
@@ -99,7 +99,13 @@ export function DashboardPage() {
           {chartError && <p className="muted">{chartError}</p>}
           {!chartError && series.timestamps.length === 0 && <p className="muted">No data yet…</p>}
           {series.timestamps.length > 0 && (
-            <MetricChart title={METRIC} timestamps={series.timestamps} values={series.values} />
+            <MetricChart
+              title={METRIC}
+              timestamps={series.timestamps}
+              values={series.values}
+              yFormat={(v) => `${Math.round(v)}`}
+              legendFormat={formatRtt}
+            />
           )}
         </Card>
 
