@@ -340,6 +340,7 @@ function InterfaceDock({
               height={132}
               timestamps={ts}
               yFormat={formatSi}
+              legendFormat={formatBps}
               series={[
                 { label: 'In', values: series!.in_bps, color: CHART_IN },
                 { label: 'Out', values: series!.out_bps, color: CHART_OUT },
@@ -363,6 +364,7 @@ function InterfaceDock({
               height={132}
               timestamps={ts}
               yFormat={formatSi}
+              legendFormat={(v) => `${formatSi(v)}/s`}
               series={[
                 { label: 'In', values: series!.in_errors, color: CHART_IN },
                 { label: 'Out', values: series!.out_errors, color: CHART_OUT },

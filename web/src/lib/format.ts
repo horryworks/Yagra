@@ -162,46 +162,43 @@ export function formatBytes(bytes: number | null): string {
   return `${v.toFixed(digits)} ${units[u]}`;
 }
 
-/** Per-source memory math: derive utilization % and total bytes from a node's raw metric
- *  values, keyed by metric name. Each built-in memory source exposes a different shape:
- *   - `huawei`: hwEntityMemUsage is already a %, hwEntityMemSize the total (bytes).
- *   - `cisco` : CISCO-MEMORY-POOL used/free bytes → % = used/(used+free), total = used+free.
- *   - `ucd`   : UCD real-memory total/avail KB → % = (total−avail)/total, total = total·unit.
- *  `unitToBytes` scales the size metric to bytes (1 for byte OIDs, 1024 for KB). Returns null
- *  fields when the inputs needed for that field are missing/non-finite. */
+/** Per-source memory math: normalize a node's raw metric values (keyed by metric name) to used
+ *  and total **bytes**, plus the derived utilization %. Each built-in source exposes a different
+ *  pair of inputs, all reducible to used+total:
+ *   - `huawei`: HUAWEI-MEMORY-MIB total + free bytes -> used = total - free.
+ *   - `cisco` : CISCO-MEMORY-POOL used + free bytes -> total = used + free.
+ *   - `ucd`   : UCD real-memory total + avail KB -> used = total - avail (scaled to bytes).
+ *  `unitToBytes` scales the inputs to bytes (1 for byte OIDs, 1024 for KB). Fields are null when
+ *  the inputs needed for them are missing/non-finite; `pct` needs both used and a positive total. */
 export function deriveMem(
   id: 'huawei' | 'cisco' | 'ucd',
   vals: Record<string, number | null | undefined>,
   unitToBytes = 1,
-): { pct: number | null; totalBytes: number | null } {
+): { usedBytes: number | null; totalBytes: number | null; pct: number | null } {
   const num = (k: string): number | null => {
     const x = vals[k];
     return typeof x === 'number' && Number.isFinite(x) ? x : null;
   };
+  let used: number | null = null;
+  let total: number | null = null;
   if (id === 'huawei') {
-    const size = num('huawei_mem_size');
-    return {
-      pct: num('huawei_mem_usage'),
-      totalBytes: size == null ? null : size * unitToBytes,
-    };
+    const t = num('huawei_mem_total');
+    const f = num('huawei_mem_free');
+    if (t != null) total = t * unitToBytes;
+    if (t != null && f != null) used = (t - f) * unitToBytes;
+  } else if (id === 'cisco') {
+    const u = num('cisco_mem_used');
+    const f = num('cisco_mem_free');
+    if (u != null) used = u * unitToBytes;
+    if (u != null && f != null) total = (u + f) * unitToBytes;
+  } else {
+    const t = num('ucd_mem_total_kb');
+    const a = num('ucd_mem_avail_kb');
+    if (t != null) total = t * unitToBytes;
+    if (t != null && a != null) used = (t - a) * unitToBytes;
   }
-  if (id === 'cisco') {
-    const used = num('cisco_mem_used');
-    const free = num('cisco_mem_free');
-    if (used == null || free == null) return { pct: null, totalBytes: null };
-    const total = used + free;
-    return {
-      pct: total > 0 ? (used / total) * 100 : null,
-      totalBytes: total * unitToBytes,
-    };
-  }
-  const total = num('ucd_mem_total_kb');
-  const avail = num('ucd_mem_avail_kb');
-  if (total == null || avail == null) return { pct: null, totalBytes: null };
-  return {
-    pct: total > 0 ? ((total - avail) / total) * 100 : null,
-    totalBytes: total * unitToBytes,
-  };
+  const pct = used != null && total != null && total > 0 ? (used / total) * 100 : null;
+  return { usedBytes: used, totalBytes: total, pct };
 }
 
 /** Format SNMP TimeTicks (hundredths of a second) as a compact human uptime, e.g.
