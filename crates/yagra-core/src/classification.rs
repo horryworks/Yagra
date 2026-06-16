@@ -9,9 +9,11 @@
 //!   classification stays hot-path cheap (no DB round-trip per candidate) and regexes compile
 //!   once, not per device.
 //!
-//! Matching is two-pass: an authoritative `sysObjectID` prefix match is tried first (across all
-//! rules, in priority order), then a `sysDescr` regex fallback. So the vendor-assigned enterprise
-//! OID always outranks a free-text keyword, even if a keyword rule has a lower priority number.
+//! Matching is single-pass over rules pre-sorted by `(prefix-bearing first, ascending priority,
+//! longer prefix first)`. A rule matches only when *all* its present matchers match — a
+//! `sysObjectID` prefix AND/or a `sysDescr` regex — so one rule can mean "this vendor AND this
+//! NOS" (e.g. Cisco's `9.` prefix + an `ASA` keyword). Because prefix-bearing rules sort ahead of
+//! `sysDescr`-only ones, the vendor-assigned enterprise OID still outranks a free-text keyword.
 
 use std::sync::RwLock;
 
@@ -81,7 +83,18 @@ impl Classifier {
     }
 
     fn compile(mut rules: Vec<ClassificationRule>, generic_snmp_id: Option<Uuid>) -> Snapshot {
-        rules.sort_by_key(|r| r.priority);
+        // Evaluation order: prefix-bearing rules before sysDescr-only ones (so an authoritative
+        // sysObjectID always outranks a free-text keyword), then ascending priority, then longer
+        // prefix first (a more specific prefix like `9.12.3.` before `9.`).
+        rules.sort_by(|a, b| {
+            let rank = |r: &ClassificationRule| u8::from(r.sysobjectid_prefix.is_none());
+            let plen =
+                |r: &ClassificationRule| r.sysobjectid_prefix.as_ref().map_or(0, String::len);
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| a.priority.cmp(&b.priority))
+                .then_with(|| plen(b).cmp(&plen(a)))
+        });
         let compiled = rules
             .into_iter()
             .filter(|r| r.enabled)
@@ -133,26 +146,24 @@ impl Classifier {
         sysdescr: Option<&str>,
     ) -> Option<ClassificationMatch> {
         let snap = self.inner.read().expect("classifier lock poisoned");
+        let oid = sysobjectid.map(str::trim).filter(|s| !s.is_empty());
 
-        // Pass 1: authoritative sysObjectID enterprise-prefix match (priority order).
-        if let Some(oid) = sysobjectid.map(str::trim).filter(|s| !s.is_empty()) {
-            for rule in &snap.rules {
-                if let Some(prefix) = &rule.sysobjectid_prefix {
-                    if oid.starts_with(prefix.as_str()) {
-                        return Some(match_of(rule));
-                    }
+        // First rule (in sorted order) whose every present matcher matches wins. A matcher whose
+        // signal is absent disqualifies the rule, so a prefix+regex rule needs both to be present.
+        for rule in &snap.rules {
+            if let Some(prefix) = &rule.sysobjectid_prefix {
+                match oid {
+                    Some(o) if o.starts_with(prefix.as_str()) => {}
+                    _ => continue,
                 }
             }
-        }
-        // Pass 2: sysDescr keyword/regex fallback (priority order).
-        if let Some(descr) = sysdescr {
-            for rule in &snap.rules {
-                if let Some(re) = &rule.sysdescr_regex {
-                    if re.is_match(descr) {
-                        return Some(match_of(rule));
-                    }
+            if let Some(re) = &rule.sysdescr_regex {
+                match sysdescr {
+                    Some(d) if re.is_match(d) => {}
+                    _ => continue,
                 }
             }
+            return Some(match_of(rule));
         }
         // Fallback: any SNMP-speaking device gets the generic profile so it still collects the
         // standard set; an ICMP-only device (no SNMP signal) gets no suggestion.
@@ -391,6 +402,62 @@ mod tests {
         // The Cisco rule is disabled, so an SNMP device falls through to generic.
         let m = c.classify(Some("1.3.6.1.4.1.9.1.1"), None).unwrap();
         assert_eq!(m.profile_id, Uuid::from_u128(GENERIC));
+    }
+
+    #[test]
+    fn combined_prefix_and_regex_requires_both() {
+        const ASA: u128 = 0xA5A;
+        const CAT: u128 = 0xCA7;
+        // Two Cisco rules sharing the 9. prefix: an ASA rule (prefix AND descr) at lower priority,
+        // and a prefix-only Catalyst catch-all.
+        let rules = vec![
+            rule(30, Some("1.3.6.1.4.1.9."), Some(r"(?i)\bASA\b"), ASA),
+            rule(80, Some("1.3.6.1.4.1.9."), None, CAT),
+        ];
+        let c = Classifier::from_rules(rules, Some(Uuid::from_u128(GENERIC)));
+        // ASA: both matchers satisfied → ASA.
+        let asa = c
+            .classify(
+                Some("1.3.6.1.4.1.9.1.745"),
+                Some("Cisco Adaptive Security Appliance ASA"),
+            )
+            .unwrap();
+        assert_eq!(asa.profile_id, Uuid::from_u128(ASA));
+        // Catalyst (same prefix, no ASA keyword) → the ASA rule's regex fails, catch-all wins.
+        let cat = c
+            .classify(
+                Some("1.3.6.1.4.1.9.1.516"),
+                Some("Cisco IOS Software, C2960"),
+            )
+            .unwrap();
+        assert_eq!(cat.profile_id, Uuid::from_u128(CAT));
+    }
+
+    #[test]
+    fn more_specific_prefix_beats_vendor_catch_all() {
+        const NEXUS: u128 = 0x4E;
+        const CAT: u128 = 0xCA7;
+        let rules = vec![
+            rule(10, Some("1.3.6.1.4.1.9.12.3."), None, NEXUS),
+            rule(80, Some("1.3.6.1.4.1.9."), None, CAT),
+        ];
+        let c = Classifier::from_rules(rules, Some(Uuid::from_u128(GENERIC)));
+        let m = c.classify(Some("1.3.6.1.4.1.9.12.3.1.3"), None).unwrap();
+        assert_eq!(m.profile_id, Uuid::from_u128(NEXUS));
+    }
+
+    #[test]
+    fn prefix_rule_needs_its_descr_when_descr_absent() {
+        // A prefix+regex rule can't match a device that returned no sysDescr; the catch-all does.
+        const ASA: u128 = 0xA5A;
+        const CAT: u128 = 0xCA7;
+        let rules = vec![
+            rule(30, Some("1.3.6.1.4.1.9."), Some(r"(?i)\bASA\b"), ASA),
+            rule(80, Some("1.3.6.1.4.1.9."), None, CAT),
+        ];
+        let c = Classifier::from_rules(rules, Some(Uuid::from_u128(GENERIC)));
+        let m = c.classify(Some("1.3.6.1.4.1.9.1.745"), None).unwrap();
+        assert_eq!(m.profile_id, Uuid::from_u128(CAT));
     }
 
     #[test]

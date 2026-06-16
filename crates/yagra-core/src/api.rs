@@ -41,7 +41,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, Role, SeriesKey, Severity,
+    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, ProfileCategory, Role,
+    SeriesKey, Severity,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -110,7 +111,10 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/node-groups/:id/placement", put(place_group))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
-        .route("/api/v1/profiles/:id", delete(delete_profile))
+        .route(
+            "/api/v1/profiles/:id",
+            put(update_profile).delete(delete_profile),
+        )
         .route(
             "/api/v1/nodes/:node_id/metrics/:metric",
             get(get_node_metric),
@@ -1240,16 +1244,48 @@ async fn list_profiles(State(st): State<ApiState>, headers: HeaderMap) -> Respon
     }
 }
 
-/// Create-profile request body.
+/// Create/update-profile request body. `category` is optional on create (defaults to
+/// generic-snmp); when present it must be a valid `ProfileCategory` token.
 #[derive(Deserialize)]
-struct CreateProfile {
+struct ProfileBody {
     name: String,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    vendor: Option<String>,
+}
+
+/// Validate the body into `(name, category_token, vendor)` or `(error_code, message)` for a
+/// 400. Returns the small error tuple (not a `Response`) so the helper stays cheap to return.
+fn parse_profile_body(
+    body: &ProfileBody,
+) -> Result<(String, &'static str, Option<String>), (&'static str, String)> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(("invalid_name", "profile name must not be empty".to_owned()));
+    }
+    let category = match body.category.as_deref().map(str::trim) {
+        None | Some("") => ProfileCategory::default(),
+        Some(tok) => ProfileCategory::from_token(tok).ok_or_else(|| {
+            (
+                "invalid_category",
+                format!("unknown profile category {tok:?}"),
+            )
+        })?,
+    };
+    let vendor = body
+        .vendor
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    Ok((name.to_owned(), category.as_str(), vendor))
 }
 
 async fn create_profile(
     State(st): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<CreateProfile>,
+    Json(body): Json<ProfileBody>,
 ) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
@@ -1257,18 +1293,49 @@ async fn create_profile(
     if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
         return resp;
     }
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_name",
-            "profile name must not be empty".to_owned(),
-        );
-    }
-    match admin.repo.create_profile(body.name.trim()).await {
+    let (name, category, vendor) = match parse_profile_body(&body) {
+        Ok(v) => v,
+        Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
+    };
+    match admin
+        .repo
+        .create_profile(&name, category, vendor.as_deref())
+        .await
+    {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "create profile failed");
             internal("failed to create profile")
+        }
+    }
+}
+
+async fn update_profile(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ProfileBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let (name, category, vendor) = match parse_profile_body(&body) {
+        Ok(v) => v,
+        Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
+    };
+    match admin
+        .repo
+        .update_profile(id, &name, category, vendor.as_deref())
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("profile_not_found", format!("no profile {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update profile failed");
+            internal("failed to update profile")
         }
     }
 }

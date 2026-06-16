@@ -286,6 +286,34 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toMatchObject({ name: 'Standard interfaces' });
   });
 
+  it('creates a profile with its name, category and vendor', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'p1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createProfile({ name: 'Cisco Nexus', category: 'l3-switch', vendor: 'Cisco' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/profiles');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Cisco Nexus',
+      category: 'l3-switch',
+      vendor: 'Cisco',
+    });
+  });
+
+  it('updates a profile via PUT to the id path', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.updateProfile('p1', { name: 'Edge', category: 'router', vendor: null });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/profiles/p1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ name: 'Edge', category: 'router', vendor: null });
+  });
+
   it('posts a template item to the nested items path', async () => {
     const spy = vi
       .fn()
@@ -700,7 +728,7 @@ describe('api client', () => {
     setUnauthorizedHandler(onUnauth);
     mockFetch(401, { error: { code: 'unauthorized', message: 'a valid bearer token is required' } });
 
-    await expect(api.createProfile('p1')).rejects.toMatchObject({ status: 401 });
+    await expect(api.createProfile({ name: 'p1' })).rejects.toMatchObject({ status: 401 });
     expect(getToken()).toBeNull();
     expect(onUnauth).toHaveBeenCalledOnce();
 
