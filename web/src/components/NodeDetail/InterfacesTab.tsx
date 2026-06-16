@@ -6,7 +6,7 @@
 // body is a flex column — toolbar (none) → list (flex:1, scrolls) → dock/hint (none). The list
 // refreshes on an interval (shared with the tab badge); per-interface series are loaded lazily.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
 import { formatBps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
@@ -59,12 +59,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
 
   // Opening the dock shrinks the list, which can push the just-clicked row behind/below the dock —
-  // then re-clicking it to close becomes impossible. Keep the selected row scrolled into the
+  // then re-clicking it to close becomes impossible. Keep the selected row scrolled flush into the
   // visible list area (just above the dock) so toggle-to-close is always one click. Computed via
   // getBoundingClientRect + scrollTop (never scrollIntoView, which can disrupt the app); the scale
   // factor keeps it correct under any ancestor transform, and LIST_HEAD_H clears the sticky header.
-  useLayoutEffect(() => {
-    if (selected == null) return;
+  const keepSelectedInView = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
     const row = list.querySelector('.nd-if-row.selected');
@@ -75,7 +74,26 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     const headH = LIST_HEAD_H * scale;
     if (rr.bottom > lr.bottom) list.scrollTop += (rr.bottom - lr.bottom) / scale;
     else if (rr.top < lr.top + headH) list.scrollTop -= (lr.top + headH - rr.top) / scale;
-  }, [selected]);
+  }, []);
+
+  // Apply it on selection change AND whenever the list resizes. The dock grows after its charts
+  // finish loading (and on a pane resize / narrow-pane chart stacking), which shrinks the list and
+  // would re-cover a row that was only scrolled clear of the shorter, still-loading dock. The
+  // ResizeObserver re-applies the keep-in-view against the dock's final height — without it the
+  // selected row ends up hidden behind the dock (only partly scrolled into view).
+  useLayoutEffect(() => {
+    if (selected == null) return;
+    keepSelectedInView();
+  }, [selected, keepSelectedInView]);
+
+  useEffect(() => {
+    if (selected == null) return;
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => keepSelectedInView());
+    ro.observe(list);
+    return () => ro.disconnect();
+  }, [selected, keepSelectedInView]);
 
   if (loaded && rows.length === 0) {
     return (
@@ -347,7 +365,7 @@ function InterfaceDock({
               ]}
             />
           ) : (
-            <p className="nd-muted">No data for this window yet…</p>
+            <div className="nd-if-chart-empty">No data for this window yet…</div>
           )}
         </div>
 
@@ -371,7 +389,7 @@ function InterfaceDock({
               ]}
             />
           ) : (
-            <p className="nd-muted">No data for this window yet…</p>
+            <div className="nd-if-chart-empty">No data for this window yet…</div>
           )}
         </div>
       </div>
