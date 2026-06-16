@@ -208,6 +208,12 @@ export const RANGES: { label: string; secs: number }[] = [
  *  window's min. Module-level + stable so MetricChart isn't rebuilt on every refresh. */
 const PCT_RANGE: [number, number] = [0, 100];
 
+/** A real device's total RAM is never a handful of bytes — below this floor a "total memory"
+ *  reading is bogus (e.g. a vendor size OID unsupported on the device, or one whose value
+ *  overflows a 32-bit SNMP INTEGER so the node-wide `max()` lands on a tiny wrong row). When
+ *  the total isn't trustworthy we show the % only rather than a wrong size like "90 B". */
+const MIN_MEM_TOTAL_BYTES = 1024 * 1024;
+
 /** CPU% candidates (vendor/host gauges that read 0–100); the first one the node collects wins. */
 const CPU_METRICS = ['huawei_cpu_usage', 'cisco_cpu_5min', 'hr_processor_load'];
 
@@ -424,7 +430,13 @@ function MemHealth({
         });
         const d = deriveMem(mem.id, vals, mem.totalUnitToBytes);
         setPct(d.pct);
-        setTotalBytes(mem.totalMetrics.length > 0 ? d.totalBytes : null);
+        // Only surface a total we actually have and that's plausibly a real RAM size.
+        const total = d.totalBytes;
+        setTotalBytes(
+          mem.totalMetrics.length > 0 && total != null && total >= MIN_MEM_TOTAL_BYTES
+            ? total
+            : null,
+        );
         // Trend: name → points, then derive % per aligned timestamp.
         const byMetric: Record<string, MetricPoint[]> = {};
         mem.metrics.forEach((m, i) => {
