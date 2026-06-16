@@ -6,7 +6,7 @@
 // Data-table standard v2: a toolbar (count + "+ Add profile") over the shared `.ytable`; add via
 // modal, delete via confirm modal. Each row expands to a Collection-template attachment checklist.
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate, ProfileSummary } from '../types/api';
@@ -16,7 +16,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { CopyableId } from '../components/ui/tableCells';
 import { TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
@@ -29,6 +29,7 @@ export function ProfilesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
+  const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -55,6 +56,14 @@ export function ProfilesPage() {
     load();
   }, [load]);
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q === '') return rows;
+    return rows.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q),
+    );
+  }, [rows, query]);
+
   return (
     <div>
       <PageHeader
@@ -72,8 +81,14 @@ export function ProfilesPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder="Search name or id…"
+              ariaLabel="Search profiles"
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="profiles" />
+            <ResultCount shown={filtered.length} total={rows.length} noun="profiles" />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + Add profile
@@ -89,15 +104,21 @@ export function ProfilesPage() {
               <div className="ytable-h right">Actions</div>
             </div>
 
-            {rows.length === 0 ? (
+            {filtered.length === 0 ? (
               <div className="yt-empty">
-                <p className="yt-empty-title">{loading ? 'Loading…' : 'No profiles yet'}</p>
+                <p className="yt-empty-title">
+                  {loading ? 'Loading…' : rows.length === 0 ? 'No profiles yet' : 'No profiles match'}
+                </p>
                 {!loading && (
-                  <p className="yt-empty-sub">Add a device-class profile (e.g. “Cisco IOS switch”).</p>
+                  <p className="yt-empty-sub">
+                    {rows.length === 0
+                      ? 'Add a device-class profile (e.g. “Cisco IOS switch”).'
+                      : 'Try a different search.'}
+                  </p>
                 )}
               </div>
             ) : (
-              rows.map((p) => {
+              filtered.map((p) => {
                 const open = openTemplates === p.id;
                 return (
                   <Fragment key={p.id}>
