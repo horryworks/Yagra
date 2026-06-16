@@ -9,9 +9,15 @@ export type Theme = 'light' | 'dark';
 interface PrefsStore {
   theme: Theme;
   sidebarCollapsed: boolean;
+  /** Inventory-tree groups the user has explicitly collapsed, keyed by group id. The tree
+   *  defaults to fully expanded, so we persist the *collapsed* set (empty ⇒ all open) — this
+   *  also means a newly-created group, absent from the map, shows expanded automatically. */
+  nodeTreeCollapsed: Record<string, true>;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   toggleSidebar: () => void;
+  /** Flip one inventory-tree group between expanded and collapsed, persisting the choice. */
+  toggleNodeTreeGroup: (id: string) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -19,9 +25,17 @@ export const usePrefsStore = create<PrefsStore>()(
     (set) => ({
       theme: 'dark',
       sidebarCollapsed: false,
+      nodeTreeCollapsed: {},
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleNodeTreeGroup: (id) =>
+        set((s) => {
+          const next = { ...s.nodeTreeCollapsed };
+          if (next[id]) delete next[id];
+          else next[id] = true;
+          return { nodeTreeCollapsed: next };
+        }),
     }),
     { name: 'yagra_prefs' },
   ),

@@ -201,6 +201,18 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/n1/interfaces');
   });
 
+  it('triggers an immediate poll via POST to the node poll endpoint', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 202, json: async () => ({ dispatched: 3 }) } as Response);
+    globalThis.fetch = spy;
+    const res = await api.pollNode('n/1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/nodes/n%2F1/poll');
+    expect(init.method).toBe('POST');
+    expect(res.dispatched).toBe(3);
+  });
+
   it('requests the resolved node collection set with the query flag', async () => {
     const spy = vi
       .fn()

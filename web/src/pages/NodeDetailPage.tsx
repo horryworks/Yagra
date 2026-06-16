@@ -77,6 +77,10 @@ export function NodeDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingBindings, setEditingBindings] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [polling, setPolling] = useState(false);
+  const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
+  // Bumped after a manual poll so the load effect re-runs once results have had a moment to land.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,7 +112,24 @@ export function NodeDetailPage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId]);
+  }, [nodeId, refreshNonce]);
+
+  // Poll now: dispatch an immediate poll, then re-fetch the node's readings a few seconds later
+  // (results return asynchronously on the normal path, so we give the poller a moment to answer).
+  const pollNow = () => {
+    setPolling(true);
+    setPollMsg(null);
+    api
+      .pollNode(nodeId)
+      .then((r) => {
+        const n = r.dispatched;
+        setPollMsg({ text: `Poll requested — ${n} check${n === 1 ? '' : 's'} dispatched.`, tone: 'info' });
+        window.setTimeout(() => setRefreshNonce((v) => v + 1), 4000);
+        window.setTimeout(() => setPollMsg(null), 8000);
+      })
+      .catch((e: unknown) => setPollMsg({ text: errMsg(e, 'failed to request poll'), tone: 'error' }))
+      .finally(() => setPolling(false));
+  };
 
   return (
     <div>
@@ -133,6 +154,11 @@ export function NodeDetailPage() {
           <div className="nodedetail-head-actions">
             {status && <StatusDot state={status.state} />}
             {authed && (
+              <Button variant="outline" onClick={pollNow} disabled={polling}>
+                {polling ? 'Polling…' : 'Poll now'}
+              </Button>
+            )}
+            {authed && (
               <Button variant="outline" onClick={() => setEditingBindings(true)}>
                 Edit node
               </Button>
@@ -145,6 +171,12 @@ export function NodeDetailPage() {
           </div>
         }
       />
+
+      {pollMsg && (
+        <p className={`nodedetail-poll-msg ${pollMsg.tone === 'error' ? 'form-error' : 'muted'}`}>
+          {pollMsg.text}
+        </p>
+      )}
 
       <Tabs
         tabs={[

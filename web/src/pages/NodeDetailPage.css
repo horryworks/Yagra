@@ -2,6 +2,12 @@
   margin-top: 16px;
 }
 
+/* Transient "poll now" feedback, shown just under the page header. */
+.nodedetail-poll-msg {
+  margin: 8px 0 0;
+  font-size: var(--font-sm);
+}
+
 .nodedetail-grid {
   display: grid;
   grid-template-columns: 280px 1fr;
