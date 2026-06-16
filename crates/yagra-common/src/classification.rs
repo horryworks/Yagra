@@ -424,6 +424,29 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "Cisco Catalyst switch (IOS/IOS-XE)",
             Some("Cisco"),
         ),
+        // ── Appended post-redesign — kept at array end on purpose ──
+        // Seed ids are Uuid::from_u128(BASE + index); inserting mid-array would shift later rule
+        // ids and duplicate their rows on reseed. The classifier sorts by `priority`, so array
+        // position is irrelevant to evaluation — these slot in by their priority numbers below.
+        //
+        // Huawei wireless controller (AC/AirEngine): vendor prefix 2011. AND an AC sysDescr, at
+        // priority 145 — between USG (140) and the NE/AR router (150) / CloudEngine catch-all (160).
+        (
+            145,
+            Some("1.3.6.1.4.1.2011."),
+            Some(r"(?i)airengine|wlan ac|\bac6\d{3}\b|\bwac\b"),
+            "Huawei wireless controller",
+            Some("Huawei"),
+        ),
+        // A10 Networks Thunder/AX ADC — single enterprise prefix (PEN 22610), priority 265
+        // (alongside the other load balancers F5 250 / Citrix 260).
+        (
+            265,
+            Some("1.3.6.1.4.1.22610."),
+            None,
+            "A10 Thunder ADC",
+            Some("A10 Networks"),
+        ),
     ];
     RULES
         .iter()
@@ -526,5 +549,41 @@ mod tests {
             cisco.iter().any(|r| r.sysdescr_regex.is_none()),
             "expected a prefix-only Cisco catch-all"
         );
+    }
+
+    #[test]
+    fn huawei_wac_rule_guards_vendor_and_discriminates_on_sysdescr() {
+        // The Huawei WAC rule must AND the 2011. vendor prefix with an AC sysDescr, and sort
+        // (by priority) ahead of the Huawei NE/AR router and CloudEngine catch-all rules.
+        let rules = builtin_classification_rules();
+        let wac = rules
+            .iter()
+            .find(|r| r.profile_name == "Huawei wireless controller")
+            .expect("Huawei WAC rule present");
+        assert_eq!(wac.sysobjectid_prefix, Some("1.3.6.1.4.1.2011."));
+        assert!(
+            wac.sysdescr_regex.is_some(),
+            "WAC rule needs a discriminator"
+        );
+        let cloudengine_prio = rules
+            .iter()
+            .find(|r| r.profile_name == "Huawei CloudEngine switch")
+            .expect("CloudEngine catch-all present")
+            .priority;
+        assert!(
+            wac.priority < cloudengine_prio,
+            "WAC must out-prioritise the CloudEngine catch-all"
+        );
+    }
+
+    #[test]
+    fn a10_rule_maps_its_enterprise_prefix() {
+        let rules = builtin_classification_rules();
+        let a10 = rules
+            .iter()
+            .find(|r| r.profile_name == "A10 Thunder ADC")
+            .expect("A10 rule present");
+        assert_eq!(a10.sysobjectid_prefix, Some("1.3.6.1.4.1.22610."));
+        assert_eq!(a10.vendor, Some("A10 Networks"));
     }
 }

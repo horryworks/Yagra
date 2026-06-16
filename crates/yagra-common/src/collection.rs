@@ -748,6 +748,23 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             vec![TEMPLATE_STANDARD_SNMP],
         ),
         prof("Generic ping", C::PingOnly, None, Vec::new()),
+        // ── Appended post-redesign — kept at array end on purpose ──
+        // Seed ids are Uuid::from_u128(BASE + index); inserting mid-array would shift every later
+        // profile's id and duplicate its row on reseed (ON CONFLICT DO NOTHING). Appending gives
+        // these fresh ids with zero churn. The UI groups by `category`, not array order, so each
+        // still appears in its proper section (Wireless controller / Load balancer).
+        prof(
+            "Huawei wireless controller",
+            C::WirelessController,
+            Some("Huawei"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI],
+        ),
+        prof(
+            "A10 Thunder ADC",
+            C::LoadBalancer,
+            Some("A10 Networks"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
     ]
 }
 
@@ -904,6 +921,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn appended_profiles_have_expected_category_and_templates() {
+        let profiles = builtin_profiles();
+        let by_name = |n: &str| profiles.iter().find(|p| p.name == n);
+
+        let wac = by_name("Huawei wireless controller").expect("Huawei WAC profile present");
+        assert_eq!(wac.category, ProfileCategory::WirelessController);
+        assert_eq!(wac.vendor, Some("Huawei"));
+        assert!(wac.templates.contains(&T_HUAWEI), "WAC carries VRP health");
+
+        let a10 = by_name("A10 Thunder ADC").expect("A10 load-balancer profile present");
+        assert_eq!(a10.category, ProfileCategory::LoadBalancer);
+        assert_eq!(a10.vendor, Some("A10 Networks"));
+        assert!(a10.templates.contains(&T_HOST_RESOURCES));
     }
 
     #[test]
