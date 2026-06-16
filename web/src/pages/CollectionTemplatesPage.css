@@ -1,8 +1,45 @@
 /* Collection templates — data-table standard v2 (styles/table.css). Only the per-row expander
-   (the Collection-set editor) is page-local. */
+   (the Collection-set editor) and the Metrics-cell toggle are page-local. */
 
 .templates-table .crud-collection {
   padding: 12px 16px 16px;
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);
+}
+
+/* Metrics cell: a flush-left toggle whose label is the metric count; clicking expands the row's
+   Collection-set editor. Flush (no button padding) so its text sits under the "Metrics" header. */
+.tmpl-metrics-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.tmpl-metrics-toggle:hover {
+  color: var(--accent-color);
+}
+
+.tmpl-metrics-chev {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform var(--transition);
+}
+
+.tmpl-metrics-toggle:hover .tmpl-metrics-chev {
+  color: inherit;
+}
+
+/* Open row: chevron points down. */
+.tmpl-metrics-toggle.open .tmpl-metrics-chev {
+  transform: rotate(90deg);
 }

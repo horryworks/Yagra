@@ -156,15 +156,15 @@ export function ClassificationRulesPage() {
                   <div className="ytable-cell mono">{r.priority}</div>
                   <div className="ytable-cell classrules-match">
                     {r.sysobjectid_prefix && (
-                      <span className="mono classrules-sig">
+                      <span className="classrules-sig">
                         <span className="classrules-sig-kind">OID</span>
-                        {r.sysobjectid_prefix}
+                        <span className="classrules-sig-val mono">{r.sysobjectid_prefix}</span>
                       </span>
                     )}
                     {r.sysdescr_regex && (
-                      <span className="mono classrules-sig">
+                      <span className="classrules-sig">
                         <span className="classrules-sig-kind">descr</span>
-                        {r.sysdescr_regex}
+                        <span className="classrules-sig-val mono">{r.sysdescr_regex}</span>
                       </span>
                     )}
                   </div>
