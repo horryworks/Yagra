@@ -101,3 +101,13 @@ export function PowerIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Open box / package — the node-detail eyebrow glyph (a single node in the inventory). */
+export function BoxIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 8 12 3 3 8v8l9 5 9-5z" />
+      <path d="M3 8l9 5 9-5M12 13v8" />
+    </svg>
+  );
+}

@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex: 1;
 }
 
 .ntree-toolbar {
@@ -35,8 +36,18 @@
   border-radius: var(--radius);
 }
 
+.ntree-row {
+  cursor: pointer;
+}
+
 .ntree-row:hover {
   background: var(--bg-secondary);
+}
+
+/* Selected row (drives the split detail pane): inset accent bar + tinted background. */
+.ntree-row.sel {
+  background: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent-color);
 }
 
 /* The dragged row dims so the drop indicators read clearly. */
@@ -119,9 +130,21 @@
   cursor: pointer;
   padding: 0;
   text-align: left;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Per-group health rollup (descendant nodes), sitting between the name and the count pill. */
+.ntree-health {
+  flex: none;
+  width: 46px;
 }
 
 .ntree-count {
+  flex: none;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   background: var(--bg-tertiary);
@@ -167,20 +190,15 @@
   cursor: pointer;
   padding: 0;
   text-align: left;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ntree-node-name:hover {
   color: var(--accent-color);
-}
-
-.ntree-node-addr {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-}
-
-.ntree-node-meta {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
 }
 
 .ntree-ungrouped {

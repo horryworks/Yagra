@@ -1,0 +1,480 @@
+// The unified node detail — one implementation rendered both inline (right pane of the Nodes split)
+// and full-page (the /nodes/:id route), so the two surfaces never drift. It owns the header
+// (group-breadcrumb eyebrow · name + status pill · per-variant actions · ip/maker/seen sub line),
+// the Poll-now action + transient notice, the Overview/Interfaces/Collection tab bar (with count
+// pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
+// on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
+
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../../services/api';
+import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
+import { groupPath } from '../../lib/nodeTree';
+import type {
+  CredentialSummary,
+  InterfaceRow,
+  NodeDetail as NodeDetailData,
+  NodeGroup,
+  NodeState,
+  NodeStatus,
+  NodeSummary,
+  ProfileSummary,
+} from '../../types/api';
+import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
+import { Select, TextInput } from '../ui/Field';
+import { BoxIcon } from '../ui/icons';
+import { OverviewTab } from './OverviewTab';
+import { InterfacesTab } from './InterfacesTab';
+import { CollectionTab } from './CollectionTab';
+import './NodeDetail.css';
+
+const METRIC = 'icmp_rtt_ms';
+const STATUS_REFRESH_MS = 15_000;
+const RTT_WINDOW_SECS = 30 * 60;
+
+const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
+
+const TABS = ['overview', 'interfaces', 'collection'];
+
+interface Props {
+  nodeId: string;
+  variant: 'inline' | 'page';
+  canEdit: boolean;
+  /** Controlled active tab + change handler (page wires it to the URL; split keeps local state). */
+  tab: string;
+  onTabChange: (tab: string) => void;
+  /** Group + node lists for the breadcrumb / parent-name resolution (the split already has them;
+   *  the page wrapper fetches groups, and parent name falls back to a targeted fetch). */
+  groups: NodeGroup[];
+  nodes?: NodeSummary[];
+  /** Inline only: open the move-to-group picker / jump to the full-page detail. */
+  onMove?: () => void;
+  onOpenDetail?: () => void;
+  /** Page only: navigate away after a delete. */
+  onDeleted?: () => void;
+}
+
+export function NodeDetail({
+  nodeId,
+  variant,
+  canEdit,
+  tab,
+  onTabChange,
+  groups,
+  nodes,
+  onMove,
+  onOpenDetail,
+  onDeleted,
+}: Props) {
+  const activeTab = TABS.includes(tab) ? tab : 'overview';
+  const [node, setNode] = useState<NodeDetailData | null>(null);
+  const [status, setStatus] = useState<NodeStatus | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+  const [interfaces, setInterfaces] = useState<InterfaceRow[]>([]);
+  const [ifLoaded, setIfLoaded] = useState(false);
+  const [ifError, setIfError] = useState<string | null>(null);
+  const [collCount, setCollCount] = useState<number | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [editingBindings, setEditingBindings] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump).
+  useEffect(() => {
+    let cancelled = false;
+    setNode(null);
+    api
+      .getNode(nodeId)
+      .then((n) => !cancelled && setNode(n))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, refreshNonce]);
+
+  // Live data: status + RTT history + interfaces, refreshed on an interval.
+  useEffect(() => {
+    let cancelled = false;
+    setStatus(null);
+    setSeries({ timestamps: [], values: [] });
+    setIfLoaded(false);
+    const load = () => {
+      const to = Math.floor(Date.now() / 1000);
+      api
+        .getNodeStatus(nodeId)
+        .then((s) => !cancelled && setStatus(s))
+        .catch(() => undefined);
+      api
+        .getNodeMetricRange(nodeId, METRIC, { from: to - RTT_WINDOW_SECS, to })
+        .then((r) => !cancelled && setSeries(pointsToSeries(r.points)))
+        .catch(() => undefined);
+      api
+        .listNodeInterfaces(nodeId)
+        .then((r) => {
+          if (cancelled) return;
+          setInterfaces(r);
+          setIfError(null);
+          setIfLoaded(true);
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setIfError(errMsg(e, 'failed to load interfaces'));
+          setIfLoaded(true);
+        });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, refreshNonce]);
+
+  // Collection-set count for the Collection tab badge (the profile's attached templates).
+  useEffect(() => {
+    let cancelled = false;
+    setCollCount(null);
+    if (node?.profile_id) {
+      api
+        .listProfileTemplates(node.profile_id)
+        .then((ts) => !cancelled && setCollCount(ts.length))
+        .catch(() => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [node?.profile_id]);
+
+  // Poll now: dispatch an immediate poll, then re-fetch the readings a few seconds later.
+  const pollNow = () => {
+    setPolling(true);
+    setPollMsg(null);
+    api
+      .pollNode(nodeId)
+      .then((r) => {
+        const n = r.dispatched;
+        setPollMsg({
+          text: `Poll requested — ${n} check${n === 1 ? '' : 's'} dispatched.`,
+          tone: 'info',
+        });
+        window.setTimeout(() => setRefreshNonce((v) => v + 1), 4000);
+        window.setTimeout(() => setPollMsg(null), 8000);
+      })
+      .catch((e: unknown) => setPollMsg({ text: errMsg(e, 'failed to request poll'), tone: 'error' }))
+      .finally(() => setPolling(false));
+  };
+
+  if (!node) {
+    return (
+      <div className="nd">
+        <div className="nd-body nd-tabpad">
+          <p className="nd-muted">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const state = status?.state ?? 'unknown';
+  const path = groupPath(groups, node.group_id);
+  const lastSeen = series.timestamps.at(-1);
+  const ifWarn = interfaces.some((r) => r.oper_status != null && r.oper_status !== 1);
+  const collWarn = !!node.credential_id && (state === 'unreachable' || state === 'unknown');
+
+  return (
+    <div className="nd">
+      <div className="nd-head">
+        <div className="nd-eyebrow">
+          <BoxIcon width={12} height={12} /> {path.length ? path.join(' / ') : 'Ungrouped'}
+        </div>
+        <div className="nd-namerow">
+          <div className="nd-namewrap">
+            <span className="nd-name">{node.name}</span>
+            {status && <StatePill state={state} />}
+          </div>
+          <div className="nd-actions">
+            {canEdit && (
+              <Button variant="outline" onClick={pollNow} disabled={polling}>
+                {polling ? 'Polling…' : 'Poll now'}
+              </Button>
+            )}
+            {variant === 'inline' && canEdit && onMove && (
+              <Button variant="outline" onClick={onMove}>
+                Move…
+              </Button>
+            )}
+            {variant === 'inline' && onOpenDetail && (
+              <Button variant="outline" onClick={onOpenDetail}>
+                Open detail
+              </Button>
+            )}
+            {variant === 'page' && canEdit && (
+              <Button variant="outline" onClick={() => setEditingBindings(true)}>
+                Edit node
+              </Button>
+            )}
+            {variant === 'page' && canEdit && (
+              <Button variant="danger" onClick={() => setDeleting(true)}>
+                Delete
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="nd-sub">
+          <span className="mono">{node.address}</span>
+          <span className="nd-sep">·</span>
+          <span>{[node.vendor, node.model].filter(Boolean).join(' ') || 'unknown device'}</span>
+          {lastSeen != null && (
+            <>
+              <span className="nd-sep">·</span>
+              <span>seen {relativeTime(new Date(lastSeen * 1000).toISOString())}</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {pollMsg && (
+        <p className={`nd-pollmsg${pollMsg.tone === 'error' ? ' err' : ''}`}>{pollMsg.text}</p>
+      )}
+
+      <div className="nd-tabs" role="tablist">
+        {[
+          { key: 'overview', label: 'Overview' as const },
+          { key: 'interfaces', label: 'Interfaces' as const, n: interfaces.length || null, warn: ifWarn },
+          { key: 'collection', label: 'Collection' as const, n: collCount, warn: collWarn },
+        ].map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === t.key}
+            className={`nd-tab${activeTab === t.key ? ' on' : ''}`}
+            onClick={() => onTabChange(t.key)}
+          >
+            {t.label}
+            {'n' in t && t.n != null && <span className="nd-tab-n">{t.n}</span>}
+            {'warn' in t && t.warn && <span className="nd-tab-warn" aria-label="needs attention">●</span>}
+          </button>
+        ))}
+      </div>
+
+      <div className="nd-body">
+        {activeTab === 'overview' && (
+          <OverviewTab
+            node={node}
+            groups={groups}
+            nodes={nodes}
+            status={status}
+            series={series}
+            unreachable={state === 'unreachable'}
+          />
+        )}
+        {activeTab === 'interfaces' && (
+          <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
+        )}
+        {activeTab === 'collection' && <CollectionTab node={node} canEdit={canEdit} />}
+      </div>
+
+      {editingBindings && (
+        <BindingsModal
+          nodeId={nodeId}
+          onClose={() => setEditingBindings(false)}
+          onDone={() => {
+            setEditingBindings(false);
+            setRefreshNonce((v) => v + 1);
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteNodeModal
+          nodeId={nodeId}
+          name={node.name}
+          onClose={() => setDeleting(false)}
+          onDeleted={() => onDeleted?.()}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Rounded status pill (dot + label, bordered in the state color) shown beside the node name. */
+function StatePill({ state }: { state: NodeState }) {
+  return (
+    <span className="nd-statepill" style={{ color: stateColorVar(state) }}>
+      <span className="nd-statepill-dot" />
+      {stateLabel(state)}
+    </span>
+  );
+}
+
+/** Confirm + delete a node (destructive-consent modal). On success the caller navigates away. */
+function DeleteNodeModal({
+  nodeId,
+  name,
+  onClose,
+  onDeleted,
+}: {
+  nodeId: string;
+  name: string;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .deleteNode(nodeId)
+      .then(onDeleted)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to delete node'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Delete node"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={submit} disabled={busy}>
+            Delete
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Delete node <strong>{name}</strong>? This removes its inventory entry and its discovered
+        interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency
+        chain, its dependents will no longer be suppressed by it. This cannot be undone.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Edit a node: device profile + SNMP credential bindings and its descriptive maker/model.
+ *  Pre-fills the current values; saving resends all so an unchanged field is preserved. */
+function BindingsModal({
+  nodeId,
+  onClose,
+  onDone,
+}: {
+  nodeId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
+  const [profileId, setProfileId] = useState('');
+  const [credentialId, setCredentialId] = useState('');
+  const [vendor, setVendor] = useState('');
+  const [model, setModel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .getNode(nodeId)
+      .then((n) => {
+        setProfileId(n.profile_id ?? '');
+        setCredentialId(n.credential_id ?? '');
+        setVendor(n.vendor ?? '');
+        setModel(n.model ?? '');
+      })
+      .catch(() => undefined);
+    api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
+    api
+      .listCredentials()
+      .then((c) => setCredentials(c.filter((cr) => cr.kind === 'snmp_v2c')))
+      .catch(() => setCredentials([]));
+  }, [nodeId]);
+
+  const save = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .setNodeBindings(nodeId, {
+        profile_id: profileId || null,
+        credential_id: credentialId || null,
+        vendor: vendor.trim() || null,
+        model: model.trim() || null,
+      })
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, 'failed to save node'));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title="Edit node"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={save} disabled={busy}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          Device profile
+          <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+            <option value="">— none —</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="form-label">
+          SNMP credential
+          <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
+            <option value="">— none —</option>
+            {credentials.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <div className="form-row">
+          <label className="form-label">
+            Maker
+            <TextInput
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+              placeholder="e.g. Cisco"
+            />
+          </label>
+          <label className="form-label">
+            Model
+            <TextInput
+              className="mono"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. C2960"
+            />
+          </label>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}

@@ -1,0 +1,14 @@
+/* Stacked status segments (proportional). The track shows through when empty / between segments. */
+.healthbar {
+  display: inline-flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  vertical-align: middle;
+}
+
+.healthbar-seg {
+  height: 100%;
+  display: block;
+}

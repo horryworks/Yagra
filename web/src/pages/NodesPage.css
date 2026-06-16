@@ -1,0 +1,81 @@
+/* Nodes / All nodes — the two-pane split. Both panes are flat cards (0.5px border, --radius) that
+   own their own internal scroll; the grid fills the height left by the page header. */
+
+.nodes-attention {
+  color: var(--status-critical);
+}
+
+.nodes-truncated {
+  margin: 0 0 8px;
+  font-size: var(--font-sm);
+}
+
+.nodes-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 312px 1fr;
+  gap: 14px;
+}
+
+.nodes-pane {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Left-pane header: INVENTORY label + tools (Add group · search). */
+.nodes-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 8px 0 12px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  flex: none;
+}
+
+.nodes-pane-title {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nodes-pane-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nodes-pane-search {
+  width: 150px;
+  height: 28px;
+}
+
+.nodes-pane-add {
+  height: 28px;
+  padding: 0 9px;
+}
+
+/* Right-pane empty / loading state. */
+.nd-empty {
+  margin: auto;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+@media (max-width: 860px) {
+  .nodes-split {
+    grid-template-columns: 1fr;
+  }
+}
