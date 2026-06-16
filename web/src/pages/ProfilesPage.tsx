@@ -1,27 +1,29 @@
-// Device profiles (Nodes ▸ Device profiles). Profiles are device-class buckets that bundle
-// collection sets by *attaching Collection templates* (profiles hold no raw OIDs themselves —
-// edit a template once and every profile using it updates). CRUD against /profiles;
-// template links via /profiles/:id/templates. ManageConfig-gated; 503 in skeleton surfaced.
+// Device profiles (Nodes ▸ Device profiles). Profiles are device-class buckets split by
+// functional role (category) × vendor-NOS family; they bundle collection sets by *attaching
+// Collection templates* (profiles hold no raw OIDs themselves — edit a template once and every
+// profile using it updates). CRUD against /profiles; template links via /profiles/:id/templates.
+// ManageConfig-gated; 503 in skeleton surfaced.
 //
-// Data-table standard v2: a toolbar (count + "+ Add profile") over the shared `.ytable`; add via
-// modal, delete via confirm modal. Each row expands to a Collection-template attachment checklist.
+// Data-table standard v2: a toolbar (search + count + "+ Add profile") over the shared `.ytable`.
+// Rows are grouped under role headers (the category); each row shows its vendor and expands to a
+// Collection-template attachment checklist. Add/edit via modal, delete via confirm modal.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate, ProfileSummary } from '../types/api';
+import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, RequiredMark } from '../components/ui/Field';
+import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { CopyableId } from '../components/ui/tableCells';
-import { TrashIcon } from '../components/ui/icons';
+import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
 
-const COLS = '1.6fr 1.4fr 150px 72px';
+const COLS = '1.8fr 1fr 130px 96px';
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
@@ -33,6 +35,7 @@ export function ProfilesPage() {
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<ProfileSummary | null>(null);
   const [deleting, setDeleting] = useState<ProfileSummary | null>(null);
   // Which profile's template attachments are expanded (one at a time).
   const [openTemplates, setOpenTemplates] = useState<string | null>(null);
@@ -59,17 +62,40 @@ export function ProfilesPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q === '') return rows;
-    return rows.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q),
+    return rows.filter((p) =>
+      [p.name, p.vendor ?? '', categoryLabel(p.category)]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
     );
   }, [rows, query]);
+
+  // Group the filtered rows by category, in the canonical display order; trailing "Other"
+  // bucket catches any unknown token so nothing is silently hidden.
+  const groups = useMemo(() => {
+    const order = PROFILE_CATEGORIES.map((c) => c.token);
+    const seen = new Set(order);
+    const byCat = new Map<string, ProfileSummary[]>();
+    for (const p of filtered) {
+      const key = seen.has(p.category) ? p.category : '__other';
+      (byCat.get(key) ?? byCat.set(key, []).get(key)!).push(p);
+    }
+    const out: { token: string; label: string; items: ProfileSummary[] }[] = [];
+    for (const token of order) {
+      const items = byCat.get(token);
+      if (items && items.length) out.push({ token, label: categoryLabel(token), items });
+    }
+    const other = byCat.get('__other');
+    if (other && other.length) out.push({ token: '__other', label: 'Other', items: other });
+    return out;
+  }, [filtered]);
 
   return (
     <div>
       <PageHeader
         title="Device profiles"
         trail={[{ label: 'Nodes' }, { label: 'Device profiles' }]}
-        note="Device-class buckets. Attach Collection templates here; nodes inherit them via their profile."
+        note="Device-class buckets (role × vendor). Attach Collection templates here; nodes inherit them via their profile."
       />
 
       {unavailable ? (
@@ -84,7 +110,7 @@ export function ProfilesPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search name or id…"
+              placeholder="Search name, vendor or role…"
               ariaLabel="Search profiles"
             />
             <TableSpacer />
@@ -99,7 +125,7 @@ export function ProfilesPage() {
           <div className="ytable profiles-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
               <div className="ytable-h">Name</div>
-              <div className="ytable-h">Profile ID</div>
+              <div className="ytable-h">Vendor</div>
               <div className="ytable-h">Templates</div>
               <div className="ytable-h right">Actions</div>
             </div>
@@ -112,59 +138,92 @@ export function ProfilesPage() {
                 {!loading && (
                   <p className="yt-empty-sub">
                     {rows.length === 0
-                      ? 'Add a device-class profile (e.g. “Cisco IOS switch”).'
+                      ? 'Add a device-class profile (e.g. “Cisco Catalyst switch”).'
                       : 'Try a different search.'}
                   </p>
                 )}
               </div>
             ) : (
-              filtered.map((p) => {
-                const open = openTemplates === p.id;
-                return (
-                  <Fragment key={p.id}>
-                    <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
-                      <div className="ytable-cell">
-                        <span className="yt-name-txt">{p.name}</span>
-                      </div>
-                      <div className="ytable-cell">
-                        <CopyableId id={p.id} />
-                      </div>
-                      <div className="ytable-cell">
-                        <Button
-                          variant="ghost"
-                          onClick={() => setOpenTemplates((cur) => (cur === p.id ? null : p.id))}
-                        >
-                          {open ? 'Hide templates' : 'Templates'}
-                        </Button>
-                      </div>
-                      <div className="ytable-cell right">
-                        {authed && (
-                          <span className="ytable-actions">
-                            <IconButton title="Delete profile" danger onClick={() => setDeleting(p)}>
-                              <TrashIcon />
-                            </IconButton>
-                          </span>
+              groups.map((g) => (
+                <Fragment key={g.token}>
+                  <div className="profiles-group-head">
+                    <span className="profiles-group-label">{g.label}</span>
+                    <span className="profiles-group-count">{g.items.length}</span>
+                  </div>
+                  {g.items.map((p) => {
+                    const open = openTemplates === p.id;
+                    return (
+                      <Fragment key={p.id}>
+                        <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
+                          <div className="ytable-cell">
+                            <span className="yt-name-txt">{p.name}</span>
+                          </div>
+                          <div className="ytable-cell">
+                            {p.vendor ? p.vendor : <span className="muted">—</span>}
+                          </div>
+                          <div className="ytable-cell">
+                            <Button
+                              variant="ghost"
+                              onClick={() =>
+                                setOpenTemplates((cur) => (cur === p.id ? null : p.id))
+                              }
+                            >
+                              {open ? 'Hide templates' : 'Templates'}
+                            </Button>
+                          </div>
+                          <div className="ytable-cell right">
+                            {authed && (
+                              <span className="ytable-actions">
+                                <IconButton title="Edit profile" onClick={() => setEditing(p)}>
+                                  <EditIcon />
+                                </IconButton>
+                                <IconButton
+                                  title="Delete profile"
+                                  danger
+                                  onClick={() => setDeleting(p)}
+                                >
+                                  <TrashIcon />
+                                </IconButton>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {open && (
+                          <div className="crud-collection">
+                            <ProfileTemplates
+                              profileId={p.id}
+                              templates={templates}
+                              canEdit={authed}
+                            />
+                          </div>
                         )}
-                      </div>
-                    </div>
-                    {open && (
-                      <div className="crud-collection">
-                        <ProfileTemplates profileId={p.id} templates={templates} canEdit={authed} />
-                      </div>
-                    )}
-                  </Fragment>
-                );
-              })
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
+              ))
             )}
           </div>
         </>
       )}
 
       {adding && (
-        <AddProfileModal
+        <ProfileModal
+          mode="add"
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false);
+            load();
+          }}
+        />
+      )}
+      {editing && (
+        <ProfileModal
+          mode="edit"
+          profile={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
             load();
           }}
         />
@@ -183,9 +242,21 @@ export function ProfilesPage() {
   );
 }
 
-/** Create a profile (focused-editing modal — just a name). */
-function AddProfileModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [name, setName] = useState('');
+/** Add or edit a profile (focused-editing modal — name + role + vendor). */
+function ProfileModal({
+  mode,
+  profile,
+  onClose,
+  onDone,
+}: {
+  mode: 'add' | 'edit';
+  profile?: ProfileSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(profile?.name ?? '');
+  const [category, setCategory] = useState(profile?.category ?? 'generic-snmp');
+  const [vendor, setVendor] = useState(profile?.vendor ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -193,18 +264,20 @@ function AddProfileModal({ onClose, onDone }: { onClose: () => void; onDone: () 
     if (!name.trim()) return;
     setBusy(true);
     setError(null);
-    api
-      .createProfile(name.trim())
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add profile'));
-        setBusy(false);
-      });
+    const body = { name: name.trim(), category, vendor: vendor.trim() || null };
+    const call =
+      mode === 'edit' && profile
+        ? api.updateProfile(profile.id, body)
+        : api.createProfile(body).then(() => undefined);
+    call.then(onDone).catch((e: unknown) => {
+      setError(errMsg(e, 'failed to save profile'));
+      setBusy(false);
+    });
   };
 
   return (
     <Modal
-      title="Add device profile"
+      title={mode === 'edit' ? 'Edit device profile' : 'Add device profile'}
       onClose={onClose}
       footer={
         <>
@@ -212,7 +285,7 @@ function AddProfileModal({ onClose, onDone }: { onClose: () => void; onDone: () 
             Cancel
           </Button>
           <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            Add profile
+            {mode === 'edit' ? 'Save' : 'Add profile'}
           </Button>
         </>
       }
@@ -222,11 +295,31 @@ function AddProfileModal({ onClose, onDone }: { onClose: () => void; onDone: () 
           Name <RequiredMark />
         </label>
         <TextInput
-          placeholder="e.g. Cisco IOS switch"
+          placeholder="e.g. Cisco Catalyst switch"
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
+      </div>
+      <div className="modal-field-row">
+        <div className="modal-field">
+          <label className="modal-field-label">Role</label>
+          <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+            {PROFILE_CATEGORIES.map((c) => (
+              <option key={c.token} value={c.token}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="modal-field">
+          <label className="modal-field-label">Vendor</label>
+          <TextInput
+            placeholder="optional"
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+          />
+        </div>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>

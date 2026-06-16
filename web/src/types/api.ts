@@ -149,10 +149,20 @@ export interface UserSummary {
   enabled: boolean;
 }
 
-/** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). */
+/** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). Split by functional
+ *  `category` (role) × `vendor`-NOS family; `category` is the kebab-case `ProfileCategory` token. */
 export interface ProfileSummary {
   id: string;
   name: string;
+  category: string;
+  vendor: string | null;
+}
+
+/** Create/update-profile request body (`POST`/`PUT /api/v1/profiles`). */
+export interface ProfileInput {
+  name: string;
+  category?: string;
+  vendor?: string | null;
 }
 
 /** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */

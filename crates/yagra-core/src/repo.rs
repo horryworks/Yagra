@@ -18,11 +18,15 @@ use sqlx::Row;
 use uuid::Uuid;
 use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
-/// A device-class/profile row for the API (id + name).
+/// A device-class/profile row for the API (id + name + role/vendor metadata).
 #[derive(Debug, Clone, Serialize)]
 pub struct ProfileSummary {
     pub id: Uuid,
     pub name: String,
+    /// Functional role token (kebab-case `ProfileCategory`) — the UI's grouping key.
+    pub category: String,
+    /// Vendor label, if known (descriptive metadata only — never a TSDB label).
+    pub vendor: Option<String>,
 }
 
 /// One interface's stored metadata (from a table walk). Descriptive attributes only —
@@ -436,7 +440,7 @@ impl NodeRepo {
 
     /// All device-class profiles.
     pub async fn list_profiles(&self) -> anyhow::Result<Vec<ProfileSummary>> {
-        let rows = sqlx::query("SELECT id, name FROM profiles ORDER BY name")
+        let rows = sqlx::query("SELECT id, name, category, vendor FROM profiles ORDER BY name")
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -444,20 +448,50 @@ impl NodeRepo {
                 Ok(ProfileSummary {
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
+                    category: row.try_get("category")?,
+                    vendor: row.try_get("vendor")?,
                 })
             })
             .collect()
     }
 
     /// Create a profile; returns its id.
-    pub async fn create_profile(&self, name: &str) -> anyhow::Result<Uuid> {
+    pub async fn create_profile(
+        &self,
+        name: &str,
+        category: &str,
+        vendor: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO profiles (id, name) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO profiles (id, name, category, vendor) VALUES ($1, $2, $3, $4)")
             .bind(id)
             .bind(name)
+            .bind(category)
+            .bind(vendor)
             .execute(&self.pool)
             .await?;
         Ok(id)
+    }
+
+    /// Update a profile's name / category / vendor. Returns whether the row existed.
+    pub async fn update_profile(
+        &self,
+        id: Uuid,
+        name: &str,
+        category: &str,
+        vendor: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE profiles SET name = $2, category = $3, vendor = $4, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(category)
+        .bind(vendor)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// Delete a profile. Returns whether a row was removed.
@@ -571,10 +605,13 @@ impl NodeRepo {
             let profile_id = Uuid::from_u128(PROFILE_ID_BASE + i as u128);
             profile_id_by_name.insert(profile.name, profile_id);
             sqlx::query(
-                "INSERT INTO profiles (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO profiles (id, name, category, vendor) VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (id) DO NOTHING",
             )
             .bind(profile_id)
             .bind(profile.name)
+            .bind(profile.category.as_str())
+            .bind(profile.vendor)
             .execute(&self.pool)
             .await?;
             // Legacy cleanup: built-in profiles no longer carry direct OIDs (templates-only).
