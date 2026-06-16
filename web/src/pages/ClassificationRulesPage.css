@@ -4,28 +4,43 @@
 .classrules-match {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* Stacked cell: left-align under the header — do NOT inherit `.ytable-cell`'s center. */
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
   min-width: 0;
 }
 
+/* Each signature line is a fixed label-gutter grid, so the OID / sysDescr values line up in a
+   neat vertical column regardless of the chip width. */
 .classrules-sig {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
   font-size: var(--font-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* Small "OID" / "descr" chip prefixing each signature line. */
+/* Small "OID" / "descr" kind chip in the gutter. */
 .classrules-sig-kind {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
+  justify-self: start;
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: var(--font-2xs, var(--font-xs));
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* The matched value (OID prefix / sysDescr regex) — monospace, truncates with ellipsis. */
+.classrules-sig-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 /* Multi-field row in the add/edit modal (priority + maker + model). */

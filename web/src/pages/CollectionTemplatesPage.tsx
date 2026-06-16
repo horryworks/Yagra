@@ -128,17 +128,27 @@ export function CollectionTemplatesPage() {
                         <span className="yt-name-txt">{t.name}</span>
                       </div>
                       <div className="ytable-cell ellipsis">
-                        <span className="muted">
-                          {t.description ?? '—'} · {t.item_count} metrics
-                        </span>
+                        <span className="muted">{t.description ?? '—'}</span>
                       </div>
                       <div className="ytable-cell">
-                        <Button
-                          variant="ghost"
+                        <button
+                          type="button"
+                          className={`tmpl-metrics-toggle${open ? ' open' : ''}`}
+                          aria-expanded={open}
                           onClick={() => setOpenItems((cur) => (cur === t.id ? null : t.id))}
                         >
-                          {open ? 'Hide metrics' : 'Metrics'}
-                        </Button>
+                          {t.item_count} metrics
+                          <svg className="tmpl-metrics-chev" viewBox="0 0 12 12" aria-hidden="true">
+                            <path
+                              d="M4 2l4 4-4 4"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.4"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
                       </div>
                       <div className="ytable-cell right">
                         {authed && (
