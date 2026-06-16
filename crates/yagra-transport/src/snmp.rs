@@ -51,10 +51,12 @@ pub async fn snmp_get_v2c(
     Ok(samples)
 }
 
-/// Walk numeric table columns from `target` via GETBULK. Each column base yields one row
-/// per ifIndex; rows whose instance OID isn't exactly `base + <single sub-id>` are skipped
-/// (guards against multi-index tables we don't model). A per-column walk failure is logged
-/// and skipped. Counters are returned **raw** (rates derived at query time, ADR-012).
+/// Walk numeric table columns from `target` via GETBULK. Each column base yields one row per
+/// instance: a single trailing sub-identifier is the row key directly, while a multi-part index
+/// is folded to a synthetic key (see [`ifindex_of`]) so multi-index tables — vendor memory
+/// (HUAWEI-MEMORY-MIB `hwMemoryDevTable`), BGP4-MIB peers, … — are collected too. A per-column
+/// walk failure is logged and skipped. Counters are returned **raw** (rates derived at query
+/// time, ADR-012).
 pub async fn snmp_walk_v2c(
     target: IpAddr,
     community: &str,
@@ -133,15 +135,32 @@ async fn connect(
         .map_err(|e| TransportError::Io(format!("snmp connect {addr}: {e}")))
 }
 
-/// Extract the ifIndex of an instance OID relative to its column `base`: the instance must
-/// be `base` followed by exactly one sub-identifier. Returns `None` otherwise (a different
-/// column, or a multi-index leaf we don't model).
+/// Row key for an instance OID relative to its column `base`. A single trailing sub-identifier
+/// (the common case — ifIndex, entPhysicalIndex, …) is used directly. A **multi-part** instance
+/// — a multi-index table such as HUAWEI-MEMORY-MIB `hwMemoryDevTable` (`.frame.slot.cpu`) or
+/// BGP4-MIB peers (`.a.b.c.d`) — is folded into a stable synthetic key so the row is still
+/// collected (node-level health aggregates over rows, so the key only needs to be distinct, not
+/// meaningful). Returns `None` when the OID isn't under `base`, or is `base` itself (no instance).
 fn ifindex_of(oid: &ObjectIdentifier, base: &ObjectIdentifier) -> Option<u32> {
     let tail = oid.relative_to(base)?;
     match tail.as_slice() {
+        [] => None,
         [ifindex] => Some(*ifindex),
-        _ => None,
+        multi => Some(fold_subids(multi)),
     }
+}
+
+/// Fold a multi-part instance index into a stable `u32` row key (FNV-1a over the sub-ids). Used
+/// only for multi-index tables, where the key just needs to be deterministic and collision-rare.
+fn fold_subids(subids: &[u32]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &n in subids {
+        for b in n.to_be_bytes() {
+            h ^= u32::from(b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+    }
+    h
 }
 
 /// Map an SNMP string-ish value to a Rust `String`: `OCTET STRING` (lossy UTF-8) or
@@ -197,16 +216,22 @@ mod tests {
     }
 
     #[test]
-    fn ifindex_extracted_only_for_single_trailing_subid() {
+    fn ifindex_uses_single_subid_directly_and_folds_multi_index() {
         let base = parse_oid("1.3.6.1.2.1.31.1.1.1.6").unwrap();
-        // base + .7 → ifIndex 7.
+        // base + .7 → ifIndex 7 (single trailing sub-id, used as-is).
         let instance = parse_oid("1.3.6.1.2.1.31.1.1.1.6.7").unwrap();
         assert_eq!(ifindex_of(&instance, &base), Some(7));
-        // The column base itself has no row index.
+        // The column base itself has no instance.
         assert_eq!(ifindex_of(&base, &base), None);
-        // A two-sub-id leaf (a table we don't model) is skipped, not mis-parsed.
-        let multi = parse_oid("1.3.6.1.2.1.31.1.1.1.6.7.2").unwrap();
-        assert_eq!(ifindex_of(&multi, &base), None);
+        // A multi-part instance (multi-index table, e.g. hwMemoryDevTable .1.0.0) folds to a
+        // stable non-None key, and two distinct instances fold to distinct keys.
+        let multi_a = parse_oid("1.3.6.1.2.1.31.1.1.1.6.1.0.0").unwrap();
+        let multi_b = parse_oid("1.3.6.1.2.1.31.1.1.1.6.2.0.0").unwrap();
+        let ka = ifindex_of(&multi_a, &base);
+        let kb = ifindex_of(&multi_b, &base);
+        assert!(ka.is_some() && kb.is_some());
+        assert_ne!(ka, kb);
+        assert_eq!(ifindex_of(&multi_a, &base), ka, "folding is deterministic");
         // An OID under a different column is not relative to this base.
         let other = parse_oid("1.3.6.1.2.1.2.2.1.8.7").unwrap();
         assert_eq!(ifindex_of(&other, &base), None);
