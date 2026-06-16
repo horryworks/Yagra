@@ -4,9 +4,10 @@
 // new device type is taught here as data, not a code change. CRUD against /classification-rules;
 // ManageConfig-gated (503 in skeleton surfaced). Data-table standard v2: toolbar + modal-add.
 //
-// Rules are evaluated by ascending priority; a sysObjectID prefix match always wins over a
-// sysDescr keyword (the backend tries all prefixes before any regex), so the authoritative OID
-// outranks free-text even when a keyword rule has a lower priority number.
+// A rule matches when all of its set matchers match: a sysObjectID prefix AND/or a sysDescr
+// regex. So a single rule can mean "this vendor AND this NOS" (e.g. Cisco's 9. prefix + an
+// "ASA" keyword). Prefix-bearing rules outrank sysDescr-only ones; within that, lower priority
+// wins — so a vendor's NOS-specific rules can precede its prefix-only catch-all.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -335,7 +336,10 @@ function RuleModal({
           value={prefix}
           onChange={(e) => setPrefix(e.target.value)}
         />
-        <FieldHint>Authoritative — matched first. End with a dot so 1.3…9. won't also match …91.</FieldHint>
+        <FieldHint>
+          Authoritative — outranks sysDescr. End with a dot so 1.3…9. won't also match …91.
+          Pair with a sysDescr regex to split one vendor by NOS.
+        </FieldHint>
       </div>
       <div className="modal-field">
         <label className="modal-field-label">sysDescr regex</label>
@@ -347,7 +351,7 @@ function RuleModal({
         />
         <FieldHint error={!hasMatcher}>
           {hasMatcher
-            ? 'Fallback when no sysObjectID prefix matches.'
+            ? 'With a prefix set, both must match (vendor + NOS); on its own, it matches sysDescr directly.'
             : 'Provide a sysObjectID prefix and/or a sysDescr regex.'}
         </FieldHint>
       </div>

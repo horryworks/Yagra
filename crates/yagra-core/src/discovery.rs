@@ -2,7 +2,9 @@
 //!
 //! Turns a scan request into a [`DiscoveryJob`] on the bus (the poller does the actual ICMP /
 //! SNMP sweep), correlates the [`DiscoveryResult`]s back by `scan_id`, and classifies each
-//! found device into a suggested device profile ([`yagra_discovery::classify`]). The poller
+//! found device into a suggested device profile (via the core [`Classifier`](crate::classification)
+//! — authoritative `sysObjectID` rules; vendor/model are pre-filled from `yagra_discovery::identify`).
+//! The poller
 //! publishes **cumulative** partial results as it sweeps, so a scan's status carries live
 //! progress (probed/total + the address currently being probed). Scan state is held **in
 //! memory** — scans are short-lived and core is single-instance today (Redis-backed state is

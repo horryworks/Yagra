@@ -32,7 +32,7 @@ pub use collection::{
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
 pub use metric::{MetricKind, SeriesKey};
 pub use node::Node;
-pub use profile::Profile;
+pub use profile::{Profile, ProfileCategory};
 pub use rbac::{Permission, Principal, Role, Scope};
 pub use severity::Severity;
 pub use state::NodeState;

@@ -17,6 +17,7 @@
 //! [`crate::thresholds::resolve_effective`]).
 
 use crate::metric::MetricKind;
+use crate::profile::ProfileCategory;
 use crate::thresholds::ScopeLevel;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -210,11 +211,16 @@ pub struct BuiltinTemplate {
     pub items: Vec<CollectionItem>,
 }
 
-/// A built-in device profile: a name and the template names it references (no raw OIDs).
+/// A built-in device profile: a name, its functional category + vendor, and the template
+/// names it references (it holds no raw OIDs — templates do).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltinProfile {
     /// Display name shown in Device profiles.
     pub name: &'static str,
+    /// Functional role — the primary split axis / UI grouping.
+    pub category: ProfileCategory,
+    /// Vendor label (descriptive metadata only — never a TSDB label).
+    pub vendor: Option<&'static str>,
     /// Names of the [`builtin_templates`] this profile attaches (empty ⇒ ICMP-only).
     pub templates: Vec<&'static str>,
 }
@@ -240,13 +246,46 @@ fn vendor_scalar(metric: &str, oid: &str) -> CollectionItem {
     }
 }
 
-/// Standard SNMP template name — the cross-vendor system + interface set most profiles use.
+// ── Template names (referenced by both templates and profiles below) ────────────────
+// Three tiers: role-base (vendor-neutral standard MIBs), vendor-health (per-NOS CPU/mem/
+// temp), and role-KPI (functional: firewall sessions etc.). A profile composes one base +
+// (optionally) a vendor-health + a role-KPI template. Every name is unique.
+
+/// Standard SNMP template name — the cross-vendor system + interface set every SNMP profile
+/// builds on (sysUpTime + interface counters/errors/status + generic `hrProcessorLoad`).
 pub const TEMPLATE_STANDARD_SNMP: &str = "Standard SNMP";
 
+// Role-base (vendor-neutral).
+const T_HOST_RESOURCES: &str = "Host resources";
+const T_ENTITY_SENSORS: &str = "Entity sensors";
+const T_BGP: &str = "BGP peers";
+const T_UPS: &str = "UPS (RFC1628)";
+const T_PRINTER: &str = "Printer (Printer-MIB)";
+
+// Vendor-health (per NOS).
+const T_CISCO_IOS: &str = "Cisco IOS/IOS-XE health";
+const T_CISCO_NXOS: &str = "Cisco NX-OS health";
+const T_CISCO_XR: &str = "Cisco IOS-XR health";
+const T_CISCO_ASA: &str = "Cisco ASA health";
+const T_JUNIPER: &str = "Juniper Junos health";
+const T_HUAWEI: &str = "Huawei VRP health";
+const T_FORTINET: &str = "Fortinet FortiOS health";
+const T_MIKROTIK: &str = "MikroTik RouterOS health";
+const T_NETSNMP: &str = "Linux Net-SNMP (UCD)";
+
+// Role-KPI (functional).
+const T_ASA_SESSIONS: &str = "Cisco ASA sessions";
+
 /// The built-in collection templates shipped with Yagra (seeded on startup).
+///
+/// Three tiers (see the name constants above). Vendor OIDs are best-effort common columns
+/// walked per-entity; an OID a device lacks is simply skipped by the poller. Long-tail
+/// vendors carry only the standard-MIB templates — vendor OIDs are added later as data via
+/// the template CRUD, no code change.
 #[must_use]
 pub fn builtin_templates() -> Vec<BuiltinTemplate> {
     vec![
+        // ── Role-base (vendor-neutral standard MIBs) ──
         BuiltinTemplate {
             name: TEMPLATE_STANDARD_SNMP,
             description:
@@ -254,40 +293,119 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
             items: builtin_catalog(),
         },
         BuiltinTemplate {
-            name: "Cisco device health",
-            description: "Cisco IOS CPU (cpmCPUTotal5min) and memory-pool used/free.",
+            name: T_HOST_RESOURCES,
+            description:
+                "HOST-RESOURCES-MIB storage used/size and process count (servers, hosts, NAS).",
+            items: vec![
+                vendor_table("hr_storage_used", "1.3.6.1.2.1.25.2.3.1.6"),
+                vendor_table("hr_storage_size", "1.3.6.1.2.1.25.2.3.1.5"),
+                vendor_scalar("hr_system_processes", "1.3.6.1.2.1.25.1.6.0"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_ENTITY_SENSORS,
+            description: "ENTITY-SENSOR-MIB physical sensor values (temperature/fan/voltage).",
+            items: vec![vendor_table("ent_sensor_value", "1.3.6.1.2.1.99.1.1.1.4")],
+        },
+        BuiltinTemplate {
+            name: T_BGP,
+            description: "BGP4-MIB per-peer session and admin state (routers).",
+            items: vec![
+                vendor_table("bgp_peer_state", "1.3.6.1.2.1.15.3.1.2"),
+                vendor_table("bgp_peer_admin_status", "1.3.6.1.2.1.15.3.1.3"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_UPS,
+            description:
+                "UPS-MIB (RFC1628) battery status, runtime/charge remaining, and output load.",
+            items: vec![
+                vendor_scalar("ups_battery_status", "1.3.6.1.2.1.33.1.2.1.0"),
+                vendor_scalar("ups_minutes_remaining", "1.3.6.1.2.1.33.1.2.3.0"),
+                vendor_scalar("ups_charge_remaining_pct", "1.3.6.1.2.1.33.1.2.4.0"),
+                vendor_table("ups_output_load_pct", "1.3.6.1.2.1.33.1.4.4.1.5"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_PRINTER,
+            description: "Printer-MIB marker page count and alert severity (network printers).",
+            items: vec![
+                vendor_table("prt_marker_life_count", "1.3.6.1.2.1.43.10.2.1.4"),
+                vendor_table("prt_alert_severity", "1.3.6.1.2.1.43.18.1.1.2"),
+            ],
+        },
+        // ── Vendor-health (per NOS) ──
+        BuiltinTemplate {
+            name: T_CISCO_IOS,
+            description: "Cisco IOS/IOS-XE CPU (cpmCPUTotal5minRev), memory-pool used/free, temp.",
             items: vec![
                 vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
                 vendor_table("cisco_mem_used", "1.3.6.1.4.1.9.9.48.1.1.1.5"),
                 vendor_table("cisco_mem_free", "1.3.6.1.4.1.9.9.48.1.1.1.6"),
+                vendor_table("cisco_env_temp", "1.3.6.1.4.1.9.9.13.1.3.1.3"),
             ],
         },
         BuiltinTemplate {
-            name: "Huawei device health",
-            description: "Huawei VRP entity CPU and memory usage (hwEntityCpu/MemUsage).",
+            name: T_CISCO_NXOS,
+            description: "Cisco NX-OS CPU and memory utilization % (CISCO-SYSTEM-EXT-MIB).",
             items: vec![
-                vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
-                vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
+                vendor_scalar("nxos_cpu_util", "1.3.6.1.4.1.9.9.305.1.1.1.0"),
+                vendor_scalar("nxos_mem_util", "1.3.6.1.4.1.9.9.305.1.1.2.0"),
             ],
         },
         BuiltinTemplate {
-            name: "Juniper device health",
-            description: "Juniper jnxOperating CPU (1-min) and buffer/memory utilization %.",
+            name: T_CISCO_XR,
+            description: "Cisco IOS-XR CPU (cpmCPUTotal5minRev) and enhanced memory-pool used.",
+            items: vec![
+                vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
+                vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_CISCO_ASA,
+            description: "Cisco ASA CPU (cpmCPUTotal5minRev) and enhanced memory-pool used.",
+            items: vec![
+                vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
+                vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_JUNIPER,
+            description: "Juniper jnxOperating CPU (1-min), buffer utilization %, and temperature.",
             items: vec![
                 vendor_table("juniper_cpu_1min", "1.3.6.1.4.1.2636.3.1.13.1.8"),
                 vendor_table("juniper_buffer_util", "1.3.6.1.4.1.2636.3.1.13.1.11"),
+                vendor_table("juniper_temp", "1.3.6.1.4.1.2636.3.1.13.1.7"),
             ],
         },
         BuiltinTemplate {
-            name: "Fortinet device health",
-            description: "FortiGate system CPU and memory usage % (fgSysCpu/MemUsage scalars).",
+            name: T_HUAWEI,
+            description: "Huawei VRP entity CPU, memory usage, and temperature (hwEntity*).",
+            items: vec![
+                vendor_table("huawei_cpu_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5"),
+                vendor_table("huawei_mem_usage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7"),
+                vendor_table("huawei_temp", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_FORTINET,
+            description: "FortiGate system CPU/memory usage % and active session count.",
             items: vec![
                 vendor_scalar("fortinet_cpu_usage", "1.3.6.1.4.1.12356.101.4.1.3.0"),
                 vendor_scalar("fortinet_mem_usage", "1.3.6.1.4.1.12356.101.4.1.4.0"),
+                vendor_scalar("fortinet_sessions", "1.3.6.1.4.1.12356.101.4.1.8.0"),
             ],
         },
         BuiltinTemplate {
-            name: "Net-SNMP host",
+            name: T_MIKROTIK,
+            description: "MikroTik RouterOS processor temperature and voltage (mtxrHealth).",
+            items: vec![
+                vendor_scalar("mikrotik_cpu_temp", "1.3.6.1.4.1.14988.1.1.3.10.0"),
+                vendor_scalar("mikrotik_voltage", "1.3.6.1.4.1.14988.1.1.3.8.0"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_NETSNMP,
             description: "Linux/Unix Net-SNMP (UCD) CPU idle % and real-memory total/available.",
             items: vec![
                 vendor_scalar("ucd_cpu_idle_pct", "1.3.6.1.4.1.2021.11.11.0"),
@@ -295,76 +413,341 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 vendor_scalar("ucd_mem_avail_kb", "1.3.6.1.4.1.2021.4.6.0"),
             ],
         },
+        // ── Role-KPI (functional) ──
+        BuiltinTemplate {
+            name: T_ASA_SESSIONS,
+            description: "Cisco ASA current connection count (CISCO-FIREWALL-MIB).",
+            items: vec![vendor_table(
+                "asa_current_connections",
+                "1.3.6.1.4.1.9.9.147.1.2.2.2.1.5",
+            )],
+        },
     ]
 }
 
-/// The built-in device profiles and the templates each references.
+/// The built-in device profiles: split by **functional role (category) × vendor-NOS family**,
+/// each composing reusable templates (role-base + optional vendor-health + role-KPI). The
+/// catalog is rebuilt cleanly (the migration reseeds it), so unlike before there is no
+/// append-only constraint — order is by category for readability. Major vendors carry real
+/// vendor-health/role-KPI OIDs; long-tail devices carry the standard-MIB base, with vendor OIDs
+/// added later as data. Every SNMP profile attaches "Standard SNMP" so it graphs out of the box.
 ///
-/// **Append-only:** the first four profiles have stable seed ids (a node may already be bound
-/// to one) — never reorder or rename them; add new device classes at the end. Every SNMP
-/// profile attaches "Standard SNMP" (system uptime + interface counters/errors/status + generic
-/// `hrProcessorLoad` CPU), which works on virtually any agent; vendors with reliable vendor-MIB
-/// CPU/memory OIDs also attach a vendor-health template. This is what makes discovery's profile
-/// auto-suggestion useful out of the box across a broad range of network devices.
+/// **Stable name required:** "Generic SNMP" is the classifier's SNMP fallback (looked up by
+/// name) and "Generic ping" the ICMP-only default — keep both names.
 #[must_use]
 pub fn builtin_profiles() -> Vec<BuiltinProfile> {
-    // Most profiles need only the cross-vendor standard set.
-    let std_only = |name: &'static str| BuiltinProfile {
+    let prof = |name: &'static str,
+                category: ProfileCategory,
+                vendor: Option<&'static str>,
+                templates: Vec<&'static str>| BuiltinProfile {
         name,
-        templates: vec![TEMPLATE_STANDARD_SNMP],
+        category,
+        vendor,
+        templates,
     };
+    use ProfileCategory as C;
     vec![
-        // ── Stable originals (indices 0–3; do not reorder/rename) ──
-        // ICMP-only: no templates (for devices without a usable SNMP agent).
-        BuiltinProfile {
-            name: "Generic ping",
-            templates: Vec::new(),
-        },
-        BuiltinProfile {
-            name: "Generic SNMP",
-            templates: vec![TEMPLATE_STANDARD_SNMP],
-        },
-        BuiltinProfile {
-            name: "Cisco IOS router",
-            templates: vec![TEMPLATE_STANDARD_SNMP, "Cisco device health"],
-        },
-        BuiltinProfile {
-            name: "Huawei USG firewall",
-            templates: vec![TEMPLATE_STANDARD_SNMP, "Huawei device health"],
-        },
-        // ── Appended device classes (vendor-health where reliably available) ──
-        BuiltinProfile {
-            name: "Juniper router/switch",
-            templates: vec![TEMPLATE_STANDARD_SNMP, "Juniper device health"],
-        },
-        BuiltinProfile {
-            name: "Fortinet FortiGate",
-            templates: vec![TEMPLATE_STANDARD_SNMP, "Fortinet device health"],
-        },
-        BuiltinProfile {
-            name: "Linux server (Net-SNMP)",
-            templates: vec![TEMPLATE_STANDARD_SNMP, "Net-SNMP host"],
-        },
-        std_only("Arista switch"),
-        std_only("MikroTik RouterOS"),
-        std_only("Ubiquiti device"),
-        std_only("Palo Alto firewall"),
-        std_only("Aruba / HPE switch"),
-        std_only("Dell switch"),
-        std_only("Extreme Networks switch"),
-        std_only("Brocade / Ruckus device"),
-        std_only("Check Point firewall"),
-        std_only("F5 BIG-IP"),
-        std_only("Citrix ADC (NetScaler)"),
-        std_only("Nokia / Alcatel-Lucent router"),
-        std_only("Zyxel device"),
-        std_only("NETGEAR switch"),
-        std_only("D-Link switch"),
-        std_only("TP-Link device"),
-        std_only("Windows server"),
-        std_only("VMware ESXi host"),
-        std_only("Synology NAS"),
-        std_only("APC UPS"),
+        // ── Routers ──
+        prof(
+            "Cisco IOS/IOS-XE router",
+            C::Router,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_IOS, T_ENTITY_SENSORS, T_BGP],
+        ),
+        prof(
+            "Cisco IOS-XR router",
+            C::Router,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_XR, T_ENTITY_SENSORS, T_BGP],
+        ),
+        prof(
+            "Juniper MX router",
+            C::Router,
+            Some("Juniper"),
+            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS, T_BGP],
+        ),
+        prof(
+            "Huawei NE/AR router",
+            C::Router,
+            Some("Huawei"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_ENTITY_SENSORS, T_BGP],
+        ),
+        prof(
+            "Nokia SR router",
+            C::Router,
+            Some("Nokia"),
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_BGP],
+        ),
+        prof(
+            "MikroTik RouterOS",
+            C::Router,
+            Some("MikroTik"),
+            vec![TEMPLATE_STANDARD_SNMP, T_MIKROTIK],
+        ),
+        prof(
+            "Generic router",
+            C::Router,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_BGP],
+        ),
+        // ── Switches (L3 / L2) ──
+        prof(
+            "Cisco Catalyst switch (IOS/IOS-XE)",
+            C::L3Switch,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_IOS, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Cisco Nexus switch (NX-OS)",
+            C::L3Switch,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_NXOS, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Arista EOS switch",
+            C::L3Switch,
+            Some("Arista"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Juniper EX/QFX switch",
+            C::L3Switch,
+            Some("Juniper"),
+            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Huawei CloudEngine switch",
+            C::L3Switch,
+            Some("Huawei"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Aruba/HPE switch",
+            C::L3Switch,
+            Some("Aruba/HPE"),
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Dell switch",
+            C::L3Switch,
+            Some("Dell"),
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Extreme EXOS switch",
+            C::L3Switch,
+            Some("Extreme Networks"),
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Brocade / Ruckus switch",
+            C::L2Switch,
+            Some("Brocade"),
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Ubiquiti switch/AP",
+            C::L2Switch,
+            Some("Ubiquiti"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "NETGEAR switch",
+            C::L2Switch,
+            Some("NETGEAR"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "D-Link switch",
+            C::L2Switch,
+            Some("D-Link"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "TP-Link switch",
+            C::L2Switch,
+            Some("TP-Link"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "Zyxel switch",
+            C::L2Switch,
+            Some("Zyxel"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "Generic switch",
+            C::L2Switch,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS],
+        ),
+        // ── Firewalls ──
+        prof(
+            "Cisco ASA firewall",
+            C::Firewall,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_ASA, T_ASA_SESSIONS],
+        ),
+        prof(
+            "Cisco Firepower (FTD)",
+            C::Firewall,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Fortinet FortiGate",
+            C::Firewall,
+            Some("Fortinet"),
+            vec![TEMPLATE_STANDARD_SNMP, T_FORTINET],
+        ),
+        prof(
+            "Palo Alto PAN-OS firewall",
+            C::Firewall,
+            Some("Palo Alto"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Check Point firewall",
+            C::Firewall,
+            Some("Check Point"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Juniper SRX firewall",
+            C::Firewall,
+            Some("Juniper"),
+            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS],
+        ),
+        prof(
+            "Huawei USG firewall",
+            C::Firewall,
+            Some("Huawei"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI],
+        ),
+        prof(
+            "Generic firewall",
+            C::Firewall,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // ── Wireless ──
+        prof(
+            "Cisco wireless controller",
+            C::WirelessController,
+            Some("Cisco"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "Aruba wireless controller",
+            C::WirelessController,
+            Some("Aruba"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "Generic wireless AP",
+            C::WirelessAp,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        // ── Load balancers / ADC ──
+        prof(
+            "F5 BIG-IP",
+            C::LoadBalancer,
+            Some("F5"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Citrix ADC (NetScaler)",
+            C::LoadBalancer,
+            Some("Citrix"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Generic load balancer",
+            C::LoadBalancer,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // ── Servers ──
+        prof(
+            "Linux server (Net-SNMP)",
+            C::Server,
+            Some("Linux"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_NETSNMP],
+        ),
+        prof(
+            "Windows server",
+            C::Server,
+            Some("Microsoft"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Unix server",
+            C::Server,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "Generic server",
+            C::Server,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // ── Hypervisors ──
+        prof(
+            "VMware ESXi host",
+            C::Hypervisor,
+            Some("VMware"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // ── Storage / NAS ──
+        prof(
+            "Synology NAS",
+            C::Storage,
+            Some("Synology"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "QNAP NAS",
+            C::Storage,
+            Some("QNAP"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        prof(
+            "NetApp / generic storage",
+            C::Storage,
+            Some("NetApp"),
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // ── Power (UPS / PDU) ──
+        prof(
+            "APC UPS",
+            C::Power,
+            Some("APC"),
+            vec![TEMPLATE_STANDARD_SNMP, T_UPS],
+        ),
+        prof(
+            "Generic UPS (RFC1628)",
+            C::Power,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_UPS],
+        ),
+        prof("Generic PDU", C::Power, None, vec![TEMPLATE_STANDARD_SNMP]),
+        // ── Printers ──
+        prof(
+            "Network printer",
+            C::Printer,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP, T_PRINTER],
+        ),
+        // ── Generic / fallback (keep these names — classifier looks them up) ──
+        prof(
+            "Generic SNMP",
+            C::GenericSnmp,
+            None,
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof("Generic ping", C::PingOnly, None, Vec::new()),
     ]
 }
 
@@ -480,10 +863,10 @@ mod tests {
             && i.metric_kind == MetricKind::Counter));
 
         // Vendor templates carry only their extras (not the generic set).
-        let cisco = &by_name("Cisco device health").items;
+        let cisco = &by_name("Cisco IOS/IOS-XE health").items;
         assert!(cisco.iter().any(|i| i.metric_name == "cisco_cpu_5min"));
         assert!(!cisco.iter().any(|i| i.metric_name == "if_hc_in_octets"));
-        assert!(by_name("Huawei device health")
+        assert!(by_name("Huawei VRP health")
             .items
             .iter()
             .any(|i| i.metric_name == "huawei_cpu_usage"));
@@ -492,29 +875,22 @@ mod tests {
     #[test]
     fn builtin_profiles_reference_existing_templates() {
         let profiles = builtin_profiles();
-        let names: Vec<&str> = profiles.iter().map(|p| p.name).collect();
-        // The first four have stable seed ids — they must stay first and unchanged (newer
-        // device classes are appended after them).
-        assert_eq!(
-            &names[..4],
-            &[
-                "Generic ping",
-                "Generic SNMP",
-                "Cisco IOS router",
-                "Huawei USG firewall"
-            ]
-        );
-        let by_name = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+        let by_name = |n: &str| profiles.iter().find(|p| p.name == n);
 
-        assert!(by_name("Generic ping").templates.is_empty());
-        assert_eq!(
-            by_name("Generic SNMP").templates,
-            vec![TEMPLATE_STANDARD_SNMP]
+        // The classifier resolves these two by name — they must stay present.
+        assert!(
+            by_name("Generic ping").is_some_and(|p| p.templates.is_empty()),
+            "Generic ping must exist and be ICMP-only"
         );
         assert_eq!(
-            by_name("Cisco IOS router").templates,
-            vec![TEMPLATE_STANDARD_SNMP, "Cisco device health"]
+            by_name("Generic SNMP").map(|p| p.templates.clone()),
+            Some(vec![TEMPLATE_STANDARD_SNMP])
         );
+        // A representative split profile composes its vendor-health template.
+        assert!(by_name("Cisco Catalyst switch (IOS/IOS-XE)")
+            .unwrap()
+            .templates
+            .contains(&T_CISCO_IOS));
 
         // Every referenced template actually exists.
         let template_names: std::collections::BTreeSet<&str> =
@@ -524,6 +900,26 @@ mod tests {
                 assert!(
                     template_names.contains(t),
                     "{} references unknown template {t}",
+                    p.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_profile_has_templates_except_ping_only() {
+        for p in builtin_profiles() {
+            if p.category == ProfileCategory::PingOnly {
+                assert!(p.templates.is_empty(), "{} should be ICMP-only", p.name);
+            } else {
+                assert!(
+                    !p.templates.is_empty(),
+                    "{} (SNMP) must attach at least one template",
+                    p.name
+                );
+                assert!(
+                    p.templates.contains(&TEMPLATE_STANDARD_SNMP),
+                    "{} must build on the standard base",
                     p.name
                 );
             }

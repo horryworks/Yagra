@@ -33,6 +33,7 @@ import type {
   NodeSummary,
   NotificationChannel,
   ProfileSummary,
+  ProfileInput,
   Role,
   RoleMatrix,
   RoutingRule,
@@ -286,9 +287,13 @@ export const api = {
   /** Device-class profiles. */
   listProfiles: (): Promise<ProfileSummary[]> => request('/profiles'),
 
-  /** Create a profile. */
-  createProfile: (name: string): Promise<{ id: string }> =>
-    request('/profiles', jsonBody('POST', { name })),
+  /** Create a profile (name + optional category/vendor). */
+  createProfile: (body: ProfileInput): Promise<{ id: string }> =>
+    request('/profiles', jsonBody('POST', body)),
+
+  /** Update a profile's name / category / vendor. */
+  updateProfile: (id: string, body: ProfileInput): Promise<void> =>
+    request(`/profiles/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
 
   /** Delete a profile. */
   deleteProfile: (id: string): Promise<void> =>
