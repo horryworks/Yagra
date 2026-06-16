@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildNodeTree, isSelfOrDescendant } from './nodeTree';
-import type { NodeGroup, NodeSummary } from '../types/api';
+import {
+  buildNodeTree,
+  descendantNodes,
+  groupOptions,
+  groupPath,
+  isSelfOrDescendant,
+  tallyStates,
+} from './nodeTree';
+import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
 
 const group = (
   id: string,
@@ -20,11 +27,12 @@ const node = (
   name: string,
   groupId: string | null,
   sort_order = 0,
+  state: NodeState = 'ok',
 ): NodeSummary => ({
   id,
   name,
   address: '10.0.0.1',
-  state: 'ok',
+  state,
   vendor: null,
   model: null,
   group_id: groupId,
@@ -67,6 +75,90 @@ describe('buildNodeTree', () => {
     const tree = buildNodeTree(groups, nodes);
     expect(tree.roots.map((g) => g.name)).toEqual(['Zeta', 'Alpha']);
     expect(tree.ungrouped.map((n) => n.name)).toEqual(['zzz', 'aaa']);
+  });
+});
+
+describe('descendantNodes', () => {
+  it('gathers a group’s own nodes plus those of every descendant group', () => {
+    const groups = [
+      group('tok', 'Tokyo'),
+      group('core', 'Core', 'tok'),
+      group('dist', 'Distribution', 'tok'),
+    ];
+    const nodes = [
+      node('n1', 'core-1', 'core'),
+      node('n2', 'core-2', 'core'),
+      node('n3', 'dist-1', 'dist'),
+      node('n4', 'direct', 'tok'), // a node directly on the parent group
+      node('n5', 'elsewhere', null),
+    ];
+    const tree = buildNodeTree(groups, nodes);
+    const tokyo = tree.roots[0];
+    expect(descendantNodes(tokyo).map((n) => n.id).sort()).toEqual(['n1', 'n2', 'n3', 'n4']);
+    const core = tokyo.children.find((c) => c.id === 'core')!;
+    expect(descendantNodes(core).map((n) => n.id)).toEqual(['n1', 'n2']);
+  });
+});
+
+describe('tallyStates', () => {
+  it('counts every state and totals the problem (need-attention) states', () => {
+    const nodes = [
+      node('a', 'a', null, 0, 'ok'),
+      node('b', 'b', null, 0, 'ok'),
+      node('c', 'c', null, 0, 'warning'),
+      node('d', 'd', null, 0, 'critical'),
+      node('e', 'e', null, 0, 'unreachable'),
+      node('f', 'f', null, 0, 'maintenance'),
+      node('g', 'g', null, 0, 'unknown'),
+    ];
+    const t = tallyStates(nodes);
+    expect(t.total).toBe(7);
+    expect(t.counts.ok).toBe(2);
+    expect(t.counts.warning).toBe(1);
+    expect(t.counts.critical).toBe(1);
+    expect(t.counts.unreachable).toBe(1);
+    expect(t.counts.maintenance).toBe(1);
+    expect(t.counts.unknown).toBe(1);
+    // warning + critical + unreachable — maintenance/unknown are not "problems".
+    expect(t.needAttention).toBe(3);
+  });
+
+  it('is all-zero for an empty set', () => {
+    const t = tallyStates([]);
+    expect(t.total).toBe(0);
+    expect(t.needAttention).toBe(0);
+    expect(t.counts.ok).toBe(0);
+  });
+});
+
+describe('groupPath', () => {
+  const groups = [group('a', 'Tokyo'), group('b', 'Edge', 'a'), group('c', 'Firewall', 'b')];
+
+  it('returns the ancestor chain from the root down to the group', () => {
+    expect(groupPath(groups, 'c')).toEqual(['Tokyo', 'Edge', 'Firewall']);
+    expect(groupPath(groups, 'a')).toEqual(['Tokyo']);
+  });
+
+  it('returns an empty path for a null or unknown id', () => {
+    expect(groupPath(groups, null)).toEqual([]);
+    expect(groupPath(groups, 'missing')).toEqual([]);
+  });
+});
+
+describe('groupOptions', () => {
+  it('flattens the hierarchy into depth-indented, name-sorted options', () => {
+    const groups = [
+      group('a', 'Tokyo'),
+      group('b', 'Osaka'),
+      group('a1', 'Edge', 'a'),
+      group('a2', 'Core', 'a'),
+    ];
+    const opts = groupOptions(groups);
+    // Top-level groups name-sorted, each parent's children following it, indented one level
+    // (the indent uses non-breaking spaces so HTML <option> leading space isn't collapsed).
+    expect(opts.map((o) => o.label.trim())).toEqual(['Osaka', 'Tokyo', 'Core', 'Edge']);
+    const indent = (s: string) => s.length - s.trimStart().length;
+    expect(opts.map((o) => indent(o.label))).toEqual([0, 0, 2, 2]);
   });
 });
 

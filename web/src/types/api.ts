@@ -369,6 +369,8 @@ export interface NodeDetail {
   /** Descriptive maker/model, editable from the node detail. */
   vendor: string | null;
   model: string | null;
+  /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
+  group_id: string | null;
 }
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).
