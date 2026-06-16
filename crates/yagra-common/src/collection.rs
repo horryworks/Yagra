@@ -275,6 +275,7 @@ const T_NETSNMP: &str = "Linux Net-SNMP (UCD)";
 
 // Role-KPI (functional).
 const T_ASA_SESSIONS: &str = "Cisco ASA sessions";
+const T_HUAWEI_USG_SESSIONS: &str = "Huawei USG sessions";
 
 /// The built-in collection templates shipped with Yagra (seeded on startup).
 ///
@@ -427,6 +428,23 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 "asa_current_connections",
                 "1.3.6.1.4.1.9.9.147.1.2.2.2.1.5",
             )],
+        },
+        BuiltinTemplate {
+            name: T_HUAWEI_USG_SESSIONS,
+            description: "Huawei USG firewall current total session count and session setup rate \
+                 (HUAWEI-SECURITY-STAT-MIB).",
+            // Both are gauges, not counters: the MIB types them Counter64 but they are
+            // instantaneous (rise and fall), so they're stored as-is with no rate() at query time.
+            items: vec![
+                vendor_table(
+                    "huawei_usg_total_sessions",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.4",
+                ),
+                vendor_table(
+                    "huawei_usg_session_setup_rate",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.3",
+                ),
+            ],
         },
     ]
 }
@@ -628,7 +646,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Huawei USG firewall",
             C::Firewall,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI],
+            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_HUAWEI_USG_SESSIONS],
         ),
         prof(
             "Generic firewall",
@@ -901,6 +919,20 @@ mod tests {
             .iter()
             .any(|i| i.metric_name == "huawei_mem_free" && i.metric_kind == MetricKind::Gauge));
         assert!(!huawei.iter().any(|i| i.metric_name == "huawei_mem_size"));
+
+        // USG firewall sessions = current total sessions + setup rate, both table gauges
+        // (instantaneous, never counters — see the template description).
+        let usg = &by_name(T_HUAWEI_USG_SESSIONS).items;
+        assert_eq!(usg.len(), 2);
+        assert!(usg
+            .iter()
+            .any(|i| i.metric_name == "huawei_usg_total_sessions"
+                && i.kind == CollectionKind::Table
+                && i.metric_kind == MetricKind::Gauge));
+        assert!(usg
+            .iter()
+            .any(|i| i.metric_name == "huawei_usg_session_setup_rate"
+                && i.metric_kind == MetricKind::Gauge));
     }
 
     #[test]
