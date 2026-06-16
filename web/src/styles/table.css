@@ -17,7 +17,12 @@
 
    IMPORTANT — column templates must use fixed/`fr` tracks only, never `auto`: the header and
    each row are independent grids, so an `auto` track resolves to different widths in the header
-   vs the rows and throws every column out of alignment. Give an actions column a fixed width. */
+   vs the rows and throws every column out of alignment. Give an actions column a fixed width.
+
+   IMPORTANT — a cell that stacks content vertically (`flex-direction: column`, e.g. a two-line
+   timestamp or a multi-line signature) MUST set `align-items: flex-start`. `.ytable-cell` defaults
+   to `align-items: center` (correct for single-line rows); without the override a column-direction
+   cell centers its lines horizontally and drifts off the left-aligned header. */
 
 /* ============================================================ container + rows */
 .ytable {
@@ -375,10 +380,12 @@
   white-space: nowrap;
 }
 
-/* Two-line timestamp: exact (mono) + relative (muted). */
+/* Two-line timestamp: exact (mono) + relative (muted). Stacked cell — see the align-items note
+   in the file header: column-direction cells must left-align (don't inherit `.ytable-cell` center). */
 .yt-time {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 1px;
   min-width: 0;
 }
