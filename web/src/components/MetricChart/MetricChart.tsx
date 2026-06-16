@@ -31,9 +31,21 @@ interface Props {
   height?: number;
   /** Optional Y-axis tick formatter (e.g. SI suffixes so big numbers don't clip). */
   yFormat?: (v: number) => string;
+  /** Fixed Y-axis `[min, max]`; omit to auto-fit the data (uPlot default). Bounded gauges like
+   *  CPU/Mem % pass `[0, 100]` so the baseline is 0, not the data's min. Pass a stable reference
+   *  (e.g. a module-level constant) so the chart isn't rebuilt on every render. */
+  yRange?: [number, number];
 }
 
-export function MetricChart({ title, timestamps, values, series, height = 220, yFormat }: Props) {
+export function MetricChart({
+  title,
+  timestamps,
+  values,
+  series,
+  height = 220,
+  yFormat,
+  yRange,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,6 +78,8 @@ export function MetricChart({ title, timestamps, values, series, height = 220, y
       width: el.clientWidth || 460,
       height,
       axes: [axis, yAxis],
+      // Force a fixed Y range when asked (e.g. 0–100% gauges); otherwise uPlot auto-fits.
+      scales: yRange ? { y: { range: yRange } } : undefined,
       series: [
         {},
         ...resolved.map((s, i) => ({
@@ -89,7 +103,7 @@ export function MetricChart({ title, timestamps, values, series, height = 220, y
       ro.disconnect();
       plot.destroy();
     };
-  }, [title, timestamps, values, series, height, yFormat]);
+  }, [title, timestamps, values, series, height, yFormat, yRange]);
 
   return <div ref={ref} />;
 }
