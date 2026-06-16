@@ -8,7 +8,7 @@
 // sysDescr keyword (the backend tries all prefixes before any regex), so the authoritative OID
 // outranks free-text even when a keyword rule has a lower priority number.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
@@ -19,7 +19,7 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
 
@@ -31,6 +31,7 @@ export function ClassificationRulesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ClassificationRule[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -59,6 +60,25 @@ export function ClassificationRulesPage() {
 
   const profileName = (id: string) => profiles.find((p) => p.id === id)?.name ?? id;
 
+  // Filter over the rule's signature (OID prefix / sysDescr regex), maker/model, and the
+  // resolved profile name — so an operator can find a rule by what it matches or where it points.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q === '') return rows;
+    return rows.filter((r) =>
+      [
+        r.sysobjectid_prefix ?? '',
+        r.sysdescr_regex ?? '',
+        r.vendor ?? '',
+        r.model ?? '',
+        profiles.find((p) => p.id === r.profile_id)?.name ?? r.profile_id,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [rows, profiles, query]);
+
   // Quick enable/disable toggle: re-submit the rule with `enabled` flipped (the update API
   // takes the full body).
   const toggleEnabled = (r: ClassificationRule) => {
@@ -86,8 +106,14 @@ export function ClassificationRulesPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder="Search signature, profile, maker…"
+              ariaLabel="Search classification rules"
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="rules" />
+            <ResultCount shown={filtered.length} total={rows.length} noun="rules" />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + Add rule
@@ -106,17 +132,25 @@ export function ClassificationRulesPage() {
               <div className="ytable-h right">Actions</div>
             </div>
 
-            {rows.length === 0 ? (
+            {filtered.length === 0 ? (
               <div className="yt-empty">
-                <p className="yt-empty-title">{loading ? 'Loading…' : 'No classification rules'}</p>
+                <p className="yt-empty-title">
+                  {loading
+                    ? 'Loading…'
+                    : rows.length === 0
+                      ? 'No classification rules'
+                      : 'No rules match'}
+                </p>
                 {!loading && (
                   <p className="yt-empty-sub">
-                    Add a rule mapping a sysObjectID prefix or sysDescr pattern to a profile.
+                    {rows.length === 0
+                      ? 'Add a rule mapping a sysObjectID prefix or sysDescr pattern to a profile.'
+                      : 'Try a different search.'}
                   </p>
                 )}
               </div>
             ) : (
-              rows.map((r) => (
+              filtered.map((r) => (
                 <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
                   <div className="ytable-cell mono">{r.priority}</div>
                   <div className="ytable-cell classrules-match">

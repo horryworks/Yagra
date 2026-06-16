@@ -6,7 +6,7 @@
 // Data-table standard v2: a toolbar (count + "+ Add template") over the shared `.ytable`; add via
 // modal, delete via confirm modal. Each row expands to its Collection-set editor.
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate } from '../types/api';
@@ -16,7 +16,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
 import { CollectionEditor } from '../components/CollectionEditor/CollectionEditor';
 import './CollectionTemplatesPage.css';
@@ -28,6 +28,7 @@ const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.mess
 export function CollectionTemplatesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
+  const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -51,6 +52,15 @@ export function CollectionTemplatesPage() {
     load();
   }, [load]);
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q === '') return rows;
+    return rows.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) || (t.description ?? '').toLowerCase().includes(q),
+    );
+  }, [rows, query]);
+
   return (
     <div>
       <PageHeader
@@ -68,8 +78,14 @@ export function CollectionTemplatesPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={query}
+              onChange={setQuery}
+              placeholder="Search name or description…"
+              ariaLabel="Search collection templates"
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="templates" />
+            <ResultCount shown={filtered.length} total={rows.length} noun="templates" />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + Add template
@@ -85,15 +101,25 @@ export function CollectionTemplatesPage() {
               <div className="ytable-h right">Actions</div>
             </div>
 
-            {rows.length === 0 ? (
+            {filtered.length === 0 ? (
               <div className="yt-empty">
-                <p className="yt-empty-title">{loading ? 'Loading…' : 'No collection templates yet'}</p>
+                <p className="yt-empty-title">
+                  {loading
+                    ? 'Loading…'
+                    : rows.length === 0
+                      ? 'No collection templates yet'
+                      : 'No templates match'}
+                </p>
                 {!loading && (
-                  <p className="yt-empty-sub">Add a reusable metric bundle (e.g. “Standard interfaces”).</p>
+                  <p className="yt-empty-sub">
+                    {rows.length === 0
+                      ? 'Add a reusable metric bundle (e.g. “Standard interfaces”).'
+                      : 'Try a different search.'}
+                  </p>
                 )}
               </div>
             ) : (
-              rows.map((t) => {
+              filtered.map((t) => {
                 const open = openItems === t.id;
                 return (
                   <Fragment key={t.id}>
