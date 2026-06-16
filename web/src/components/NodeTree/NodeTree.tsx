@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { buildNodeTree, isSelfOrDescendant, type TreeGroup } from '../../lib/nodeTree';
+import { usePrefsStore } from '../../prefs';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { GroupIcon } from './GroupIcon';
@@ -83,7 +84,11 @@ export function NodeTree({
   onReorderGroup,
 }: Props) {
   const tree = buildNodeTree(groups, nodes);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(tree.roots.map((g) => g.id)));
+  // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
+  // set of groups the user explicitly collapsed (empty ⇒ everything open), so the last layout is
+  // restored and any newly-added group shows expanded automatically.
+  const collapsed = usePrefsStore((s) => s.nodeTreeCollapsed);
+  const toggle = usePrefsStore((s) => s.toggleNodeTreeGroup);
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
@@ -100,14 +105,6 @@ export function NodeTree({
       document.removeEventListener('keydown', onKey);
     };
   }, [menu]);
-
-  const toggle = (id: string) =>
-    setExpanded((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   const reset = () => {
     setDrag(null);
@@ -192,7 +189,7 @@ export function NodeTree({
   };
 
   const renderGroup = (group: TreeGroup, depth: number): React.ReactNode => {
-    const isOpen = expanded.has(group.id);
+    const isOpen = !collapsed[group.id];
     const count = group.children.length + group.nodes.length;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id };
     return (

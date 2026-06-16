@@ -19,6 +19,7 @@ use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
+use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
 use crate::store::{MetricPoint, MetricStore};
 use crate::thresholds::ThresholdStore;
@@ -63,6 +64,9 @@ pub struct AdminState {
     pub classifier: Arc<Classifier>,
     pub groups: Arc<GroupRepo>,
     pub audit: Arc<AuditRepo>,
+    /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
+    /// manual poll matches a periodic one. Bus-only (core⇄poller never call directly, ADR-003).
+    pub poll: Arc<PollDispatcher>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -98,6 +102,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
+        .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
@@ -942,6 +947,39 @@ async fn set_node_bindings(
             internal("failed to update node")
         }
     }
+}
+
+/// Trigger an immediate poll of one node (the "poll now" action): dispatches its full configured
+/// poll set (ICMP liveness + SNMP scalar/table, per its bindings) to the bus right away, bypassing
+/// the scheduler's interval/jitter. Results arrive asynchronously on the normal result path, so
+/// this just confirms how many jobs were dispatched — the UI refreshes its readings shortly after.
+/// `ManageConfig` (an operator action, like a discovery scan); audited by the mutation middleware.
+async fn poll_node_now(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let node = match admin.repo.get_node(node_id).await {
+        Ok(Some(node)) => node,
+        Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "poll-now: load node failed");
+            return internal("failed to load node");
+        }
+    };
+    let dispatched = admin.poll.poll_now(&node).await;
+    tracing::info!(node = %node_id, dispatched, "manual poll dispatched");
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "dispatched": dispatched })),
+    )
+        .into_response()
 }
 
 /// Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).
@@ -3755,6 +3793,25 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(body_json(resp).await["error"]["code"], "node_not_found");
+    }
+
+    #[tokio::test]
+    async fn poll_now_unavailable_without_admin() {
+        // "Poll now" dispatches bus jobs via the admin-only dispatcher; skeleton has none.
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/nodes/{node}/poll"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]
