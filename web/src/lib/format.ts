@@ -138,9 +138,12 @@ export function formatBps(bps: number | null): string {
   return `${v.toFixed(v >= 100 || u === 0 ? 0 : 1)} ${units[u]}`;
 }
 
-/** Format a utilization percentage, or `—` when unknown (no speed / no data). */
+/** Format a utilization percentage, or `—` when unknown (no speed / no data). Whole numbers
+ *  (including 0 and 100) show no decimal ("0%", "75%"); sub-10 fractions keep one place. */
 export function formatUtil(pct: number | null): string {
-  return pct == null ? '—' : `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+  if (pct == null) return '—';
+  const digits = Number.isInteger(pct) || pct >= 10 ? 0 : 1;
+  return `${pct.toFixed(digits)}%`;
 }
 
 /** Format a byte count with binary-scaled units rendered with familiar GB-style suffixes
