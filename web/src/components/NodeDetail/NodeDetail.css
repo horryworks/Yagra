@@ -623,6 +623,18 @@
   min-width: 0;
 }
 
+/* Reserve the chart height while data loads so the dock is full-height from the first render — the
+   selected row's auto-scroll measures the final layout instead of a still-growing dock. Height
+   mirrors the dock MetricChart's `height={132}`. */
+.nd-if-chart-empty {
+  height: 132px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
 .nd-if-chart-t {
   font-size: var(--font-xs);
   text-transform: uppercase;
