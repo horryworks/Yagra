@@ -53,7 +53,7 @@ use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use thresholds::ThresholdStore;
 use uuid::Uuid;
-use yagra_bus::{Bus, IcmpCheck, NatsBus, PollResult};
+use yagra_bus::{NatsBus, PollResult};
 use yagra_topology::Topology;
 
 #[tokio::main]
@@ -139,21 +139,21 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         .filter(|c| !c.is_empty());
     let collection = Arc::new(CollectionRepo::new(repo.pool()));
 
+    // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP). Shared by the periodic scheduler
+    // and the on-demand "poll now" API action so both build jobs the same way.
+    let dispatcher = Arc::new(scheduler::PollDispatcher::new(
+        bus.clone(),
+        creds.clone(),
+        collection.clone(),
+        env_community.clone(),
+        cfg.poll_interval_secs,
+    ));
+
     // Scheduler: inventory → jobs on the bus, jittered across the interval.
     {
         let repo = repo.clone();
-        let bus = bus.clone();
-        let creds = creds.clone();
-        let env_community = env_community.clone();
-        let collection = collection.clone();
-        tokio::spawn(run_scheduler(
-            repo,
-            bus,
-            cfg.poll_interval_secs,
-            creds,
-            env_community,
-            collection,
-        ));
+        let dispatcher = dispatcher.clone();
+        tokio::spawn(run_scheduler(repo, dispatcher));
     }
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
@@ -218,6 +218,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classifier,
         groups: Arc::new(groups::GroupRepo::new(repo.pool())),
         audit: Arc::new(AuditRepo::new(repo.pool())),
+        poll: dispatcher,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -337,16 +338,11 @@ async fn consume_results<S>(
     tracing::warn!("result stream ended");
 }
 
-/// Periodically turn the inventory into ICMP jobs, spread across the interval with
-/// per-node jitter so N nodes don't poll on the same tick (anti-stampede).
-async fn run_scheduler(
-    repo: Arc<NodeRepo>,
-    bus: Arc<NatsBus>,
-    interval_secs: u32,
-    creds: Arc<CredentialStore>,
-    env_community: Option<String>,
-    collection: Arc<CollectionRepo>,
-) {
+/// Periodically turn the inventory into poll jobs (ICMP + SNMP), spread across the interval
+/// with per-job jitter so N nodes don't poll on the same tick (anti-stampede). Job-building is
+/// delegated to the shared [`PollDispatcher`] so the periodic and on-demand paths agree.
+async fn run_scheduler(repo: Arc<NodeRepo>, dispatcher: Arc<scheduler::PollDispatcher>) {
+    let interval_secs = dispatcher.interval_secs();
     let interval = Duration::from_secs(u64::from(interval_secs));
     // Clamp to [1, u64::MAX] before narrowing u128→u64 so an extreme interval can't wrap to a
     // tiny jitter window (which would defeat the anti-stampede spread).
@@ -357,172 +353,22 @@ async fn run_scheduler(
             Ok(nodes) => {
                 tracing::debug!(count = nodes.len(), "scheduling poll round");
                 for node in nodes {
-                    // Resolve the node's SNMP auth from its bound credential (decrypted in
-                    // core, never the poller — ADR-018/020): a v2c community or a v3 USM
-                    // doc; the env community is a v2c fallback. None ⇒ no SNMP.
-                    match resolve_snmp_auth(&creds, &node, env_community.as_deref()).await {
-                        Some(SnmpAuth::V2c(community)) => {
-                            // Resolve the node's effective collection set (node overrides
-                            // profile); fall back to the built-in catalog so an unconfigured
-                            // node still gets the default sysUpTime + interface poll.
-                            let items = resolve_node_collection(&collection, &node).await;
-                            let (scalar, table) =
-                                scheduler::build_snmp_checks(&community, &items, 2000);
-
-                            if let Some(check) = scalar {
-                                let bus = bus.clone();
-                                let node = node.clone();
-                                let delay = jitter();
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(delay).await;
-                                    let mut job = scheduler::build_snmp_job(
-                                        &node,
-                                        check,
-                                        interval_secs,
-                                        Uuid::new_v4(),
-                                    );
-                                    // Probe identity (sysDescr) only while the maker is unknown —
-                                    // once classified, stop fetching it every poll.
-                                    job.probe_identity = node.vendor.is_none();
-                                    publish(&bus, job, "snmp", node.id).await;
-                                });
-                            }
-                            if let Some(check) = table {
-                                let bus = bus.clone();
-                                let node = node.clone();
-                                let delay = jitter();
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(delay).await;
-                                    let job = scheduler::build_snmp_table_job(
-                                        &node,
-                                        check,
-                                        interval_secs,
-                                        Uuid::new_v4(),
-                                    );
-                                    publish(&bus, job, "snmp_table", node.id).await;
-                                });
-                            }
-                        }
-                        Some(SnmpAuth::V3(secret)) => {
-                            // v3 polls the scalar set; table walks over v3 are a follow-up
-                            // (interface metrics need the v3 GETBULK walk).
-                            let items = resolve_node_collection(&collection, &node).await;
-                            if items
-                                .iter()
-                                .any(|i| i.kind == yagra_common::CollectionKind::Table)
-                            {
-                                tracing::debug!(node = %node.id, "v3 table items skipped (v3 walk not yet supported)");
-                            }
-                            if let Some(check) =
-                                scheduler::build_snmp_v3_check(&secret, &items, 2000)
-                            {
-                                let bus = bus.clone();
-                                let node = node.clone();
-                                let delay = jitter();
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(delay).await;
-                                    let mut job = scheduler::build_snmp_v3_job(
-                                        &node,
-                                        check,
-                                        interval_secs,
-                                        Uuid::new_v4(),
-                                    );
-                                    job.probe_identity = node.vendor.is_none();
-                                    publish(&bus, job, "snmp_v3", node.id).await;
-                                });
-                            }
-                        }
-                        None => {}
+                    // Resolve auth + collection and build the node's jobs up front; jitter only
+                    // the publish so polls spread across the window without a stampede.
+                    for (job, kind) in dispatcher.build_node_jobs(&node).await {
+                        let dispatcher = dispatcher.clone();
+                        let node_id = node.id;
+                        let delay = jitter();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(delay).await;
+                            dispatcher.publish_job(job, kind, node_id).await;
+                        });
                     }
-
-                    // ICMP liveness job.
-                    let bus = bus.clone();
-                    let delay = jitter();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(delay).await;
-                        let job = scheduler::build_icmp_job(
-                            &node,
-                            IcmpCheck::default(),
-                            interval_secs,
-                            Uuid::new_v4(),
-                        );
-                        publish(&bus, job, "icmp", node.id).await;
-                    });
                 }
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
         tokio::time::sleep(interval).await;
-    }
-}
-
-/// Resolve a node's effective collection set, defaulting to the built-in catalog when
-/// nothing is configured (or the lookup fails) so polling always has a sensible default.
-async fn resolve_node_collection(
-    collection: &CollectionRepo,
-    node: &yagra_common::Node,
-) -> Vec<yagra_common::CollectionItem> {
-    match collection
-        .list_items_for_node(node.id.as_uuid(), node.profile.map(|p| p.0))
-        .await
-    {
-        Ok(scoped) => {
-            let resolved = yagra_common::resolve_collection_set(&scoped);
-            if resolved.is_empty() {
-                yagra_common::builtin_catalog()
-            } else {
-                resolved
-            }
-        }
-        Err(e) => {
-            tracing::warn!(node = %node.id, error = %e, "collection load failed; using built-in catalog");
-            yagra_common::builtin_catalog()
-        }
-    }
-}
-
-/// A node's resolved SNMP authentication: a v2c community string or a v3 USM document.
-enum SnmpAuth {
-    V2c(String),
-    V3(secrets::SnmpV3Secret),
-}
-
-/// Resolve a node's SNMP auth from its bound credential (decrypted in core, never the
-/// poller — ADR-018/020). The credential `kind` picks the protocol: `snmp_v3` secrets are
-/// USM JSON docs; anything else is treated as a v2c community (back-compat with
-/// credentials created before kinds were meaningful). The env community is a v2c fallback.
-async fn resolve_snmp_auth(
-    creds: &CredentialStore,
-    node: &yagra_common::Node,
-    env_community: Option<&str>,
-) -> Option<SnmpAuth> {
-    if let Some(cred) = node.credential {
-        match creds.open(cred.as_uuid()).await {
-            Ok(Some((kind, bytes))) => {
-                if kind == secrets::KIND_SNMP_V3 {
-                    match secrets::SnmpV3Secret::parse(&bytes) {
-                        Ok(secret) => return Some(SnmpAuth::V3(secret)),
-                        // Static reason only — never echo any part of the secret.
-                        Err(reason) => {
-                            tracing::warn!(node = %node.id, %reason, "invalid snmp_v3 credential");
-                        }
-                    }
-                } else if let Ok(community) = String::from_utf8(bytes) {
-                    return Some(SnmpAuth::V2c(community));
-                }
-            }
-            Ok(None) => tracing::warn!(node = %node.id, "bound credential not found"),
-            Err(e) => tracing::warn!(node = %node.id, error = %e, "credential decrypt failed"),
-        }
-    }
-    env_community.map(|c| SnmpAuth::V2c(c.to_owned()))
-}
-
-/// Publish a job and bump the published-jobs counter, logging failures.
-async fn publish(bus: &NatsBus, job: yagra_bus::PollJob, kind: &str, node: yagra_common::NodeId) {
-    match bus.publish_job(job).await {
-        Ok(()) => metrics::counter!("yagra_jobs_published_total").increment(1),
-        Err(e) => tracing::warn!(error = %e, %kind, node = %node, "failed to publish job"),
     }
 }
 

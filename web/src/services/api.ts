@@ -229,6 +229,12 @@ export const api = {
   deleteNode: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  /** Trigger an immediate poll of a node (ICMP + its configured SNMP set), bypassing the
+   *  scheduler interval. Returns how many jobs were dispatched; results arrive asynchronously
+   *  on the normal path, so the caller refreshes its readings shortly after. */
+  pollNode: (id: string): Promise<{ dispatched: number }> =>
+    request(`/nodes/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
+
   /** Set or clear a node's device-profile + bound credential and its maker/model. The node-edit
    *  UI loads the current values and resends them, so an unchanged field is preserved. */
   setNodeBindings: (
