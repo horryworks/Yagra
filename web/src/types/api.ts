@@ -460,6 +460,13 @@ export interface AuditRow {
   status: number;
 }
 
+/** Fleet state-count timeline (`GET /api/v1/fleet/state-history`): per-state series aligned to a
+ *  shared `timestamps` axis (Unix seconds). `series` is keyed by node state. */
+export interface StateHistory {
+  timestamps: number[];
+  series: Record<string, number[]>;
+}
+
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
 export interface FleetCoverage {
   total: number;

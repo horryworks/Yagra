@@ -804,6 +804,19 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/fleet/coverage');
   });
 
+  it('builds the state-history path (default + windowed)', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ timestamps: [], series: {} }),
+    } as Response);
+    globalThis.fetch = spy;
+    await api.getStateHistory();
+    expect(spy).toHaveBeenCalledWith('/api/v1/fleet/state-history');
+    await api.getStateHistory({ from: 100, to: 200 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/fleet/state-history?from=100&to=200');
+  });
+
   it('saves the dashboard layout as a JSON body', async () => {
     const spy = vi
       .fn()

@@ -404,6 +404,63 @@ impl NodeRepo {
             .collect()
     }
 
+    /// Append one node-state snapshot: a row per `(state, count)`, all sharing the same `now()`
+    /// timestamp (single statement). For the fleet health timeline. Low cardinality (≤6 rows).
+    pub async fn insert_state_snapshot(&self, counts: &[(String, i64)]) -> anyhow::Result<()> {
+        if counts.is_empty() {
+            return Ok(());
+        }
+        let states: Vec<String> = counts.iter().map(|(s, _)| s.clone()).collect();
+        let nums: Vec<i32> = counts.iter().map(|(_, c)| *c as i32).collect();
+        sqlx::query(
+            "INSERT INTO node_state_snapshots (ts, state, count) \
+             SELECT now(), s, c FROM unnest($1::text[], $2::int[]) AS t(s, c)",
+        )
+        .bind(&states)
+        .bind(&nums)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// State-count snapshots over `[from_s, to_s]` (Unix seconds) as `(ts_unix, state, count)`,
+    /// oldest first. Pivoted into per-state series at the API edge.
+    pub async fn state_history(
+        &self,
+        from_s: i64,
+        to_s: i64,
+    ) -> anyhow::Result<Vec<(i64, String, i64)>> {
+        let rows = sqlx::query(
+            "SELECT extract(epoch from ts)::bigint AS t, state, count \
+             FROM node_state_snapshots \
+             WHERE ts >= to_timestamp($1) AND ts <= to_timestamp($2) ORDER BY ts",
+        )
+        .bind(from_s)
+        .bind(to_s)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("t")?,
+                    r.try_get("state")?,
+                    r.try_get::<i32, _>("count")? as i64,
+                ))
+            })
+            .collect()
+    }
+
+    /// Delete state snapshots older than `older_than_secs` (retention). Returns rows removed.
+    pub async fn prune_state_snapshots(&self, older_than_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM node_state_snapshots WHERE ts < now() - ($1::double precision * interval '1 second')",
+        )
+        .bind(older_than_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The display name of each of the given node ids, in one query. For joining TSDB results
     /// (which carry only the node id, ADR-011) back to human-readable names — e.g. the fleet
     /// Top-N endpoint. Ids absent from the map default to the id string at the call site.

@@ -46,6 +46,7 @@ import type {
   RoutingRule,
   ScopeLevel,
   Severity,
+  StateHistory,
   StoredCollectionItem,
   StoredThreshold,
   TopEntry,
@@ -518,6 +519,15 @@ export const api = {
 
   /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
   getFleetCoverage: (): Promise<FleetCoverage> => request('/fleet/coverage'),
+
+  /** Node-state counts over time (fleet health timeline; default last 24h). */
+  getStateHistory: (opts?: { from?: number; to?: number }): Promise<StateHistory> => {
+    const params = new URLSearchParams();
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    const qs = params.toString();
+    return request(qs ? `/fleet/state-history?${qs}` : '/fleet/state-history');
+  },
 
   /** Notification channels (metadata only; the secret config is never returned). */
   listNotificationChannels: (): Promise<NotificationChannel[]> =>
