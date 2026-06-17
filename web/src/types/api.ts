@@ -460,6 +460,14 @@ export interface AuditRow {
   status: number;
 }
 
+/** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
+export interface FleetCoverage {
+  total: number;
+  fresh: number;
+  coverage_pct: number;
+  stale: { node_id: string; name: string }[];
+}
+
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */
 export interface TopologyNode {
   id: string;

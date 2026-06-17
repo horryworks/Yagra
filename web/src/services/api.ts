@@ -19,6 +19,7 @@ import type {
   CredentialSummary,
   Direction,
   DiscoveryScan,
+  FleetCoverage,
   GroupType,
   InterfaceRow,
   InterfaceTopEntry,
@@ -514,6 +515,9 @@ export const api = {
 
   /** The dependency graph: nodes + parent edges + state + active root-cause attribution. */
   getTopology: (): Promise<{ nodes: TopologyNode[] }> => request('/topology'),
+
+  /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
+  getFleetCoverage: (): Promise<FleetCoverage> => request('/fleet/coverage'),
 
   /** Notification channels (metadata only; the secret config is never returned). */
   listNotificationChannels: (): Promise<NotificationChannel[]> =>

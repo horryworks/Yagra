@@ -3,8 +3,9 @@
 // straight reads of existing endpoints.
 
 import { Badge } from '../../components/ui/Badge';
-import { httpStatusLabel, httpStatusTone, relativeTime } from '../../lib/format';
+import { httpStatusLabel, httpStatusTone, relativeTime, stateColorVar } from '../../lib/format';
 import { api } from '../../services/api';
+import { Gauge } from '../primitives/Gauge';
 import { usePolled } from '../usePolled';
 
 export function MaintenanceWidget() {
@@ -29,6 +30,38 @@ export function MaintenanceWidget() {
           <span className="dwl-sub muted">
             {w.active ? `ends ${relativeTime(w.ends_at, now)}` : relativeTime(w.starts_at, now)}
           </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function DataCoverageWidget() {
+  const { data, loading, error } = usePolled(() => api.getFleetCoverage(), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const pct = data?.coverage_pct ?? 0;
+  // Coverage reads as health: high = good. Threshold onto the status channel.
+  const color =
+    pct >= 95 ? stateColorVar('ok') : pct >= 80 ? stateColorVar('warning') : stateColorVar('critical');
+  return (
+    <Gauge value={pct} centerLabel="% fresh" color={color} sub={`${data?.fresh ?? 0}/${data?.total ?? 0} nodes`} />
+  );
+}
+
+export function StaleDataWidget() {
+  const { data, loading, error } = usePolled(() => api.getFleetCoverage(), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const stale = data?.stale ?? [];
+  if (stale.length === 0) return <p className="muted">All nodes are reporting fresh data. 🎉</p>;
+  return (
+    <ul className="dwl">
+      {stale.map((s) => (
+        <li className="dwl-row" key={s.node_id}>
+          <span className="dwl-dot" style={{ background: stateColorVar('unknown') }} />
+          <span className="dwl-name">{s.name}</span>
+          <span className="dwl-sub muted">no recent data</span>
         </li>
       ))}
     </ul>

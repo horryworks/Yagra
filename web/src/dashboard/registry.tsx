@@ -17,7 +17,12 @@ import {
   TopAlertingNodesWidget,
 } from './widgets/alerts';
 import { HealthRingWidget, NodesDownWidget, StatusSummaryWidget } from './widgets/fleet';
-import { AuditWidget, MaintenanceWidget } from './widgets/monitoring';
+import {
+  AuditWidget,
+  DataCoverageWidget,
+  MaintenanceWidget,
+  StaleDataWidget,
+} from './widgets/monitoring';
 import {
   BusiestInterfacesWidget,
   MostErrorsWidget,
@@ -247,6 +252,26 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: MaintenanceWidget,
+  },
+  {
+    type: 'data-coverage',
+    title: 'Data coverage',
+    section: SECTION.monitoring,
+    blurb: 'Gauge: % of nodes returning fresh data (blind-spot detector).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: DataCoverageWidget,
+  },
+  {
+    type: 'stale-data',
+    title: 'Stale data watchlist',
+    section: SECTION.monitoring,
+    blurb: 'Nodes whose last sample is overdue (silent failures).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: StaleDataWidget,
   },
   {
     type: 'audit',

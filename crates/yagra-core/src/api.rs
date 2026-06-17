@@ -196,6 +196,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/calendar", get(alert_calendar))
         .route("/api/v1/alerts/transitions", get(alert_transitions))
         .route("/api/v1/topology", get(get_topology))
+        .route("/api/v1/fleet/coverage", get(fleet_coverage))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -887,6 +888,78 @@ async fn get_topology(State(st): State<ApiState>, headers: HeaderMap) -> Respons
         });
     }
     Json(serde_json::json!({ "nodes": out })).into_response()
+}
+
+/// A node returning no fresh data (silent failure / blind spot).
+#[derive(Serialize)]
+struct StaleNode {
+    node_id: Uuid,
+    name: String,
+}
+
+/// Fleet data-coverage summary: fresh vs total nodes + the stale watchlist.
+#[derive(Serialize)]
+struct FleetCoverage {
+    total: usize,
+    fresh: usize,
+    /// Percent of nodes reporting fresh data (100 when the inventory is empty).
+    coverage_pct: i64,
+    stale: Vec<StaleNode>,
+}
+
+/// How recent a node's last ICMP sample must be to count as "fresh" (silent beyond this ⇒ stale).
+const COVERAGE_FRESH_SECS: u64 = 600;
+
+/// Fleet data coverage + the stale-data watchlist: which nodes have (not) reported ICMP within
+/// the freshness window. A blind-spot detector — low coverage means the monitoring itself is
+/// missing data. Admin-only data source (full inventory).
+async fn fleet_coverage(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let nodes = match admin.repo.list_nodes().await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(error = %e, "fleet coverage list nodes failed");
+            return internal("failed to load fleet coverage");
+        }
+    };
+    let fresh_ids: std::collections::HashSet<Uuid> = st
+        .store
+        .fresh_node_ids("icmp_rtt_ms", COVERAGE_FRESH_SECS)
+        .await
+        .into_iter()
+        .collect();
+    let total = nodes.len();
+    let mut fresh = 0usize;
+    let mut stale: Vec<StaleNode> = Vec::new();
+    for n in nodes {
+        if fresh_ids.contains(&n.id.as_uuid()) {
+            fresh += 1;
+        } else {
+            stale.push(StaleNode {
+                node_id: n.id.as_uuid(),
+                name: n.name,
+            });
+        }
+    }
+    let coverage_pct = if total > 0 {
+        ((fresh as f64 / total as f64) * 100.0).round() as i64
+    } else {
+        100
+    };
+    stale.sort_by(|a, b| a.name.cmp(&b.name));
+    stale.truncate(50);
+    Json(FleetCoverage {
+        total,
+        fresh,
+        coverage_pct,
+        stale,
+    })
+    .into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).
