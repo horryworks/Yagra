@@ -447,6 +447,24 @@ pub fn builtin_classification_rules() -> Vec<BuiltinClassificationRule> {
             "A10 Thunder ADC",
             Some("A10 Networks"),
         ),
+        // Cisco Meraki (cloud-managed): one enterprise prefix (29671), split MX (security
+        // appliance → firewall) vs MS (switch) on the model token in sysDescr (e.g. "Meraki
+        // MX67", "Meraki MS220-8P"). No prefix-only catch-all on purpose: other Meraki lines
+        // (MR APs, MV cameras) shouldn't fall into MX/MS — they drop to "Generic SNMP" instead.
+        (
+            480,
+            Some("1.3.6.1.4.1.29671."),
+            Some(r"(?i)\bMX\d"),
+            "Cisco Meraki MX",
+            Some("Cisco Meraki"),
+        ),
+        (
+            485,
+            Some("1.3.6.1.4.1.29671."),
+            Some(r"(?i)\bMS\d"),
+            "Cisco Meraki MS switch",
+            Some("Cisco Meraki"),
+        ),
     ];
     RULES
         .iter()
@@ -585,5 +603,27 @@ mod tests {
             .expect("A10 rule present");
         assert_eq!(a10.sysobjectid_prefix, Some("1.3.6.1.4.1.22610."));
         assert_eq!(a10.vendor, Some("A10 Networks"));
+    }
+
+    #[test]
+    fn meraki_rules_split_mx_and_ms_on_sysdescr() {
+        // Both Meraki rules share the 29671 prefix and discriminate MX vs MS on the model token
+        // in sysDescr — so the same cloud vendor maps to firewall vs switch profiles.
+        let rules = builtin_classification_rules();
+        let mx = rules
+            .iter()
+            .find(|r| r.profile_name == "Cisco Meraki MX")
+            .expect("Meraki MX rule present");
+        let ms = rules
+            .iter()
+            .find(|r| r.profile_name == "Cisco Meraki MS switch")
+            .expect("Meraki MS rule present");
+        assert_eq!(mx.sysobjectid_prefix, Some("1.3.6.1.4.1.29671."));
+        assert_eq!(ms.sysobjectid_prefix, Some("1.3.6.1.4.1.29671."));
+        assert!(
+            mx.sysdescr_regex.is_some() && ms.sysdescr_regex.is_some(),
+            "both Meraki rules need a model discriminator"
+        );
+        assert_eq!(mx.vendor, Some("Cisco Meraki"));
     }
 }
