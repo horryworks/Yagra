@@ -106,20 +106,21 @@ export function MetricChart({
         })),
       ],
       // Horizontal reference line (e.g. configured bandwidth), drawn over the series. Canvas works
-      // in device pixels, so scale stroke/text by the pixel ratio; clamp to the plot edges so an
-      // off-range value stays visible (labelled) and slides in as the data approaches it.
+      // in device pixels, so scale stroke/text by the pixel ratio. Drawn ONLY at its true Y
+      // position — when the value is outside the visible range (auto-fit mode with traffic well
+      // below the bandwidth) nothing is drawn, so the line never misleads by clamping to the edge.
+      // It appears from the top as traffic nears capacity; in bandwidth-scaled mode it sits at top.
       hooks: referenceLine
         ? {
             draw: [
               (u: uPlot) => {
                 const refv = referenceLine.value;
                 if (!Number.isFinite(refv)) return;
+                const { left, top, width, height } = u.bbox;
+                const y = u.valToPos(refv, 'y', true);
+                if (y < top || y > top + height) return; // off-scale → don't draw
                 const ctx = u.ctx;
                 const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
-                const { left, top, width, height } = u.bbox;
-                const raw = u.valToPos(refv, 'y', true);
-                const aboveRange = raw < top;
-                const y = Math.min(top + height, Math.max(top, raw));
                 ctx.save();
                 ctx.strokeStyle = refColor;
                 ctx.lineWidth = 1.5 * dpr;
@@ -133,10 +134,11 @@ export function MetricChart({
                   ctx.fillStyle = refColor;
                   ctx.font = `${11 * dpr}px ${uiFont}`;
                   ctx.textAlign = 'left';
-                  // Keep the label inside the plot: below the line when pinned to the top edge,
+                  // Keep the label inside the plot: below the line when it's near the top edge,
                   // above it otherwise.
-                  ctx.textBaseline = aboveRange ? 'top' : 'bottom';
-                  ctx.fillText(referenceLine.label, left + 4 * dpr, y + (aboveRange ? 2 * dpr : -2 * dpr));
+                  const nearTop = y - top < 14 * dpr;
+                  ctx.textBaseline = nearTop ? 'top' : 'bottom';
+                  ctx.fillText(referenceLine.label, left + 4 * dpr, y + (nearTop ? 2 * dpr : -2 * dpr));
                 }
                 ctx.restore();
               },
