@@ -27,7 +27,7 @@ pub use classification::{
 pub use collection::{
     builtin_catalog, builtin_interface_meta_columns, builtin_profiles, builtin_templates,
     resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
-    InterfaceField, ScopedCollectionItem, TEMPLATE_STANDARD_SNMP,
+    InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED, TEMPLATE_STANDARD_SNMP,
 };
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
 pub use metric::{MetricKind, SeriesKey};

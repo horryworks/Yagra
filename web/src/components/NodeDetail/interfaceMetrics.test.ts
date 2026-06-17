@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { latestErrorRate, sparklinePath } from './interfaceMetrics';
+import {
+  latestErrorRate,
+  sparklinePath,
+  throughputBandwidthOverlay,
+} from './interfaceMetrics';
+import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
 
 function series(partial: Partial<InterfaceSeries>): InterfaceSeries {
@@ -69,5 +74,26 @@ describe('sparklinePath', () => {
   it('clamps negative values to the baseline rather than drawing below it', () => {
     const p = sparklinePath([-5, 10], 100, 20, 2)!;
     expect(p.line).toContain('M2.0 18.0'); // -5 clamped to the 0-baseline
+  });
+});
+
+describe('throughputBandwidthOverlay', () => {
+  it('yields no line or range for an absent / non-positive speed', () => {
+    expect(throughputBandwidthOverlay(null, 'fit')).toEqual({});
+    expect(throughputBandwidthOverlay(undefined, 'capacity')).toEqual({});
+    expect(throughputBandwidthOverlay(0, 'fit')).toEqual({});
+    expect(throughputBandwidthOverlay(-1, 'capacity')).toEqual({});
+  });
+
+  it('draws the bandwidth line but leaves the axis auto-fit in fit mode', () => {
+    const o = throughputBandwidthOverlay(1_000_000_000, 'fit');
+    expect(o.referenceLine).toEqual({ value: 1_000_000_000, label: formatBps(1_000_000_000) });
+    expect(o.yRange).toBeUndefined();
+  });
+
+  it('pins the axis top to the bandwidth in capacity mode', () => {
+    const o = throughputBandwidthOverlay(1_000_000_000, 'capacity');
+    expect(o.referenceLine?.value).toBe(1_000_000_000);
+    expect(o.yRange).toEqual([0, 1_000_000_000]);
   });
 });

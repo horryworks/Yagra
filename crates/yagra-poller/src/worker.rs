@@ -8,14 +8,14 @@
 
 use crate::limiter::PollLimiter;
 use futures::stream::{Stream, StreamExt};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use yagra_bus::{
     Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
     SnmpMetaColumn, SnmpTableCheck, BUS_SCHEMA_VERSION,
 };
-use yagra_common::{IfIndex, InterfaceField};
+use yagra_common::{IfIndex, InterfaceField, OID_IF_HIGH_SPEED};
 use yagra_transport::Transport;
 
 /// sysDescr.0 — system description scalar (the v3 GET form).
@@ -274,35 +274,88 @@ async fn walk_interface_metadata(
     }
 
     if !speed_oids.is_empty() {
-        match transport
-            .snmp_walk(job.target, community, &speed_oids, timeout)
+        // Walk the 32-bit `ifSpeed` (the bus column) and the 64-bit `ifHighSpeed` (Mbps), then
+        // resolve the effective bandwidth so links above the ~4.29 Gbps `ifSpeed` cap report
+        // their true rate. ifHighSpeed is walked poller-side rather than as a bus column to keep
+        // the job contract N/N-1 compatible (no new wire field).
+        let raw_speed = walk_numeric_by_ifindex(job, transport, community, &speed_oids, timeout)
             .await
-        {
-            Ok(rows) => {
-                for row in rows {
-                    let rec = ifs.entry(row.ifindex).or_insert_with(|| blank(row.ifindex));
-                    // ifSpeed is a non-negative gauge. Guard the f64→i64 conversion instead of
-                    // relying on a silent saturating `as` cast: a malformed/huge/non-finite
-                    // device value is dropped (logged), not stored as a bogus saturated speed.
-                    if row.value.is_finite() && (0.0..=i64::MAX as f64).contains(&row.value) {
-                        rec.if_speed = Some(row.value as i64);
-                    } else {
-                        tracing::debug!(
-                            job_id = %job.job_id,
-                            ifindex = row.ifindex,
-                            value = row.value,
-                            "ignoring out-of-range ifSpeed value"
-                        );
-                    }
-                }
-            }
-            Err(err) => {
+            .unwrap_or_else(|err| {
                 tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifSpeed walk failed");
+                HashMap::new()
+            });
+        let high_oids = [OID_IF_HIGH_SPEED.to_owned()];
+        let raw_high = walk_numeric_by_ifindex(job, transport, community, &high_oids, timeout)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifHighSpeed walk failed");
+                HashMap::new()
+            });
+
+        for ifindex in raw_speed
+            .keys()
+            .chain(raw_high.keys())
+            .copied()
+            .collect::<BTreeSet<u32>>()
+        {
+            match resolve_if_speed(
+                raw_speed.get(&ifindex).copied(),
+                raw_high.get(&ifindex).copied(),
+            ) {
+                Some(bps) => {
+                    let rec = ifs.entry(ifindex).or_insert_with(|| blank(ifindex));
+                    rec.if_speed = Some(bps);
+                }
+                None => tracing::debug!(
+                    job_id = %job.job_id,
+                    ifindex,
+                    "no resolvable interface speed (ifSpeed/ifHighSpeed absent or out of range)"
+                ),
             }
         }
     }
 
     ifs.into_values().collect()
+}
+
+/// Walk numeric table column(s) and fold the latest value per ifIndex.
+async fn walk_numeric_by_ifindex(
+    job: &PollJob,
+    transport: &dyn Transport,
+    community: &str,
+    oids: &[String],
+    timeout: Duration,
+) -> Result<HashMap<u32, f64>, yagra_transport::TransportError> {
+    let rows = transport
+        .snmp_walk(job.target, community, oids, timeout)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.ifindex, r.value)).collect())
+}
+
+/// Resolve the effective interface bandwidth (bits/sec) from `ifSpeed` (32-bit) and `ifHighSpeed`
+/// (units of 1,000,000 bits/sec).
+///
+/// Below the 32-bit `ifSpeed` saturation point (`u32::MAX`, ~4.29 Gbps) `ifSpeed` is authoritative
+/// — it can express sub-Mbps links that `ifHighSpeed` rounds to 0. At/above the cap (or when
+/// `ifSpeed` is missing/0) the 64-bit `ifHighSpeed` is used. Non-finite, negative, or
+/// out-of-`i64`-range values are dropped rather than stored as a bogus saturated speed.
+fn resolve_if_speed(if_speed: Option<f64>, if_high_speed: Option<f64>) -> Option<i64> {
+    let sane = |v: f64| v.is_finite() && (0.0..=i64::MAX as f64).contains(&v);
+    let speed = if_speed.filter(|v| sane(*v));
+    let high_bps = if_high_speed
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|mbps| mbps * 1_000_000.0)
+        .filter(|bps| sane(*bps));
+
+    // 4_294_967_295: the value a 32-bit `ifSpeed` reports once the real rate exceeds it.
+    const IF_SPEED_CAP: f64 = u32::MAX as f64;
+
+    match speed {
+        Some(s) if s > 0.0 && s < IF_SPEED_CAP => Some(s as i64),
+        _ => high_bps
+            .map(|bps| bps as i64)
+            .or_else(|| speed.map(|s| s as i64)),
+    }
 }
 
 /// Stable metric name for an SNMP OID. Known OIDs get friendly names; others fall back to
@@ -735,5 +788,85 @@ mod tests {
         assert_eq!(result.job_id, Uuid::nil());
         assert_eq!(result.outcome, CheckOutcome::Reachable);
         assert!(!result.samples.is_empty());
+    }
+
+    #[test]
+    fn resolve_if_speed_prefers_ifspeed_below_cap() {
+        // A 1 Gbps link: ifSpeed is exact and below the 32-bit cap, so it wins.
+        assert_eq!(
+            resolve_if_speed(Some(1_000_000_000.0), Some(1000.0)),
+            Some(1_000_000_000)
+        );
+    }
+
+    #[test]
+    fn resolve_if_speed_uses_high_speed_when_saturated() {
+        // 10 Gbps: ifSpeed saturates at u32::MAX, ifHighSpeed (10000 Mbps) gives the true rate.
+        assert_eq!(
+            resolve_if_speed(Some(u32::MAX as f64), Some(10_000.0)),
+            Some(10_000_000_000)
+        );
+        // 100 Gbps with ifSpeed absent entirely → ifHighSpeed (100000 Mbps).
+        assert_eq!(
+            resolve_if_speed(None, Some(100_000.0)),
+            Some(100_000_000_000)
+        );
+    }
+
+    #[test]
+    fn resolve_if_speed_keeps_sub_mbps_precision() {
+        // A 64 kbps link: ifHighSpeed rounds to 0, so the exact ifSpeed must be kept.
+        assert_eq!(resolve_if_speed(Some(64_000.0), Some(0.0)), Some(64_000));
+    }
+
+    #[test]
+    fn resolve_if_speed_drops_invalid_and_handles_absence() {
+        assert_eq!(resolve_if_speed(None, None), None);
+        // Non-finite / negative ifSpeed is dropped; falls back to ifHighSpeed when present.
+        assert_eq!(resolve_if_speed(Some(f64::INFINITY), None), None);
+        assert_eq!(resolve_if_speed(Some(-1.0), None), None);
+        assert_eq!(
+            resolve_if_speed(Some(f64::NAN), Some(40_000.0)),
+            Some(40_000_000_000)
+        );
+        // ifSpeed reporting the saturated cap with no ifHighSpeed → best-effort, keep the cap.
+        assert_eq!(
+            resolve_if_speed(Some(u32::MAX as f64), None),
+            Some(u32::MAX as i64)
+        );
+    }
+
+    /// ifHighSpeed (walked poller-side, not a bus column) overrides a saturated ifSpeed so a
+    /// 10 Gbps interface stores its true rate, not the 32-bit cap.
+    #[tokio::test]
+    async fn snmp_table_high_speed_overrides_saturated_if_speed() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // One numeric metric sample so the poll counts as reachable.
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 1,
+                value: 10.0,
+            },
+            // ifSpeed saturated at the 32-bit cap.
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.2.2.1.5".to_owned(),
+                ifindex: 1,
+                value: u32::MAX as f64,
+            },
+            // ifHighSpeed = 10000 Mbps (walked from OID_IF_HIGH_SPEED).
+            SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 1,
+                value: 10_000.0,
+            },
+        ]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        let iface = r
+            .interfaces
+            .iter()
+            .find(|i| i.ifindex == IfIndex(1))
+            .expect("ifIndex 1 discovered");
+        assert_eq!(iface.if_speed, Some(10_000_000_000));
     }
 }
