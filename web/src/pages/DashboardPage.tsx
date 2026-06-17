@@ -2,8 +2,8 @@
 // today: status summary (node states), active alerts (live SSE), and a Top-N-style RTT chart
 // for a chosen node. Other recommended widgets (heatmap, SLA, throughput) wait on endpoints.
 
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatRtt, pointsToSeries } from '../lib/format';
 import { api, ApiError } from '../services/api';
 import { useAlertStream } from '../hooks/useAlertStream';
@@ -25,7 +25,19 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [nodesLoading, setNodesLoading] = useState(true);
-  const [selected, setSelected] = useState<string | null>(null);
+  // The charted node lives in the URL (`?node=<id>`) so a reload restores the same chart instead of
+  // snapping back to the first node (design-guidelines.md "画面状態の永続化").
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected = searchParams.get('node');
+  const setSelected = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(searchParams);
+      if (id) params.set('node', id);
+      else params.delete('node');
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
     values: [],
@@ -39,7 +51,6 @@ export function DashboardPage() {
       .then((ns) => {
         if (cancelled) return;
         setNodes(ns);
-        setSelected((cur) => cur ?? ns[0]?.id ?? null);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -49,6 +60,17 @@ export function DashboardPage() {
       cancelled = true;
     };
   }, []);
+
+  // Default/validate the charted node once the list loads: keep the URL's pin if it still exists,
+  // otherwise fall back to the first node (written back to the URL so a reload is stable).
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const cur = searchParams.get('node');
+    if (cur && nodes.some((n) => n.id === cur)) return;
+    const params = new URLSearchParams(searchParams);
+    params.set('node', nodes[0].id);
+    setSearchParams(params, { replace: true });
+  }, [nodes, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!selected) return;

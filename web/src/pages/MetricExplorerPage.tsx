@@ -3,6 +3,7 @@
 // catalog API doesn't exist yet; icmp_rtt_ms is the one always present today.
 
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { pointsToSeries } from '../lib/format';
 import { api, ApiError } from '../services/api';
 import type { NodeSummary } from '../types/api';
@@ -15,10 +16,34 @@ import { RangeControl, resolveRange } from '../components/NodeDetail/RangeContro
 import { useRangeStore } from '../store';
 import './MetricExplorerPage.css';
 
+const DEFAULT_METRIC = 'icmp_rtt_ms';
+
 export function MetricExplorerPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
-  const [node, setNode] = useState('');
-  const [metric, setMetric] = useState('icmp_rtt_ms');
+  // Node + metric live in the URL so a reload restores the query and the view is shareable
+  // (design-guidelines.md "画面状態の永続化"). The time range is the app-wide shared range store,
+  // which is itself persisted across reload.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const node = searchParams.get('node') ?? '';
+  // `has` (not `??`) so a deliberately-emptied box stays empty instead of snapping back to default.
+  const metric = searchParams.has('metric') ? (searchParams.get('metric') ?? '') : DEFAULT_METRIC;
+  const setNode = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(searchParams);
+      if (id) params.set('node', id);
+      else params.delete('node');
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+  const setMetric = useCallback(
+    (m: string) => {
+      const params = new URLSearchParams(searchParams);
+      params.set('metric', m);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
@@ -33,12 +58,22 @@ export function MetricExplorerPage() {
       .listNodes()
       .then((ns) => {
         setNodes(ns);
-        setNode((cur) => cur || ns[0]?.id || '');
         // Nothing to query against — stop waiting so the chart shows its empty state.
         if (ns.length === 0) setLoading(false);
       })
       .catch(() => setLoading(false));
   }, []);
+
+  // Default/validate the queried node once the list loads: keep a valid URL pin, else fall back to
+  // the first node (written back to the URL so a reload is stable).
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const cur = searchParams.get('node');
+    if (cur && nodes.some((n) => n.id === cur)) return;
+    const params = new URLSearchParams(searchParams);
+    params.set('node', nodes[0].id);
+    setSearchParams(params, { replace: true });
+  }, [nodes, searchParams, setSearchParams]);
 
   const run = useCallback(() => {
     if (!node || !metric) return;

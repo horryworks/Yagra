@@ -3,10 +3,18 @@
 // an SSE re-delivery upserts rather than duplicates.
 
 import { create } from 'zustand';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { severityRank } from './lib/format';
 import { getToken } from './services/api';
 import type { Alert } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
+
+// sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
+// node env (no sessionStorage) without a persist warning.
+const sessionStore = (): StateStorage =>
+  typeof sessionStorage !== 'undefined'
+    ? sessionStorage
+    : { getItem: () => null, setItem: () => undefined, removeItem: () => undefined };
 
 // Shared authentication state so the app-level login gate and the Admin pane stay in
 // sync (a single source of truth for "am I logged in"). The token itself lives in the
@@ -23,16 +31,23 @@ export const useAuthStore = create<AuthStore>((set) => ({
 
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces
 // dock, the Metric explorer) carries to the others across navigation — one source of truth for the
-// active window. In-memory (like the stores above): it survives route changes, not a full reload.
+// active window. Persisted to sessionStorage so a browser reload restores the same window instead
+// of snapping back to the default (design-guidelines.md "画面状態の永続化"); sessionStorage (not
+// localStorage) scopes it to the tab/session, matching "reload shows the same view".
 interface RangeStore {
   range: Range;
   setRange: (range: Range) => void;
 }
 
-export const useRangeStore = create<RangeStore>((set) => ({
-  range: DEFAULT_RANGE,
-  setRange: (range) => set({ range }),
-}));
+export const useRangeStore = create<RangeStore>()(
+  persist(
+    (set) => ({
+      range: DEFAULT_RANGE,
+      setRange: (range) => set({ range }),
+    }),
+    { name: 'yagra.range', storage: createJSONStorage(sessionStore) },
+  ),
+);
 
 export function alertKey(a: Pick<Alert, 'node' | 'check' | 'severity'>): string {
   return `${a.node}|${a.check}|${a.severity}`;
