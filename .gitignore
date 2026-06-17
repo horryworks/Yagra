@@ -35,7 +35,4 @@ npm-debug.log*
 # developer/assistant config and are not committed.
 .claude/
 CLAUDE.md
-
-# ── Internal design / requirements documents (kept local, not pushed) ──
-yagra-requirements_1.md
-design-system.md
+# Internal design/requirements docs now live under .claude/docs/ — covered by .claude/ above.

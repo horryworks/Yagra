@@ -1,4 +1,4 @@
-// Placeholder for IA entries whose backend isn't built yet (design-system.md §5 lists these
+// Placeholder for IA entries whose backend isn't built yet (.claude/docs/design-system.md §5 lists these
 // as 🔶 spec-only / ⏸ deferred). The nav entry is intentionally present so the information
 // architecture stays whole; this screen states plainly that the backend is pending so it's
 // never mistaken for a broken page. Resolves its own title from the nav by current path.
