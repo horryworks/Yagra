@@ -3,6 +3,7 @@ import {
   deriveMem,
   formatBps,
   formatBytes,
+  formatCount,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -56,6 +57,17 @@ describe('format', () => {
     expect(formatBps(500)).toBe('500 bps');
     expect(formatBps(2_500)).toBe('2.5 kbps');
     expect(formatBps(1_000_000_000)).toBe('1.0 Gbps');
+  });
+
+  it('formats a count: rounds to whole, groups via the locale, dash when non-finite', () => {
+    // Grouping is delegated to the platform locale (i18n-ready) — assert against the same call
+    // rather than a hardcoded separator so the test is locale-independent.
+    expect(formatCount(0)).toBe('0');
+    expect(formatCount(12_840)).toBe((12_840).toLocaleString());
+    expect(formatCount(1_234_567)).toBe((1_234_567).toLocaleString());
+    expect(formatCount(199.6)).toBe((200).toLocaleString()); // rounds to whole
+    expect(formatCount(Number.NaN)).toBe('—');
+    expect(formatCount(Number.POSITIVE_INFINITY)).toBe('—');
   });
 
   it('formats utilization percentage and a dash when unknown', () => {
