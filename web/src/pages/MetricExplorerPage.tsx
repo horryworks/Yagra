@@ -11,19 +11,14 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { MetricChart } from '../components/MetricChart/MetricChart';
+import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from '../components/NodeDetail/RangeControl';
 import './MetricExplorerPage.css';
-
-const RANGES: { label: string; secs: number }[] = [
-  { label: 'Last 1h', secs: 3600 },
-  { label: 'Last 6h', secs: 6 * 3600 },
-  { label: 'Last 24h', secs: 24 * 3600 },
-];
 
 export function MetricExplorerPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [node, setNode] = useState('');
   const [metric, setMetric] = useState('icmp_rtt_ms');
-  const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
+  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
     values: [],
@@ -46,16 +41,16 @@ export function MetricExplorerPage() {
   const run = useCallback(() => {
     if (!node || !metric) return;
     setError(null);
-    const to = Math.floor(Date.now() / 1000);
+    const { from, to } = resolveRange(range);
     api
-      .getNodeMetricRange(node, metric, { from: to - rangeSecs, to })
+      .getNodeMetricRange(node, metric, { from, to })
       .then((r) => setSeries(pointsToSeries(r.points)))
       .catch((e: unknown) => {
         setSeries({ timestamps: [], values: [] });
         setError(e instanceof ApiError ? e.message : 'query failed');
       })
       .finally(() => setLoading(false));
-  }, [node, metric, rangeSecs]);
+  }, [node, metric, range]);
 
   useEffect(() => {
     run();
@@ -88,16 +83,10 @@ export function MetricExplorerPage() {
             />
             <FieldHint>TSDB series name (e.g. icmp_rtt_ms, snmp_oid_*) — not a display label.</FieldHint>
           </label>
-          <label className="form-label">
+          <div className="form-label">
             Range
-            <Select value={rangeSecs} onChange={(e) => setRangeSecs(Number(e.target.value))}>
-              {RANGES.map((r) => (
-                <option key={r.secs} value={r.secs}>
-                  {r.label}
-                </option>
-              ))}
-            </Select>
-          </label>
+            <RangeControl value={range} onChange={setRange} />
+          </div>
           <Button variant="primary" onClick={run} disabled={!node || !metric}>
             Run
           </Button>

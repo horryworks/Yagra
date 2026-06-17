@@ -224,11 +224,6 @@
   gap: 12px;
 }
 
-.nd-windows {
-  display: flex;
-  gap: 6px;
-}
-
 /* ---------------- Overview ---------------- */
 .nd-overview {
   padding: 16px 20px 22px;
