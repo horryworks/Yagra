@@ -4,7 +4,7 @@
 //   - 'seal' (default): the orange tile + mark — top bar / home / app icon.
 //   - 'mark': just the off-white kamon on transparent — for placing ON a brand-orange
 //     surface (the login panel is itself the seal at panel scale).
-// NOTE: design-system.md says reference assets/logo/ and not recreate the logo, but no logo
+// NOTE: .claude/docs/design-system.md says reference assets/logo/ and not recreate the logo, but no logo
 // assets exist in the repo yet; this is a faithful placeholder. Brand colors are the one
 // hardcode exemption (a physical brand surface, fixed in both themes — §1.2).
 
