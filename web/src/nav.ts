@@ -29,7 +29,7 @@ export const NAV: NavSection[] = [
     path: '/dashboard',
     items: [
       { label: 'Overview', path: '/dashboard', implemented: true, mono: 'Ov' },
-      { label: 'My dashboards', path: '/dashboard/my', implemented: false, mono: 'My' },
+      { label: 'My dashboard', path: '/dashboard/my', implemented: true, mono: 'My' },
       { label: 'Templates', path: '/dashboard/templates', implemented: false, mono: 'Tp' },
     ],
   },

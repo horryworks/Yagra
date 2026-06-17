@@ -1,0 +1,40 @@
+.kpitile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kpitile-value {
+  font-size: 34px;
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpitile-caption {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.kpitile-delta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: var(--font-sm);
+  /* Delta is categorical (a change, not a node state) — keep it off the status channel. */
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpitile-delta-arrow {
+  font-size: var(--font-xs);
+}
+
+.kpitile-delta-label {
+  color: var(--text-tertiary);
+}

@@ -40,6 +40,17 @@ export interface MetricRange {
   points: MetricPoint[];
 }
 
+/** Aggregation for the fleet Top-N endpoint: `now` = most recent value; `max_1h` = hourly peak. */
+export type MetricTopAgg = 'now' | 'max_1h';
+
+/** One ranked node in a fleet Top-N result (`GET /api/v1/metrics/top`). `name` is joined from
+ *  PostgreSQL (TSDB carries only the id); it falls back to the id for a since-deleted node. */
+export interface TopEntry {
+  node_id: string;
+  name: string;
+  value: number;
+}
+
 /** An alert as produced by the engine (`yagra_alert::Alert`). */
 export interface Alert {
   node: string;

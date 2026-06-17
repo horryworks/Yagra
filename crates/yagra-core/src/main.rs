@@ -16,6 +16,7 @@ mod auth;
 mod classification;
 mod collection;
 mod config;
+mod dashboard;
 mod discovery;
 mod groups;
 mod history;
@@ -40,6 +41,7 @@ use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
+use dashboard::DashboardRepo;
 use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
@@ -218,6 +220,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classifier,
         groups: Arc::new(groups::GroupRepo::new(repo.pool())),
         audit: Arc::new(AuditRepo::new(repo.pool())),
+        dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         poll: dispatcher,
     }));
     let sessions = Arc::new(SessionStore::new());

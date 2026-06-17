@@ -12,6 +12,7 @@ use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
+use crate::dashboard::DashboardRepo;
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
 use crate::history::AlertHistoryStore;
@@ -21,7 +22,7 @@ use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
-use crate::store::{MetricPoint, MetricStore};
+use crate::store::{MetricPoint, MetricStore, TopAgg};
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{Path, Query, Request, State},
@@ -64,6 +65,8 @@ pub struct AdminState {
     pub classifier: Arc<Classifier>,
     pub groups: Arc<GroupRepo>,
     pub audit: Arc<AuditRepo>,
+    /// Per-user "My Dashboard" widget layouts (server-side persistence).
+    pub dashboards: Arc<DashboardRepo>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
     /// manual poll matches a periodic one. Bus-only (core⇄poller never call directly, ADR-003).
     pub poll: Arc<PollDispatcher>,
@@ -128,6 +131,7 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/nodes/:node_id/metrics/:metric/range",
             get(get_node_metric_range),
         )
+        .route("/api/v1/metrics/top", get(top_metrics))
         .route(
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
@@ -231,6 +235,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/mutes", get(list_mutes).post(create_mute))
         .route("/api/v1/mutes/:id", delete(delete_mute))
         .route("/api/v1/audit", get(list_audit))
+        .route("/api/v1/dashboard", get(get_dashboard).put(put_dashboard))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
         .layer(middleware::from_fn_with_state(state.clone(), audit_mw))
@@ -620,6 +625,75 @@ async fn get_node_metric_range(
         points,
     })
     .into_response()
+}
+
+/// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
+#[derive(Deserialize)]
+struct TopQuery {
+    /// Metric to rank by (validated identifier).
+    metric: String,
+    /// `now` (default) ⇒ most recent value; `max_1h` ⇒ trailing-hour peak.
+    agg: Option<String>,
+    /// How many nodes to return (default 5, clamped 1..=50).
+    limit: Option<usize>,
+}
+
+/// One ranked node in a Top-N result.
+#[derive(Serialize)]
+struct TopEntry {
+    node_id: Uuid,
+    /// Display name, joined from PostgreSQL (TSDB carries only the id, ADR-011); falls back to
+    /// the id string if the node has since been deleted.
+    name: String,
+    value: f64,
+}
+
+/// Fleet-wide Top-N for a metric: the highest-value nodes right now (or by hourly peak).
+/// Powers the dashboard "Top RTT / CPU / memory / …" widgets from one endpoint.
+async fn top_metrics(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<TopQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    if !is_valid_metric_name(&q.metric) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_name",
+            format!("metric name {:?} is not a valid identifier", q.metric),
+        );
+    }
+    let agg = match q.agg.as_deref() {
+        None | Some("now") => TopAgg::Now,
+        Some("max_1h") => TopAgg::Max1h,
+        Some(other) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_agg",
+                format!("agg must be 'now' or 'max_1h', got {other:?}"),
+            )
+        }
+    };
+    let limit = q.limit.unwrap_or(5).clamp(1, 50);
+    let ranked = st.store.top_nodes(&q.metric, agg, limit).await;
+    // Join node id → name (TSDB labels carry only the id, ADR-011). Best-effort: in skeleton
+    // mode (no repo) or for a since-deleted node the row keeps the id string as its name.
+    let ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
+    let names = match st.admin.as_ref() {
+        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        None => std::collections::HashMap::new(),
+    };
+    let out: Vec<TopEntry> = ranked
+        .into_iter()
+        .map(|(id, value)| TopEntry {
+            node_id: id,
+            name: names.get(&id).cloned().unwrap_or_else(|| id.to_string()),
+            value,
+        })
+        .collect();
+    Json(out).into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).
@@ -3346,6 +3420,102 @@ async fn list_audit(
     }
 }
 
+// ── My Dashboard (per-user widget layout) ────────────────────────────────────
+
+/// Max accepted size of a saved dashboard layout (serialized JSON). A real layout is a few KB;
+/// this caps abuse without constraining legitimate use. Enforced at the edge before the DB.
+const MAX_DASHBOARD_BYTES: usize = 65_536;
+
+/// Resolve the caller's session (a *real* authenticated user — public-dashboard mode does not
+/// apply here, since "My Dashboard" is inherently per-account). Returns the session or a boxed
+/// error response to short-circuit with (boxed so the `Ok` path stays cheap — `clippy::result_large_err`).
+fn require_session(
+    st: &ApiState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Session, Box<Response>> {
+    st.sessions
+        .authorize(bearer(headers), Permission::View)
+        .map_err(|e| {
+            Box::new(match e {
+                AuthError::Forbidden => error_response(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "your role does not permit this action".to_owned(),
+                ),
+                _ => error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "a valid bearer token is required".to_owned(),
+                ),
+            })
+        })
+}
+
+/// The caller's saved dashboard layout, or `null` when they have never saved one (the WebUI
+/// then renders its default layout). Always scoped to the authenticated caller.
+async fn get_dashboard(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let session = match require_session(&st, &headers) {
+        Ok(s) => s,
+        Err(resp) => return *resp,
+    };
+    match admin.dashboards.get_for_user(&session.username).await {
+        // No saved layout ⇒ explicit JSON null so the client falls back to its default.
+        Ok(layout) => Json(layout.unwrap_or(serde_json::Value::Null)).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "get dashboard failed");
+            internal("failed to load the dashboard layout")
+        }
+    }
+}
+
+/// Save (replace) the caller's dashboard layout. The body is an opaque JSON object — the
+/// backend never interprets widget types (the WebUI owns and migrates the shape). Mutating, so
+/// the audit middleware records it automatically.
+async fn put_dashboard(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let session = match require_session(&st, &headers) {
+        Ok(s) => s,
+        Err(resp) => return *resp,
+    };
+    // Must be a JSON object (the layout document), and within the size cap.
+    if !body.is_object() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_layout",
+            "dashboard layout must be a JSON object".to_owned(),
+        );
+    }
+    if serde_json::to_vec(&body).map_or(usize::MAX, |v| v.len()) > MAX_DASHBOARD_BYTES {
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "layout_too_large",
+            format!("dashboard layout exceeds {MAX_DASHBOARD_BYTES} bytes"),
+        );
+    }
+    match admin
+        .dashboards
+        .upsert_for_user(&session.username, &body)
+        .await
+    {
+        Ok(true) => Json(serde_json::json!({ "ok": true })).into_response(),
+        // A valid session whose account vanished mid-request — treat as gone.
+        Ok(false) => not_found("user_not_found", "no such user account".to_owned()),
+        Err(e) => {
+            tracing::error!(error = %e, "save dashboard failed");
+            internal("failed to save the dashboard layout")
+        }
+    }
+}
+
 // ── Maintenance windows + mutes ──────────────────────────────────────────────
 
 /// Parse an RFC 3339 timestamp from the API edge into UTC.
@@ -4222,5 +4392,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn top_metrics_empty_on_in_memory_store() {
+        // Public-dashboard read; the in-memory sink can't rank a fleet, so the result is [].
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics/top?metric=icmp_rtt_ms")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn top_metrics_rejects_invalid_metric_and_agg() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let bad_metric = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics/top?metric=up}+or+vector(1)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_metric.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(bad_metric).await["error"]["code"],
+            "invalid_metric_name"
+        );
+
+        let bad_agg = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics/top?metric=icmp_rtt_ms&agg=bogus")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad_agg.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(bad_agg).await["error"]["code"], "invalid_agg");
+    }
+
+    #[tokio::test]
+    async fn dashboard_unavailable_without_admin() {
+        // Skeleton has no user store; "My Dashboard" persistence needs the admin/DB side.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[test]
+    fn require_session_gates_on_a_real_token() {
+        // "My Dashboard" is per-account, so its handlers demand a real session even in
+        // public-dashboard mode — unlike `require_view`, which is open then.
+        let (state, token) = private_state_with(Arc::new(InMemorySink::default()));
+
+        // No bearer ⇒ 401.
+        let empty = HeaderMap::new();
+        let denied = require_session(&state, &empty).expect_err("no token must be rejected");
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED); // Box<Response> derefs for .status()
+
+        // Valid bearer ⇒ the caller's session (scopes the layout to this username).
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        let session = require_session(&state, &headers).expect("valid token authorizes");
+        assert_eq!(session.username, "viewer1");
     }
 }

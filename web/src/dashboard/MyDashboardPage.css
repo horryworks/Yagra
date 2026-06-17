@@ -1,0 +1,58 @@
+/* 12-column responsive board. Each widget cell sets its column span via .mydash-span-N. */
+.mydash-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.mydash-span-4 {
+  grid-column: span 4;
+}
+.mydash-span-6 {
+  grid-column: span 6;
+}
+.mydash-span-8 {
+  grid-column: span 8;
+}
+.mydash-span-12 {
+  grid-column: span 12;
+}
+
+/* ≤1180px: collapse to a 6-col grid — halves stay halves, two-thirds/full become full. */
+@media (max-width: 1180px) {
+  .mydash-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  .mydash-span-4 {
+    grid-column: span 3;
+  }
+  .mydash-span-6 {
+    grid-column: span 6;
+  }
+  .mydash-span-8,
+  .mydash-span-12 {
+    grid-column: span 6;
+  }
+}
+
+/* ≤720px: everything full width. */
+@media (max-width: 720px) {
+  .mydash-grid {
+    grid-template-columns: 1fr;
+  }
+  .mydash-span-4,
+  .mydash-span-6,
+  .mydash-span-8,
+  .mydash-span-12 {
+    grid-column: 1 / -1;
+  }
+}
+
+.mydash-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 40px 0;
+}

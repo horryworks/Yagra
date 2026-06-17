@@ -1,0 +1,75 @@
+.donut {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.donut-svg {
+  width: 120px;
+  height: 120px;
+  flex: none;
+}
+
+.donut-track {
+  fill: none;
+  stroke: var(--bg-tertiary);
+  stroke-width: 4;
+}
+
+.donut-seg {
+  fill: none;
+  stroke-width: 4;
+  /* Round joins read cleaner where segments meet. */
+  stroke-linecap: butt;
+}
+
+.donut-center-value {
+  fill: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: 9px;
+  font-weight: var(--weight-medium);
+}
+
+.donut-center-sub {
+  fill: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.donut-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm);
+}
+
+.donut-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.donut-legend-label {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.donut-legend-value {
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-variant-numeric: tabular-nums;
+}

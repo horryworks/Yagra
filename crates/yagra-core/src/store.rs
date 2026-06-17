@@ -8,10 +8,20 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
+use uuid::Uuid;
 use yagra_bus::PollResult;
 use yagra_common::SeriesKey;
 
 use crate::sink::InMemorySink;
+
+/// How a fleet Top-N collapses each node's series to a single rankable value over the lookback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopAgg {
+    /// The most recent value within the instant lookback window (the value "now").
+    Now,
+    /// The peak value over the trailing hour (sustained hotspots, robust to a momentary dip).
+    Max1h,
+}
 
 /// One point of a time series: Unix-seconds timestamp and value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -62,6 +72,12 @@ pub trait MetricStore: Send + Sync {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint>;
+    /// The `limit` nodes with the highest value for `metric`, fleet-wide, as `(node_id, value)`
+    /// pairs sorted descending. Any per-entity/per-interface series is collapsed to a node max,
+    /// so the ranking is by node and the result carries only the node id (names are joined from
+    /// PostgreSQL at the API edge, ADR-011). `metric` must be a validated identifier. Empty if
+    /// the store has no such data (e.g. the in-memory sink).
+    async fn top_nodes(&self, metric: &str, agg: TopAgg, limit: usize) -> Vec<(Uuid, f64)>;
 }
 
 #[async_trait]
@@ -116,6 +132,11 @@ impl MetricStore for InMemorySink {
         _step_s: u64,
     ) -> Vec<MetricPoint> {
         // No history ⇒ no aggregate series.
+        Vec::new()
+    }
+
+    async fn top_nodes(&self, _metric: &str, _agg: TopAgg, _limit: usize) -> Vec<(Uuid, f64)> {
+        // The skeleton sink holds a single demo series, not a fleet — nothing to rank.
         Vec::new()
     }
 }
@@ -263,6 +284,60 @@ fn aggregate_range_query(key: &SeriesKey) -> String {
     format!("max({})", node_scope_selector(key))
 }
 
+/// Trailing window for the `Max1h` Top-N aggregate.
+const MAX_WINDOW_SECS: u64 = 3600;
+
+/// Fleet Top-N PromQL: rank nodes by their value for `metric`. `max by (node)` collapses any
+/// per-entity/per-interface series to one value per node (and drops every label but `node`, so
+/// the result is keyed cleanly by node id); `topk` keeps the highest `limit`. `Now` reads the
+/// most recent value within the instant lookback (jitter-robust); `Max1h` takes the hourly peak.
+/// `metric` is a caller-validated identifier (`is_valid_metric_name` at the API edge), so it is
+/// safe to interpolate into the selector.
+fn topk_query(metric: &str, agg: TopAgg, limit: usize) -> String {
+    let n = limit.clamp(1, 100);
+    match agg {
+        TopAgg::Now => {
+            format!("topk({n}, max by (node) (last_over_time({metric}[{INSTANT_LOOKBACK_SECS}s])))")
+        }
+        TopAgg::Max1h => {
+            format!("topk({n}, max by (node) (max_over_time({metric}[{MAX_WINDOW_SECS}s])))")
+        }
+    }
+}
+
+/// Parse a VictoriaMetrics instant-query response into `(node_id, value)` pairs: each
+/// `data.result[]` series contributes its `metric.node` label (parsed as a UUID) and
+/// `value[1]` (the string-encoded sample). Series without a parseable node label or value are
+/// skipped. Split out for unit-testing the parse without a live TSDB.
+fn parse_top_nodes(json: &serde_json::Value) -> Vec<(Uuid, f64)> {
+    let Some(results) = json
+        .get("data")
+        .and_then(|d| d.get("result"))
+        .and_then(|r| r.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(results.len());
+    for series in results {
+        let node = series
+            .get("metric")
+            .and_then(|m| m.get("node"))
+            .and_then(|n| n.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        let value = series
+            .get("value")
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok());
+        if let (Some(node), Some(value)) = (node, value) {
+            out.push((node, value));
+        }
+    }
+    // VM returns topk highest-first, but sort defensively so callers can rely on the order.
+    out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
 #[async_trait]
 impl MetricStore for VmStore {
     async fn write(&self, result: &PollResult) {
@@ -382,6 +457,27 @@ impl MetricStore for VmStore {
         self.query_range_points(aggregate_range_query(key), from_s, to_s, step_s)
             .await
     }
+
+    async fn top_nodes(&self, metric: &str, agg: TopAgg, limit: usize) -> Vec<(Uuid, f64)> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[("query", topk_query(metric, agg, limit))])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics topk query failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        parse_top_nodes(&json)
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +583,68 @@ mod tests {
         assert!(MetricStore::rate_range(&store, &key, 0, 3600, 60, 300)
             .await
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_has_no_top_nodes() {
+        let store = InMemorySink::default();
+        assert!(
+            MetricStore::top_nodes(&store, "icmp_rtt_ms", TopAgg::Now, 5)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn topk_now_collapses_to_node_max_within_lookback() {
+        assert_eq!(
+            topk_query("icmp_rtt_ms", TopAgg::Now, 5),
+            "topk(5, max by (node) (last_over_time(icmp_rtt_ms[1800s])))"
+        );
+    }
+
+    #[test]
+    fn topk_max_1h_uses_hourly_peak() {
+        assert_eq!(
+            topk_query("cisco_cpu_5min", TopAgg::Max1h, 3),
+            "topk(3, max by (node) (max_over_time(cisco_cpu_5min[3600s])))"
+        );
+    }
+
+    #[test]
+    fn topk_clamps_limit_into_range() {
+        assert!(topk_query("m", TopAgg::Now, 0).starts_with("topk(1,"));
+        assert!(topk_query("m", TopAgg::Now, 9999).starts_with("topk(100,"));
+    }
+
+    #[test]
+    fn parse_top_nodes_extracts_node_and_value_sorted_desc() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let json = serde_json::json!({
+            "data": { "result": [
+                { "metric": { "node": a.to_string() }, "value": [1_000, "12.5"] },
+                { "metric": { "node": b.to_string() }, "value": [1_000, "44.0"] },
+            ]}
+        });
+        let out = parse_top_nodes(&json);
+        // Highest-first regardless of input order.
+        assert_eq!(out, vec![(b, 44.0), (a, 12.5)]);
+    }
+
+    #[test]
+    fn parse_top_nodes_skips_unparseable_series_and_empty() {
+        let good = Uuid::new_v4();
+        let json = serde_json::json!({
+            "data": { "result": [
+                { "metric": {}, "value": [1, "1.0"] },                       // no node label
+                { "metric": { "node": "not-a-uuid" }, "value": [1, "1.0"] }, // bad node
+                { "metric": { "node": good.to_string() }, "value": [1, "x"] }, // bad value
+                { "metric": { "node": good.to_string() }, "value": [1, "9.0"] },
+            ]}
+        });
+        assert_eq!(parse_top_nodes(&json), vec![(good, 9.0)]);
+        assert!(parse_top_nodes(&serde_json::json!({})).is_empty());
     }
 
     #[tokio::test]

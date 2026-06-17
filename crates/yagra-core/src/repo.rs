@@ -397,6 +397,22 @@ impl NodeRepo {
             .collect()
     }
 
+    /// The display name of each of the given node ids, in one query. For joining TSDB results
+    /// (which carry only the node id, ADR-011) back to human-readable names — e.g. the fleet
+    /// Top-N endpoint. Ids absent from the map default to the id string at the call site.
+    pub async fn node_names(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, String>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query("SELECT id, name FROM nodes WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("name")?)))
+            .collect()
+    }
+
     /// Upsert an interface discovered during a table walk: insert it, or refresh its
     /// metadata and `last_seen`. Names/aliases are device-supplied metadata kept in
     /// PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011). A
