@@ -10,9 +10,9 @@ target/
 .github/
 
 # Local-only config / internal docs (never needed in an image, keep out of layers).
+# (Design/requirements docs live under .claude/docs/ — covered by .claude/ below.)
 .claude/
 CLAUDE.md
-yagra-requirements_1.md
 
 # Frontend deps/build (web image uses its own context + .dockerignore).
 web/node_modules/

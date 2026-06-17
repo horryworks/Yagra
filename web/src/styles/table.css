@@ -3,7 +3,7 @@
 
    Replaces the older two looks (the ALL-CAPS zebra `.ytable` and the flat `.crud-list` rows)
    with one polished, dense, accessible standard. Built strictly on the tokens in tokens.css —
-   no hardcoded color/size here. Compliance with design-system.md:
+   no hardcoded color/size here. Compliance with .claude/docs/design-system.md:
      §1.4  sentence-case headers (NO all-caps — fixes the old `.ytable` defect)
      §1.1  brand orange = active/focus/selected/sort chrome ONLY
      §1.3  status = dot + status-palette color only; categorical things (type/method/role) stay neutral
