@@ -1,0 +1,228 @@
+/* Time-range selector: joined preset segments + a calendar button that opens a custom-range
+   popover. The canonical duration/range picker — reused by every chart window. Tokens only; the
+   only fixed numbers are the control dimensions from the design handoff (heights, popover size). */
+
+.rc {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- joined segmented presets ---- */
+.rc-seg {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.rc-seg-btn {
+  min-width: 30px;
+  padding: 0 9px;
+  border: none;
+  border-left: var(--border-width) solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    color var(--transition);
+}
+
+.rc-seg-btn:first-child {
+  border-left: none;
+}
+
+.rc-seg-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.rc-seg-btn.active {
+  background: var(--brand);
+  color: var(--brand-mark);
+}
+
+/* ---- calendar / custom-range trigger ---- */
+.rc-cal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    color var(--transition),
+    border-color var(--transition);
+}
+
+.rc-cal:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.rc-cal.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-mark);
+}
+
+.rc-cal-icon {
+  flex: none;
+}
+
+.rc-cal-readout {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+/* ---- custom-range popover ---- */
+.rc-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  box-shadow: 0 12px 34px var(--overlay);
+}
+
+.rc-pop-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rc-pop-label {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.rc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rc-chip {
+  height: 24px;
+  padding: 0 9px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    color var(--transition),
+    border-color var(--transition);
+}
+
+.rc-chip:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.rc-chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-mark);
+}
+
+.rc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rc-field-label {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.rc-input {
+  height: 30px;
+  padding: 0 9px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+}
+
+.rc-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.rc-pop-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rc-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    border-color var(--transition);
+}
+
+.rc-btn:hover {
+  border-color: var(--text-tertiary);
+}
+
+.rc-btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-mark);
+}
+
+.rc-btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.rc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

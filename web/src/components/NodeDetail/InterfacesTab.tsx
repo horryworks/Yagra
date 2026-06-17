@@ -11,10 +11,10 @@ import { api } from '../../services/api';
 import { formatBps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
-import { Button } from '../ui/Button';
 import { TextInput } from '../ui/Field';
 import { MetricChart } from '../MetricChart/MetricChart';
-import { operState, RANGES } from './OverviewTab';
+import { operState } from './OverviewTab';
+import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from './RangeControl';
 import { latestErrorRate, sparklinePath } from './interfaceMetrics';
 
 const STATUS_REFRESH_MS = 15_000;
@@ -273,15 +273,15 @@ function InterfaceDock({
   row: InterfaceRow;
   onClose: () => void;
 }) {
-  const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
+  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      const to = Math.floor(Date.now() / 1000);
+      const { from, to } = resolveRange(range);
       api
-        .getInterfaceSeries(nodeId, row.ifindex, { from: to - rangeSecs, to })
+        .getInterfaceSeries(nodeId, row.ifindex, { from, to })
         .then((s) => !cancelled && setSeries(s))
         .catch(() => undefined);
     };
@@ -292,7 +292,7 @@ function InterfaceDock({
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId, row.ifindex, rangeSecs]);
+  }, [nodeId, row.ifindex, range]);
 
   const ts = series?.timestamps ?? [];
   const hasData = ts.length > 0;
@@ -319,17 +319,7 @@ function InterfaceDock({
               </span>
             )}
           </span>
-          <div className="nd-windows">
-            {RANGES.map((r) => (
-              <Button
-                key={r.secs}
-                variant={rangeSecs === r.secs ? 'primary' : 'outline'}
-                onClick={() => setRangeSecs(r.secs)}
-              >
-                {r.label}
-              </Button>
-            ))}
-          </div>
+          <RangeControl value={range} onChange={setRange} />
         </div>
         <button
           type="button"
