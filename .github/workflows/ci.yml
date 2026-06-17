@@ -1,7 +1,11 @@
-# Continuous integration: validate the workspace on every push / PR. No deploy, no
-# registry push — that is `deploy-test.yml`'s job. The `images` job builds the Docker
-# images (without pushing) so build breakage — including the Dockerfile's pinned Rust
-# version (MSRV) — is caught here, even though images are only published on deploy.
+# Continuous integration: validate the workspace on every push / PR. The `images` job builds the
+# Docker images (pushing to GHCR only on main) so build breakage — including the Dockerfile's pinned
+# Rust version (MSRV) — is caught here; `deploy` publishes to the test server on main.
+#
+# Compute runs on SELF-HOSTED runners (label `yagra-build` for build/test/images, `yagra-test` for
+# deploy) to avoid GitHub-hosted Actions-minute billing — the repo, images (GHCR) and deploy stay on
+# GitHub, only the execution is local. A runner host needs: rustup, Node (setup-node fetches it),
+# and Docker + buildx. See the runner setup notes if a job fails with a missing toolchain.
 
 name: ci
 
@@ -14,7 +18,7 @@ on:
 jobs:
   backend:
     name: backend (rust)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, yagra-build]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -30,7 +34,7 @@ jobs:
 
   frontend:
     name: frontend (web)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, yagra-build]
     defaults:
       run:
         working-directory: web
@@ -49,7 +53,7 @@ jobs:
 
   images:
     name: docker image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, yagra-build]
     needs: [backend, frontend]
     permissions:
       contents: read
