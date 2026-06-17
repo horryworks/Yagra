@@ -765,6 +765,19 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-top?metric=errors');
   });
 
+  it('builds the alert aggregation paths', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getAlertTopNodes({ window: 3600, limit: 5 });
+    expect(spy).toHaveBeenCalledWith('/api/v1/alerts/top-nodes?window=3600&limit=5');
+    await api.getAlertCalendar(7);
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/alerts/calendar?days=7');
+    await api.getAlertTransitions(12);
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/alerts/transitions?limit=12');
+  });
+
   it('reads the saved dashboard layout (null when none saved)', async () => {
     mockFetch(200, null);
     const layout = await api.getDashboard();

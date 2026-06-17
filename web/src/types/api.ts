@@ -221,6 +221,30 @@ export interface AlertHistoryRow {
   resolved: boolean;
 }
 
+/** A chronic-offender row (`GET /api/v1/alerts/top-nodes`). */
+export interface AlertNodeCount {
+  node_id: string;
+  name: string;
+  count: number;
+}
+
+/** One weekday×hour heatmap cell (`GET /api/v1/alerts/calendar`); `dow` 0=Sun…6=Sat, hour 0–23 (UTC). */
+export interface CalendarBucket {
+  dow: number;
+  hour: number;
+  count: number;
+}
+
+/** A recent up/down transition (`GET /api/v1/alerts/transitions`). `resolved` = recovery to ok. */
+export interface AlertTransition {
+  node_id: string;
+  name: string;
+  state: NodeState;
+  severity: Severity;
+  resolved: boolean;
+  at_unix_ms: number;
+}
+
 /** A notification channel kind (yagra-core `ChannelKind`). */
 export type ChannelKind = 'webhook' | 'email';
 

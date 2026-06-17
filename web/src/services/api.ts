@@ -5,7 +5,10 @@
 import type {
   Alert,
   AlertHistoryRow,
+  AlertNodeCount,
+  AlertTransition,
   ApiErrorBody,
+  CalendarBucket,
   AuditRow,
   AuthMe,
   ChannelConfigInput,
@@ -490,6 +493,23 @@ export const api = {
   /** Recent alert history (default 100 rows). */
   listAlertHistory: (limit?: number): Promise<AlertHistoryRow[]> =>
     request(limit != null ? `/alerts/history?limit=${limit}` : '/alerts/history'),
+
+  /** Nodes generating the most alert fires over a trailing window (chronic offenders). */
+  getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<AlertNodeCount[]> => {
+    const params = new URLSearchParams();
+    if (opts?.window != null) params.set('window', String(opts.window));
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request(qs ? `/alerts/top-nodes?${qs}` : '/alerts/top-nodes');
+  },
+
+  /** Alert fires bucketed weekday×hour over the last `days` (heatmap). */
+  getAlertCalendar: (days?: number): Promise<CalendarBucket[]> =>
+    request(days != null ? `/alerts/calendar?days=${days}` : '/alerts/calendar'),
+
+  /** Recent up/down transitions (latest fires + recoveries). */
+  getAlertTransitions: (limit?: number): Promise<AlertTransition[]> =>
+    request(limit != null ? `/alerts/transitions?limit=${limit}` : '/alerts/transitions'),
 
   /** Notification channels (metadata only; the secret config is never returned). */
   listNotificationChannels: (): Promise<NotificationChannel[]> =>

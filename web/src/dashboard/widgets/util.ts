@@ -1,7 +1,13 @@
 // Pure helpers shared by the dashboard widgets (kept side-effect-free so they unit-test in the
 // node env). State roll-ups, worst-state precedence, and alert-history bucketing live here.
 
-import type { AlertHistoryRow, NodeGroup, NodeState, NodeSummary } from '../../types/api';
+import type {
+  AlertHistoryRow,
+  CalendarBucket,
+  NodeGroup,
+  NodeState,
+  NodeSummary,
+} from '../../types/api';
 
 /** Worst-first precedence for rolling a set of node states up to a single "group" state. */
 const SEVERITY_ORDER: NodeState[] = [
@@ -75,6 +81,16 @@ export function bucketAlertsByHour(
     if (idx >= 0 && idx < buckets.length) buckets[idx].count += 1;
   }
   return buckets;
+}
+
+/** Expand sparse weekday×hour buckets into a dense 7×24 matrix (`m[dow][hour]`), zero-filled.
+ *  For the alert-calendar heatmap. Out-of-range buckets are ignored. */
+export function calendarMatrix(buckets: CalendarBucket[]): number[][] {
+  const m: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  for (const b of buckets) {
+    if (b.dow >= 0 && b.dow < 7 && b.hour >= 0 && b.hour < 24) m[b.dow][b.hour] = b.count;
+  }
+  return m;
 }
 
 /** A per-region (top-level group) health roll-up. */

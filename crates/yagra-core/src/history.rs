@@ -59,6 +59,56 @@ impl AlertHistoryStore {
         Ok(())
     }
 
+    /// Nodes with the most alert **fires** (resolved=false) at or after `since_ms` (Unix ms),
+    /// highest first. Powers the "Top alerting nodes" widget (chronic offenders).
+    pub async fn top_nodes_by_fires(
+        &self,
+        since_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<(Uuid, i64)>> {
+        let rows = sqlx::query(
+            "SELECT node, count(*) AS n FROM alert_history \
+             WHERE resolved = false AND at_unix_ms >= $1 \
+             GROUP BY node ORDER BY n DESC LIMIT $2",
+        )
+        .bind(since_ms)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("node")?, row.try_get::<i64, _>("n")?)))
+            .collect()
+    }
+
+    /// Alert-fire counts bucketed by weekday (0=Sun … 6=Sat, UTC) × hour (0–23) at or after
+    /// `since_ms`. Powers the "Alert calendar" heatmap. UTC so buckets are stable regardless of
+    /// the DB session timezone.
+    pub async fn fires_by_weekday_hour(
+        &self,
+        since_ms: i64,
+    ) -> anyhow::Result<Vec<(i32, i32, i64)>> {
+        let rows = sqlx::query(
+            "SELECT \
+                extract(dow from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS dow, \
+                extract(hour from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS hour, \
+                count(*) AS n \
+             FROM alert_history WHERE resolved = false AND at_unix_ms >= $1 \
+             GROUP BY dow, hour",
+        )
+        .bind(since_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("dow")?,
+                    row.try_get("hour")?,
+                    row.try_get::<i64, _>("n")?,
+                ))
+            })
+            .collect()
+    }
+
     /// The most recent `limit` history rows (newest first).
     pub async fn recent(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(

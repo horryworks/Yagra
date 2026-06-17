@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AlertHistoryRow, NodeGroup, NodeSummary } from '../../types/api';
+import type { AlertHistoryRow, CalendarBucket, NodeGroup, NodeSummary } from '../../types/api';
 import {
   bucketAlertsByHour,
+  calendarMatrix,
   downCount,
   percentHealthy,
   stateCounts,
@@ -73,6 +74,22 @@ describe('bucketAlertsByHour', () => {
     expect(buckets[buckets.length - 2].count).toBe(1);
     const total = buckets.reduce((n, b) => n + b.count, 0);
     expect(total).toBe(3);
+  });
+});
+
+describe('calendarMatrix', () => {
+  it('expands sparse buckets into a dense 7×24 matrix and ignores out-of-range', () => {
+    const buckets: CalendarBucket[] = [
+      { dow: 0, hour: 0, count: 3 },
+      { dow: 6, hour: 23, count: 5 },
+      { dow: 9, hour: 0, count: 99 }, // out of range ⇒ ignored
+    ];
+    const m = calendarMatrix(buckets);
+    expect(m.length).toBe(7);
+    expect(m[0].length).toBe(24);
+    expect(m[0][0]).toBe(3);
+    expect(m[6][23]).toBe(5);
+    expect(m[3][12]).toBe(0); // zero-filled
   });
 });
 
