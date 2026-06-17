@@ -357,11 +357,11 @@ function InterfaceDock({
                   onClick={toggleThroughputScale}
                   title={
                     throughputScale === 'capacity'
-                      ? 'Y-axis scaled to bandwidth — click to fit traffic'
-                      : 'Y-axis fits traffic — click to scale to bandwidth'
+                      ? 'Y-axis scaled to bandwidth — click for auto-fit'
+                      : 'Y-axis auto-fits traffic — click to scale to bandwidth'
                   }
                 >
-                  {throughputScale === 'capacity' ? 'Capacity' : 'Fit'}
+                  {throughputScale === 'capacity' ? 'Bandwidth' : 'Auto'}
                 </button>
               )}
               <ChartLegend bandwidth={hasBandwidth} />
