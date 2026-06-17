@@ -460,6 +460,16 @@ export interface AuditRow {
   status: number;
 }
 
+/** One node in the dependency/topology graph (`GET /api/v1/topology`). */
+export interface TopologyNode {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  state: NodeState;
+  /** Upstream node currently attributed as this node's root cause (dependency suppression). */
+  root_cause: string | null;
+}
+
 /** The fixed error envelope (ADR-019). */
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };

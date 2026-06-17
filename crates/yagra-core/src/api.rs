@@ -195,6 +195,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
         .route("/api/v1/alerts/calendar", get(alert_calendar))
         .route("/api/v1/alerts/transitions", get(alert_transitions))
+        .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -831,6 +832,61 @@ async fn interface_top(
         })
         .collect();
     Json(out).into_response()
+}
+
+/// One node in the dependency/topology graph.
+#[derive(Serialize)]
+struct TopologyNode {
+    id: Uuid,
+    name: String,
+    /// Upstream parent in the dependency graph (`null` ⇒ a root).
+    parent_id: Option<Uuid>,
+    state: NodeState,
+    /// Upstream node currently identified as the root cause of this node's alert (dependency
+    /// suppression), if any — lets the UI collapse downstream alerts under the cause.
+    root_cause: Option<Uuid>,
+}
+
+/// The dependency graph: every node with its parent edge, current state, and any active
+/// root-cause attribution. Assembled from the inventory (parent links) + the live alert engine
+/// (state + root_cause) — no new model. Admin-only data source (full node list).
+async fn get_topology(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let nodes = match admin.repo.list_nodes().await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(error = %e, "topology list nodes failed");
+            return internal("failed to load topology");
+        }
+    };
+    let states = st.alerts.node_states();
+    // node → upstream root cause (from active, suppressed alerts).
+    let mut root_causes: std::collections::HashMap<NodeId, Uuid> = std::collections::HashMap::new();
+    for a in st.alerts.active_alerts() {
+        if let Some(cause) = a.root_cause {
+            root_causes.entry(a.node).or_insert_with(|| cause.as_uuid());
+        }
+    }
+    let mut out = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        let state = match states.get(&n.id) {
+            Some(s) => *s,
+            None => derive_fallback_state(&st, n.id).await,
+        };
+        out.push(TopologyNode {
+            id: n.id.as_uuid(),
+            name: n.name,
+            parent_id: n.parent.map(|p| p.as_uuid()),
+            state,
+            root_cause: root_causes.get(&n.id).copied(),
+        });
+    }
+    Json(serde_json::json!({ "nodes": out })).into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).

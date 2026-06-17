@@ -1,0 +1,60 @@
+// 04 · Dependency / root-cause view. Renders the parent→child dependency forest as a compact
+// indented tree (no graph library): each node shows a status dot, its name, and — when the alert
+// engine has attributed an upstream root cause — a muted "← caused by <name>" so downstream
+// alerts read as collapsed under the cause. Data: GET /api/v1/topology (parent links + live state).
+
+import { StatusDot } from '../../components/ui/StatusDot';
+import { api } from '../../services/api';
+import { usePolled } from '../usePolled';
+import { buildForest, type TopoTreeNode } from './util';
+import './topology.css';
+
+/** Max render depth — a backstop against a parent cycle (server guards, but be safe). */
+const MAX_DEPTH = 8;
+
+function TreeRow({
+  node,
+  depth,
+  names,
+}: {
+  node: TopoTreeNode;
+  depth: number;
+  names: Map<string, string>;
+}) {
+  if (depth > MAX_DEPTH) return null;
+  const cause = node.node.root_cause ? names.get(node.node.root_cause) : null;
+  return (
+    <li className="topo-item">
+      <div className="topo-row" style={{ paddingLeft: `${depth * 16}px` }}>
+        <StatusDot state={node.node.state} withLabel={false} />
+        <span className="topo-name">{node.node.name}</span>
+        {cause && <span className="topo-cause muted">← {cause}</span>}
+      </div>
+      {node.children.length > 0 && (
+        <ul className="topo-children">
+          {node.children.map((c) => (
+            <TreeRow key={c.node.id} node={c} depth={depth + 1} names={names} />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+export function DependencyWidget() {
+  const { data, loading, error } = usePolled(() => api.getTopology(), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const nodes = data?.nodes ?? [];
+  if (nodes.length === 0) return <p className="muted">No nodes in the inventory.</p>;
+  const names = new Map(nodes.map((n) => [n.id, n.name]));
+  const forest = buildForest(nodes);
+  // A flat inventory (no parent links) still renders — just a single-level list.
+  return (
+    <ul className="topo">
+      {forest.map((r) => (
+        <TreeRow key={r.node.id} node={r} depth={0} names={names} />
+      ))}
+    </ul>
+  );
+}

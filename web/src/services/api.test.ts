@@ -784,6 +784,15 @@ describe('api client', () => {
     expect(layout).toBeNull();
   });
 
+  it('requests the dependency topology', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ nodes: [] }) } as Response);
+    globalThis.fetch = spy;
+    await api.getTopology();
+    expect(spy).toHaveBeenCalledWith('/api/v1/topology');
+  });
+
   it('saves the dashboard layout as a JSON body', async () => {
     const spy = vi
       .fn()

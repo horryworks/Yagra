@@ -28,6 +28,7 @@ import {
   TopTalkersWidget,
 } from './widgets/performance';
 import { RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
+import { DependencyWidget } from './widgets/topology';
 import './widgets/widgets.css';
 
 const SECTION = {
@@ -226,6 +227,16 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: RegionRollupWidget,
+  },
+  {
+    type: 'dependency-view',
+    title: 'Dependency / root cause',
+    section: SECTION.sites,
+    blurb: 'Parent→child dependency tree with active root-cause attribution.',
+    backing: 'rollup',
+    defaultSpan: 6,
+    allowedSpans: [6, 8, 12],
+    Component: DependencyWidget,
   },
   {
     type: 'maintenance',

@@ -48,6 +48,7 @@ import type {
   StoredCollectionItem,
   StoredThreshold,
   TopEntry,
+  TopologyNode,
   UserSummary,
 } from '../types/api';
 
@@ -510,6 +511,9 @@ export const api = {
   /** Recent up/down transitions (latest fires + recoveries). */
   getAlertTransitions: (limit?: number): Promise<AlertTransition[]> =>
     request(limit != null ? `/alerts/transitions?limit=${limit}` : '/alerts/transitions'),
+
+  /** The dependency graph: nodes + parent edges + state + active root-cause attribution. */
+  getTopology: (): Promise<{ nodes: TopologyNode[] }> => request('/topology'),
 
   /** Notification channels (metadata only; the secret config is never returned). */
   listNotificationChannels: (): Promise<NotificationChannel[]> =>
