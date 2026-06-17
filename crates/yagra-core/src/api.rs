@@ -192,6 +192,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/alerts/history", get(list_alert_history))
+        .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
+        .route("/api/v1/alerts/calendar", get(alert_calendar))
+        .route("/api/v1/alerts/transitions", get(alert_transitions))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -862,6 +865,163 @@ async fn list_alert_history(
             internal("failed to list alert history")
         }
     }
+}
+
+/// Query for the alert top-nodes aggregation: `?window=<secs>` (default 24h) + `?limit=`.
+#[derive(Deserialize)]
+struct AlertTopQuery {
+    window: Option<i64>,
+    limit: Option<i64>,
+}
+
+/// One chronic-offender row.
+#[derive(Serialize)]
+struct AlertNodeCount {
+    node_id: Uuid,
+    name: String,
+    count: i64,
+}
+
+/// Nodes generating the most alert fires over a trailing window (chronic offenders). Empty in
+/// skeleton mode (no history store).
+async fn alert_top_nodes(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<AlertTopQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(history) = st.history.as_ref() else {
+        return Json(Vec::<AlertNodeCount>::new()).into_response();
+    };
+    let window = q.window.unwrap_or(86_400).clamp(60, 30 * 86_400);
+    let since_ms = (now_unix_s() - window) * 1000;
+    let limit = q.limit.unwrap_or(6).clamp(1, 50);
+    let counts = match history.top_nodes_by_fires(since_ms, limit).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "alert top-nodes failed");
+            return internal("failed to aggregate alerting nodes");
+        }
+    };
+    let ids: Vec<Uuid> = counts.iter().map(|(n, _)| *n).collect();
+    let names = match st.admin.as_ref() {
+        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        None => std::collections::HashMap::new(),
+    };
+    let out: Vec<AlertNodeCount> = counts
+        .into_iter()
+        .map(|(node_id, count)| AlertNodeCount {
+            node_id,
+            name: names
+                .get(&node_id)
+                .cloned()
+                .unwrap_or_else(|| node_id.to_string()),
+            count,
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+/// Query for the alert calendar heatmap: `?days=<n>` (default 7) of history.
+#[derive(Deserialize)]
+struct AlertCalendarQuery {
+    days: Option<i64>,
+}
+
+/// One weekday×hour heatmap cell.
+#[derive(Serialize)]
+struct CalendarBucket {
+    /// 0 = Sunday … 6 = Saturday (UTC).
+    dow: i32,
+    /// Hour of day 0–23 (UTC).
+    hour: i32,
+    count: i64,
+}
+
+/// Alert fires bucketed weekday×hour over the last `days` (for the calendar heatmap). Empty in
+/// skeleton mode.
+async fn alert_calendar(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<AlertCalendarQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(history) = st.history.as_ref() else {
+        return Json(Vec::<CalendarBucket>::new()).into_response();
+    };
+    let days = q.days.unwrap_or(7).clamp(1, 90);
+    let since_ms = (now_unix_s() - days * 86_400) * 1000;
+    match history.fires_by_weekday_hour(since_ms).await {
+        Ok(buckets) => {
+            let out: Vec<CalendarBucket> = buckets
+                .into_iter()
+                .map(|(dow, hour, count)| CalendarBucket { dow, hour, count })
+                .collect();
+            Json(out).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "alert calendar failed");
+            internal("failed to build the alert calendar")
+        }
+    }
+}
+
+/// One recent state-change row (a fire = into an alert state; a resolve = recovery to ok).
+#[derive(Serialize)]
+struct AlertTransition {
+    node_id: Uuid,
+    name: String,
+    state: String,
+    severity: String,
+    /// true = recovery (→ ok); false = went into the alert state.
+    resolved: bool,
+    at_unix_ms: i64,
+}
+
+/// Recent up/down transitions (latest fires and resolutions), node names joined. Empty in
+/// skeleton mode.
+async fn alert_transitions(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(history) = st.history.as_ref() else {
+        return Json(Vec::<AlertTransition>::new()).into_response();
+    };
+    let rows = match history.recent(q.limit.unwrap_or(12)).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "alert transitions failed");
+            return internal("failed to list alert transitions");
+        }
+    };
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.node).collect();
+    let names = match st.admin.as_ref() {
+        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        None => std::collections::HashMap::new(),
+    };
+    let out: Vec<AlertTransition> = rows
+        .into_iter()
+        .map(|r| AlertTransition {
+            node_id: r.node,
+            name: names
+                .get(&r.node)
+                .cloned()
+                .unwrap_or_else(|| r.node.to_string()),
+            state: r.state,
+            severity: r.severity,
+            resolved: r.resolved,
+            at_unix_ms: r.at_unix_ms,
+        })
+        .collect();
+    Json(out).into_response()
 }
 
 /// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's

@@ -9,9 +9,12 @@ import type { DashboardLayout, Span, WidgetDefinition, WidgetInstance } from './
 import {
   ActiveAlertsActions,
   ActiveAlertsWidget,
+  AlertCalendarWidget,
   AlertVolumeWidget,
   FlappingWatchlistWidget,
+  RecentStateChangesWidget,
   SeverityMixWidget,
+  TopAlertingNodesWidget,
 } from './widgets/alerts';
 import { HealthRingWidget, NodesDownWidget, StatusSummaryWidget } from './widgets/fleet';
 import { AuditWidget, MaintenanceWidget } from './widgets/monitoring';
@@ -68,6 +71,16 @@ export const REGISTRY: WidgetDefinition[] = [
     Component: NodesDownWidget,
   },
   {
+    type: 'recent-state-changes',
+    title: 'Recent state changes',
+    section: SECTION.fleet,
+    blurb: 'Latest up/down transitions (fires + recoveries).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: RecentStateChangesWidget,
+  },
+  {
     type: 'active-alerts',
     title: 'Active alerts',
     section: SECTION.alerts,
@@ -107,6 +120,26 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: FlappingWatchlistWidget,
+  },
+  {
+    type: 'top-alerting-nodes',
+    title: 'Top alerting nodes',
+    section: SECTION.alerts,
+    blurb: 'Nodes generating the most alerts (chronic offenders).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TopAlertingNodesWidget,
+  },
+  {
+    type: 'alert-calendar',
+    title: 'Alert calendar',
+    section: SECTION.alerts,
+    blurb: 'Hour × weekday heatmap of alert volume (7 days).',
+    backing: 'rollup',
+    defaultSpan: 8,
+    allowedSpans: [6, 8, 12],
+    Component: AlertCalendarWidget,
   },
   {
     type: 'top-rtt',

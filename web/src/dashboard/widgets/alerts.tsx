@@ -3,13 +3,18 @@
 
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/Button';
-import { severityColorVar } from '../../lib/format';
+import { relativeTime, severityColorVar, stateColorVar, stateLabel } from '../../lib/format';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
 import { AlertRows } from '../../widgets/AlertRows';
 import { Donut } from '../primitives/Donut';
+import { Heatmap } from '../primitives/Heatmap';
+import { RankedBars } from '../primitives/RankedBars';
 import { usePolled } from '../usePolled';
-import { bucketAlertsByHour } from './util';
+import { bucketAlertsByHour, calendarMatrix } from './util';
+
+const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => (h % 6 === 0 ? String(h) : ''));
 
 export function ActiveAlertsWidget() {
   return <AlertRows limit={8} empty="No active alerts. All monitored nodes are healthy." />;
@@ -74,5 +79,59 @@ export function AlertVolumeWidget() {
         </span>
       ))}
     </div>
+  );
+}
+
+export function TopAlertingNodesWidget() {
+  const { data, loading, error } = usePolled(() => api.getAlertTopNodes({ limit: 6 }), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const rows = (data ?? []).map((e) => ({
+    label: e.name,
+    value: e.count,
+    valueText: String(e.count),
+    color: 'var(--series-2)',
+  }));
+  return <RankedBars rows={rows} empty="No alerts recorded yet." />;
+}
+
+export function AlertCalendarWidget() {
+  const { data, loading, error } = usePolled(() => api.getAlertCalendar(7), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const matrix = calendarMatrix(data ?? []);
+  if ((data ?? []).length === 0) return <p className="muted">No alerts in the last 7 days.</p>;
+  return (
+    <Heatmap
+      rowLabels={DOW_LABELS}
+      colLabels={HOUR_LABELS}
+      values={matrix}
+      colorBase="var(--series-2)"
+      title={(row, col, v) => `${row} ${col || ''}:00 — ${v} alert${v === 1 ? '' : 's'}`}
+    />
+  );
+}
+
+export function RecentStateChangesWidget() {
+  const { data, loading, error } = usePolled(() => api.getAlertTransitions(12), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  if ((data ?? []).length === 0) return <p className="muted">No recent state changes.</p>;
+  return (
+    <ul className="dwl">
+      {(data ?? []).map((t, i) => (
+        <li className="dwl-row" key={`${t.node_id}-${t.at_unix_ms}-${i}`}>
+          <span
+            className="dwl-dot"
+            style={{ background: t.resolved ? stateColorVar('ok') : severityColorVar(t.severity) }}
+          />
+          <span className="dwl-name">{t.name}</span>
+          <span className="dwl-sub muted">
+            {t.resolved ? '→ recovered' : `→ ${stateLabel(t.state)}`} ·{' '}
+            {relativeTime(new Date(t.at_unix_ms).toISOString(), Date.now())}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

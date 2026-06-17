@@ -1,0 +1,32 @@
+.heatmap {
+  display: grid;
+  /* row-label column + N equal cell columns */
+  grid-template-columns: auto repeat(var(--heat-cols), 1fr);
+  gap: 2px;
+  align-items: center;
+}
+
+.heatmap-corner {
+  /* empty top-left cell */
+}
+
+.heatmap-colhead {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+
+.heatmap-rowhead {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  padding-right: 6px;
+  white-space: nowrap;
+}
+
+.heatmap-cell {
+  height: 14px;
+  border-radius: 2px;
+  min-width: 8px;
+}
