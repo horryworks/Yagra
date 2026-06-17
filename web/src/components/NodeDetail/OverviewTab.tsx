@@ -9,7 +9,9 @@ import { api } from '../../services/api';
 import {
   deriveMem,
   formatBytes,
+  formatCount,
   formatRtt,
+  formatSi,
   formatTimestamp,
   formatUptimeTicks,
   formatUtil,
@@ -219,6 +221,40 @@ const MIN_MEM_TOTAL_BYTES = 1024 * 1024;
 /** CPU% candidates (vendor/host gauges that read 0–100); the first one the node collects wins. */
 const CPU_METRICS = ['huawei_cpu_usage', 'cisco_cpu_5min', 'hr_processor_load'];
 
+/** Firewall session-count gauges (current concurrent sessions); the first one the node collects
+ *  wins. Mixed sources: Huawei USG / Cisco ASA are walked as per-entity tables (collapsed node-wide
+ *  via query-time max(), like CPU); Fortinet is a scalar. */
+const SESSION_TOTAL_METRICS = [
+  'huawei_usg_total_sessions',
+  'fortinet_sessions',
+  'asa_current_connections',
+];
+
+/** New-session setup-rate gauges (sessions/sec). Separate card from the total because the scale is
+ *  utterly different (a count vs a per-second rate), so overlaying one axis would flatten the other. */
+const SESSION_RATE_METRICS = ['huawei_usg_session_setup_rate'];
+
+/** A session metric resolved against a node's collection set: its name and (for table sources) the
+ *  node-level aggregation to apply. */
+interface ResolvedSession {
+  metric: string;
+  /** `max` for table sources (per-entity rows → node value); absent for scalar sources. */
+  agg?: 'max';
+}
+
+/** Resolve the first candidate session metric the node actually collects, tagging table sources so
+ *  the reads aggregate node-wide (`max`) — mirrors the CPU/mem table handling. */
+function resolveSession(
+  items: { metric_name: string; kind: string }[],
+  candidates: string[],
+): ResolvedSession | null {
+  for (const metric of candidates) {
+    const it = items.find((i) => i.metric_name === metric);
+    if (it) return { metric, agg: it.kind === 'table' ? 'max' : undefined };
+  }
+  return null;
+}
+
 type MemId = 'huawei' | 'cisco' | 'ucd';
 
 /** Memory sources, in priority order — the first whose two `metrics` are both collected wins.
@@ -253,18 +289,20 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   // `undefined` = still resolving; `null` = resolved, none present.
   const [cpuMetric, setCpuMetric] = useState<string | null | undefined>(undefined);
   const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
+  const [sessTotal, setSessTotal] = useState<ResolvedSession | null | undefined>(undefined);
+  const [sessRate, setSessRate] = useState<ResolvedSession | null | undefined>(undefined);
   const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let names = new Set<string>();
+      let items: { metric_name: string; kind: string }[] = [];
       try {
-        const items = await api.listNodeCollection(nodeId, true);
-        names = new Set(items.map((i) => i.metric_name));
+        items = await api.listNodeCollection(nodeId, true);
       } catch {
         // admin-only endpoint not permitted → no health card
       }
+      const names = new Set(items.map((i) => i.metric_name));
       const cpu = CPU_METRICS.find((m) => names.has(m)) ?? null;
       const spec = MEM_SPECS.find((s) => s.metrics.every((m) => names.has(m)));
       const resolvedMem: ResolvedMem | null = spec
@@ -273,6 +311,8 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
       if (!cancelled) {
         setCpuMetric(cpu);
         setMem(resolvedMem);
+        setSessTotal(resolveSession(items, SESSION_TOTAL_METRICS));
+        setSessRate(resolveSession(items, SESSION_RATE_METRICS));
       }
     })();
     return () => {
@@ -280,8 +320,10 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
     };
   }, [nodeId]);
 
-  if (cpuMetric === undefined || mem === undefined) return null; // still resolving
-  if (!cpuMetric && !mem) return null; // nothing to show
+  // Still resolving any of the cards.
+  if (cpuMetric === undefined || mem === undefined || sessTotal === undefined || sessRate === undefined)
+    return null;
+  if (!cpuMetric && !mem && !sessTotal && !sessRate) return null; // nothing to show
 
   return (
     <section>
@@ -302,8 +344,97 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
       <div className="nd-health-metrics">
         {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} rangeSecs={rangeSecs} />}
         {mem && <MemHealth nodeId={nodeId} mem={mem} rangeSecs={rangeSecs} />}
+        {sessTotal && (
+          <SessionHealth
+            nodeId={nodeId}
+            label="Sessions"
+            session={sessTotal}
+            rangeSecs={rangeSecs}
+          />
+        )}
+        {sessRate && (
+          <SessionHealth
+            nodeId={nodeId}
+            label="Setup rate"
+            unit="/s"
+            session={sessRate}
+            rangeSecs={rangeSecs}
+          />
+        )}
       </div>
     </section>
+  );
+}
+
+/** A firewall session gauge (current sessions or setup rate): current value + a trend chart over
+ *  the selected window. Reads aggregate node-wide (`max`) for table sources. Unlike CPU/mem the Y
+ *  axis is unbounded (counts vary wildly per device), so the chart auto-fits; the axis uses compact
+ *  SI suffixes ("12.8k") while the headline + hover show the full count ("12,840"). */
+function SessionHealth({
+  nodeId,
+  label,
+  session,
+  rangeSecs,
+  unit = '',
+}: {
+  nodeId: string;
+  label: string;
+  session: ResolvedSession;
+  rangeSecs: number;
+  unit?: string;
+}) {
+  const [value, setValue] = useState<number | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const to = Math.floor(Date.now() / 1000);
+      void Promise.allSettled([
+        api.getNodeMetric(nodeId, session.metric, session.agg ? { agg: session.agg } : undefined),
+        api.getNodeMetricRange(nodeId, session.metric, {
+          from: to - rangeSecs,
+          to,
+          ...(session.agg ? { agg: session.agg } : {}),
+        }),
+      ]).then(([v, r]) => {
+        if (cancelled) return;
+        setValue(v.status === 'fulfilled' ? v.value.value : null);
+        setSeries(
+          r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
+        );
+      });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, session.metric, session.agg, rangeSecs]);
+
+  const fmt = (v: number) => `${formatCount(v)}${unit}`;
+  return (
+    <div className="nd-health-metric">
+      <div className="nd-health-metric-head">
+        <span className="nd-health-metric-label">{label}</span>
+        <span className="nd-health-metric-value">{value == null ? '—' : fmt(value)}</span>
+      </div>
+      {series.timestamps.length > 0 ? (
+        <MetricChart
+          title=""
+          timestamps={series.timestamps}
+          values={series.values}
+          yFormat={formatSi}
+          legendFormat={fmt}
+        />
+      ) : (
+        <p className="nd-muted">No history yet…</p>
+      )}
+    </div>
   );
 }
 

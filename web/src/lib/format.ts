@@ -248,6 +248,14 @@ export function scalarDisplay(metric: string, value: number): {
   return { label: SCALAR_LABELS[metric] ?? metric, value: String(value), known };
 }
 
+/** Whole-number count with locale thousands separators (e.g. 12840 → "12,840"), or `—` for a
+ *  non-finite value. For session/connection counts shown as a headline or chart-hover readout
+ *  (where the axis uses the compact `formatSi`). Rounds to the nearest integer. */
+export function formatCount(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  return Math.round(n).toLocaleString();
+}
+
 /** Compact, unit-less SI suffix (k/M/G/T) for a plain number — for chart axis ticks so big
  *  values (e.g. 455000) render as "455k" instead of being clipped. */
 export function formatSi(n: number): string {
