@@ -734,6 +734,45 @@ describe('api client', () => {
     expect(groups[0].group_type).toBe('site');
   });
 
+  it('builds the Top-N path with metric, agg and limit', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getTopMetrics('icmp_rtt_ms', { agg: 'max_1h', limit: 10 });
+    expect(spy).toHaveBeenCalledWith('/api/v1/metrics/top?metric=icmp_rtt_ms&agg=max_1h&limit=10');
+  });
+
+  it('defaults the Top-N path to just the metric', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getTopMetrics('icmp_rtt_ms');
+    expect(spy).toHaveBeenCalledWith('/api/v1/metrics/top?metric=icmp_rtt_ms');
+  });
+
+  it('reads the saved dashboard layout (null when none saved)', async () => {
+    mockFetch(200, null);
+    const layout = await api.getDashboard();
+    expect(layout).toBeNull();
+  });
+
+  it('saves the dashboard layout as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) } as Response);
+    globalThis.fetch = spy;
+    await api.putDashboard({ version: 1, widgets: [{ instanceId: 'w1', type: 'health-ring', span: 4 }] });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/dashboard');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      version: 1,
+      widgets: [{ instanceId: 'w1', type: 'health-ring', span: 4 }],
+    });
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

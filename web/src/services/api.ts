@@ -24,6 +24,7 @@ import type {
   MetricKind,
   MetricRange,
   MetricReading,
+  MetricTopAgg,
   MibCatalogEntry,
   Mute,
   NodeDetail,
@@ -41,6 +42,7 @@ import type {
   Severity,
   StoredCollectionItem,
   StoredThreshold,
+  TopEntry,
   UserSummary,
 } from '../types/api';
 
@@ -171,6 +173,18 @@ export const api = {
     const qs = params.toString();
     const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}/range`;
     return request(qs ? `${path}?${qs}` : path);
+  },
+
+  /** Fleet-wide Top-N for a metric: the highest-value nodes now (`agg: 'now'`, default) or by
+   *  trailing-hour peak (`agg: 'max_1h'`). Powers the dashboard Top RTT/CPU/… widgets. */
+  getTopMetrics: (
+    metric: string,
+    opts?: { agg?: MetricTopAgg; limit?: number },
+  ): Promise<TopEntry[]> => {
+    const params = new URLSearchParams({ metric });
+    if (opts?.agg) params.set('agg', opts.agg);
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    return request(`/metrics/top?${params.toString()}`);
   },
 
   /** Inventory listing (first page; the response is keyset-paginated). */
@@ -574,6 +588,15 @@ export const api = {
     const qs = params.toString();
     return request(qs ? `/audit?${qs}` : '/audit');
   },
+
+  /** The caller's saved My Dashboard layout, or `null` if none saved yet (the client then uses
+   *  its default). The body is opaque JSON — the client owns and migrates the widget shape
+   *  (types in `dashboard/types`); the server stores it verbatim, scoped to the logged-in user. */
+  getDashboard: (): Promise<unknown> => request('/dashboard'),
+
+  /** Save (replace) the caller's My Dashboard layout. */
+  putDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
+    request('/dashboard', jsonBody('PUT', layout)),
 
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => request('/auth/me'),

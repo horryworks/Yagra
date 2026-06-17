@@ -8,6 +8,7 @@ import { AppShell } from './components/shell/AppShell';
 import { ComingSoon } from './components/ui/ComingSoon';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { MyDashboardPage } from './dashboard/MyDashboardPage';
 import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
@@ -38,7 +39,7 @@ export function AppRoutes() {
 
         {/* Dashboard */}
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="dashboard/my" element={<ComingSoon />} />
+        <Route path="dashboard/my" element={<MyDashboardPage />} />
         <Route path="dashboard/templates" element={<ComingSoon />} />
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}

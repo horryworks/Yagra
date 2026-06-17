@@ -1,0 +1,53 @@
+.mydash-cell {
+  min-width: 0;
+}
+
+/* Edit-mode affordances live in the card's actions slot. */
+.widgetframe-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.widgetframe-remove,
+.widgetframe-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.widgetframe-remove:hover {
+  color: var(--status-critical);
+  border-color: var(--status-critical);
+}
+
+.widgetframe-handle {
+  cursor: grab;
+}
+
+.widgetframe-handle:hover {
+  color: var(--text-primary);
+}
+
+/* While editing, dim slightly and outline so the board reads as "in customize mode". */
+.mydash-cell.is-editing .card {
+  outline: var(--border-width) dashed var(--border-color);
+  outline-offset: -1px;
+}
+
+.mydash-cell.is-dragging {
+  /* The dragged tile floats above its neighbours. */
+  z-index: 2;
+  opacity: 0.9;
+}

@@ -1,0 +1,63 @@
+.catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* Keep the picker scrollable inside the modal for a long catalog. */
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.catalog-section-title {
+  margin: 0 0 8px;
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.catalog-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.catalog-item:hover {
+  border-color: var(--accent-color);
+}
+
+.catalog-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.catalog-item-title {
+  font-size: var(--font-md);
+  color: var(--text-primary);
+}
+
+.catalog-item-blurb {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.catalog-item-add {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  color: var(--accent-color);
+}
