@@ -7,6 +7,7 @@ import type {
   NodeGroup,
   NodeState,
   NodeSummary,
+  TopologyNode,
 } from '../../types/api';
 
 /** Worst-first precedence for rolling a set of node states up to a single "group" state. */
@@ -81,6 +82,27 @@ export function bucketAlertsByHour(
     if (idx >= 0 && idx < buckets.length) buckets[idx].count += 1;
   }
   return buckets;
+}
+
+/** A node in the dependency forest (parent → children). */
+export interface TopoTreeNode {
+  node: TopologyNode;
+  children: TopoTreeNode[];
+}
+
+/** Build a parent→children forest from a flat topology node list. Nodes whose parent is missing
+ *  (or absent) become roots; a self-parent is treated as a root. Each node appears once, so a
+ *  parent cycle can't duplicate nodes — render with a depth cap as a belt-and-braces guard. */
+export function buildForest(nodes: TopologyNode[]): TopoTreeNode[] {
+  const byId = new Map<string, TopoTreeNode>(nodes.map((n) => [n.id, { node: n, children: [] }]));
+  const roots: TopoTreeNode[] = [];
+  for (const n of nodes) {
+    const entry = byId.get(n.id)!;
+    const parent = n.parent_id ? byId.get(n.parent_id) : undefined;
+    if (parent && parent !== entry) parent.children.push(entry);
+    else roots.push(entry);
+  }
+  return roots;
 }
 
 /** Expand sparse weekday×hour buckets into a dense 7×24 matrix (`m[dow][hour]`), zero-filled.

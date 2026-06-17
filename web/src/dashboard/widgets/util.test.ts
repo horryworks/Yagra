@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { AlertHistoryRow, CalendarBucket, NodeGroup, NodeSummary } from '../../types/api';
+import type {
+  AlertHistoryRow,
+  CalendarBucket,
+  NodeGroup,
+  NodeSummary,
+  TopologyNode,
+} from '../../types/api';
 import {
   bucketAlertsByHour,
+  buildForest,
   calendarMatrix,
   downCount,
   percentHealthy,
@@ -74,6 +81,34 @@ describe('bucketAlertsByHour', () => {
     expect(buckets[buckets.length - 2].count).toBe(1);
     const total = buckets.reduce((n, b) => n + b.count, 0);
     expect(total).toBe(3);
+  });
+});
+
+describe('buildForest', () => {
+  const tnode = (id: string, parent_id: string | null, root_cause: string | null = null): TopologyNode => ({
+    id,
+    name: id,
+    parent_id,
+    state: 'ok',
+    root_cause,
+  });
+
+  it('nests children under parents and keeps parentless nodes as roots', () => {
+    const forest = buildForest([
+      tnode('core', null),
+      tnode('dist', 'core'),
+      tnode('access', 'dist'),
+      tnode('island', null),
+    ]);
+    expect(forest.map((r) => r.node.id).sort()).toEqual(['core', 'island']);
+    const core = forest.find((r) => r.node.id === 'core')!;
+    expect(core.children.map((c) => c.node.id)).toEqual(['dist']);
+    expect(core.children[0].children.map((c) => c.node.id)).toEqual(['access']);
+  });
+
+  it('treats a missing parent and a self-parent as roots (no dangling/loop)', () => {
+    const forest = buildForest([tnode('a', 'ghost'), tnode('b', 'b')]);
+    expect(forest.map((r) => r.node.id).sort()).toEqual(['a', 'b']);
   });
 });
 
