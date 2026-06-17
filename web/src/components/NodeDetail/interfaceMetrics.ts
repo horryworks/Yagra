@@ -2,7 +2,24 @@
 // Kept framework-free so they're unit-testable in the node test env (the WebUI has no DOM-render
 // harness — see vitest.config.ts `environment: 'node'`).
 
+import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
+import type { ThroughputScale } from '../../prefs';
+
+/** Throughput-chart bandwidth overlay derived from an interface's configured speed and the global
+ *  Y-axis mode. Returns the red reference line (configured bandwidth) and, in `capacity` mode, a
+ *  fixed `[0, bandwidth]` Y range. A non-positive/absent speed (interfaces with no concept of
+ *  bandwidth) yields neither — the caller then shows no line and no toggle. */
+export function throughputBandwidthOverlay(
+  ifSpeedBps: number | null | undefined,
+  mode: ThroughputScale,
+): { referenceLine?: { value: number; label: string }; yRange?: [number, number] } {
+  if (ifSpeedBps == null || !(ifSpeedBps > 0)) return {};
+  return {
+    referenceLine: { value: ifSpeedBps, label: formatBps(ifSpeedBps) },
+    yRange: mode === 'capacity' ? [0, ifSpeedBps] : undefined,
+  };
+}
 
 /** Latest combined error rate (in + out, errors/sec) from a fetched interface series, or `null`
  *  when the series is absent or carries no error samples. Used for the dock's "Err" stat tile —

@@ -664,6 +664,47 @@
   display: inline-block;
 }
 
+/* Configured-bandwidth key: a dashed red bar matching the chart's reference line. */
+.nd-if-legend-bw {
+  border-radius: 0;
+  background: repeating-linear-gradient(
+    to right,
+    var(--status-critical) 0,
+    var(--status-critical) 4px,
+    transparent 4px,
+    transparent 7px
+  );
+}
+
+/* Right side of the throughput chart title: the Y-axis scale toggle + legend. */
+.nd-if-chart-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nd-if-scale-toggle {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.nd-if-scale-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
 /* Slim hint shown in place of the dock when nothing is selected. */
 .nd-if-dockhint {
   flex: none;

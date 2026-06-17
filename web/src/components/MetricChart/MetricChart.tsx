@@ -38,6 +38,10 @@ interface Props {
   /** Formatter for the cursor-legend value (the "Value" readout on hover). Use it to show a unit
    *  the compact axis omits (e.g. ms / bps). Falls back to `yFormat` when not given. */
   legendFormat?: (v: number) => string;
+  /** Optional horizontal reference line (e.g. an interface's configured bandwidth) drawn in the
+   *  `--status-critical` colour. When the value sits above the visible Y range it is pinned to the
+   *  top edge and labelled, so it's always visible and slides into the plot as data nears it. */
+  referenceLine?: { value: number; label?: string };
 }
 
 export function MetricChart({
@@ -49,6 +53,7 @@ export function MetricChart({
   yFormat,
   yRange,
   legendFormat,
+  referenceLine,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -63,6 +68,8 @@ export function MetricChart({
     const cs = getComputedStyle(el);
     const axisColor = cs.getPropertyValue('--text-tertiary').trim() || '#8a8f98';
     const gridColor = cs.getPropertyValue('--border-color').trim() || 'rgba(255,255,255,0.1)';
+    const refColor = cs.getPropertyValue('--status-critical').trim() || '#ef5350';
+    const uiFont = cs.getPropertyValue('--ui-font-family').trim() || 'sans-serif';
     const axis = {
       stroke: axisColor,
       grid: { stroke: gridColor, width: 1 },
@@ -98,6 +105,44 @@ export function MetricChart({
             v == null ? '--' : legendFmt ? legendFmt(v) : `${v}`,
         })),
       ],
+      // Horizontal reference line (e.g. configured bandwidth), drawn over the series. Canvas works
+      // in device pixels, so scale stroke/text by the pixel ratio; clamp to the plot edges so an
+      // off-range value stays visible (labelled) and slides in as the data approaches it.
+      hooks: referenceLine
+        ? {
+            draw: [
+              (u: uPlot) => {
+                const refv = referenceLine.value;
+                if (!Number.isFinite(refv)) return;
+                const ctx = u.ctx;
+                const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+                const { left, top, width, height } = u.bbox;
+                const raw = u.valToPos(refv, 'y', true);
+                const aboveRange = raw < top;
+                const y = Math.min(top + height, Math.max(top, raw));
+                ctx.save();
+                ctx.strokeStyle = refColor;
+                ctx.lineWidth = 1.5 * dpr;
+                ctx.setLineDash([5 * dpr, 4 * dpr]);
+                ctx.beginPath();
+                ctx.moveTo(left, y);
+                ctx.lineTo(left + width, y);
+                ctx.stroke();
+                if (referenceLine.label) {
+                  ctx.setLineDash([]);
+                  ctx.fillStyle = refColor;
+                  ctx.font = `${11 * dpr}px ${uiFont}`;
+                  ctx.textAlign = 'left';
+                  // Keep the label inside the plot: below the line when pinned to the top edge,
+                  // above it otherwise.
+                  ctx.textBaseline = aboveRange ? 'top' : 'bottom';
+                  ctx.fillText(referenceLine.label, left + 4 * dpr, y + (aboveRange ? 2 * dpr : -2 * dpr));
+                }
+                ctx.restore();
+              },
+            ],
+          }
+        : undefined,
     };
     const data = [timestamps, ...resolved.map((s) => s.values)] as uPlot.AlignedData;
     const plot = new uPlot(opts, data, el);
@@ -113,7 +158,7 @@ export function MetricChart({
       ro.disconnect();
       plot.destroy();
     };
-  }, [title, timestamps, values, series, height, yFormat, yRange, legendFormat]);
+  }, [title, timestamps, values, series, height, yFormat, yRange, legendFormat, referenceLine]);
 
   return <div ref={ref} />;
 }

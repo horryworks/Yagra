@@ -16,7 +16,8 @@ import { MetricChart } from '../MetricChart/MetricChart';
 import { operState } from './OverviewTab';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
-import { latestErrorRate, sparklinePath } from './interfaceMetrics';
+import { usePrefsStore } from '../../prefs';
+import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
 
 const STATUS_REFRESH_MS = 15_000;
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
@@ -277,6 +278,8 @@ function InterfaceDock({
 }) {
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
+  const throughputScale = usePrefsStore((s) => s.throughputScale);
+  const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
 
   useEffect(() => {
@@ -300,6 +303,9 @@ function InterfaceDock({
   const ts = series?.timestamps ?? [];
   const hasData = ts.length > 0;
   const errRate = latestErrorRate(series);
+  // Configured-bandwidth overlay for the throughput chart (red line + optional capacity Y-range).
+  const bw = throughputBandwidthOverlay(row.if_speed_bps, throughputScale);
+  const hasBandwidth = bw.referenceLine != null;
 
   return (
     <div className="nd-if-dock">
@@ -343,7 +349,23 @@ function InterfaceDock({
             <span>
               Throughput <span className="nd-unit">(In / Out, bps)</span>
             </span>
-            <ChartLegend />
+            <span className="nd-if-chart-ctl">
+              {hasBandwidth && (
+                <button
+                  type="button"
+                  className="nd-if-scale-toggle"
+                  onClick={toggleThroughputScale}
+                  title={
+                    throughputScale === 'capacity'
+                      ? 'Y-axis scaled to bandwidth — click to fit traffic'
+                      : 'Y-axis fits traffic — click to scale to bandwidth'
+                  }
+                >
+                  {throughputScale === 'capacity' ? 'Capacity' : 'Fit'}
+                </button>
+              )}
+              <ChartLegend bandwidth={hasBandwidth} />
+            </span>
           </div>
           {hasData ? (
             <MetricChart
@@ -352,6 +374,8 @@ function InterfaceDock({
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={formatBps}
+              yRange={bw.yRange}
+              referenceLine={bw.referenceLine}
               series={[
                 { label: 'In', values: series!.in_bps, color: CHART_IN },
                 { label: 'Out', values: series!.out_bps, color: CHART_OUT },
@@ -390,8 +414,9 @@ function InterfaceDock({
   );
 }
 
-/** In/Out colour key shown beside a dock chart title (matches the chart series colours). */
-function ChartLegend() {
+/** In/Out colour key shown beside a dock chart title (matches the chart series colours). With
+ *  `bandwidth`, also shows the red configured-bandwidth reference-line key. */
+function ChartLegend({ bandwidth = false }: { bandwidth?: boolean }) {
   return (
     <span className="nd-if-legend">
       <span className="nd-if-legend-k">
@@ -402,6 +427,12 @@ function ChartLegend() {
         <span className="nd-if-legend-sw" style={{ background: CHART_OUT }} />
         Out
       </span>
+      {bandwidth && (
+        <span className="nd-if-legend-k">
+          <span className="nd-if-legend-sw nd-if-legend-bw" />
+          Bandwidth
+        </span>
+      )}
     </span>
   );
 }

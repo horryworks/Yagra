@@ -79,7 +79,10 @@ pub enum InterfaceField {
     Name,
     /// `ifAlias` — operator-assigned description.
     Alias,
-    /// `ifSpeed`/`ifHighSpeed`-derived line rate, in bits per second.
+    /// Effective line rate in bits per second. The wire column carries the `ifSpeed` (32-bit)
+    /// OID; the poller folds in `ifHighSpeed` ([`OID_IF_HIGH_SPEED`]) so links faster than the
+    /// 32-bit `ifSpeed` cap (~4.29 Gbps) report their true rate. Resolved poller-side so the bus
+    /// contract stays unchanged (N/N-1 compatible) — no separate `HighSpeed` field on the wire.
     Speed,
 }
 
@@ -122,6 +125,12 @@ pub const OID_SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
 /// The standard cross-vendor CPU metric (net-snmp/host agents); network gear that lacks
 /// HOST-RESOURCES simply returns no rows for it (skipped by the poller).
 pub const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
+
+/// ifHighSpeed — ifXTable interface speed in **units of 1,000,000 bits/sec** (Mbps). Required
+/// for links faster than the 32-bit `ifSpeed` gauge can report (it saturates at 4,294,967,295,
+/// ~4.29 Gbps). The poller walks this alongside `ifSpeed` to resolve the effective bandwidth
+/// stored in `interfaces.if_speed` (see [`InterfaceField::Speed`]).
+pub const OID_IF_HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15";
 
 /// The standard scalar + interface-table metrics collected by default.
 ///
@@ -173,11 +182,7 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         // alerting tell an intentionally-shut port (admin-down) from an unplanned outage.
         table("if_oper_status", "1.3.6.1.2.1.2.2.1.8", MetricKind::Gauge),
         table("if_admin_status", "1.3.6.1.2.1.2.2.1.7", MetricKind::Gauge),
-        table(
-            "if_high_speed",
-            "1.3.6.1.2.1.31.1.1.1.15",
-            MetricKind::Gauge,
-        ),
+        table("if_high_speed", OID_IF_HIGH_SPEED, MetricKind::Gauge),
         // hrProcessorLoad — standard per-CPU load % (HOST-RESOURCES-MIB). Best-effort across
         // vendors; absent on devices without HOST-RESOURCES (returns no rows). Surfaced as a
         // node-level CPU% via the query-time `max()` aggregate.
@@ -191,9 +196,11 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
 
 /// The standard interface-metadata columns (ifName, ifAlias, ifSpeed) and their OID bases.
 ///
-/// Walked alongside the numeric columns to populate the PostgreSQL `interfaces` table;
-/// these never become TSDB series. `ifSpeed` is in bits/sec (the 32-bit gauge — adequate
-/// for the metadata speed; ifHighSpeed in the numeric catalog covers >4 Gbps links).
+/// Walked alongside the numeric columns to populate the PostgreSQL `interfaces` table; these
+/// never become TSDB series. The `Speed` column sends the 32-bit `ifSpeed` OID, but the poller
+/// also walks [`OID_IF_HIGH_SPEED`] and resolves the **effective** bandwidth (so >4.29 Gbps
+/// links are correct) before storing it — see [`InterfaceField::Speed`]. The OID list here is
+/// the bus contract; keep it stable for N/N-1 compatibility.
 #[must_use]
 pub fn builtin_interface_meta_columns() -> Vec<(InterfaceField, &'static str)> {
     vec![
