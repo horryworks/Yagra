@@ -20,6 +20,8 @@ const group = (
   group_type: 'generic',
   parent_id: parent,
   sort_order,
+  latitude: null,
+  longitude: null,
 });
 
 const node = (

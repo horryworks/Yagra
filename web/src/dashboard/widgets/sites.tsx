@@ -65,3 +65,45 @@ export function RegionRollupWidget() {
     }));
   return <RankedBars rows={rows} max={100} empty="No top-level groups with members yet." />;
 }
+
+export function GeoMapWidget() {
+  const { nodes, loading, error } = useNodes();
+  const groups = usePolled(() => api.listNodeGroups(), []);
+  if (error || groups.error) return <p className="muted">Couldn’t load the map.</p>;
+  if ((loading && nodes.length === 0) || (groups.loading && !groups.data)) {
+    return <p className="muted">Loading…</p>;
+  }
+  const placed = (groups.data ?? []).filter(
+    (g) => g.latitude != null && g.longitude != null,
+  );
+  if (placed.length === 0) {
+    return <p className="muted">No geo-located sites. Set coordinates on a group to plot it.</p>;
+  }
+  // Normalize lon→x, lat→y into the box (lat inverted so north is up). A small pad avoids pins
+  // sitting on the edge; a single point lands in the centre.
+  const lats = placed.map((g) => g.latitude as number);
+  const lons = placed.map((g) => g.longitude as number);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  const norm = (v: number, lo: number, hi: number) => (hi > lo ? (v - lo) / (hi - lo) : 0.5);
+  return (
+    <div className="geo" role="img" aria-label="sites positioned by coordinates, colored by worst state">
+      {placed.map((g) => {
+        const members = nodes.filter((n) => n.group_id === g.id);
+        const worst = worstState(members.map((m) => m.state));
+        const x = 6 + norm(g.longitude as number, minLon, maxLon) * 88;
+        const y = 6 + (1 - norm(g.latitude as number, minLat, maxLat)) * 88;
+        return (
+          <span
+            key={g.id}
+            className="geo-pin"
+            title={`${g.name}: ${stateLabel(worst)} (${members.length} nodes)`}
+            style={{ left: `${x}%`, top: `${y}%`, background: stateColorVar(worst) }}
+          />
+        );
+      })}
+    </div>
+  );
+}

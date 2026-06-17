@@ -34,6 +34,8 @@ const group = (id: string, parent_id: string | null = null): NodeGroup => ({
   group_type: 'site',
   parent_id,
   sort_order: 0,
+  latitude: null,
+  longitude: null,
 });
 
 describe('state roll-ups', () => {

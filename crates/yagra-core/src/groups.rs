@@ -66,6 +66,9 @@ pub struct GroupSummary {
     pub parent_id: Option<Uuid>,
     /// Manual order within the parent scope (the UI sorts siblings by this, then by name).
     pub sort_order: f64,
+    /// Optional geo coordinates for the dashboard map (both set ⇒ plotted as a pin).
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 /// A fractional sort_order that places an item between `prev` and `next` — the order values of
@@ -137,8 +140,8 @@ impl GroupRepo {
     /// within each parent scope, then name — the same order the tree renders.
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, group_type, parent_id, sort_order FROM node_groups \
-             ORDER BY sort_order, name, id",
+            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude \
+             FROM node_groups ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -150,9 +153,28 @@ impl GroupRepo {
                     group_type: row.try_get("group_type")?,
                     parent_id: row.try_get("parent_id")?,
                     sort_order: row.try_get("sort_order")?,
+                    latitude: row.try_get("latitude")?,
+                    longitude: row.try_get("longitude")?,
                 })
             })
             .collect()
+    }
+
+    /// Set (or clear, with `None`) a group's geo coordinates. Returns whether the group exists.
+    /// Coordinate-range validation happens at the API edge.
+    pub async fn set_geo(
+        &self,
+        id: Uuid,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET latitude = $2, longitude = $3 WHERE id = $1")
+            .bind(id)
+            .bind(latitude)
+            .bind(longitude)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.

@@ -104,6 +104,9 @@ export interface NodeGroup {
   parent_id: string | null;
   /** Manual order within the parent scope (tree sorts siblings by this, then by name). */
   sort_order: number;
+  /** Optional geo coordinates for the dashboard map (both set ⇒ plotted). */
+  latitude: number | null;
+  longitude: number | null;
 }
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
@@ -465,6 +468,21 @@ export interface AuditRow {
 export interface StateHistory {
   timestamps: number[];
   series: Record<string, number[]>;
+}
+
+/** Fleet aggregate throughput over time (`GET /api/v1/metrics/throughput-range`); bits/sec, `null` = gap. */
+export interface ThroughputRange {
+  timestamps: number[];
+  in_bps: (number | null)[];
+  out_bps: (number | null)[];
+}
+
+/** Busiest-links × time throughput heatmap (`GET /api/v1/metrics/interface-heatmap`). `values`
+ *  is rows (`links`) × cols (`timestamps`), each cell bits/sec. */
+export interface InterfaceHeatmap {
+  links: string[];
+  timestamps: number[];
+  values: number[][];
 }
 
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
