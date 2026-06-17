@@ -30,7 +30,7 @@ import type {
   NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
-import { Button } from '../ui/Button';
+import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from './RangeControl';
 
 const STATUS_REFRESH_MS = 15_000;
 
@@ -201,13 +201,6 @@ export function operState(oper: number | null): NodeState {
   return oper === 1 ? 'ok' : 'critical';
 }
 
-/** Chart time-windows for the device-health and interface trend charts. */
-export const RANGES: { label: string; secs: number }[] = [
-  { label: '1h', secs: 3600 },
-  { label: '6h', secs: 6 * 3600 },
-  { label: '24h', secs: 24 * 3600 },
-];
-
 /** A bounded gauge's Y range — CPU/Mem read as 0–100%, so the chart baseline is 0, not the
  *  window's min. Module-level + stable so MetricChart isn't rebuilt on every refresh. */
 const PCT_RANGE: [number, number] = [0, 100];
@@ -291,7 +284,7 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
   const [sessTotal, setSessTotal] = useState<ResolvedSession | null | undefined>(undefined);
   const [sessRate, setSessRate] = useState<ResolvedSession | null | undefined>(undefined);
-  const [rangeSecs, setRangeSecs] = useState(RANGES[0].secs);
+  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
 
   useEffect(() => {
     let cancelled = false;
@@ -329,28 +322,13 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
     <section>
       <div className="nd-section-head">
         <div className="nd-section-t">Device health</div>
-        <div className="nd-windows">
-          {RANGES.map((r) => (
-            <Button
-              key={r.secs}
-              variant={rangeSecs === r.secs ? 'primary' : 'outline'}
-              onClick={() => setRangeSecs(r.secs)}
-            >
-              {r.label}
-            </Button>
-          ))}
-        </div>
+        <RangeControl value={range} onChange={setRange} />
       </div>
       <div className="nd-health-metrics">
-        {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} rangeSecs={rangeSecs} />}
-        {mem && <MemHealth nodeId={nodeId} mem={mem} rangeSecs={rangeSecs} />}
+        {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} range={range} />}
+        {mem && <MemHealth nodeId={nodeId} mem={mem} range={range} />}
         {sessTotal && (
-          <SessionHealth
-            nodeId={nodeId}
-            label="Sessions"
-            session={sessTotal}
-            rangeSecs={rangeSecs}
-          />
+          <SessionHealth nodeId={nodeId} label="Sessions" session={sessTotal} range={range} />
         )}
         {sessRate && (
           <SessionHealth
@@ -358,7 +336,7 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
             label="Setup rate"
             unit="/s"
             session={sessRate}
-            rangeSecs={rangeSecs}
+            range={range}
           />
         )}
       </div>
@@ -374,13 +352,13 @@ function SessionHealth({
   nodeId,
   label,
   session,
-  rangeSecs,
+  range,
   unit = '',
 }: {
   nodeId: string;
   label: string;
   session: ResolvedSession;
-  rangeSecs: number;
+  range: Range;
   unit?: string;
 }) {
   const [value, setValue] = useState<number | null>(null);
@@ -392,11 +370,11 @@ function SessionHealth({
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      const to = Math.floor(Date.now() / 1000);
+      const { from, to } = resolveRange(range);
       void Promise.allSettled([
         api.getNodeMetric(nodeId, session.metric, session.agg ? { agg: session.agg } : undefined),
         api.getNodeMetricRange(nodeId, session.metric, {
-          from: to - rangeSecs,
+          from,
           to,
           ...(session.agg ? { agg: session.agg } : {}),
         }),
@@ -414,7 +392,7 @@ function SessionHealth({
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId, session.metric, session.agg, rangeSecs]);
+  }, [nodeId, session.metric, session.agg, range]);
 
   const fmt = (v: number) => `${formatCount(v)}${unit}`;
   return (
@@ -442,11 +420,11 @@ function SessionHealth({
 function CpuHealth({
   nodeId,
   metric,
-  rangeSecs,
+  range,
 }: {
   nodeId: string;
   metric: string;
-  rangeSecs: number;
+  range: Range;
 }) {
   const [value, setValue] = useState<number | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
@@ -457,10 +435,10 @@ function CpuHealth({
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      const to = Math.floor(Date.now() / 1000);
+      const { from, to } = resolveRange(range);
       void Promise.allSettled([
         api.getNodeMetric(nodeId, metric, { agg: 'max' }),
-        api.getNodeMetricRange(nodeId, metric, { from: to - rangeSecs, to, agg: 'max' }),
+        api.getNodeMetricRange(nodeId, metric, { from, to, agg: 'max' }),
       ]).then(([v, r]) => {
         if (cancelled) return;
         setValue(v.status === 'fulfilled' ? v.value.value : null);
@@ -475,7 +453,7 @@ function CpuHealth({
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId, metric, rangeSecs]);
+  }, [nodeId, metric, range]);
 
   return (
     <div className="nd-health-metric">
@@ -505,11 +483,11 @@ function CpuHealth({
 function MemHealth({
   nodeId,
   mem,
-  rangeSecs,
+  range,
 }: {
   nodeId: string;
   mem: ResolvedMem;
-  rangeSecs: number;
+  range: Range;
 }) {
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
@@ -522,13 +500,11 @@ function MemHealth({
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      const to = Math.floor(Date.now() / 1000);
+      const { from, to } = resolveRange(range);
       void Promise.all([
         Promise.allSettled(mem.metrics.map((m) => api.getNodeMetric(nodeId, m, { agg: 'max' }))),
         Promise.allSettled(
-          mem.metrics.map((m) =>
-            api.getNodeMetricRange(nodeId, m, { from: to - rangeSecs, to, agg: 'max' }),
-          ),
+          mem.metrics.map((m) => api.getNodeMetricRange(nodeId, m, { from, to, agg: 'max' })),
         ),
       ]).then(([scalars, ranges]) => {
         if (cancelled) return;
@@ -558,7 +534,7 @@ function MemHealth({
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId, mem, rangeSecs]);
+  }, [nodeId, mem, range]);
 
   // Headline: absolute used / total when we have a trustworthy total, else a bare usage %.
   const absolute = usedBytes != null && totalBytes != null;
