@@ -127,6 +127,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       <div className="nd-if-list" ref={listRef}>
         <div className="nd-if-head">
           <div className="nd-if-h">Interface</div>
+          <div className="nd-if-h">Description</div>
           <div className="nd-if-h">Oper</div>
           <div className="nd-if-h">Throughput (1h)</div>
           <div className="nd-if-h right">In / Out</div>
@@ -144,8 +145,8 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             >
               <span className="nd-if-id">
                 <span className="nd-if-name mono">{r.if_name ?? `if${r.ifindex}`}</span>
-                {r.if_alias && <span className="nd-if-sub">{r.if_alias}</span>}
               </span>
+              <span className="nd-if-cell nd-if-desc">{r.if_alias || '—'}</span>
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status)} withLabel={false} />
                 {operLabel(r.oper_status)}

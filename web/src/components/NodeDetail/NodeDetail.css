@@ -409,7 +409,7 @@
 .nd-if-head,
 .nd-if-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) 94px 132px minmax(116px, 1fr);
+  grid-template-columns: minmax(140px, 1.4fr) minmax(140px, 1.6fr) 94px 132px minmax(116px, 1fr);
   align-items: center;
 }
 
@@ -482,12 +482,9 @@
   white-space: nowrap;
 }
 
-.nd-if-sub {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Operator-configured interface description (ifAlias); secondary to the mono name. */
+.nd-if-desc {
+  color: var(--text-secondary);
 }
 
 .nd-if-oper {
