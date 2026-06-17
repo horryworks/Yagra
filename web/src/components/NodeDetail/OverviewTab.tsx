@@ -30,7 +30,8 @@ import type {
   NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
-import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from './RangeControl';
+import { RangeControl, resolveRange, type Range } from './RangeControl';
+import { useRangeStore } from '../../store';
 
 const STATUS_REFRESH_MS = 15_000;
 
@@ -221,11 +222,26 @@ const SESSION_TOTAL_METRICS = [
   'huawei_usg_total_sessions',
   'fortinet_sessions',
   'asa_current_connections',
+  'panos_sessions_active',
 ];
 
 /** New-session setup-rate gauges (sessions/sec). Separate card from the total because the scale is
  *  utterly different (a count vs a per-second rate), so overlaying one axis would flatten the other. */
 const SESSION_RATE_METRICS = ['huawei_usg_session_setup_rate'];
+
+/** VPN remote-access user/session gauges (AnyConnect / SSL-VPN logged-in users) on firewalls used
+ *  as VPN heads; first match the node collects wins. Cisco RA is a scalar, Fortinet SSL-VPN users a
+ *  per-VDOM table (collapsed node-wide via max). */
+const VPN_USER_METRICS = ['cisco_ra_sessions', 'fortinet_sslvpn_users'];
+
+/** VPN tunnel-count gauges — site-to-site IPsec/IKE tunnels or GlobalProtect tunnels; first match
+ *  wins. All scalar sources here. */
+const VPN_TUNNEL_METRICS = [
+  'cisco_ipsec_active_tunnels',
+  'cisco_ike_active_tunnels',
+  'fortinet_vpn_tunnels_up',
+  'panos_gp_active_tunnels',
+];
 
 /** A session metric resolved against a node's collection set: its name and (for table sources) the
  *  node-level aggregation to apply. */
@@ -284,7 +300,10 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
   const [sessTotal, setSessTotal] = useState<ResolvedSession | null | undefined>(undefined);
   const [sessRate, setSessRate] = useState<ResolvedSession | null | undefined>(undefined);
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const [vpnUsers, setVpnUsers] = useState<ResolvedSession | null | undefined>(undefined);
+  const [vpnTunnels, setVpnTunnels] = useState<ResolvedSession | null | undefined>(undefined);
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
 
   useEffect(() => {
     let cancelled = false;
@@ -306,6 +325,8 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
         setMem(resolvedMem);
         setSessTotal(resolveSession(items, SESSION_TOTAL_METRICS));
         setSessRate(resolveSession(items, SESSION_RATE_METRICS));
+        setVpnUsers(resolveSession(items, VPN_USER_METRICS));
+        setVpnTunnels(resolveSession(items, VPN_TUNNEL_METRICS));
       }
     })();
     return () => {
@@ -314,9 +335,16 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   }, [nodeId]);
 
   // Still resolving any of the cards.
-  if (cpuMetric === undefined || mem === undefined || sessTotal === undefined || sessRate === undefined)
+  if (
+    cpuMetric === undefined ||
+    mem === undefined ||
+    sessTotal === undefined ||
+    sessRate === undefined ||
+    vpnUsers === undefined ||
+    vpnTunnels === undefined
+  )
     return null;
-  if (!cpuMetric && !mem && !sessTotal && !sessRate) return null; // nothing to show
+  if (!cpuMetric && !mem && !sessTotal && !sessRate && !vpnUsers && !vpnTunnels) return null; // nothing to show
 
   return (
     <section>
@@ -338,6 +366,12 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
             session={sessRate}
             range={range}
           />
+        )}
+        {vpnUsers && (
+          <SessionHealth nodeId={nodeId} label="VPN users" session={vpnUsers} range={range} />
+        )}
+        {vpnTunnels && (
+          <SessionHealth nodeId={nodeId} label="VPN tunnels" session={vpnTunnels} range={range} />
         )}
       </div>
     </section>

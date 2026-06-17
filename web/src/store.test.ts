@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { sortedAlerts, useAlertStore, useAuthStore } from './store';
+import { sortedAlerts, useAlertStore, useAuthStore, useRangeStore } from './store';
 import type { Alert } from './types/api';
 
 function alert(over: Partial<Alert>): Alert {
@@ -51,5 +51,14 @@ describe('auth store', () => {
     expect(useAuthStore.getState().authed).toBe(true);
     useAuthStore.getState().setAuthed(false);
     expect(useAuthStore.getState().authed).toBe(false);
+  });
+});
+
+describe('range store', () => {
+  it('holds one shared range that every consumer reads/writes', () => {
+    useRangeStore.getState().setRange({ kind: 'relative', secs: 6 * 3600 });
+    expect(useRangeStore.getState().range).toEqual({ kind: 'relative', secs: 6 * 3600 });
+    useRangeStore.getState().setRange({ kind: 'absolute', from: 1000, to: 2000 });
+    expect(useRangeStore.getState().range).toEqual({ kind: 'absolute', from: 1000, to: 2000 });
   });
 });
