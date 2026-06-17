@@ -18,6 +18,8 @@ import type {
   DiscoveryScan,
   GroupType,
   InterfaceRow,
+  InterfaceTopEntry,
+  InterfaceTopMetric,
   InterfaceSeries,
   MaintenanceWindow,
   MetricAgg,
@@ -185,6 +187,17 @@ export const api = {
     if (opts?.agg) params.set('agg', opts.agg);
     if (opts?.limit != null) params.set('limit', String(opts.limit));
     return request(`/metrics/top?${params.toString()}`);
+  },
+
+  /** Fleet-wide interface Top-N (busiest links / most errors). `metric` selects the dimension. */
+  getInterfaceTop: (
+    metric: InterfaceTopMetric,
+    opts?: { agg?: MetricTopAgg; limit?: number },
+  ): Promise<InterfaceTopEntry[]> => {
+    const params = new URLSearchParams({ metric });
+    if (opts?.agg) params.set('agg', opts.agg);
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    return request(`/metrics/interface-top?${params.toString()}`);
   },
 
   /** Inventory listing (first page; the response is keyset-paginated). */

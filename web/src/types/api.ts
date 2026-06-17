@@ -51,6 +51,21 @@ export interface TopEntry {
   value: number;
 }
 
+/** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). */
+export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' | 'discards';
+
+/** One ranked interface in a fleet interface Top-N. `value` is bits/sec for throughput metrics,
+ *  errors|discards per second otherwise; node/interface names joined from PostgreSQL. */
+export interface InterfaceTopEntry {
+  node_id: string;
+  node_name: string;
+  ifindex: number;
+  if_name: string | null;
+  if_alias: string | null;
+  if_speed_bps: number | null;
+  value: number;
+}
+
 /** An alert as produced by the engine (`yagra_alert::Alert`). */
 export interface Alert {
   node: string;

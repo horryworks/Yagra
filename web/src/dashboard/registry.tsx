@@ -15,7 +15,15 @@ import {
 } from './widgets/alerts';
 import { HealthRingWidget, NodesDownWidget, StatusSummaryWidget } from './widgets/fleet';
 import { AuditWidget, MaintenanceWidget } from './widgets/monitoring';
-import { TopRttActions, TopRttWidget } from './widgets/performance';
+import {
+  BusiestInterfacesWidget,
+  MostErrorsWidget,
+  TopAggActions,
+  TopCpuWidget,
+  TopMemoryWidget,
+  TopRttWidget,
+  TopTalkersWidget,
+} from './widgets/performance';
 import { RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
 import './widgets/widgets.css';
 
@@ -24,6 +32,7 @@ const SECTION = {
   alerts: '02 · Alerts',
   performance: '03 · Performance hotspots',
   sites: '04 · Sites & topology',
+  capacity: '05 · Capacity & traffic',
   monitoring: '06 · Monitoring health',
 } as const;
 
@@ -108,7 +117,62 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: TopRttWidget,
-    Actions: TopRttActions,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'top-cpu',
+    title: 'Top CPU',
+    section: SECTION.performance,
+    blurb: 'Busiest control planes, % utilization (vendor CPU gauges).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TopCpuWidget,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'top-memory',
+    title: 'Top memory',
+    section: SECTION.performance,
+    blurb: 'Nodes nearest the memory ceiling, % used (vendor % gauges).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TopMemoryWidget,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'busiest-interfaces',
+    title: 'Busiest interfaces',
+    section: SECTION.performance,
+    blurb: 'Highest-throughput links, utilization % where speed is known.',
+    backing: 'rollup',
+    defaultSpan: 6,
+    allowedSpans: [6, 8, 12],
+    Component: BusiestInterfacesWidget,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'most-interface-errors',
+    title: 'Most interface errors',
+    section: SECTION.performance,
+    blurb: 'Links shedding the most errors/sec (in+out).',
+    backing: 'rollup',
+    defaultSpan: 6,
+    allowedSpans: [6, 8, 12],
+    Component: MostErrorsWidget,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'top-talkers',
+    title: 'Top talkers',
+    section: SECTION.capacity,
+    blurb: 'Interfaces moving the most bits now (in+out).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TopTalkersWidget,
+    Actions: TopAggActions,
   },
   {
     type: 'site-matrix',

@@ -22,7 +22,7 @@ use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
-use crate::store::{MetricPoint, MetricStore, TopAgg};
+use crate::store::{InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{Path, Query, Request, State},
@@ -132,6 +132,7 @@ pub fn router(state: ApiState) -> Router {
             get(get_node_metric_range),
         )
         .route("/api/v1/metrics/top", get(top_metrics))
+        .route("/api/v1/metrics/interface-top", get(interface_top))
         .route(
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
@@ -648,8 +649,45 @@ struct TopEntry {
     value: f64,
 }
 
+/// Logical node-metric aliases for the fleet Top-N: a friendly name → the set of per-vendor
+/// metric names ranked together via a `__name__` regex (one query collapses them with
+/// `max by (node)`). Only "busy-style" gauges where higher = worse are included — idle/temperature
+/// metrics are excluded. Memory uses the vendors that expose a direct % (bytes-derived % for
+/// Cisco/UCD is a later recording-rule job). The selector is built from these constants only, so
+/// it is safe to interpolate (no user input reaches the PromQL).
+fn logical_metric_selector(alias: &str) -> Option<String> {
+    let names: &[&str] = match alias {
+        "cpu" => &[
+            "huawei_cpu_usage",
+            "cisco_cpu_5min",
+            "nxos_cpu_util",
+            "fortinet_cpu_usage",
+            "juniper_cpu_1min",
+            "hr_processor_load",
+        ],
+        "memory" => &["huawei_mem_usage", "nxos_mem_util", "fortinet_mem_usage"],
+        _ => return None,
+    };
+    Some(format!("{{__name__=~\"{}\"}}", names.join("|")))
+}
+
+/// Parse the shared `agg` query param (`now` default | `max_1h`) into a [`TopAgg`]. The error is
+/// boxed so the `Ok` path stays cheap (`clippy::result_large_err`).
+fn parse_top_agg(agg: Option<&str>) -> Result<TopAgg, Box<Response>> {
+    match agg {
+        None | Some("now") => Ok(TopAgg::Now),
+        Some("max_1h") => Ok(TopAgg::Max1h),
+        Some(other) => Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_agg",
+            format!("agg must be 'now' or 'max_1h', got {other:?}"),
+        ))),
+    }
+}
+
 /// Fleet-wide Top-N for a metric: the highest-value nodes right now (or by hourly peak).
-/// Powers the dashboard "Top RTT / CPU / memory / …" widgets from one endpoint.
+/// Powers the dashboard "Top RTT / CPU / memory / …" widgets from one endpoint. `metric` is
+/// either a raw collected metric name (e.g. `icmp_rtt_ms`) or a logical alias (`cpu`, `memory`).
 async fn top_metrics(
     State(st): State<ApiState>,
     headers: HeaderMap,
@@ -658,26 +696,27 @@ async fn top_metrics(
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
-    if !is_valid_metric_name(&q.metric) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            format!("metric name {:?} is not a valid identifier", q.metric),
-        );
-    }
-    let agg = match q.agg.as_deref() {
-        None | Some("now") => TopAgg::Now,
-        Some("max_1h") => TopAgg::Max1h,
-        Some(other) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_agg",
-                format!("agg must be 'now' or 'max_1h', got {other:?}"),
-            )
+    // A logical alias expands to a constant `{__name__=~…}` selector; otherwise the metric must be
+    // a valid identifier (it's interpolated into the PromQL selector).
+    let selector = match logical_metric_selector(&q.metric) {
+        Some(sel) => sel,
+        None => {
+            if !is_valid_metric_name(&q.metric) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_metric_name",
+                    format!("metric name {:?} is not a valid identifier", q.metric),
+                );
+            }
+            q.metric.clone()
         }
     };
+    let agg = match parse_top_agg(q.agg.as_deref()) {
+        Ok(a) => a,
+        Err(resp) => return *resp,
+    };
     let limit = q.limit.unwrap_or(5).clamp(1, 50);
-    let ranked = st.store.top_nodes(&q.metric, agg, limit).await;
+    let ranked = st.store.top_nodes(&selector, agg, limit).await;
     // Join node id → name (TSDB labels carry only the id, ADR-011). Best-effort: in skeleton
     // mode (no repo) or for a since-deleted node the row keeps the id string as its name.
     let ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
@@ -691,6 +730,101 @@ async fn top_metrics(
             node_id: id,
             name: names.get(&id).cloned().unwrap_or_else(|| id.to_string()),
             value,
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+/// Query for the fleet interface Top-N endpoint.
+#[derive(Deserialize)]
+struct InterfaceTopQuery {
+    /// `throughput` | `in_bps` | `out_bps` | `errors` | `discards`.
+    metric: String,
+    agg: Option<String>,
+    limit: Option<usize>,
+}
+
+/// One ranked interface in a fleet interface Top-N.
+#[derive(Serialize)]
+struct InterfaceTopEntry {
+    node_id: Uuid,
+    node_name: String,
+    ifindex: i32,
+    if_name: Option<String>,
+    if_alias: Option<String>,
+    /// Configured speed (bits/sec) for util%; `null` if unknown.
+    if_speed_bps: Option<i64>,
+    /// bits/sec for throughput metrics, errors|discards per second otherwise.
+    value: f64,
+}
+
+/// Fleet-wide busiest/erroring interfaces. Ranks `(node,ifindex)` by a query-time rate, then
+/// joins node + interface names (and speed) from PostgreSQL (TSDB carries only ids, ADR-011).
+async fn interface_top(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<InterfaceTopQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let metric = match q.metric.as_str() {
+        "throughput" => InterfaceTopMetric::Throughput,
+        "in_bps" => InterfaceTopMetric::InBps,
+        "out_bps" => InterfaceTopMetric::OutBps,
+        "errors" => InterfaceTopMetric::Errors,
+        "discards" => InterfaceTopMetric::Discards,
+        other => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_metric",
+                format!("metric must be throughput|in_bps|out_bps|errors|discards, got {other:?}"),
+            )
+        }
+    };
+    let agg = match parse_top_agg(q.agg.as_deref()) {
+        Ok(a) => a,
+        Err(resp) => return *resp,
+    };
+    let limit = q.limit.unwrap_or(6).clamp(1, 50);
+    let ranked = st.store.top_interfaces(metric, agg, limit).await;
+    // Join (node, interface) identity. One repo query over the distinct nodes in the result.
+    let node_ids: Vec<Uuid> = {
+        let mut ids: Vec<Uuid> = ranked.iter().map(|(n, _, _)| *n).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    let (names, idents) = match st.admin.as_ref() {
+        Some(admin) => (
+            admin.repo.node_names(&node_ids).await.unwrap_or_default(),
+            admin
+                .repo
+                .interface_idents_for(&node_ids)
+                .await
+                .unwrap_or_default(),
+        ),
+        None => (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        ),
+    };
+    let out: Vec<InterfaceTopEntry> = ranked
+        .into_iter()
+        .map(|(node_id, ifindex, value)| {
+            let ident = idents.get(&(node_id, ifindex));
+            InterfaceTopEntry {
+                node_id,
+                node_name: names
+                    .get(&node_id)
+                    .cloned()
+                    .unwrap_or_else(|| node_id.to_string()),
+                ifindex,
+                if_name: ident.and_then(|i| i.if_name.clone()),
+                if_alias: ident.and_then(|i| i.if_alias.clone()),
+                if_speed_bps: ident.and_then(|i| i.if_speed),
+                value,
+            }
         })
         .collect();
     Json(out).into_response()
@@ -4409,6 +4543,49 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn interface_top_empty_on_in_memory_and_rejects_bad_metric() {
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        // In-memory store can't rank a fleet ⇒ [].
+        let ok = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics/interface-top?metric=throughput")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        assert_eq!(body_json(ok).await, serde_json::json!([]));
+        // Unknown metric ⇒ 400.
+        let bad = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics/interface-top?metric=bogus")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(bad).await["error"]["code"], "invalid_metric");
+    }
+
+    #[test]
+    fn logical_metric_selector_expands_cpu_and_memory() {
+        let cpu = logical_metric_selector("cpu").unwrap();
+        assert!(cpu.starts_with("{__name__=~\""));
+        assert!(cpu.contains("huawei_cpu_usage") && cpu.contains("hr_processor_load"));
+        // idle/temperature are intentionally excluded from "busy" CPU ranking
+        assert!(!cpu.contains("idle") && !cpu.contains("temp"));
+        assert!(logical_metric_selector("memory")
+            .unwrap()
+            .contains("huawei_mem_usage"));
+        assert!(logical_metric_selector("icmp_rtt_ms").is_none());
     }
 
     #[tokio::test]
