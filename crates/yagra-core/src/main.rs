@@ -110,15 +110,19 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Result consumer: bus → TSDB + alert engine (+ history + notifications + interface
     // inventory upsert).
+    // Self-monitoring counters for the poll loop, shared by the consumer + scheduler and read by
+    // the poller-health endpoint.
+    let scheduler_stats = Arc::new(scheduler::SchedulerStats::default());
     {
         let store = store.clone();
         let alerts = alerts.clone();
         let notifier = notifier.clone();
         let history = history.clone();
         let repo = repo.clone();
+        let stats = scheduler_stats.clone();
         let results = Box::pin(bus.subscribe_results().await?);
         tokio::spawn(consume_results(
-            results, store, alerts, notifier, history, repo,
+            results, store, alerts, notifier, history, repo, stats,
         ));
     }
 
@@ -155,7 +159,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     {
         let repo = repo.clone();
         let dispatcher = dispatcher.clone();
-        tokio::spawn(run_scheduler(repo, dispatcher));
+        let stats = scheduler_stats.clone();
+        tokio::spawn(run_scheduler(repo, dispatcher, stats));
     }
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
@@ -252,6 +257,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         groups: Arc::new(groups::GroupRepo::new(repo.pool())),
         audit: Arc::new(AuditRepo::new(repo.pool())),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
+        scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
     }));
     let sessions = Arc::new(SessionStore::new());
@@ -307,12 +313,14 @@ async fn consume_results<S>(
     notifier: Arc<Notifier>,
     history: Arc<AlertHistoryStore>,
     repo: Arc<NodeRepo>,
+    stats: Arc<scheduler::SchedulerStats>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
     use crate::alerts::NotifyAction;
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
+        stats.record_result();
         store.write(&result).await;
         // Upsert any interfaces discovered on this poll (table walks). Metadata only —
         // names/aliases live in PostgreSQL, joined to metrics at query time (ADR-011).
@@ -375,7 +383,11 @@ async fn consume_results<S>(
 /// Periodically turn the inventory into poll jobs (ICMP + SNMP), spread across the interval
 /// with per-job jitter so N nodes don't poll on the same tick (anti-stampede). Job-building is
 /// delegated to the shared [`PollDispatcher`] so the periodic and on-demand paths agree.
-async fn run_scheduler(repo: Arc<NodeRepo>, dispatcher: Arc<scheduler::PollDispatcher>) {
+async fn run_scheduler(
+    repo: Arc<NodeRepo>,
+    dispatcher: Arc<scheduler::PollDispatcher>,
+    stats: Arc<scheduler::SchedulerStats>,
+) {
     let interval_secs = dispatcher.interval_secs();
     let interval = Duration::from_secs(u64::from(interval_secs));
     // Clamp to [1, u64::MAX] before narrowing u128→u64 so an extreme interval can't wrap to a
@@ -386,10 +398,12 @@ async fn run_scheduler(repo: Arc<NodeRepo>, dispatcher: Arc<scheduler::PollDispa
         match repo.list_nodes().await {
             Ok(nodes) => {
                 tracing::debug!(count = nodes.len(), "scheduling poll round");
+                let mut jobs_round: u64 = 0;
                 for node in nodes {
                     // Resolve auth + collection and build the node's jobs up front; jitter only
                     // the publish so polls spread across the window without a stampede.
                     for (job, kind) in dispatcher.build_node_jobs(&node).await {
+                        jobs_round += 1;
                         let dispatcher = dispatcher.clone();
                         let node_id = node.id;
                         let delay = jitter();
@@ -399,6 +413,7 @@ async fn run_scheduler(repo: Arc<NodeRepo>, dispatcher: Arc<scheduler::PollDispa
                         });
                     }
                 }
+                stats.record_sweep(jobs_round);
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }

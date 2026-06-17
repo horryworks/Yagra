@@ -3,7 +3,13 @@
 // straight reads of existing endpoints.
 
 import { Badge } from '../../components/ui/Badge';
-import { httpStatusLabel, httpStatusTone, relativeTime, stateColorVar } from '../../lib/format';
+import {
+  formatCount,
+  httpStatusLabel,
+  httpStatusTone,
+  relativeTime,
+  stateColorVar,
+} from '../../lib/format';
 import { api } from '../../services/api';
 import { Gauge } from '../primitives/Gauge';
 import { usePolled } from '../usePolled';
@@ -62,6 +68,52 @@ export function StaleDataWidget() {
           <span className="dwl-dot" style={{ background: stateColorVar('unknown') }} />
           <span className="dwl-name">{s.name}</span>
           <span className="dwl-sub muted">no recent data</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function PollerHealthWidget() {
+  const { data, loading, error } = usePolled(() => api.getPollerHealth(), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const lastSweep =
+    data?.last_sweep_unix_ms != null
+      ? relativeTime(new Date(data.last_sweep_unix_ms).toISOString(), Date.now())
+      : 'never';
+  return (
+    <div className="statstrip">
+      <div className="statstrip-item">
+        <span className="statstrip-val">{lastSweep}</span>
+        <span className="statstrip-cap">last sweep</span>
+      </div>
+      <div className="statstrip-item">
+        <span className="statstrip-val">{formatCount(data?.jobs_last_round ?? 0)}</span>
+        <span className="statstrip-cap">jobs / round</span>
+      </div>
+      <div className="statstrip-item">
+        <span className="statstrip-val">{formatCount(data?.results_total ?? 0)}</span>
+        <span className="statstrip-cap">results total</span>
+      </div>
+    </div>
+  );
+}
+
+export function DiscoveryQueueWidget() {
+  const { data, loading, error } = usePolled(() => api.getDiscoveryCandidates(10), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const candidates = data ?? [];
+  if (candidates.length === 0) {
+    return <p className="muted">No pending discoveries. Run a scan from Nodes → Discovery.</p>;
+  }
+  return (
+    <ul className="dwl">
+      {candidates.map((c) => (
+        <li className="dwl-row" key={c.address}>
+          <span className="dwl-name mono">{c.address}</span>
+          <span className="dwl-sub muted">{c.sysname ?? c.sysdescr ?? 'unclassified'}</span>
         </li>
       ))}
     </ul>
