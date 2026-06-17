@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { severityRank } from './lib/format';
 import { getToken } from './services/api';
 import type { Alert } from './types/api';
+import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 
 // Shared authentication state so the app-level login gate and the Admin pane stay in
 // sync (a single source of truth for "am I logged in"). The token itself lives in the
@@ -18,6 +19,19 @@ interface AuthStore {
 export const useAuthStore = create<AuthStore>((set) => ({
   authed: getToken() != null,
   setAuthed: (authed) => set({ authed }),
+}));
+
+// Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces
+// dock, the Metric explorer) carries to the others across navigation — one source of truth for the
+// active window. In-memory (like the stores above): it survives route changes, not a full reload.
+interface RangeStore {
+  range: Range;
+  setRange: (range: Range) => void;
+}
+
+export const useRangeStore = create<RangeStore>((set) => ({
+  range: DEFAULT_RANGE,
+  setRange: (range) => set({ range }),
 }));
 
 export function alertKey(a: Pick<Alert, 'node' | 'check' | 'severity'>): string {
