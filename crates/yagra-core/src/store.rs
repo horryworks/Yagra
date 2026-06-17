@@ -106,6 +106,10 @@ pub trait MetricStore: Send + Sync {
         agg: TopAgg,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)>;
+    /// The node ids that have reported `metric` within the trailing `within_secs` window — the
+    /// "fresh" set for fleet data-coverage. The API edge diffs this against the inventory to find
+    /// stale (silent) nodes. Empty if the store has no such data.
+    async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid>;
 }
 
 #[async_trait]
@@ -174,6 +178,10 @@ impl MetricStore for InMemorySink {
         _agg: TopAgg,
         _limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
+        Vec::new()
+    }
+
+    async fn fresh_node_ids(&self, _metric: &str, _within_secs: u64) -> Vec<Uuid> {
         Vec::new()
     }
 }
@@ -611,6 +619,27 @@ impl MetricStore for VmStore {
             return Vec::new();
         };
         parse_top_interfaces(&json)
+    }
+
+    async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid> {
+        let url = format!("{}/api/v1/query", self.base);
+        // Every node series that has any sample in the window contributes its node label.
+        let query = format!("last_over_time({metric}[{}s])", within_secs.max(1));
+        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics freshness query failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        // Reuse the node-label parser; we only need the ids, not the values.
+        parse_top_nodes(&json)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
     }
 }
 

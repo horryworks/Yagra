@@ -1,0 +1,46 @@
+.gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gauge-svg {
+  width: 130px;
+  height: 130px;
+}
+
+.gauge-track {
+  fill: none;
+  stroke: var(--bg-tertiary);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.gauge-fill {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--transition);
+}
+
+.gauge-value {
+  fill: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: 9px;
+  font-weight: var(--weight-medium);
+}
+
+.gauge-label {
+  fill: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.gauge-sub {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

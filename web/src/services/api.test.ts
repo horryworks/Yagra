@@ -793,6 +793,17 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/topology');
   });
 
+  it('requests fleet coverage', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ total: 0, fresh: 0, coverage_pct: 100, stale: [] }),
+    } as Response);
+    globalThis.fetch = spy;
+    await api.getFleetCoverage();
+    expect(spy).toHaveBeenCalledWith('/api/v1/fleet/coverage');
+  });
+
   it('saves the dashboard layout as a JSON body', async () => {
     const spy = vi
       .fn()
