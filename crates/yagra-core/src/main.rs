@@ -183,6 +183,37 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         });
     }
 
+    // Fleet health timeline: snapshot the node-state counts every few minutes into PostgreSQL so
+    // the dashboard can chart "degrading vs recovering" over time, and prune old snapshots +
+    // alert history past the retention window (the only place these tables are trimmed).
+    {
+        let repo = repo.clone();
+        let alerts = alerts.clone();
+        let history = history.clone();
+        tokio::spawn(async move {
+            const SNAPSHOT_SECS: u64 = 300;
+            const RETENTION_SECS: i64 = 90 * 86_400;
+            loop {
+                tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
+                let states = alerts.node_states();
+                let mut counts: HashMap<String, i64> = HashMap::new();
+                for s in states.values() {
+                    *counts.entry(s.as_str().to_owned()).or_insert(0) += 1;
+                }
+                let snapshot: Vec<(String, i64)> = counts.into_iter().collect();
+                if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
+                    tracing::warn!(error = %e, "node-state snapshot failed");
+                }
+                if let Err(e) = repo.prune_state_snapshots(RETENTION_SECS).await {
+                    tracing::warn!(error = %e, "prune state snapshots failed");
+                }
+                if let Err(e) = history.prune_old(RETENTION_SECS).await {
+                    tracing::warn!(error = %e, "prune alert history failed");
+                }
+            }
+        });
+    }
+
     // Notification routing + mutes: load the DB channels/rules into the notifier now, then
     // refresh periodically so edits take effect without a restart (env channels stay
     // always-on; expired mutes drop out on refresh).

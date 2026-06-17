@@ -109,6 +109,17 @@ impl AlertHistoryStore {
             .collect()
     }
 
+    /// Delete history rows older than `older_than_secs` (retention). Returns rows removed.
+    pub async fn prune_old(&self, older_than_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM alert_history WHERE recorded_at < now() - ($1::double precision * interval '1 second')",
+        )
+        .bind(older_than_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The most recent `limit` history rows (newest first).
     pub async fn recent(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(

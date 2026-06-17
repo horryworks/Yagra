@@ -3,10 +3,13 @@
 // shared `useNodes()` poll, so adding several costs one inventory fetch.
 
 import { stateColorVar } from '../../lib/format';
+import { api } from '../../services/api';
+import { MetricChart } from '../../components/MetricChart/MetricChart';
 import { StatusSummary } from '../../widgets/StatusSummary';
 import { Donut } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
 import { useNodes } from '../useNodes';
+import { usePolled } from '../usePolled';
 import { downCount, percentHealthy, stateCounts } from './util';
 
 export function StatusSummaryWidget() {
@@ -35,4 +38,37 @@ export function NodesDownWidget() {
   const { nodes, loading } = useNodes();
   if (loading && nodes.length === 0) return <p className="muted">Loading nodes…</p>;
   return <KpiTile value={String(downCount(nodes))} caption="nodes down" />;
+}
+
+// Chart series colors are passed to the canvas (uPlot can't read CSS vars) — the documented
+// exemption to the no-hardcoded-color rule. These mirror the dark-theme status palette.
+const DOWN_COLOR = '#ef5350';
+const WARN_COLOR = '#e2a526';
+const UNKNOWN_COLOR = '#8a93a3';
+
+export function FleetHealthTimelineWidget() {
+  const { data, loading, error } = usePolled(() => api.getStateHistory(), []);
+  if (error) return <p className="muted">{error}</p>;
+  if (loading && !data) return <p className="muted">Loading…</p>;
+  const ts = data?.timestamps ?? [];
+  if (ts.length === 0) {
+    return <p className="muted">No history yet — state snapshots accrue every 5 minutes.</p>;
+  }
+  const s = data?.series ?? {};
+  const at = (k: string, i: number) => s[k]?.[i] ?? 0;
+  // "Down" merges critical + unreachable (both hard-down) into one problem line.
+  const down = ts.map((_, i) => at('critical', i) + at('unreachable', i));
+  return (
+    <MetricChart
+      title=""
+      timestamps={ts}
+      height={180}
+      yFormat={(v) => String(Math.round(v))}
+      series={[
+        { label: 'Down', values: down, color: DOWN_COLOR },
+        { label: 'Warning', values: s.warning ?? [], color: WARN_COLOR },
+        { label: 'Unknown', values: s.unknown ?? [], color: UNKNOWN_COLOR },
+      ]}
+    />
+  );
 }

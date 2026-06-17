@@ -197,6 +197,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/transitions", get(alert_transitions))
         .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
+        .route("/api/v1/fleet/state-history", get(fleet_state_history))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -960,6 +961,66 @@ async fn fleet_coverage(State(st): State<ApiState>, headers: HeaderMap) -> Respo
         stale,
     })
     .into_response()
+}
+
+/// Query for the fleet state-history timeline: `?from=&to=` Unix seconds (default last 24h).
+#[derive(Deserialize)]
+struct StateHistoryQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+}
+
+/// The node-state counts over time, pivoted into per-state series aligned to a shared timestamp
+/// axis (for the "fleet health timeline" stacked/line chart). Admin-only data source.
+async fn fleet_state_history(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<StateHistoryQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let to = q.to.unwrap_or_else(now_unix_s);
+    // Default window: the last 24h of snapshots.
+    let from = q.from.unwrap_or(to - 24 * 3600);
+    let rows = match admin.repo.state_history(from, to).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "fleet state history failed");
+            return internal("failed to load state history");
+        }
+    };
+    // Pivot (ts, state, count) rows into { timestamps, series: { state: [aligned counts] } }.
+    let mut timestamps: Vec<i64> = Vec::new();
+    let mut ts_index: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    for (t, _, _) in &rows {
+        if !ts_index.contains_key(t) {
+            ts_index.insert(*t, timestamps.len());
+            timestamps.push(*t);
+        }
+    }
+    // Fixed state set so the series keys are stable for the client.
+    const STATES: [&str; 6] = [
+        "ok",
+        "warning",
+        "critical",
+        "unreachable",
+        "unknown",
+        "maintenance",
+    ];
+    let mut series: std::collections::BTreeMap<String, Vec<i64>> = STATES
+        .iter()
+        .map(|s| ((*s).to_owned(), vec![0i64; timestamps.len()]))
+        .collect();
+    for (t, state, count) in rows {
+        if let (Some(&i), Some(arr)) = (ts_index.get(&t), series.get_mut(&state)) {
+            arr[i] = count;
+        }
+    }
+    Json(serde_json::json!({ "timestamps": timestamps, "series": series })).into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).

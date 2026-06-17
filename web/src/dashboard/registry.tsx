@@ -16,7 +16,12 @@ import {
   SeverityMixWidget,
   TopAlertingNodesWidget,
 } from './widgets/alerts';
-import { HealthRingWidget, NodesDownWidget, StatusSummaryWidget } from './widgets/fleet';
+import {
+  FleetHealthTimelineWidget,
+  HealthRingWidget,
+  NodesDownWidget,
+  StatusSummaryWidget,
+} from './widgets/fleet';
 import {
   AuditWidget,
   DataCoverageWidget,
@@ -75,6 +80,16 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: NodesDownWidget,
+  },
+  {
+    type: 'fleet-health-timeline',
+    title: 'Fleet health timeline',
+    section: SECTION.fleet,
+    blurb: 'Down / warning / unknown node counts over the last 24h.',
+    backing: 'rollup',
+    defaultSpan: 8,
+    allowedSpans: [6, 8, 12],
+    Component: FleetHealthTimelineWidget,
   },
   {
     type: 'recent-state-changes',
