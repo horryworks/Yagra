@@ -23,6 +23,23 @@ pub enum TopAgg {
     Max1h,
 }
 
+/// A fleet interface Top-N dimension. Each maps to a fixed, safe PromQL rate expression over the
+/// thin-label interface counters (never user-interpolated) — so the API edge only validates the
+/// enum, not a raw metric string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterfaceTopMetric {
+    /// Total throughput in+out (bits/sec).
+    Throughput,
+    /// Inbound throughput (bits/sec).
+    InBps,
+    /// Outbound throughput (bits/sec).
+    OutBps,
+    /// Errors in+out (per second).
+    Errors,
+    /// Discards in+out (per second).
+    Discards,
+}
+
 /// One point of a time series: Unix-seconds timestamp and value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MetricPoint {
@@ -75,9 +92,20 @@ pub trait MetricStore: Send + Sync {
     /// The `limit` nodes with the highest value for `metric`, fleet-wide, as `(node_id, value)`
     /// pairs sorted descending. Any per-entity/per-interface series is collapsed to a node max,
     /// so the ranking is by node and the result carries only the node id (names are joined from
-    /// PostgreSQL at the API edge, ADR-011). `metric` must be a validated identifier. Empty if
-    /// the store has no such data (e.g. the in-memory sink).
+    /// PostgreSQL at the API edge, ADR-011). `metric` is a validated identifier OR a
+    /// caller-built `{__name__=~"…"}` selector (logical CPU/memory alias). Empty if the store has
+    /// no such data (e.g. the in-memory sink).
     async fn top_nodes(&self, metric: &str, agg: TopAgg, limit: usize) -> Vec<(Uuid, f64)>;
+    /// The `limit` interfaces with the highest value for `metric`, fleet-wide, as
+    /// `(node_id, ifindex, value)` sorted descending. Ranks by query-time `rate()` of the thin
+    /// interface counters; names (node + if_name/if_alias) are joined from PostgreSQL at the edge.
+    /// Empty if the store has no such data.
+    async fn top_interfaces(
+        &self,
+        metric: InterfaceTopMetric,
+        agg: TopAgg,
+        limit: usize,
+    ) -> Vec<(Uuid, i32, f64)>;
 }
 
 #[async_trait]
@@ -137,6 +165,15 @@ impl MetricStore for InMemorySink {
 
     async fn top_nodes(&self, _metric: &str, _agg: TopAgg, _limit: usize) -> Vec<(Uuid, f64)> {
         // The skeleton sink holds a single demo series, not a fleet — nothing to rank.
+        Vec::new()
+    }
+
+    async fn top_interfaces(
+        &self,
+        _metric: InterfaceTopMetric,
+        _agg: TopAgg,
+        _limit: usize,
+    ) -> Vec<(Uuid, i32, f64)> {
         Vec::new()
     }
 }
@@ -303,6 +340,77 @@ fn topk_query(metric: &str, agg: TopAgg, limit: usize) -> String {
             format!("topk({n}, max by (node) (max_over_time({metric}[{MAX_WINDOW_SECS}s])))")
         }
     }
+}
+
+/// Rate lookback for interface Top-N (matches the interface-list/series default).
+const INTERFACE_RATE_LOOKBACK_SECS: u64 = 300;
+
+/// The fixed rate expression for an interface Top-N dimension over the thin counters. `in`+`out`
+/// rates share `(node,ifindex)` labels, so vector addition aligns per interface. Octet rates are
+/// scaled ×8 to bits/sec.
+fn interface_expr(metric: InterfaceTopMetric) -> String {
+    let w = INTERFACE_RATE_LOOKBACK_SECS;
+    match metric {
+        InterfaceTopMetric::Throughput => {
+            format!("(rate(if_hc_in_octets[{w}s]) + rate(if_hc_out_octets[{w}s])) * 8")
+        }
+        InterfaceTopMetric::InBps => format!("rate(if_hc_in_octets[{w}s]) * 8"),
+        InterfaceTopMetric::OutBps => format!("rate(if_hc_out_octets[{w}s]) * 8"),
+        InterfaceTopMetric::Errors => {
+            format!("(rate(if_in_errors[{w}s]) + rate(if_out_errors[{w}s]))")
+        }
+        InterfaceTopMetric::Discards => {
+            format!("(rate(if_in_discards[{w}s]) + rate(if_out_discards[{w}s]))")
+        }
+    }
+}
+
+/// Fleet interface Top-N PromQL: rank `(node,ifindex)` by the rate expression. `Now` takes the
+/// most recent value within the instant lookback (jitter-robust, like `instant_rate_query`);
+/// `Max1h` the trailing-hour peak. The result carries only `node`+`ifindex` labels.
+fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -> String {
+    let n = limit.clamp(1, 100);
+    let expr = interface_expr(metric);
+    let w = INTERFACE_RATE_LOOKBACK_SECS;
+    let instant = match agg {
+        TopAgg::Now => format!("last_over_time(({expr})[{INSTANT_LOOKBACK_SECS}s:{w}s])"),
+        TopAgg::Max1h => format!("max_over_time(({expr})[{MAX_WINDOW_SECS}s:{w}s])"),
+    };
+    format!("topk({n}, max by (node,ifindex) ({instant}))")
+}
+
+/// Parse a VM instant-query response into `(node_id, ifindex, value)` triples (node + ifindex
+/// labels). Skips series with an unparseable node/ifindex/value. Sorted highest-first.
+fn parse_top_interfaces(json: &serde_json::Value) -> Vec<(Uuid, i32, f64)> {
+    let Some(results) = json
+        .get("data")
+        .and_then(|d| d.get("result"))
+        .and_then(|r| r.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(results.len());
+    for series in results {
+        let m = series.get("metric");
+        let node = m
+            .and_then(|m| m.get("node"))
+            .and_then(|n| n.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        let ifindex = m
+            .and_then(|m| m.get("ifindex"))
+            .and_then(|i| i.as_str())
+            .and_then(|s| s.parse::<i32>().ok());
+        let value = series
+            .get("value")
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok());
+        if let (Some(node), Some(ifindex), Some(value)) = (node, ifindex, value) {
+            out.push((node, ifindex, value));
+        }
+    }
+    out.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    out
 }
 
 /// Parse a VictoriaMetrics instant-query response into `(node_id, value)` pairs: each
@@ -478,6 +586,32 @@ impl MetricStore for VmStore {
         };
         parse_top_nodes(&json)
     }
+
+    async fn top_interfaces(
+        &self,
+        metric: InterfaceTopMetric,
+        agg: TopAgg,
+        limit: usize,
+    ) -> Vec<(Uuid, i32, f64)> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[("query", topk_interface_query(metric, agg, limit))])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics interface topk query failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        parse_top_interfaces(&json)
+    }
 }
 
 #[cfg(test)]
@@ -592,6 +726,47 @@ mod tests {
             MetricStore::top_nodes(&store, "icmp_rtt_ms", TopAgg::Now, 5)
                 .await
                 .is_empty()
+        );
+        assert!(MetricStore::top_interfaces(
+            &store,
+            InterfaceTopMetric::Throughput,
+            TopAgg::Now,
+            5
+        )
+        .await
+        .is_empty());
+    }
+
+    #[test]
+    fn topk_interface_throughput_sums_in_out_rate_scaled_to_bits() {
+        assert_eq!(
+            topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5),
+            "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) * 8)[1800s:300s])))"
+        );
+    }
+
+    #[test]
+    fn topk_interface_errors_uses_error_counters_and_hourly_peak() {
+        assert_eq!(
+            topk_interface_query(InterfaceTopMetric::Errors, TopAgg::Max1h, 3),
+            "topk(3, max by (node,ifindex) (max_over_time(((rate(if_in_errors[300s]) + rate(if_out_errors[300s])))[3600s:300s])))"
+        );
+    }
+
+    #[test]
+    fn parse_top_interfaces_extracts_node_ifindex_value_sorted_desc() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let json = serde_json::json!({
+            "data": { "result": [
+                { "metric": { "node": a.to_string(), "ifindex": "3" }, "value": [1, "1000"] },
+                { "metric": { "node": b.to_string(), "ifindex": "7" }, "value": [1, "5000"] },
+                { "metric": { "node": a.to_string() }, "value": [1, "9"] },
+            ]}
+        });
+        assert_eq!(
+            parse_top_interfaces(&json),
+            vec![(b, 7, 5000.0), (a, 3, 1000.0)]
         );
     }
 

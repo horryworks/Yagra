@@ -41,6 +41,13 @@ pub struct InterfaceMeta {
     pub last_seen_s: Option<i64>,
 }
 
+/// Interface identity for a fleet Top-N name join (no timestamp — just labels + speed).
+pub struct InterfaceIdent {
+    pub if_name: Option<String>,
+    pub if_alias: Option<String>,
+    pub if_speed: Option<i64>,
+}
+
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
 fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     let id: Uuid = row.try_get("id")?;
@@ -410,6 +417,40 @@ impl NodeRepo {
             .await?;
         rows.into_iter()
             .map(|row| Ok((row.try_get("id")?, row.try_get("name")?)))
+            .collect()
+    }
+
+    /// Interface identity (name/alias/speed) for every interface on the given node ids, keyed by
+    /// `(node_id, ifindex)`. For joining a fleet interface Top-N (which carries only node UUID +
+    /// ifindex from the TSDB, ADR-011) back to human-readable names. Over-fetches all interfaces
+    /// of the few nodes in a Top-N result, then the caller filters by the exact pairs — one query.
+    pub async fn interface_idents_for(
+        &self,
+        node_ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<(Uuid, i32), InterfaceIdent>> {
+        if node_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT node_id, ifindex, if_name, if_alias, if_speed \
+             FROM interfaces WHERE node_id = ANY($1)",
+        )
+        .bind(node_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let node_id: Uuid = row.try_get("node_id")?;
+                let ifindex: i32 = row.try_get("ifindex")?;
+                Ok((
+                    (node_id, ifindex),
+                    InterfaceIdent {
+                        if_name: row.try_get("if_name")?,
+                        if_alias: row.try_get("if_alias")?,
+                        if_speed: row.try_get("if_speed")?,
+                    },
+                ))
+            })
             .collect()
     }
 

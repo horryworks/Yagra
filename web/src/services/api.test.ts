@@ -752,6 +752,19 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/metrics/top?metric=icmp_rtt_ms');
   });
 
+  it('builds the interface Top-N path with metric, agg and limit', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getInterfaceTop('throughput', { agg: 'now', limit: 8 });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/metrics/interface-top?metric=throughput&agg=now&limit=8',
+    );
+    await api.getInterfaceTop('errors');
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-top?metric=errors');
+  });
+
   it('reads the saved dashboard layout (null when none saved)', async () => {
     mockFetch(200, null);
     const layout = await api.getDashboard();
