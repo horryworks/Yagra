@@ -14,7 +14,8 @@ import { StatusDot } from '../ui/StatusDot';
 import { TextInput } from '../ui/Field';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { operState } from './OverviewTab';
-import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from './RangeControl';
+import { RangeControl, resolveRange } from './RangeControl';
+import { useRangeStore } from '../../store';
 import { latestErrorRate, sparklinePath } from './interfaceMetrics';
 
 const STATUS_REFRESH_MS = 15_000;
@@ -273,7 +274,8 @@ function InterfaceDock({
   row: InterfaceRow;
   onClose: () => void;
 }) {
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
 
   useEffect(() => {

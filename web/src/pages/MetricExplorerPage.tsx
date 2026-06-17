@@ -11,14 +11,16 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { MetricChart } from '../components/MetricChart/MetricChart';
-import { RangeControl, resolveRange, DEFAULT_RANGE, type Range } from '../components/NodeDetail/RangeControl';
+import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
+import { useRangeStore } from '../store';
 import './MetricExplorerPage.css';
 
 export function MetricExplorerPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [node, setNode] = useState('');
   const [metric, setMetric] = useState('icmp_rtt_ms');
-  const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
     values: [],
