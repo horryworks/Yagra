@@ -155,11 +155,24 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
             "1.3.6.1.2.1.31.1.1.1.10",
             MetricKind::Counter,
         ),
-        // ifTable error counters.
+        // ifTable error + discard counters. Discards (congestion/queue drops) complement the
+        // error counters and are stored raw; rates are derived via rate() at query time.
         table("if_in_errors", "1.3.6.1.2.1.2.2.1.14", MetricKind::Counter),
         table("if_out_errors", "1.3.6.1.2.1.2.2.1.20", MetricKind::Counter),
-        // ifOperStatus (1=up) and ifHighSpeed (Mbps) as gauges.
+        table(
+            "if_in_discards",
+            "1.3.6.1.2.1.2.2.1.13",
+            MetricKind::Counter,
+        ),
+        table(
+            "if_out_discards",
+            "1.3.6.1.2.1.2.2.1.19",
+            MetricKind::Counter,
+        ),
+        // ifOperStatus / ifAdminStatus (1=up) and ifHighSpeed (Mbps) as gauges. Admin status lets
+        // alerting tell an intentionally-shut port (admin-down) from an unplanned outage.
         table("if_oper_status", "1.3.6.1.2.1.2.2.1.8", MetricKind::Gauge),
+        table("if_admin_status", "1.3.6.1.2.1.2.2.1.7", MetricKind::Gauge),
         table(
             "if_high_speed",
             "1.3.6.1.2.1.31.1.1.1.15",
@@ -246,6 +259,17 @@ fn vendor_scalar(metric: &str, oid: &str) -> CollectionItem {
     }
 }
 
+/// A vendor scalar **counter** (a `.0`-instance counter OID — e.g. IPsec global octets). Stored
+/// raw; bandwidth/throughput is derived via `rate()` at query time (ADR-012), never by the poller.
+fn vendor_scalar_counter(metric: &str, oid: &str) -> CollectionItem {
+    CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: oid.to_owned(),
+        kind: CollectionKind::Scalar,
+        metric_kind: MetricKind::Counter,
+    }
+}
+
 // ── Template names (referenced by both templates and profiles below) ────────────────
 // Three tiers: role-base (vendor-neutral standard MIBs), vendor-health (per-NOS CPU/mem/
 // temp), and role-KPI (functional: firewall sessions etc.). A profile composes one base +
@@ -277,6 +301,13 @@ const T_NETSNMP: &str = "Linux Net-SNMP (UCD)";
 const T_ASA_SESSIONS: &str = "Cisco ASA sessions";
 const T_HUAWEI_USG_SESSIONS: &str = "Huawei USG sessions";
 
+// Role-KPI (VPN) — firewalls used as VPN heads. Cisco RA/IPsec reuse across ASA + FTD (+ IOS
+// IPsec gateways); Fortinet/Palo Alto carry their own VPN counters.
+const T_CISCO_RA_VPN: &str = "Cisco remote-access VPN";
+const T_CISCO_IPSEC: &str = "Cisco IPsec tunnels";
+const T_FORTINET_VPN: &str = "Fortinet VPN";
+const T_PANOS: &str = "Palo Alto sessions/VPN";
+
 /// The built-in collection templates shipped with Yagra (seeded on startup).
 ///
 /// Three tiers (see the name constants above). Vendor OIDs are best-effort common columns
@@ -295,12 +326,15 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         },
         BuiltinTemplate {
             name: T_HOST_RESOURCES,
-            description:
-                "HOST-RESOURCES-MIB storage used/size and process count (servers, hosts, NAS).",
+            description: "HOST-RESOURCES-MIB storage used/size and process count, plus TCP-MIB \
+                 established connections (servers, hosts, NAS).",
             items: vec![
                 vendor_table("hr_storage_used", "1.3.6.1.2.1.25.2.3.1.6"),
                 vendor_table("hr_storage_size", "1.3.6.1.2.1.25.2.3.1.5"),
                 vendor_scalar("hr_system_processes", "1.3.6.1.2.1.25.1.6.0"),
+                // TCP-MIB tcpCurrEstab — current established TCP connections; a vendor-neutral
+                // load signal available on virtually every host/appliance SNMP agent.
+                vendor_scalar("tcp_curr_estab", "1.3.6.1.2.1.6.9.0"),
             ],
         },
         BuiltinTemplate {
@@ -413,11 +447,21 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         },
         BuiltinTemplate {
             name: T_NETSNMP,
-            description: "Linux/Unix Net-SNMP (UCD) CPU idle % and real-memory total/available.",
+            description: "Linux/Unix Net-SNMP (UCD) CPU idle %, real-memory total/available, \
+                 load averages, swap, and per-disk usage %.",
             items: vec![
                 vendor_scalar("ucd_cpu_idle_pct", "1.3.6.1.4.1.2021.11.11.0"),
                 vendor_scalar("ucd_mem_total_kb", "1.3.6.1.4.1.2021.4.5.0"),
                 vendor_scalar("ucd_mem_avail_kb", "1.3.6.1.4.1.2021.4.6.0"),
+                // laLoadInt (load average ×100 as an integer) for the 1/5/15-min instances — the
+                // classic Unix saturation signal. Stored as-is; the UI scales ÷100 to a real load.
+                vendor_scalar("ucd_load_1min", "1.3.6.1.4.1.2021.10.1.5.1"),
+                vendor_scalar("ucd_load_5min", "1.3.6.1.4.1.2021.10.1.5.2"),
+                vendor_scalar("ucd_load_15min", "1.3.6.1.4.1.2021.10.1.5.3"),
+                // Swap total/available (KB) and per-mount disk usage % (dskTable column, walked).
+                vendor_scalar("ucd_swap_total_kb", "1.3.6.1.4.1.2021.4.3.0"),
+                vendor_scalar("ucd_swap_avail_kb", "1.3.6.1.4.1.2021.4.4.0"),
+                vendor_table("ucd_disk_used_pct", "1.3.6.1.4.1.2021.9.1.9"),
             ],
         },
         // ── Role-KPI (functional) ──
@@ -444,6 +488,54 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                     "huawei_usg_session_setup_rate",
                     "1.3.6.1.4.1.2011.6.122.15.1.2.1.3",
                 ),
+            ],
+        },
+        // ── Role-KPI (VPN) — appended at end so existing template seed-ids don't shift ──
+        BuiltinTemplate {
+            name: T_CISCO_RA_VPN,
+            description:
+                "Cisco remote-access VPN (AnyConnect/SSL/IPsec-RA) active sessions, users, \
+                 and traffic (CISCO-REMOTE-ACCESS-MONITOR-MIB) — ASA/FTD VPN concentrators.",
+            // Counts are gauges; the octet totals are counters (bandwidth via rate() at query time).
+            items: vec![
+                vendor_scalar("cisco_ra_sessions", "1.3.6.1.4.1.9.9.392.1.3.1.0"),
+                vendor_scalar("cisco_ra_users", "1.3.6.1.4.1.9.9.392.1.3.3.0"),
+                vendor_scalar_counter("cisco_ra_in_octets", "1.3.6.1.4.1.9.9.392.1.3.7.0"),
+                vendor_scalar_counter("cisco_ra_out_octets", "1.3.6.1.4.1.9.9.392.1.3.9.0"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_CISCO_IPSEC,
+            description: "Cisco site-to-site IPsec/IKE active tunnel counts and 64-bit throughput \
+                 (CISCO-IPSEC-FLOW-MONITOR-MIB) — ASA and IOS/IOS-XR IPsec gateways.",
+            items: vec![
+                vendor_scalar("cisco_ike_active_tunnels", "1.3.6.1.4.1.9.9.171.1.2.1.1.0"),
+                vendor_scalar(
+                    "cisco_ipsec_active_tunnels",
+                    "1.3.6.1.4.1.9.9.171.1.3.1.1.0",
+                ),
+                vendor_scalar_counter("cisco_ipsec_in_octets", "1.3.6.1.4.1.9.9.171.1.3.1.4.0"),
+                vendor_scalar_counter("cisco_ipsec_out_octets", "1.3.6.1.4.1.9.9.171.1.3.1.17.0"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_FORTINET_VPN,
+            description:
+                "FortiGate IPsec tunnels up and SSL-VPN logged-in users (FORTINET-FORTIGATE-MIB).",
+            items: vec![
+                vendor_scalar("fortinet_vpn_tunnels_up", "1.3.6.1.4.1.12356.101.12.1.1.0"),
+                // SSL-VPN logged-in users is a per-VDOM table column — walked, collapsed node-wide.
+                vendor_table("fortinet_sslvpn_users", "1.3.6.1.4.1.12356.101.12.2.3.1.2"),
+            ],
+        },
+        BuiltinTemplate {
+            name: T_PANOS,
+            description: "Palo Alto PAN-OS active sessions, session-table utilization %, and \
+                 GlobalProtect connected tunnels (PAN-COMMON-MIB).",
+            items: vec![
+                vendor_scalar("panos_sessions_active", "1.3.6.1.4.1.25461.2.1.2.3.1.0"),
+                vendor_scalar("panos_session_util_pct", "1.3.6.1.4.1.25461.2.1.2.3.2.0"),
+                vendor_scalar("panos_gp_active_tunnels", "1.3.6.1.4.1.25461.2.1.2.5.1.3.0"),
             ],
         },
     ]
@@ -610,31 +702,53 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Cisco ASA firewall",
             C::Firewall,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_ASA, T_ASA_SESSIONS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_CISCO_ASA,
+                T_ASA_SESSIONS,
+                T_CISCO_RA_VPN,
+                T_CISCO_IPSEC,
+                T_ENTITY_SENSORS,
+            ],
         ),
         prof(
             "Cisco Firepower (FTD)",
             C::Firewall,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HOST_RESOURCES,
+                T_CISCO_RA_VPN,
+                T_ENTITY_SENSORS,
+            ],
         ),
         prof(
             "Fortinet FortiGate",
             C::Firewall,
             Some("Fortinet"),
-            vec![TEMPLATE_STANDARD_SNMP, T_FORTINET],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_FORTINET,
+                T_FORTINET_VPN,
+                T_ENTITY_SENSORS,
+            ],
         ),
         prof(
             "Palo Alto PAN-OS firewall",
             C::Firewall,
             Some("Palo Alto"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HOST_RESOURCES,
+                T_PANOS,
+                T_ENTITY_SENSORS,
+            ],
         ),
         prof(
             "Check Point firewall",
             C::Firewall,
             Some("Check Point"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
         ),
         prof(
             "Juniper SRX firewall",
@@ -646,13 +760,18 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Huawei USG firewall",
             C::Firewall,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_HUAWEI_USG_SESSIONS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HUAWEI,
+                T_HUAWEI_USG_SESSIONS,
+                T_ENTITY_SENSORS,
+            ],
         ),
         prof(
             "Generic firewall",
             C::Firewall,
             None,
-            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
         ),
         // ── Wireless ──
         prof(
@@ -788,6 +907,22 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             C::LoadBalancer,
             Some("A10 Networks"),
             vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES],
+        ),
+        // Cisco Meraki (cloud-managed): local per-device SNMP exposes standard MIBs only (IF-MIB +
+        // system uptime) — no vendor CPU/mem and no VPN/AutoVPN (those live in the Dashboard API,
+        // not SNMP). So both carry just the Standard SNMP base: interface traffic/errors/status +
+        // ICMP liveness. MX = security appliance (firewall), MS = switch.
+        prof(
+            "Cisco Meraki MX",
+            C::Firewall,
+            Some("Cisco Meraki"),
+            vec![TEMPLATE_STANDARD_SNMP],
+        ),
+        prof(
+            "Cisco Meraki MS switch",
+            C::L2Switch,
+            Some("Cisco Meraki"),
+            vec![TEMPLATE_STANDARD_SNMP],
         ),
     ]
 }
@@ -1024,5 +1159,109 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn vpn_templates_carry_expected_metrics() {
+        let templates = builtin_templates();
+        let by_name = |n: &str| templates.iter().find(|t| t.name == n).unwrap();
+
+        // Cisco remote-access VPN: session/user gauges + octet counters (all scalar GETs).
+        let ra = &by_name(T_CISCO_RA_VPN).items;
+        assert!(ra.iter().any(|i| i.metric_name == "cisco_ra_sessions"
+            && i.kind == CollectionKind::Scalar
+            && i.metric_kind == MetricKind::Gauge));
+        assert!(
+            ra.iter()
+                .any(|i| i.metric_name == "cisco_ra_in_octets"
+                    && i.metric_kind == MetricKind::Counter)
+        );
+
+        // Cisco IPsec tunnels: active-tunnel gauges + 64-bit throughput counters.
+        let ipsec = &by_name(T_CISCO_IPSEC).items;
+        assert!(ipsec
+            .iter()
+            .any(|i| i.metric_name == "cisco_ipsec_active_tunnels"
+                && i.metric_kind == MetricKind::Gauge));
+        assert!(ipsec
+            .iter()
+            .any(|i| i.metric_name == "cisco_ipsec_out_octets"
+                && i.metric_kind == MetricKind::Counter));
+
+        // Fortinet VPN: scalar tunnels-up + per-VDOM SSL-VPN users table.
+        let fgt = &by_name(T_FORTINET_VPN).items;
+        assert!(fgt.iter().any(
+            |i| i.metric_name == "fortinet_vpn_tunnels_up" && i.kind == CollectionKind::Scalar
+        ));
+        assert!(fgt
+            .iter()
+            .any(|i| i.metric_name == "fortinet_sslvpn_users" && i.kind == CollectionKind::Table));
+
+        // Palo Alto sessions/VPN: active sessions + GlobalProtect tunnels.
+        let pan = &by_name(T_PANOS).items;
+        assert!(pan.iter().any(|i| i.metric_name == "panos_sessions_active"));
+        assert!(pan
+            .iter()
+            .any(|i| i.metric_name == "panos_gp_active_tunnels"));
+    }
+
+    #[test]
+    fn firewall_profiles_attach_vpn_and_sensor_templates() {
+        let profiles = builtin_profiles();
+        let by_name = |n: &str| profiles.iter().find(|p| p.name == n).unwrap();
+
+        let asa = &by_name("Cisco ASA firewall").templates;
+        assert!(
+            asa.contains(&T_CISCO_RA_VPN) && asa.contains(&T_CISCO_IPSEC),
+            "ASA gains both VPN templates"
+        );
+        assert!(asa.contains(&T_ENTITY_SENSORS), "ASA gains entity sensors");
+        assert!(by_name("Cisco Firepower (FTD)")
+            .templates
+            .contains(&T_CISCO_RA_VPN));
+        assert!(by_name("Fortinet FortiGate")
+            .templates
+            .contains(&T_FORTINET_VPN));
+        assert!(by_name("Palo Alto PAN-OS firewall")
+            .templates
+            .contains(&T_PANOS));
+    }
+
+    #[test]
+    fn standard_host_and_ucd_templates_gained_p3_metrics() {
+        let templates = builtin_templates();
+        let by_name = |n: &str| templates.iter().find(|t| t.name == n).unwrap();
+
+        let std = &by_name(TEMPLATE_STANDARD_SNMP).items;
+        for m in ["if_in_discards", "if_out_discards", "if_admin_status"] {
+            assert!(
+                std.iter().any(|i| i.metric_name == m),
+                "Standard SNMP missing {m}"
+            );
+        }
+        assert!(by_name(T_HOST_RESOURCES)
+            .items
+            .iter()
+            .any(|i| i.metric_name == "tcp_curr_estab"));
+        let ucd = &by_name(T_NETSNMP).items;
+        for m in ["ucd_load_1min", "ucd_swap_total_kb", "ucd_disk_used_pct"] {
+            assert!(ucd.iter().any(|i| i.metric_name == m), "UCD missing {m}");
+        }
+    }
+
+    #[test]
+    fn meraki_profiles_present_and_snmp_only() {
+        let profiles = builtin_profiles();
+        let by_name = |n: &str| profiles.iter().find(|p| p.name == n);
+
+        let mx = by_name("Cisco Meraki MX").expect("Meraki MX profile present");
+        assert_eq!(mx.category, ProfileCategory::Firewall);
+        assert_eq!(mx.vendor, Some("Cisco Meraki"));
+        // Cloud-managed: Standard SNMP only — VPN/AutoVPN is Dashboard-API, not SNMP.
+        assert_eq!(mx.templates, vec![TEMPLATE_STANDARD_SNMP]);
+
+        let ms = by_name("Cisco Meraki MS switch").expect("Meraki MS profile present");
+        assert_eq!(ms.category, ProfileCategory::L2Switch);
+        assert_eq!(ms.templates, vec![TEMPLATE_STANDARD_SNMP]);
     }
 }
