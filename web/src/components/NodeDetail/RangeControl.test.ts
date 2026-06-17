@@ -10,8 +10,11 @@ import {
   formatCompactRange,
   localInputToUnix,
   rangeInputsValid,
+  readRangeParam,
   resolveRange,
   unixToLocalInput,
+  writeRangeParams,
+  type Range,
 } from './RangeControl';
 
 describe('resolveRange', () => {
@@ -68,5 +71,60 @@ describe('rangeInputsValid', () => {
     expect(rangeInputsValid('garbage', '2026-06-17T09:30')).toBe(false);
     expect(rangeInputsValid('2026-06-17T09:30', '2026-06-17T09:30')).toBe(false);
     expect(rangeInputsValid('2026-06-18T09:30', '2026-06-17T09:30')).toBe(false);
+  });
+});
+
+describe('range URL params', () => {
+  const roundTrip = (range: Range) => {
+    const params = new URLSearchParams();
+    writeRangeParams(params, range);
+    return readRangeParam(params);
+  };
+
+  it('round-trips a relative range', () => {
+    expect(roundTrip({ kind: 'relative', secs: 3600 })).toEqual({ kind: 'relative', secs: 3600 });
+  });
+
+  it('round-trips an absolute range', () => {
+    expect(roundTrip({ kind: 'absolute', from: 100, to: 200 })).toEqual({
+      kind: 'absolute',
+      from: 100,
+      to: 200,
+    });
+  });
+
+  it('clears the other form when switching range kind', () => {
+    const params = new URLSearchParams();
+    writeRangeParams(params, { kind: 'absolute', from: 100, to: 200 });
+    writeRangeParams(params, { kind: 'relative', secs: 3600 });
+    expect(params.get('from')).toBeNull();
+    expect(params.get('to')).toBeNull();
+    expect(params.get('r')).toBe('3600');
+
+    writeRangeParams(params, { kind: 'absolute', from: 5, to: 9 });
+    expect(params.get('r')).toBeNull();
+  });
+
+  it('prefers a valid absolute window over a relative one', () => {
+    const params = new URLSearchParams('r=3600&from=100&to=200');
+    expect(readRangeParam(params)).toEqual({ kind: 'absolute', from: 100, to: 200 });
+  });
+
+  it('falls back to relative when the absolute window is invalid', () => {
+    expect(readRangeParam(new URLSearchParams('r=3600&from=200&to=100'))).toEqual({
+      kind: 'relative',
+      secs: 3600,
+    });
+    expect(readRangeParam(new URLSearchParams('r=3600&from=abc&to=def'))).toEqual({
+      kind: 'relative',
+      secs: 3600,
+    });
+  });
+
+  it('returns null when no range params are present or values are unusable', () => {
+    expect(readRangeParam(new URLSearchParams())).toBeNull();
+    expect(readRangeParam(new URLSearchParams('r=0'))).toBeNull();
+    expect(readRangeParam(new URLSearchParams('r=-5'))).toBeNull();
+    expect(readRangeParam(new URLSearchParams('r=abc'))).toBeNull();
   });
 });

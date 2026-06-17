@@ -10,7 +10,7 @@
 // follow-up for very large fleets.
 
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
@@ -21,6 +21,7 @@ import type {
   ProfileSummary,
 } from '../types/api';
 import { groupOptions, isSelfOrDescendant, tallyStates } from '../lib/nodeTree';
+import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
@@ -45,6 +46,8 @@ const GROUP_TYPES: { value: GroupType; label: string }[] = [
 
 const PROBLEM_STATES = new Set<NodeSummary['state']>(['warning', 'critical', 'unreachable']);
 
+const TABS = ['overview', 'interfaces', 'collection'];
+
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
@@ -64,11 +67,37 @@ export function NodesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Split selection (drives the right pane) + the left-pane search filter.
-  const [selected, setSelected] = useState<TreeSelection>(null);
+  // The right-pane selection and the inline detail tab live in the URL (`?sel=node:<id>&tab=…`)
+  // so a browser reload restores the same pane instead of snapping back to the empty state
+  // (design-guidelines.md "画面状態の永続化"). The left-pane search box stays transient (local).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected: TreeSelection = parseSelection(searchParams.get('sel'));
+  const tabParam = searchParams.get('tab') ?? '';
+  const tab = TABS.includes(tabParam) ? tabParam : 'overview';
   const [filter, setFilter] = useState('');
-  // Inline detail's active tab (local; resets to Overview when the selection changes).
-  const [tab, setTab] = useState('overview');
+
+  // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
+  // `replace` keeps rapid clicking out of the browser history.
+  const select = useCallback(
+    (sel: TreeSelection) => {
+      const params = new URLSearchParams(searchParams);
+      const value = selectionToParam(sel);
+      if (value) params.set('sel', value);
+      else params.delete('sel');
+      params.delete('tab');
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const setTab = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams);
+      params.set('tab', next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   // Add-node modal.
   const [adding, setAdding] = useState(false);
@@ -109,27 +138,29 @@ export function NodesPage() {
     void reload();
   }, [reload]);
 
-  // Default + validate the selection: keep the current row if it still exists, otherwise fall back
-  // to the first problem node (warning/critical/unreachable), else nothing (empty-state prompt).
+  // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
+  // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
+  // written back to the URL (replace) so a reload lands on the same pane. Runs only when the
+  // current selection is missing/stale, so it can't fight a user's choice.
   useEffect(() => {
     if (loading) return;
-    setSelected((cur) => {
-      if (cur) {
-        const exists =
-          cur.kind === 'node'
-            ? nodes.some((n) => n.id === cur.id)
-            : groups.some((g) => g.id === cur.id);
-        if (exists) return cur;
-      }
-      const problem = nodes.find((n) => PROBLEM_STATES.has(n.state));
-      return problem ? { kind: 'node', id: problem.id } : null;
-    });
-  }, [loading, nodes, groups]);
-
-  // Reset the inline tab whenever the selected entity changes.
-  useEffect(() => {
-    setTab('overview');
-  }, [selected?.kind, selected?.id]);
+    const raw = searchParams.get('sel');
+    const cur = parseSelection(raw);
+    const exists =
+      !!cur &&
+      (cur.kind === 'node'
+        ? nodes.some((n) => n.id === cur.id)
+        : groups.some((g) => g.id === cur.id));
+    if (exists) return;
+    const problem = nodes.find((n) => PROBLEM_STATES.has(n.state));
+    const next = problem ? selectionToParam({ kind: 'node', id: problem.id }) : null;
+    if (next === (raw ?? null)) return; // already empty / nothing better to select → no write
+    const params = new URLSearchParams(searchParams);
+    if (next) params.set('sel', next);
+    else params.delete('sel');
+    params.delete('tab');
+    setSearchParams(params, { replace: true });
+  }, [loading, nodes, groups, searchParams, setSearchParams]);
 
   // Load the binding options (profiles + SNMP credentials) when the add-node modal opens.
   useEffect(() => {
@@ -267,8 +298,8 @@ export function NodesPage() {
             showToolbar={false}
             selected={selected}
             filter={filter}
-            onSelectNode={(n) => setSelected({ kind: 'node', id: n.id })}
-            onSelectGroup={(g) => setSelected({ kind: 'group', id: g.id })}
+            onSelectNode={(n) => select({ kind: 'node', id: n.id })}
+            onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}

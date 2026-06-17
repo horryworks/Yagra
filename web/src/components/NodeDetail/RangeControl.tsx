@@ -38,6 +38,40 @@ export function resolveRange(range: Range): { from: number; to: number } {
   return { from: to - range.secs, to };
 }
 
+/** Write a Range into URL search params so a reload restores the same window: relative → `r=<secs>`,
+ *  absolute → `from=<unix>&to=<unix>`. Clears the other form's keys so the URL stays unambiguous. */
+export function writeRangeParams(params: URLSearchParams, range: Range): void {
+  if (range.kind === 'relative') {
+    params.set('r', String(range.secs));
+    params.delete('from');
+    params.delete('to');
+  } else {
+    params.set('from', String(range.from));
+    params.set('to', String(range.to));
+    params.delete('r');
+  }
+}
+
+/** Read a Range back from URL search params, or null if absent/invalid (caller falls back to
+ *  DEFAULT_RANGE). A valid absolute window (`from`+`to`, from < to) wins over relative (`r`). */
+export function readRangeParam(params: URLSearchParams): Range | null {
+  const fromStr = params.get('from');
+  const toStr = params.get('to');
+  if (fromStr != null && toStr != null) {
+    const from = Number(fromStr);
+    const to = Number(toStr);
+    if (Number.isFinite(from) && Number.isFinite(to) && from < to) {
+      return { kind: 'absolute', from, to };
+    }
+  }
+  const rStr = params.get('r');
+  if (rStr != null) {
+    const secs = Number(rStr);
+    if (Number.isFinite(secs) && secs > 0) return { kind: 'relative', secs };
+  }
+  return null;
+}
+
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
 /** Compact range readout for the calendar button, e.g. "6/12 12:00–6/17 09:30" (local time). */
