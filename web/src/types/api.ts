@@ -485,6 +485,13 @@ export interface InterfaceHeatmap {
   values: number[][];
 }
 
+/** Poll-loop self-monitoring (`GET /api/v1/poller-health`). */
+export interface PollerHealth {
+  last_sweep_unix_ms: number | null;
+  jobs_last_round: number;
+  results_total: number;
+}
+
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
 export interface FleetCoverage {
   total: number;

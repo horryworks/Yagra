@@ -67,6 +67,8 @@ pub struct AdminState {
     pub audit: Arc<AuditRepo>,
     /// Per-user "My Dashboard" widget layouts (server-side persistence).
     pub dashboards: Arc<DashboardRepo>,
+    /// Live poll-loop self-monitoring counters (the poller-health endpoint).
+    pub scheduler_stats: Arc<crate::scheduler::SchedulerStats>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
     /// manual poll matches a periodic one. Bus-only (core⇄poller never call directly, ADR-003).
     pub poll: Arc<PollDispatcher>,
@@ -202,6 +204,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/fleet/state-history", get(fleet_state_history))
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
         .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
+        .route("/api/v1/poller-health", get(poller_health))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -227,6 +230,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/discovery/scan", post(start_discovery_scan))
         .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
         .route("/api/v1/discovery/import", post(import_discovered))
+        .route("/api/v1/discovery/candidates", get(discovery_candidates))
         .route(
             "/api/v1/classification-rules",
             get(list_classification_rules).post(create_classification_rule),
@@ -1172,6 +1176,42 @@ async fn interface_heatmap(
         .collect();
     Json(serde_json::json!({ "links": links, "timestamps": timestamps, "values": values }))
         .into_response()
+}
+
+/// Query for the standing discovery-candidates view.
+#[derive(Deserialize)]
+struct CandidatesQuery {
+    limit: Option<usize>,
+}
+
+/// Recent discovered (unclassified) devices across in-memory scans — the dashboard "discovery
+/// queue". Read-only; empty in skeleton mode (no discovery runner).
+async fn discovery_candidates(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<CandidatesQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return Json(Vec::<serde_json::Value>::new()).into_response();
+    };
+    let limit = q.limit.unwrap_or(10).clamp(1, 50);
+    Json(admin.discovery.recent_candidates(limit)).into_response()
+}
+
+/// Poll-loop self-monitoring: last sweep time, jobs dispatched last round, total results consumed.
+/// The "stat strip" of the poller & collection-health widget. Per-poller rows need poller identity
+/// on the bus and are a later addition. Admin-only (stats live with the live write side).
+async fn poller_health(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    Json(admin.scheduler_stats.snapshot()).into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).

@@ -195,6 +195,27 @@ impl DiscoveryRunner {
         g.get(&scan_id).map(|s| s.status(scan_id))
     }
 
+    /// Recent discovered candidates across all in-memory scans, deduped by address (first seen
+    /// wins), capped at `limit`. Backs the dashboard "discovery queue" widget — a standing view of
+    /// unclassified finds without needing a scan id. In-memory only (scans are short-lived).
+    #[must_use]
+    pub fn recent_candidates(&self, limit: usize) -> Vec<Candidate> {
+        let g = self.scans.lock().expect("scans mutex poisoned");
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for scan in g.values() {
+            for c in &scan.candidates {
+                if seen.insert(c.address.clone()) {
+                    out.push(c.clone());
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Consume discovery results off the bus, folding each into its scan. Runs until the
     /// stream ends.
     pub async fn run_consumer<S>(self: Arc<Self>, mut results: S)

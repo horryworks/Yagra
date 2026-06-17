@@ -108,6 +108,33 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Stat strip (poller health): a row of big-number stats. */
+.statstrip {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.statstrip-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.statstrip-val {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.statstrip-cap {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
 /* Geo scatter (dependency-free; no basemap) — pins positioned by normalized lon/lat. */
 .geo {
   position: relative;

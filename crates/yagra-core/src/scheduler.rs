@@ -331,6 +331,58 @@ async fn publish(bus: &NatsBus, job: PollJob, kind: &str, node: NodeId) -> bool 
     }
 }
 
+/// Live self-monitoring counters for the poll loop, shared between the scheduler (producer) and
+/// the result consumer. Lock-free atomics — updated on the hot path, read by the poller-health
+/// endpoint. Per-poller breakdown needs poller identity on the bus and is a later addition.
+#[derive(Default)]
+pub struct SchedulerStats {
+    last_sweep_ms: std::sync::atomic::AtomicI64,
+    jobs_last_round: std::sync::atomic::AtomicU64,
+    results_total: std::sync::atomic::AtomicU64,
+}
+
+/// A point-in-time view of [`SchedulerStats`] for the API.
+#[derive(serde::Serialize)]
+pub struct SchedulerStatsSnapshot {
+    /// When the last poll round was dispatched (Unix ms), or `None` if none yet.
+    pub last_sweep_unix_ms: Option<i64>,
+    /// Jobs published in the most recent round.
+    pub jobs_last_round: u64,
+    /// Total poll results consumed since start.
+    pub results_total: u64,
+}
+
+impl SchedulerStats {
+    /// Record a completed dispatch round (`jobs` published, stamped now).
+    pub fn record_sweep(&self, jobs: u64) {
+        use std::sync::atomic::Ordering;
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        self.last_sweep_ms.store(ms, Ordering::Relaxed);
+        self.jobs_last_round.store(jobs, Ordering::Relaxed);
+    }
+
+    /// Count one consumed poll result.
+    pub fn record_result(&self) {
+        self.results_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Snapshot for the API.
+    #[must_use]
+    pub fn snapshot(&self) -> SchedulerStatsSnapshot {
+        use std::sync::atomic::Ordering;
+        let ms = self.last_sweep_ms.load(Ordering::Relaxed);
+        SchedulerStatsSnapshot {
+            last_sweep_unix_ms: (ms > 0).then_some(ms),
+            jobs_last_round: self.jobs_last_round.load(Ordering::Relaxed),
+            results_total: self.results_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

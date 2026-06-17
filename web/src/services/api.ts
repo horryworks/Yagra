@@ -18,6 +18,7 @@ import type {
   CollectionTemplate,
   CredentialSummary,
   Direction,
+  DiscoveryCandidate,
   DiscoveryScan,
   FleetCoverage,
   GroupType,
@@ -40,6 +41,7 @@ import type {
   NodeStatus,
   NodeSummary,
   NotificationChannel,
+  PollerHealth,
   ProfileSummary,
   ProfileInput,
   Role,
@@ -435,6 +437,13 @@ export const api = {
   /** Poll a discovery scan's status + candidates. */
   getDiscoveryScan: (id: string): Promise<DiscoveryScan> =>
     request(`/discovery/scan/${encodeURIComponent(id)}`),
+
+  /** Recent discovered (unclassified) devices across scans — the dashboard discovery queue. */
+  getDiscoveryCandidates: (limit?: number): Promise<DiscoveryCandidate[]> =>
+    request(limit != null ? `/discovery/candidates?limit=${limit}` : '/discovery/candidates'),
+
+  /** Poll-loop self-monitoring (last sweep / jobs per round / results total). */
+  getPollerHealth: (): Promise<PollerHealth> => request('/poller-health'),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (

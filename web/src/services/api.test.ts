@@ -787,6 +787,17 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-heatmap?limit=8');
   });
 
+  it('requests poller health and discovery candidates', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getPollerHealth();
+    expect(spy).toHaveBeenCalledWith('/api/v1/poller-health');
+    await api.getDiscoveryCandidates(10);
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/discovery/candidates?limit=10');
+  });
+
   it('builds the alert aggregation paths', async () => {
     const spy = vi
       .fn()

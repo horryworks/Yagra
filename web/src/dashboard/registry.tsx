@@ -25,7 +25,9 @@ import {
 import {
   AuditWidget,
   DataCoverageWidget,
+  DiscoveryQueueWidget,
   MaintenanceWidget,
+  PollerHealthWidget,
   StaleDataWidget,
 } from './widgets/monitoring';
 import {
@@ -323,6 +325,26 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: MaintenanceWidget,
+  },
+  {
+    type: 'poller-health',
+    title: 'Poller & collection health',
+    section: SECTION.monitoring,
+    blurb: 'Last sweep, jobs per round, results consumed.',
+    backing: 'new',
+    defaultSpan: 6,
+    allowedSpans: [6, 8, 12],
+    Component: PollerHealthWidget,
+  },
+  {
+    type: 'discovery-queue',
+    title: 'Discovery queue',
+    section: SECTION.monitoring,
+    blurb: 'Recently discovered, unclassified devices.',
+    backing: 'live',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: DiscoveryQueueWidget,
   },
   {
     type: 'data-coverage',
