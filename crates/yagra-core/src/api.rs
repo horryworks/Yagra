@@ -22,7 +22,7 @@ use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
-use crate::store::{InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
+use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{Path, Query, Request, State},
@@ -118,6 +118,7 @@ pub fn router(state: ApiState) -> Router {
             put(update_node_group).delete(delete_node_group),
         )
         .route("/api/v1/node-groups/:id/placement", put(place_group))
+        .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route(
             "/api/v1/profiles/:id",
@@ -133,6 +134,7 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/metrics/top", get(top_metrics))
         .route("/api/v1/metrics/interface-top", get(interface_top))
+        .route("/api/v1/metrics/interface-delta", get(interface_delta))
         .route(
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
@@ -198,6 +200,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
         .route("/api/v1/fleet/state-history", get(fleet_state_history))
+        .route("/api/v1/metrics/throughput-range", get(throughput_range))
+        .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -794,7 +798,16 @@ async fn interface_top(
     };
     let limit = q.limit.unwrap_or(6).clamp(1, 50);
     let ranked = st.store.top_interfaces(metric, agg, limit).await;
-    // Join (node, interface) identity. One repo query over the distinct nodes in the result.
+    Json(build_interface_entries(&st, ranked).await).into_response()
+}
+
+/// Join a fleet interface ranking `(node, ifindex, value)` to node + interface names (and speed)
+/// from PostgreSQL — one repo query over the distinct nodes in the result. Shared by the
+/// interface Top-N and interface-delta endpoints.
+async fn build_interface_entries(
+    st: &ApiState,
+    ranked: Vec<(Uuid, i32, f64)>,
+) -> Vec<InterfaceTopEntry> {
     let node_ids: Vec<Uuid> = {
         let mut ids: Vec<Uuid> = ranked.iter().map(|(n, _, _)| *n).collect();
         ids.sort_unstable();
@@ -815,7 +828,7 @@ async fn interface_top(
             std::collections::HashMap::new(),
         ),
     };
-    let out: Vec<InterfaceTopEntry> = ranked
+    ranked
         .into_iter()
         .map(|(node_id, ifindex, value)| {
             let ident = idents.get(&(node_id, ifindex));
@@ -832,8 +845,44 @@ async fn interface_top(
                 value,
             }
         })
-        .collect();
-    Json(out).into_response()
+        .collect()
+}
+
+/// Query for the interface rate-delta endpoint (traffic spikes/drops).
+#[derive(Deserialize)]
+struct InterfaceDeltaQuery {
+    /// `up` (spikes) | `down` (drops).
+    direction: String,
+    /// Comparison window in seconds (default 300 = now vs 5m ago).
+    window: Option<u64>,
+    limit: Option<usize>,
+}
+
+/// Interfaces whose total throughput moved the most vs `window` ago — spikes (`up`) or drops
+/// (`down`). `value` is the signed delta in bits/sec.
+async fn interface_delta(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<InterfaceDeltaQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let direction = match q.direction.as_str() {
+        "up" => DeltaDirection::Up,
+        "down" => DeltaDirection::Down,
+        other => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_direction",
+                format!("direction must be 'up' or 'down', got {other:?}"),
+            )
+        }
+    };
+    let window = q.window.unwrap_or(300).clamp(60, 3600);
+    let limit = q.limit.unwrap_or(6).clamp(1, 50);
+    let ranked = st.store.interface_delta(direction, window, limit).await;
+    Json(build_interface_entries(&st, ranked).await).into_response()
 }
 
 /// One node in the dependency/topology graph.
@@ -1021,6 +1070,108 @@ async fn fleet_state_history(
         }
     }
     Json(serde_json::json!({ "timestamps": timestamps, "series": series })).into_response()
+}
+
+/// Query for the aggregate-throughput range: `?from=&to=&step=` (default last 24h, 300s step).
+#[derive(Deserialize)]
+struct ThroughputRangeQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
+}
+
+/// Fleet aggregate ingress/egress (bits/sec) over time, aligned to one timestamp axis. For the
+/// "aggregate throughput" 2-series chart.
+async fn throughput_range(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<ThroughputRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let to = q.to.unwrap_or_else(now_unix_s);
+    let from = q.from.unwrap_or(to - 24 * 3600);
+    let step = q.step.unwrap_or(300).max(60);
+    let (in_pts, out_pts) = st.store.throughput_range(from, to, step).await;
+    // Align in/out onto one sorted timestamp axis (null where a side has no point).
+    let mut grid: std::collections::BTreeMap<i64, (Option<f64>, Option<f64>)> =
+        std::collections::BTreeMap::new();
+    for p in in_pts {
+        grid.entry(p.t).or_default().0 = Some(p.v);
+    }
+    for p in out_pts {
+        grid.entry(p.t).or_default().1 = Some(p.v);
+    }
+    let timestamps: Vec<i64> = grid.keys().copied().collect();
+    let in_bps: Vec<Option<f64>> = grid.values().map(|(i, _)| *i).collect();
+    let out_bps: Vec<Option<f64>> = grid.values().map(|(_, o)| *o).collect();
+    Json(serde_json::json!({ "timestamps": timestamps, "in_bps": in_bps, "out_bps": out_bps }))
+        .into_response()
+}
+
+/// Query for the interface throughput heatmap: `?limit=&from=&to=&step=`.
+#[derive(Deserialize)]
+struct HeatmapQuery {
+    limit: Option<usize>,
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
+}
+
+/// Busiest-links × time heatmap: picks the top interfaces by current throughput, then returns
+/// each link's throughput (bits/sec) over time on a shared timestamp axis. Cells are intensity-
+/// shaded client-side.
+async fn interface_heatmap(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<HeatmapQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let limit = q.limit.unwrap_or(8).clamp(1, 20);
+    let to = q.to.unwrap_or_else(now_unix_s);
+    let from = q.from.unwrap_or(to - 6 * 3600);
+    let step = q.step.unwrap_or(600).max(60);
+    // Pick the busiest links now, then fetch each one's throughput series.
+    let top = st
+        .store
+        .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, limit)
+        .await;
+    let entries = build_interface_entries(&st, top).await;
+    let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let mut per_link: Vec<(String, std::collections::HashMap<i64, f64>)> = Vec::new();
+    for e in &entries {
+        let pts = st
+            .store
+            .interface_throughput_range(e.node_id, e.ifindex, from, to, step)
+            .await;
+        let mut m = std::collections::HashMap::new();
+        for p in pts {
+            union.insert(p.t);
+            m.insert(p.t, p.v);
+        }
+        let iface = e
+            .if_name
+            .clone()
+            .or_else(|| e.if_alias.clone())
+            .unwrap_or_else(|| format!("if{}", e.ifindex));
+        per_link.push((format!("{} · {}", e.node_name, iface), m));
+    }
+    let timestamps: Vec<i64> = union.into_iter().collect();
+    let links: Vec<String> = per_link.iter().map(|(l, _)| l.clone()).collect();
+    let values: Vec<Vec<f64>> = per_link
+        .iter()
+        .map(|(_, m)| {
+            timestamps
+                .iter()
+                .map(|t| m.get(t).copied().unwrap_or(0.0))
+                .collect()
+        })
+        .collect();
+    Json(serde_json::json!({ "links": links, "timestamps": timestamps, "values": values }))
+        .into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).
@@ -1799,6 +1950,60 @@ async fn place_group(
         Err(e) => {
             tracing::error!(error = %e, "place group failed");
             internal("failed to move group")
+        }
+    }
+}
+
+/// Set/clear a group's geo coordinates (both or neither). Body: `{ latitude, longitude }` —
+/// `null` for both clears the pin.
+#[derive(Deserialize)]
+struct GroupGeo {
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+}
+
+async fn set_node_group_geo(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupGeo>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    // Both or neither, and within valid coordinate ranges.
+    match (body.latitude, body.longitude) {
+        (Some(lat), Some(lon)) => {
+            if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_coordinates",
+                    "latitude must be -90..90 and longitude -180..180".to_owned(),
+                );
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_coordinates",
+                "provide both latitude and longitude, or neither (to clear)".to_owned(),
+            )
+        }
+    }
+    match admin
+        .groups
+        .set_geo(id, body.latitude, body.longitude)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("group_not_found", format!("no group {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set group geo failed");
+            internal("failed to set group coordinates")
         }
     }
 }

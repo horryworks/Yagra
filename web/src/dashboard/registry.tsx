@@ -37,8 +37,14 @@ import {
   TopRttWidget,
   TopTalkersWidget,
 } from './widgets/performance';
-import { RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
+import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
 import { DependencyWidget } from './widgets/topology';
+import {
+  AggregateThroughputWidget,
+  InterfaceHeatmapWidget,
+  TrafficDropsWidget,
+  TrafficSpikesWidget,
+} from './widgets/capacity';
 import './widgets/widgets.css';
 
 const SECTION = {
@@ -229,6 +235,46 @@ export const REGISTRY: WidgetDefinition[] = [
     Actions: TopAggActions,
   },
   {
+    type: 'aggregate-throughput',
+    title: 'Aggregate throughput',
+    section: SECTION.capacity,
+    blurb: 'Total fleet ingress/egress (bits/sec) over 24h.',
+    backing: 'rollup',
+    defaultSpan: 8,
+    allowedSpans: [6, 8, 12],
+    Component: AggregateThroughputWidget,
+  },
+  {
+    type: 'interface-heatmap',
+    title: 'Interface utilization heatmap',
+    section: SECTION.capacity,
+    blurb: 'Busiest links × time, shaded by throughput.',
+    backing: 'rollup',
+    defaultSpan: 8,
+    allowedSpans: [6, 8, 12],
+    Component: InterfaceHeatmapWidget,
+  },
+  {
+    type: 'traffic-spikes',
+    title: 'Traffic spikes',
+    section: SECTION.capacity,
+    blurb: 'Interfaces whose throughput jumped most vs 5m ago.',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TrafficSpikesWidget,
+  },
+  {
+    type: 'traffic-drops',
+    title: 'Traffic drops',
+    section: SECTION.capacity,
+    blurb: 'Interfaces whose throughput fell most vs 5m ago (possible outage).',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    Component: TrafficDropsWidget,
+  },
+  {
     type: 'site-matrix',
     title: 'Site health matrix',
     section: SECTION.sites,
@@ -247,6 +293,16 @@ export const REGISTRY: WidgetDefinition[] = [
     defaultSpan: 4,
     allowedSpans: [4, 6],
     Component: RegionRollupWidget,
+  },
+  {
+    type: 'geo-map',
+    title: 'Geo map',
+    section: SECTION.sites,
+    blurb: 'Sites plotted by coordinates, pin colored by worst state.',
+    backing: 'new',
+    defaultSpan: 6,
+    allowedSpans: [4, 6, 8],
+    Component: GeoMapWidget,
   },
   {
     type: 'dependency-view',

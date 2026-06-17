@@ -765,6 +765,28 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-top?metric=errors');
   });
 
+  it('builds the interface-delta path (spikes/drops)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getInterfaceDelta('up', { window: 300, limit: 6 });
+    expect(spy).toHaveBeenCalledWith('/api/v1/metrics/interface-delta?direction=up&window=300&limit=6');
+    await api.getInterfaceDelta('down');
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-delta?direction=down');
+  });
+
+  it('builds throughput-range and interface-heatmap paths', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.getThroughputRange();
+    expect(spy).toHaveBeenCalledWith('/api/v1/metrics/throughput-range');
+    await api.getInterfaceHeatmap({ limit: 8 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/metrics/interface-heatmap?limit=8');
+  });
+
   it('builds the alert aggregation paths', async () => {
     const spy = vi
       .fn()

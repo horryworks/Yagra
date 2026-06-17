@@ -40,6 +40,15 @@ pub enum InterfaceTopMetric {
     Discards,
 }
 
+/// Direction for the interface rate-delta (traffic spikes vs drops).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeltaDirection {
+    /// Largest positive change (spikes).
+    Up,
+    /// Largest negative change (drops).
+    Down,
+}
+
 /// One point of a time series: Unix-seconds timestamp and value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MetricPoint {
@@ -110,6 +119,34 @@ pub trait MetricStore: Send + Sync {
     /// "fresh" set for fleet data-coverage. The API edge diffs this against the inventory to find
     /// stale (silent) nodes. Empty if the store has no such data.
     async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid>;
+    /// The `limit` interfaces whose total throughput changed the most vs `window_secs` ago, as
+    /// `(node_id, ifindex, signed_delta_bps)` ordered by magnitude. `Up` ⇒ biggest increases
+    /// (spikes), `Down` ⇒ biggest decreases (drops). Empty if the store has no such data.
+    async fn interface_delta(
+        &self,
+        direction: DeltaDirection,
+        window_secs: u64,
+        limit: usize,
+    ) -> Vec<(Uuid, i32, f64)>;
+    /// Fleet aggregate throughput: the sum of all interface in/out rates (×8 = bits/sec) sampled
+    /// across `[from_s, to_s]` at `step_s`, as `(in_bps_points, out_bps_points)` oldest-first.
+    /// Empty if the store has no history.
+    async fn throughput_range(
+        &self,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> (Vec<MetricPoint>, Vec<MetricPoint>);
+    /// Total throughput (in+out rate ×8 = bits/sec) for one interface over `[from_s, to_s]` at
+    /// `step_s`, oldest first. For the per-link utilization heatmap. Empty if no history.
+    async fn interface_throughput_range(
+        &self,
+        node: Uuid,
+        ifindex: i32,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint>;
 }
 
 #[async_trait]
@@ -182,6 +219,35 @@ impl MetricStore for InMemorySink {
     }
 
     async fn fresh_node_ids(&self, _metric: &str, _within_secs: u64) -> Vec<Uuid> {
+        Vec::new()
+    }
+
+    async fn interface_delta(
+        &self,
+        _direction: DeltaDirection,
+        _window_secs: u64,
+        _limit: usize,
+    ) -> Vec<(Uuid, i32, f64)> {
+        Vec::new()
+    }
+
+    async fn throughput_range(
+        &self,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> (Vec<MetricPoint>, Vec<MetricPoint>) {
+        (Vec::new(), Vec::new())
+    }
+
+    async fn interface_throughput_range(
+        &self,
+        _node: Uuid,
+        _ifindex: i32,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
         Vec::new()
     }
 }
@@ -385,6 +451,23 @@ fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -
         TopAgg::Max1h => format!("max_over_time(({expr})[{MAX_WINDOW_SECS}s:{w}s])"),
     };
     format!("topk({n}, max by (node,ifindex) ({instant}))")
+}
+
+/// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
+/// `window_secs` ago (×8 = bits/sec). `Up` keeps the biggest increases (`topk`), `Down` the
+/// biggest decreases (`bottomk`). The two `rate()`s share `(node,ifindex)` labels so the
+/// subtraction aligns per interface.
+fn interface_delta_query(direction: DeltaDirection, window_secs: u64, limit: usize) -> String {
+    let n = limit.clamp(1, 100);
+    let w = window_secs.max(1);
+    let delta = format!(
+        "((rate(if_hc_in_octets[{w}s]) + rate(if_hc_out_octets[{w}s])) - \
+          (rate(if_hc_in_octets[{w}s] offset {w}s) + rate(if_hc_out_octets[{w}s] offset {w}s))) * 8"
+    );
+    match direction {
+        DeltaDirection::Up => format!("topk({n}, {delta})"),
+        DeltaDirection::Down => format!("bottomk({n}, {delta})"),
+    }
 }
 
 /// Parse a VM instant-query response into `(node_id, ifindex, value)` triples (node + ifindex
@@ -641,6 +724,66 @@ impl MetricStore for VmStore {
             .map(|(id, _)| id)
             .collect()
     }
+
+    async fn interface_delta(
+        &self,
+        direction: DeltaDirection,
+        window_secs: u64,
+        limit: usize,
+    ) -> Vec<(Uuid, i32, f64)> {
+        let url = format!("{}/api/v1/query", self.base);
+        let query = interface_delta_query(direction, window_secs, limit);
+        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics interface-delta query failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        let mut out = parse_top_interfaces(&json);
+        // Order by magnitude so the biggest movers lead, in both directions.
+        out.sort_by(|a, b| {
+            b.2.abs()
+                .partial_cmp(&a.2.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out
+    }
+
+    async fn throughput_range(
+        &self,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> (Vec<MetricPoint>, Vec<MetricPoint>) {
+        // Fleet sum of per-interface octet rates ×8 = bits/sec. 300s rate window is robust to
+        // poll jitter; sampled at the requested step across the range.
+        let in_q = "sum(rate(if_hc_in_octets[300s])) * 8".to_string();
+        let out_q = "sum(rate(if_hc_out_octets[300s])) * 8".to_string();
+        let in_pts = self.query_range_points(in_q, from_s, to_s, step_s).await;
+        let out_pts = self.query_range_points(out_q, from_s, to_s, step_s).await;
+        (in_pts, out_pts)
+    }
+
+    async fn interface_throughput_range(
+        &self,
+        node: Uuid,
+        ifindex: i32,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        // node is a UUID and ifindex an i32 (both bounded types from the topk result), so they're
+        // safe to interpolate into the thin-label selector.
+        let q = format!(
+            "(rate(if_hc_in_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[300s]) + \
+              rate(if_hc_out_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[300s])) * 8"
+        );
+        self.query_range_points(q, from_s, to_s, step_s).await
+    }
 }
 
 #[cfg(test)]
@@ -772,6 +915,19 @@ mod tests {
             topk_interface_query(InterfaceTopMetric::Throughput, TopAgg::Now, 5),
             "topk(5, max by (node,ifindex) (last_over_time(((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) * 8)[1800s:300s])))"
         );
+    }
+
+    #[test]
+    fn interface_delta_up_uses_topk_and_offset() {
+        assert_eq!(
+            interface_delta_query(DeltaDirection::Up, 300, 5),
+            "topk(5, ((rate(if_hc_in_octets[300s]) + rate(if_hc_out_octets[300s])) - (rate(if_hc_in_octets[300s] offset 300s) + rate(if_hc_out_octets[300s] offset 300s))) * 8)"
+        );
+    }
+
+    #[test]
+    fn interface_delta_down_uses_bottomk() {
+        assert!(interface_delta_query(DeltaDirection::Down, 300, 5).starts_with("bottomk(5,"));
     }
 
     #[test]

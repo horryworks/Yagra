@@ -21,6 +21,7 @@ import type {
   DiscoveryScan,
   FleetCoverage,
   GroupType,
+  InterfaceHeatmap,
   InterfaceRow,
   InterfaceTopEntry,
   InterfaceTopMetric,
@@ -47,6 +48,7 @@ import type {
   ScopeLevel,
   Severity,
   StateHistory,
+  ThroughputRange,
   StoredCollectionItem,
   StoredThreshold,
   TopEntry,
@@ -206,6 +208,18 @@ export const api = {
     return request(`/metrics/interface-top?${params.toString()}`);
   },
 
+  /** Interfaces whose throughput moved the most vs `window`s ago — `up` (spikes) / `down` (drops).
+   *  `value` is the signed delta in bits/sec. */
+  getInterfaceDelta: (
+    direction: 'up' | 'down',
+    opts?: { window?: number; limit?: number },
+  ): Promise<InterfaceTopEntry[]> => {
+    const params = new URLSearchParams({ direction });
+    if (opts?.window != null) params.set('window', String(opts.window));
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    return request(`/metrics/interface-delta?${params.toString()}`);
+  },
+
   /** Inventory listing (first page; the response is keyset-paginated). */
   listNodes: (): Promise<NodeSummary[]> =>
     request<NodePage>('/nodes').then((r) => r.nodes),
@@ -318,6 +332,13 @@ export const api = {
     body: { parent_id: string | null; before?: string; after?: string },
   ): Promise<void> =>
     request(`/node-groups/${encodeURIComponent(id)}/placement`, jsonBody('PUT', body)),
+
+  /** Set (or clear, with both `null`) a group's geo coordinates for the dashboard map. */
+  setNodeGroupGeo: (
+    id: string,
+    body: { latitude: number | null; longitude: number | null },
+  ): Promise<void> =>
+    request(`/node-groups/${encodeURIComponent(id)}/geo`, jsonBody('PUT', body)),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
@@ -527,6 +548,36 @@ export const api = {
     if (opts?.to != null) params.set('to', String(opts.to));
     const qs = params.toString();
     return request(qs ? `/fleet/state-history?${qs}` : '/fleet/state-history');
+  },
+
+  /** Fleet aggregate ingress/egress (bits/sec) over time (default last 24h). */
+  getThroughputRange: (opts?: {
+    from?: number;
+    to?: number;
+    step?: number;
+  }): Promise<ThroughputRange> => {
+    const params = new URLSearchParams();
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    if (opts?.step != null) params.set('step', String(opts.step));
+    const qs = params.toString();
+    return request(qs ? `/metrics/throughput-range?${qs}` : '/metrics/throughput-range');
+  },
+
+  /** Busiest-links × time throughput heatmap (default top 8 over last 6h). */
+  getInterfaceHeatmap: (opts?: {
+    limit?: number;
+    from?: number;
+    to?: number;
+    step?: number;
+  }): Promise<InterfaceHeatmap> => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    if (opts?.step != null) params.set('step', String(opts.step));
+    const qs = params.toString();
+    return request(qs ? `/metrics/interface-heatmap?${qs}` : '/metrics/interface-heatmap');
   },
 
   /** Notification channels (metadata only; the secret config is never returned). */
