@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANOMS, KINDS, METHODS, TOOLS, severityFor, toolById } from './data';
+import { KINDS, METHODS, TOOLS, kindMeta, toolById } from './data';
 
 describe('troubleshoot catalog data', () => {
   it('every tool has a unique id and a known method', () => {
@@ -8,10 +8,14 @@ describe('troubleshoot catalog data', () => {
     for (const t of TOOLS) expect(METHODS[t.method]).toBeDefined();
   });
 
-  it('only tools with a report screen expose a reportPath', () => {
-    const anomaly = toolById('anomaly');
-    expect(anomaly?.reportPath).toBe('/troubleshoot/anomaly');
-    // The other three have no report screen yet.
+  it('tool ids match the backend tool keys', () => {
+    expect(TOOLS.map((t) => t.id).sort()).toEqual(
+      ['anomaly', 'capacity', 'correlation', 'flap'].sort(),
+    );
+  });
+
+  it('only Anomaly Detection exposes a report path (others have no report screen yet)', () => {
+    expect(toolById('anomaly')?.reportPath).toBe('/troubleshoot/anomaly');
     expect(toolById('correlation')?.reportPath).toBeUndefined();
     expect(toolById('capacity')?.reportPath).toBeUndefined();
     expect(toolById('flap')?.reportPath).toBeUndefined();
@@ -23,22 +27,9 @@ describe('troubleshoot catalog data', () => {
       expect(t.depth).toBeLessThanOrEqual(5);
     }
   });
-});
 
-describe('anomaly findings', () => {
-  it('severityFor matches the score thresholds (≥90 crit, ≥75 warn, else info)', () => {
-    expect(severityFor(98)).toBe('crit');
-    expect(severityFor(90)).toBe('crit');
-    expect(severityFor(89)).toBe('warn');
-    expect(severityFor(75)).toBe('warn');
-    expect(severityFor(74)).toBe('info');
-  });
-
-  it('each finding’s stored severity agrees with its score', () => {
-    for (const a of ANOMS) expect(a.sev).toBe(severityFor(a.score));
-  });
-
-  it('every finding kind has catalog metadata', () => {
-    for (const a of ANOMS) expect(KINDS[a.kind]).toBeDefined();
+  it('kindMeta resolves anomaly shapes and falls back for unknown kinds', () => {
+    expect(kindMeta('spike').label).toBe(KINDS.spike.label);
+    expect(kindMeta('correlation').label).toBe('correlation'); // not an anomaly shape
   });
 });

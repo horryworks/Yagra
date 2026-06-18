@@ -1,79 +1,64 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { INITIAL_RUNS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
+import type { AnalysisJob } from '../types/api';
 
-function reset() {
-  useTroubleshootStore.setState({
-    runs: INITIAL_RUNS.map((r) => ({ ...r })),
-    nextRunId: 1,
-    openToolId: null,
-    toast: null,
-  });
+function job(over: Partial<AnalysisJob>): AnalysisJob {
+  return {
+    id: 'j1',
+    tool: 'anomaly',
+    scope_kind: 'all',
+    scope_id: null,
+    scope_label: 'All nodes',
+    params: {},
+    state: 'running',
+    pct: 10,
+    phase: 'Scoring…',
+    finding_count: 0,
+    summary: null,
+    error: null,
+    created_ms: 1000,
+    started_ms: 1000,
+    finished_ms: null,
+    ...over,
+  };
 }
 
-beforeEach(reset);
-
-describe('troubleshoot runs store', () => {
-  it('seeds with two running jobs', () => {
-    expect(runningCount(useTroubleshootStore.getState().runs)).toBe(2);
-  });
-
-  it('prepends a launched run with a generated id', () => {
-    useTroubleshootStore.getState().addRun({
-      tool: 'Anomaly Detection',
-      mono: 'An',
-      scope: 'all nodes (128) · 7 d',
-      state: 'running',
-      pct: 3,
-    });
-    const runs = useTroubleshootStore.getState().runs;
-    expect(runs).toHaveLength(INITIAL_RUNS.length + 1);
-    expect(runs[0].tool).toBe('Anomaly Detection');
-    expect(runs[0].id).toBe('new-1');
-    expect(runningCount(runs)).toBe(3);
-  });
-
-  it('cancel drops a running job from the list', () => {
-    useTroubleshootStore.getState().cancelRun('r1');
-    const runs = useTroubleshootStore.getState().runs;
-    expect(runs.find((r) => r.id === 'r1')).toBeUndefined();
-    expect(runningCount(runs)).toBe(1);
-  });
-
-  it('retry re-queues a failed job back to running', () => {
-    expect(useTroubleshootStore.getState().runs.find((r) => r.id === 'r5')?.state).toBe('failed');
-    useTroubleshootStore.getState().retryRun('r5');
-    const r5 = useTroubleshootStore.getState().runs.find((r) => r.id === 'r5');
-    expect(r5?.state).toBe('running');
-    expect(r5?.err).toBeUndefined();
-    expect(runningCount(useTroubleshootStore.getState().runs)).toBe(3);
-  });
-
-  it('retry is a no-op on a non-failed job', () => {
-    useTroubleshootStore.getState().retryRun('r3'); // a done job
-    expect(useTroubleshootStore.getState().runs.find((r) => r.id === 'r3')?.state).toBe('done');
-  });
-
-  it('tick advances running progress, caps at 99, and never touches finished jobs', () => {
-    useTroubleshootStore.setState({
-      runs: [
-        { id: 'a', tool: 'T', mono: 'T', scope: 's', state: 'running', pct: 95, phase: 'Scoring…' },
-        { id: 'b', tool: 'T', mono: 'T', scope: 's', state: 'done', when: '1m ago' },
-      ],
-      nextRunId: 1,
-      openToolId: null,
-      toast: null,
-    });
-    useTroubleshootStore.getState().tickProgress();
-    const [a, b] = useTroubleshootStore.getState().runs;
-    expect(a.pct).toBeGreaterThanOrEqual(95);
-    expect(a.pct).toBeLessThanOrEqual(99);
-    expect(a.phase).toBe('Finalizing report…'); // >92%
-    expect(b.state).toBe('done'); // untouched
-  });
+beforeEach(() => {
+  useTroubleshootStore.setState({ jobs: [], loaded: false, openToolId: null, toast: null });
 });
 
-describe('troubleshoot drawer + toast', () => {
+describe('troubleshoot jobs store', () => {
+  it('setJobs sorts newest-first and marks loaded', () => {
+    useTroubleshootStore.getState().setJobs([
+      job({ id: 'a', created_ms: 100 }),
+      job({ id: 'b', created_ms: 300 }),
+      job({ id: 'c', created_ms: 200 }),
+    ]);
+    const s = useTroubleshootStore.getState();
+    expect(s.loaded).toBe(true);
+    expect(s.jobs.map((j) => j.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('upsertJob replaces by id (SSE tick) and keeps newest-first order', () => {
+    const store = useTroubleshootStore.getState();
+    store.setJobs([job({ id: 'a', created_ms: 100, pct: 10 })]);
+    store.upsertJob(job({ id: 'b', created_ms: 300, pct: 5 }));
+    store.upsertJob(job({ id: 'a', created_ms: 100, pct: 90 })); // update existing
+    const jobs = useTroubleshootStore.getState().jobs;
+    expect(jobs.map((j) => j.id)).toEqual(['b', 'a']);
+    expect(jobs.find((j) => j.id === 'a')?.pct).toBe(90);
+  });
+
+  it('runningCount counts only running jobs', () => {
+    const jobs = [
+      job({ id: 'a', state: 'running' }),
+      job({ id: 'b', state: 'done' }),
+      job({ id: 'c', state: 'running' }),
+      job({ id: 'd', state: 'failed' }),
+    ];
+    expect(runningCount(jobs)).toBe(2);
+  });
+
   it('opens and closes the launch drawer by tool id', () => {
     useTroubleshootStore.getState().openDrawer('capacity');
     expect(useTroubleshootStore.getState().openToolId).toBe('capacity');
@@ -81,12 +66,12 @@ describe('troubleshoot drawer + toast', () => {
     expect(useTroubleshootStore.getState().openToolId).toBeNull();
   });
 
-  it('shows a toast and bumps its key so a repeat message re-fires the timer', () => {
+  it('shows a toast and bumps its key for a repeat message', () => {
     useTroubleshootStore.getState().showToast('Started', '/troubleshoot/anomaly');
     const first = useTroubleshootStore.getState().toast;
     expect(first?.msg).toBe('Started');
     expect(first?.linkTo).toBe('/troubleshoot/anomaly');
-    useTroubleshootStore.getState().showToast('Started');
+    useTroubleshootStore.getState().showToast('Started again');
     expect(useTroubleshootStore.getState().toast?.key).toBe((first?.key ?? 0) + 1);
     useTroubleshootStore.getState().dismissToast();
     expect(useTroubleshootStore.getState().toast).toBeNull();

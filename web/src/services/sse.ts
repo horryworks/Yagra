@@ -3,7 +3,7 @@
 // event id. The event *parsing* is split out as a pure function so it can be tested without
 // a browser EventSource.
 
-import type { Alert } from '../types/api';
+import type { Alert, AnalysisJob } from '../types/api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 
@@ -38,6 +38,36 @@ export function subscribeAlerts(
     if (!event) return;
     if (event.resolved) onResolve?.(event);
     else onAlert(event);
+  };
+  if (onError) source.onerror = onError;
+  return () => source.close();
+}
+
+/** Parse one analysis-job SSE payload, or null if malformed. */
+export function parseAnalysisJob(data: string): AnalysisJob | null {
+  try {
+    const obj = JSON.parse(data) as Partial<AnalysisJob>;
+    if (typeof obj.id === 'string' && typeof obj.state === 'string') {
+      return obj as AnalysisJob;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Subscribe to the analysis-job status stream (ADR-022). Each event is a job's current row;
+ * `onJob` upserts it into the runs store. Returns an unsubscribe function.
+ */
+export function subscribeAnalysis(
+  onJob: (job: AnalysisJob) => void,
+  onError?: (err: Event) => void,
+): () => void {
+  const source = new EventSource(`${BASE}/stream/analysis`);
+  source.onmessage = (ev: MessageEvent<string>) => {
+    const job = parseAnalysisJob(ev.data);
+    if (job) onJob(job);
   };
   if (onError) source.onerror = onError;
   return () => source.close();

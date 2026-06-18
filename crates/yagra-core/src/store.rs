@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_bus::PollResult;
 use yagra_common::SeriesKey;
@@ -147,6 +148,11 @@ pub trait MetricStore: Send + Sync {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint>;
+    /// The distinct metric names that have at least one sample for `node` within the trailing
+    /// `within_secs` window — i.e. which series actually have data for the node (used by the
+    /// Troubleshoot analyses to discover what to scan). Empty if the store can't enumerate
+    /// (the in-memory sink). Names are deduplicated; order is unspecified.
+    async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String>;
 }
 
 #[async_trait]
@@ -248,6 +254,11 @@ impl MetricStore for InMemorySink {
         _to_s: i64,
         _step_s: u64,
     ) -> Vec<MetricPoint> {
+        Vec::new()
+    }
+
+    async fn node_metric_names(&self, _node: Uuid, _within_secs: u64) -> Vec<String> {
+        // The skeleton sink holds a single demo series and can't enumerate per node.
         Vec::new()
     }
 }
@@ -783,6 +794,46 @@ impl MetricStore for VmStore {
               rate(if_hc_out_octets{{node=\"{node}\",ifindex=\"{ifindex}\"}}[300s])) * 8"
         );
         self.query_range_points(q, from_s, to_s, step_s).await
+    }
+
+    async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String> {
+        // VictoriaMetrics /api/v1/series lists the label sets of every series matching a selector.
+        // `node` is a UUID (bounded type), so it's safe to interpolate into the matcher.
+        let url = format!("{}/api/v1/series", self.base);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let start = now - i64::try_from(within_secs.max(1)).unwrap_or(i64::MAX);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[
+                ("match[]", format!("{{node=\"{node}\"}}")),
+                ("start", start.to_string()),
+                ("end", now.to_string()),
+            ])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics series enumeration failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        let Some(series) = json.get("data").and_then(|d| d.as_array()) else {
+            return Vec::new();
+        };
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for s in series {
+            if let Some(name) = s.get("__name__").and_then(|n| n.as_str()) {
+                names.insert(name.to_owned());
+            }
+        }
+        names.into_iter().collect()
     }
 }
 

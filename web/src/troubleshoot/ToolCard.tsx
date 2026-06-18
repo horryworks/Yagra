@@ -1,16 +1,19 @@
 // Tool catalog card (handoff §1). Monogram tile + name + method line, description, a "Surfaces …"
-// reveal, and a footer meta row: cost estimate, a 5-pip compute-depth indicator, an optional
-// "latest:" link, and the primary Run button. Clicking the card (or Run) opens the launch
-// drawer; the latest-link instead jumps to the tool's last report.
+// reveal, and a footer meta row: cost estimate, a 5-pip compute-depth indicator, and the primary
+// Run button. Clicking the card (or Run) opens the launch drawer. Past results for a tool show in
+// the Analysis runs panel, so the card itself carries no per-tool "latest" link.
 
-import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { METHODS, type Tool } from './data';
 import { useTroubleshootStore } from './store';
 
 function DepthPips({ depth }: { depth: number }) {
   return (
-    <span className="ts-depth" title={`Compute depth ${depth} of 5`} aria-label={`Compute depth ${depth} of 5`}>
+    <span
+      className="ts-depth"
+      title={`Compute depth ${depth} of 5`}
+      aria-label={`Compute depth ${depth} of 5`}
+    >
       {[1, 2, 3, 4, 5].map((i) => (
         <span key={i} className={i <= depth ? 'ts-depth-pip on' : 'ts-depth-pip'} />
       ))}
@@ -19,7 +22,6 @@ function DepthPips({ depth }: { depth: number }) {
 }
 
 export function ToolCard({ tool }: { tool: Tool }) {
-  const navigate = useNavigate();
   const openDrawer = useTroubleshootStore((s) => s.openDrawer);
   const method = METHODS[tool.method];
 
@@ -48,19 +50,6 @@ export function ToolCard({ tool }: { tool: Tool }) {
         </span>
         <DepthPips depth={tool.depth} />
         <div className="ts-tool-actions">
-          {/* The "latest" link is only shown when a report screen exists to open (Anomaly today);
-              otherwise the same result is already visible in the Analysis runs panel. */}
-          {tool.latest && tool.reportPath && (
-            <button
-              className="ts-linkbtn ts-tool-latest"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(tool.reportPath!);
-              }}
-            >
-              latest: {tool.latest.text}
-            </button>
-          )}
           <Button
             variant="primary"
             className="btn-sm"

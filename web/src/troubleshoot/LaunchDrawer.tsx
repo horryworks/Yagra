@@ -1,10 +1,8 @@
-// Launch drawer (handoff §3): right-side slide-in panel to configure and submit any tool as a
-// background job. Scope (select), Time window / Depth / "When done" (segmented), and a
-// Sensitivity slider for ML/Anomaly tools. On submit it prepends a running job to the store,
-// closes, and shows a toast (with a View → link when the tool has a report screen).
-//
-// Driven by the store's `openToolId`. The selected tool is mirrored into local state so its
-// content stays put during the close (slide-out) animation. Closes on scrim click / Escape / ×.
+// Launch drawer (handoff §3): configure and submit any tool as a real background job (ADR-022).
+// Scope (real node groups + All nodes), Time window / Depth / "When done" (segmented), and a
+// Sensitivity slider for ML/Anomaly. On submit it POSTs the job, closes, and toasts (with a
+// View → link to the report for tools that have one). The created row appears in Analysis runs
+// and progresses over SSE.
 
 import { useEffect, useRef, useState } from 'react';
 import { Select } from '../components/ui/Field';
@@ -12,12 +10,14 @@ import { Button } from '../components/ui/Button';
 import { Segmented } from './Segmented';
 import { METHODS, toolById, type Tool } from './data';
 import { useTroubleshootStore } from './store';
+import { useScopeOptions } from './useScopeOptions';
+import type { AnalysisJobInput } from '../types/api';
 
 const WINDOWS = [
-  { value: '24h', label: '24 h' },
-  { value: '7d', label: '7 d' },
-  { value: '30d', label: '30 d' },
-  { value: '90d', label: '90 d' },
+  { value: '86400', label: '24 h' },
+  { value: '604800', label: '7 d' },
+  { value: '2592000', label: '30 d' },
+  { value: '7776000', label: '90 d' },
 ];
 const DEPTHS = [
   { value: 'quick', label: 'Quick' },
@@ -30,26 +30,28 @@ const NOTIFY = [
 ];
 const SENS_LABELS = ['very loose', 'loose', 'balanced', 'strict', 'very strict'];
 
-const SCOPES = [
-  'group: Matsumoto / core (18 nodes)',
-  'all nodes (128)',
-  'role: edge firewalls (9)',
-  'single node…',
-];
+/** Map the 1–5 sensitivity slider to a σ threshold (looser = higher σ = fewer flags). */
+function sigmaFor(slider: number): number {
+  return 4.5 - 0.5 * slider;
+}
+
+const BASELINE_SECS = 14 * 86_400;
 
 export function LaunchDrawer() {
   const openToolId = useTroubleshootStore((s) => s.openToolId);
   const closeDrawer = useTroubleshootStore((s) => s.closeDrawer);
-  const addRun = useTroubleshootStore((s) => s.addRun);
+  const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
+  const scopes = useScopeOptions();
 
   // Mirror the selected tool so its content survives the slide-out after openToolId clears.
   const [tool, setTool] = useState<Tool | null>(null);
-  const [scope, setScope] = useState(SCOPES[0]);
-  const [windowVal, setWindowVal] = useState('7d');
+  const [scopeIdx, setScopeIdx] = useState(0);
+  const [windowVal, setWindowVal] = useState('604800');
   const [depth, setDepth] = useState('standard');
   const [sensitivity, setSensitivity] = useState(3);
   const [notify, setNotify] = useState('notify');
+  const [submitting, setSubmitting] = useState(false);
 
   const open = openToolId != null;
   const closeRef = useRef(closeDrawer);
@@ -60,9 +62,8 @@ export function LaunchDrawer() {
       const t = toolById(openToolId);
       if (t) {
         setTool(t);
-        // Reset the form to defaults for each freshly-opened tool.
-        setScope(SCOPES[0]);
-        setWindowVal('7d');
+        setScopeIdx(0);
+        setWindowVal('604800');
         setDepth('standard');
         setSensitivity(3);
         setNotify('notify');
@@ -70,7 +71,6 @@ export function LaunchDrawer() {
     }
   }, [openToolId]);
 
-  // Escape closes the drawer while open.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -81,32 +81,41 @@ export function LaunchDrawer() {
   }, [open]);
 
   const showSensitivity = tool?.method === 'ml';
-  const windowLabel = WINDOWS.find((w) => w.value === windowVal)?.label ?? windowVal;
 
-  const submit = () => {
-    if (!tool) return;
-    addRun({
-      tool: tool.name,
-      mono: tool.mono,
-      scope: `${scope} · ${windowLabel}`,
-      state: 'running',
-      pct: 3,
-      phase: 'Queued — fetching history…',
-      eta: tool.est,
-      started: 'just now',
-      reportPath: tool.reportPath,
-    });
-    closeDrawer();
-    showToast(`${tool.name} started — running in background.`, tool.reportPath);
+  const submit = async () => {
+    if (!tool || submitting) return;
+    const scope = scopes[scopeIdx] ?? scopes[0];
+    const windowLabel = WINDOWS.find((w) => w.value === windowVal)?.label ?? windowVal;
+    const input: AnalysisJobInput = {
+      tool: tool.id,
+      scope_kind: scope.kind,
+      scope_id: scope.id,
+      scope_label: `${scope.label} · ${windowLabel}`,
+      window_secs: Number(windowVal),
+      baseline_secs: BASELINE_SECS,
+      sensitivity: sigmaFor(sensitivity),
+      depth,
+      family: 'all',
+      notify: notify === 'notify',
+    };
+    setSubmitting(true);
+    try {
+      const job = await createJob(input);
+      closeDrawer();
+      showToast(
+        `${tool.name} started — running in background.`,
+        tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
+      );
+    } catch {
+      showToast('Could not start the analysis.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <>
-      <div
-        className={open ? 'ts-scrim open' : 'ts-scrim'}
-        onClick={closeDrawer}
-        aria-hidden
-      />
+      <div className={open ? 'ts-scrim open' : 'ts-scrim'} onClick={closeDrawer} aria-hidden />
       <aside
         className={open ? 'ts-drawer open' : 'ts-drawer'}
         aria-hidden={!open}
@@ -119,7 +128,9 @@ export function LaunchDrawer() {
               <div className="ts-drawer-mono">{tool.mono}</div>
               <div>
                 <div className="ts-drawer-title">{tool.name}</div>
-                <div className="ts-drawer-sub">{METHODS[tool.method].label} · configure &amp; run</div>
+                <div className="ts-drawer-sub">
+                  {METHODS[tool.method].label} · configure &amp; run
+                </div>
               </div>
               <button className="ts-drawer-x" onClick={closeDrawer} aria-label="Close">
                 ×
@@ -134,12 +145,12 @@ export function LaunchDrawer() {
                 <Select
                   id="ts-drawer-scope"
                   className="ts-field-full"
-                  value={scope}
-                  onChange={(e) => setScope(e.target.value)}
+                  value={String(scopeIdx)}
+                  onChange={(e) => setScopeIdx(Number(e.target.value))}
                 >
-                  {SCOPES.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
+                  {scopes.map((s, i) => (
+                    <option key={`${s.kind}-${s.id ?? 'all'}`} value={i}>
+                      {s.label}
                     </option>
                   ))}
                 </Select>
@@ -160,7 +171,7 @@ export function LaunchDrawer() {
                 <span className="ts-flabel">Depth</span>
                 <Segmented options={DEPTHS} value={depth} onChange={setDepth} ariaLabel="Depth" />
                 <span className="ts-fhint">
-                  Exhaustive scans more series and longer history — slower, more thorough.
+                  Exhaustive scans more nodes and series — slower, more thorough.
                 </span>
               </div>
 
@@ -198,8 +209,8 @@ export function LaunchDrawer() {
             <div className="ts-drawer-foot">
               <span className="ts-est">est. {tool.est}</span>
               <Button onClick={closeDrawer}>Cancel</Button>
-              <Button variant="primary" onClick={submit}>
-                Run analysis
+              <Button variant="primary" onClick={() => void submit()} disabled={submitting}>
+                {submitting ? 'Starting…' : 'Run analysis'}
               </Button>
             </div>
           </>
