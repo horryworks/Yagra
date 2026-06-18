@@ -12,7 +12,7 @@ import { formatBps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { TextInput } from '../ui/Field';
-import { MetricChart } from '../MetricChart/MetricChart';
+import { MetricChart, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
 import { operState } from './OverviewTab';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
@@ -27,8 +27,6 @@ const SPARK_W = 120;
 const SPARK_H = 26;
 // Sticky list-header height, mirrored in CSS — used to keep the selected row clear of it.
 const LIST_HEAD_H = 32;
-const CHART_IN = '#4f8cff';
-const CHART_OUT = '#34d399';
 
 /** Human oper label from ifOperStatus (1 = up). */
 function operLabel(oper: number | null): string {
@@ -256,8 +254,8 @@ function Sparkline({
     <span className="nd-if-spark-wrap" ref={ref}>
       {path ? (
         <svg className="nd-if-spark-svg" viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none">
-          <path d={path.area} fill={CHART_IN} opacity="0.12" />
-          <path d={path.line} fill="none" stroke={CHART_IN} strokeWidth="1.4" />
+          <path d={path.area} fill={SERIES_IN} opacity="0.12" />
+          <path d={path.line} fill="none" stroke={SERIES_IN} strokeWidth="1.4" />
         </svg>
       ) : (
         <span className="nd-if-spark-empty" />
@@ -379,8 +377,8 @@ function InterfaceDock({
               yRange={bw.yRange}
               referenceLine={bw.referenceLine}
               series={[
-                { label: 'In', values: series!.in_bps, color: CHART_IN },
-                { label: 'Out', values: series!.out_bps, color: CHART_OUT },
+                { label: 'In', values: series!.in_bps, color: SERIES_IN },
+                { label: 'Out', values: series!.out_bps, color: SERIES_OUT },
               ]}
             />
           ) : (
@@ -403,8 +401,8 @@ function InterfaceDock({
               yFormat={formatSi}
               legendFormat={(v) => `${formatSi(v)}/s`}
               series={[
-                { label: 'In', values: series!.in_errors, color: CHART_IN },
-                { label: 'Out', values: series!.out_errors, color: CHART_OUT },
+                { label: 'In', values: series!.in_errors, color: SERIES_IN },
+                { label: 'Out', values: series!.out_errors, color: SERIES_OUT },
               ]}
             />
           ) : (
@@ -422,11 +420,11 @@ function ChartLegend({ bandwidth = false }: { bandwidth?: boolean }) {
   return (
     <span className="nd-if-legend">
       <span className="nd-if-legend-k">
-        <span className="nd-if-legend-sw" style={{ background: CHART_IN }} />
+        <span className="nd-if-legend-sw" style={{ background: SERIES_IN }} />
         In
       </span>
       <span className="nd-if-legend-k">
-        <span className="nd-if-legend-sw" style={{ background: CHART_OUT }} />
+        <span className="nd-if-legend-sw" style={{ background: SERIES_OUT }} />
         Out
       </span>
       {bandwidth && (

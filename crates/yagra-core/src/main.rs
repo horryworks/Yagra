@@ -239,9 +239,30 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let users = Arc::new(UserStore::new(repo.pool()));
-    let admin_password =
-        std::env::var("YAGRA_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_owned());
-    users.ensure_default_admin(&admin_password).await?;
+    // Bootstrap admin: use YAGRA_ADMIN_PASSWORD when supplied, otherwise generate a random
+    // one-time password — never a well-known default like "admin" (security.md).
+    let provided_admin_password = std::env::var("YAGRA_ADMIN_PASSWORD")
+        .ok()
+        .filter(|p| !p.trim().is_empty());
+    let admin_password = provided_admin_password
+        .clone()
+        .unwrap_or_else(auth::generate_bootstrap_password);
+    if users.ensure_default_admin(&admin_password).await? {
+        if provided_admin_password.is_some() {
+            tracing::warn!(
+                "SECURITY: seeded the initial 'admin' account from YAGRA_ADMIN_PASSWORD — \
+                 change it after first login"
+            );
+        } else {
+            // One-time disclosure of the generated bootstrap password so the operator can log in;
+            // it is not stored in plaintext and will not be shown again.
+            tracing::warn!(
+                admin_bootstrap_password = %admin_password,
+                "SECURITY: no YAGRA_ADMIN_PASSWORD set — generated a one-time bootstrap password \
+                 for the 'admin' account (shown once above). Log in and change it immediately."
+            );
+        }
+    }
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
         creds,

@@ -32,7 +32,7 @@
 
 .icon-btn.danger:hover {
   background: var(--status-critical);
-  color: #fff;
+  color: var(--on-status);
 }
 
 .icon-btn svg {

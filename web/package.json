@@ -23,12 +23,17 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
     "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "globals": "^15.15.0",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.61.1",
     "vite": "^6.0.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.9"
   }
 }

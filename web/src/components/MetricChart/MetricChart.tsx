@@ -8,8 +8,13 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './MetricChart.css';
 
-/** Default series palette (In / Out / aux …), indexed by series position. */
-const PALETTE = ['#4f8cff', '#34d399', '#f59e0b', '#ef4444'];
+/** Default series palette (In / Out / aux …), indexed by series position. Canvas strokes can't
+ *  read CSS vars, so this data-driven palette is the single source of truth for series colors —
+ *  exported so DOM legend swatches mirror the chart instead of re-hardcoding the same hex. */
+export const PALETTE = ['#4f8cff', '#34d399', '#f59e0b', '#ef4444'];
+/** Canonical In / Out series colors (used by both the chart strokes and the legend swatches). */
+export const SERIES_IN = PALETTE[0];
+export const SERIES_OUT = PALETTE[1];
 
 export interface ChartSeries {
   label: string;

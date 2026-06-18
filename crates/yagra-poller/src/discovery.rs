@@ -8,11 +8,12 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
 use yagra_bus::{DiscoveredDevice, DiscoveryJob, DiscoveryResult, NatsBus, BUS_SCHEMA_VERSION};
+use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 use yagra_transport::{SnmpV3Params, Transport};
 
 /// sysDescr column base — walking it yields the `.0` scalar instance (v2c path).
@@ -99,13 +100,17 @@ where
         tracing::info!(scan = %job.scan_id, targets = job.targets.len(), "discovery sweep starting");
         let candidates = Arc::new(candidates_of(&job));
         let timeout = Duration::from_millis(u64::from(job.timeout_ms));
+        // Per-device credential-probe rate limit (security.md): space attempts and back off after
+        // repeated failures so the sweep can never trip a device's account lockout. Conservative
+        // defaults; tunable here as SSH/CLI credential probing (which actually locks out) lands.
+        let rate = LimiterConfig::default();
         let total = u32::try_from(job.targets.len()).unwrap_or(u32::MAX);
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
 
         let chunk_count = job.targets.chunks(PROGRESS_CHUNK).count();
         for (i, chunk) in job.targets.chunks(PROGRESS_CHUNK).enumerate() {
-            found.extend(sweep_chunk(chunk, &candidates, timeout, transport.clone()).await);
+            found.extend(sweep_chunk(chunk, &candidates, timeout, transport.clone(), rate).await);
             probed = probed.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
             publish(
                 &bus,
@@ -153,12 +158,13 @@ async fn sweep_chunk(
     candidates: &Arc<Vec<SnmpCandidate>>,
     timeout: Duration,
     transport: Arc<dyn Transport>,
+    rate: LimiterConfig,
 ) -> Vec<DiscoveredDevice> {
     futures::stream::iter(targets.iter().copied())
         .map(|target| {
             let transport = transport.clone();
             let candidates = candidates.clone();
-            async move { probe_one(target, &candidates, timeout, transport.as_ref()).await }
+            async move { probe_one(target, &candidates, timeout, transport.as_ref(), rate).await }
         })
         .buffer_unordered(SWEEP_CONCURRENCY)
         .filter_map(|d| async move { d })
@@ -166,28 +172,57 @@ async fn sweep_chunk(
         .await
 }
 
+/// Current Unix time in milliseconds (clock for the per-device probe limiter).
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 /// Probe one target: ICMP liveness + SNMP identity, trying each candidate in order
-/// (first that answers wins). Candidate probes run **sequentially per device** — at most
-/// one credential attempt in flight per target (rate-bounding, security.md); attempted
-/// credentials are never logged. Returns a device iff it answered ICMP or SNMP.
+/// (first that answers wins). Candidate probes run **sequentially per device** and are gated
+/// by a per-device [`CredentialProbeLimiter`] (`rate`): attempts are spaced apart and, after
+/// repeated failures, the device is backed off for the rest of the sweep so probing can never
+/// trip an account lockout (security.md). Attempted credentials are never logged. Returns a
+/// device iff it answered ICMP or SNMP.
 async fn probe_one(
     target: IpAddr,
     candidates: &[SnmpCandidate],
     timeout: Duration,
     transport: &dyn Transport,
+    rate: LimiterConfig,
 ) -> Option<DiscoveredDevice> {
     let reachable = (transport.probe_icmp(target, 1, timeout).await)
         .map(|p| p.reachable)
         .unwrap_or(false);
 
+    // Keyed by target IP — the device has no NodeId during discovery. One limiter per probe is
+    // enough: each target appears once per sweep, and spacing/cooldown only span this target's
+    // sequential candidate attempts.
+    let mut limiter = CredentialProbeLimiter::<IpAddr>::new(rate);
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
-    for cand in candidates {
+    'candidates: for cand in candidates {
+        // Honour per-device spacing before each attempt; stop the device entirely on cooldown.
+        loop {
+            match limiter.begin_attempt(target, now_ms()) {
+                AttemptDecision::Allow => break,
+                AttemptDecision::TooSoon { wait_ms } => {
+                    if wait_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(wait_ms.unsigned_abs())).await;
+                    }
+                }
+                AttemptDecision::CoolingDown { .. } => break 'candidates,
+            }
+        }
         if let Some(id) = try_candidate(target, cand, timeout, transport).await {
+            limiter.record_success(target);
             identity = id;
             matched_credential = cand.cred_ref();
             break;
         }
+        limiter.record_failure(target, now_ms());
     }
 
     if reachable
@@ -418,6 +453,16 @@ mod tests {
         }
     }
 
+    /// Rate config that disables spacing and cooldown so the probe tests never actually sleep
+    /// (the limiter wiring itself is unit-tested in `yagra-discovery::credential_finder`).
+    fn no_rate() -> LimiterConfig {
+        LimiterConfig {
+            min_interval_ms: 0,
+            max_consecutive_failures: u32::MAX,
+            cooldown_ms: 0,
+        }
+    }
+
     fn job(credentials: Vec<DiscoveryCredential>, communities: Vec<String>) -> DiscoveryJob {
         DiscoveryJob {
             schema_version: BUS_SCHEMA_VERSION,
@@ -438,9 +483,15 @@ mod tests {
             good_community: Some("secret".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake)
-            .await
-            .expect("device answers");
+        let d = probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            no_rate(),
+        )
+        .await
+        .expect("device answers");
         assert_eq!(d.matched_credential, Some(id));
         assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
         assert_eq!(d.sysname.as_deref(), Some("sw01"));
@@ -462,9 +513,15 @@ mod tests {
             good_community: None,
             good_v3_user: Some("monitor".to_owned()),
         };
-        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake)
-            .await
-            .expect("device answers v3");
+        let d = probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            no_rate(),
+        )
+        .await
+        .expect("device answers v3");
         assert_eq!(d.matched_credential, Some(v3));
         assert_eq!(d.sysdescr.as_deref(), Some("Huawei USG6000"));
         assert_eq!(d.sysobjectid.as_deref(), Some("1.3.6.1.4.1.2011.2.1"));
@@ -479,9 +536,15 @@ mod tests {
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake)
-            .await
-            .expect("device answers");
+        let d = probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            no_rate(),
+        )
+        .await
+        .expect("device answers");
         assert_eq!(d.matched_credential, None);
         assert!(d.sysdescr.is_some());
     }
@@ -500,9 +563,15 @@ mod tests {
             good_community: Some("shared".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake)
-            .await
-            .expect("device answers");
+        let d = probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            no_rate(),
+        )
+        .await
+        .expect("device answers");
         assert_eq!(d.matched_credential, Some(id));
     }
 
@@ -514,10 +583,115 @@ mod tests {
             good_community: None,
             good_v3_user: None,
         };
-        assert!(
-            probe_one(target(), &cands, Duration::from_millis(100), &fake)
-                .await
-                .is_none()
+        assert!(probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            no_rate()
+        )
+        .await
+        .is_none());
+    }
+
+    /// Wiring check: once a device hits the consecutive-failure limit it is backed off, so the
+    /// remaining candidates are never tried (lockout protection, security.md).
+    #[tokio::test]
+    async fn cooldown_backs_off_remaining_candidates() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Never answers; counts how many credential attempts actually reached the transport.
+        struct CountingFake {
+            attempts: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Transport for CountingFake {
+            async fn probe_icmp(
+                &self,
+                _t: IpAddr,
+                _c: u8,
+                _to: Duration,
+            ) -> Result<IcmpProbe, TransportError> {
+                Ok(IcmpProbe {
+                    reachable: false,
+                    rtt_ms: None,
+                    loss_pct: 100.0,
+                })
+            }
+            async fn snmp_get(
+                &self,
+                _t: IpAddr,
+                _c: &str,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpSample>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_v3_get(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpSample>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_v3_get_strings(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpStringSample>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_walk(
+                &self,
+                _t: IpAddr,
+                _c: &str,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_walk_strings(
+                &self,
+                _t: IpAddr,
+                _c: &str,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpTableString>, TransportError> {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                Ok(Vec::new()) // empty ⇒ this candidate "failed"
+            }
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let fake = CountingFake {
+            attempts: attempts.clone(),
+        };
+        // Five candidates that all fail; cooldown trips after 2 consecutive failures.
+        let cands = candidates_of(&job(
+            vec![],
+            vec![
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
+                "e".to_owned(),
+            ],
+        ));
+        let rate = LimiterConfig {
+            min_interval_ms: 0,
+            max_consecutive_failures: 2,
+            cooldown_ms: 60_000,
+        };
+        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake, rate).await;
+        assert!(d.is_none(), "no device answered");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "device is backed off after the failure limit instead of trying all five"
         );
     }
 }
