@@ -31,6 +31,7 @@ export const NAV: NavSection[] = [
       { label: 'Overview', path: '/dashboard', implemented: true, mono: 'Ov' },
       { label: 'My dashboard', path: '/dashboard/my', implemented: true, mono: 'My' },
       { label: 'Templates', path: '/dashboard/templates', implemented: false, mono: 'Tp' },
+      { label: 'Reports', path: '/dashboard/reports', implemented: false, mono: 'Rp' },
     ],
   },
   {
@@ -78,16 +79,6 @@ export const NAV: NavSection[] = [
       { label: 'Routing & notifications', path: '/alerts/routing', implemented: true, mono: 'Rt' },
       { label: 'Maintenance windows', path: '/alerts/maintenance', implemented: true, mono: 'Mw' },
       { label: 'Mutes', path: '/alerts/mutes', implemented: true, mono: 'Mu' },
-    ],
-  },
-  {
-    key: 'metrics',
-    label: 'Metrics',
-    path: '/metrics',
-    items: [
-      { label: 'Metric explorer', path: '/metrics', implemented: true, mono: 'Mx' },
-      { label: 'Reports', path: '/metrics/reports', implemented: false, mono: 'Rp' },
-      { label: 'Saved views', path: '/metrics/saved', implemented: false, mono: 'Sv' },
     ],
   },
   {
