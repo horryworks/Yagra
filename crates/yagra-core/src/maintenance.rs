@@ -19,6 +19,8 @@ use yagra_common::{Node, NodeId, ScopeLevel};
 pub struct StoredWindow {
     pub id: Uuid,
     pub name: String,
+    // Serialized as `scope_level` so the GET response matches the POST body field name.
+    #[serde(rename = "scope_level")]
     pub level: ScopeLevel,
     pub scope_id: String,
     pub starts_at: String,
@@ -28,11 +30,13 @@ pub struct StoredWindow {
     pub active: bool,
 }
 
-/// A stored mute (API shape). `check_name: None` mutes every check on the node.
+/// A stored mute (API shape). `metric_name: None` mutes every metric/check on the node.
 #[derive(Debug, Clone, Serialize)]
 pub struct StoredMute {
     pub id: Uuid,
     pub node_id: Uuid,
+    // Serialized as `metric_name` (matches the create body); the DB column stays `check_name`.
+    #[serde(rename = "metric_name")]
     pub check_name: Option<String>,
     pub until_at: String,
     pub reason: Option<String>,

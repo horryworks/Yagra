@@ -106,10 +106,11 @@ export function MetricChart({
         })),
       ],
       // Horizontal reference line (e.g. configured bandwidth), drawn over the series. Canvas works
-      // in device pixels, so scale stroke/text by the pixel ratio. Drawn ONLY at its true Y
-      // position — when the value is outside the visible range (auto-fit mode with traffic well
-      // below the bandwidth) nothing is drawn, so the line never misleads by clamping to the edge.
-      // It appears from the top as traffic nears capacity; in bandwidth-scaled mode it sits at top.
+      // in device pixels, so scale stroke/text by the pixel ratio. When the value sits inside the
+      // visible range it's drawn at its true Y; when it's off-scale (auto-fit mode with traffic
+      // well below the bandwidth) the line is pinned to the nearest edge and its label gets a ↑/↓
+      // marker — so the operator can still see the threshold and that the real value is beyond the
+      // edge, rather than the line silently vanishing.
       hooks: referenceLine
         ? {
             draw: [
@@ -117,8 +118,10 @@ export function MetricChart({
                 const refv = referenceLine.value;
                 if (!Number.isFinite(refv)) return;
                 const { left, top, width, height } = u.bbox;
-                const y = u.valToPos(refv, 'y', true);
-                if (y < top || y > top + height) return; // off-scale → don't draw
+                const trueY = u.valToPos(refv, 'y', true);
+                const aboveRange = trueY < top; // value greater than the visible max
+                const belowRange = trueY > top + height; // value less than the visible min
+                const y = Math.min(top + height, Math.max(top, trueY)); // pin to the edge
                 const ctx = u.ctx;
                 const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
                 ctx.save();
@@ -134,11 +137,17 @@ export function MetricChart({
                   ctx.fillStyle = refColor;
                   ctx.font = `${11 * dpr}px ${uiFont}`;
                   ctx.textAlign = 'left';
+                  // Mark an off-scale threshold so a pinned line is never read as the true value.
+                  const label = aboveRange
+                    ? `↑ ${referenceLine.label}`
+                    : belowRange
+                      ? `↓ ${referenceLine.label}`
+                      : referenceLine.label;
                   // Keep the label inside the plot: below the line when it's near the top edge,
                   // above it otherwise.
                   const nearTop = y - top < 14 * dpr;
                   ctx.textBaseline = nearTop ? 'top' : 'bottom';
-                  ctx.fillText(referenceLine.label, left + 4 * dpr, y + (nearTop ? 2 * dpr : -2 * dpr));
+                  ctx.fillText(label, left + 4 * dpr, y + (nearTop ? 2 * dpr : -2 * dpr));
                 }
                 ctx.restore();
               },

@@ -30,3 +30,14 @@
   border-radius: 2px;
   min-width: 8px;
 }
+
+/* Missing data — a subtle diagonal hatch so "no data" reads differently from a real 0% cell. */
+.heatmap-cell-empty {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--bg-tertiary),
+    var(--bg-tertiary) 3px,
+    var(--border-color) 3px,
+    var(--border-color) 4px
+  );
+}

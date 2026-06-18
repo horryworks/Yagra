@@ -67,7 +67,7 @@ function AddMuteModal({
     api
       .createMute({
         node_id: nodeId,
-        check: check.trim() || undefined,
+        metric_name: check.trim() || undefined,
         until: toRfc3339(until),
         reason: reason.trim() || undefined,
       })
@@ -108,10 +108,10 @@ function AddMuteModal({
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Check</label>
+        <label className="modal-field-label">Metric</label>
         <TextInput
           className="mono"
-          placeholder="check (empty = whole node)"
+          placeholder="metric (empty = whole node)"
           list="mute-check-presets"
           value={check}
           onChange={(e) => setCheck(e.target.value)}
@@ -190,13 +190,13 @@ function LiftMuteModal({
     >
       <p className="modal-confirm-text">
         Lift the mute on <strong>{nodeName}</strong>
-        {mute.check_name ? (
+        {mute.metric_name ? (
           <>
             {' '}
-            (<span className="mono">{mute.check_name}</span>)
+            (<span className="mono">{mute.metric_name}</span>)
           </>
         ) : (
-          ' (all checks)'
+          ' (all metrics)'
         )}
         ? Notifications resume immediately.
       </p>
@@ -262,7 +262,7 @@ export function MutesPage() {
             <div className="ytable-scroll">
               <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
                 <div className="ytable-h">Node</div>
-                <div className="ytable-h">Check</div>
+                <div className="ytable-h">Metric</div>
                 <div className="ytable-h">Until</div>
                 <div className="ytable-h">Reason</div>
                 <div className="ytable-h right">Actions</div>
@@ -284,12 +284,12 @@ export function MutesPage() {
                       <span className="yt-name-txt">{nodeName(m.node_id)}</span>
                     </div>
                     <div className="ytable-cell">
-                      {m.check_name ? (
+                      {m.metric_name ? (
                         <Badge tone="neutral">
-                          <span className="mono">{m.check_name}</span>
+                          <span className="mono">{m.metric_name}</span>
                         </Badge>
                       ) : (
-                        <Badge tone="info">all checks</Badge>
+                        <Badge tone="info">all metrics</Badge>
                       )}
                     </div>
                     <div className="ytable-cell mono">{fmtTime(m.until_at)}</div>

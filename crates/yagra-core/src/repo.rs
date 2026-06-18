@@ -124,7 +124,7 @@ impl NodeListing for StaticNodeList {
         Ok(nodes
             .into_iter()
             .filter(|n| after.is_none_or(|a| n.id.as_uuid() > a))
-            .take(limit.clamp(1, 500) as usize)
+            .take(limit.clamp(1, 501) as usize)
             .collect())
     }
 }
@@ -132,6 +132,16 @@ impl NodeListing for StaticNodeList {
 /// The nodes/profiles metadata store.
 pub struct NodeRepo {
     pool: PgPool,
+}
+
+/// One pre-validated node to bulk-import (borrows from the request to avoid copies).
+pub struct NewNode<'a> {
+    pub name: &'a str,
+    pub address: IpAddr,
+    pub profile: Option<Uuid>,
+    pub credential: Option<Uuid>,
+    pub vendor: Option<&'a str>,
+    pub model: Option<&'a str>,
 }
 
 impl NodeRepo {
@@ -229,7 +239,9 @@ impl NodeRepo {
         after: Option<Uuid>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
-        let limit = limit.clamp(1, 500);
+        // Upper bound 501 (not 500) so the API can fetch one extra row past a 500-item page to
+        // detect "has more" without an extra round-trip; the user-facing limit is capped at 500.
+        let limit = limit.clamp(1, 501);
         let rows = match after {
             Some(after) => {
                 sqlx::query(&format!(
@@ -286,6 +298,30 @@ impl NodeRepo {
         .execute(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Bulk-import nodes **atomically**: all rows insert in a single transaction, so a failure
+    /// partway (e.g. a duplicate name hitting the unique constraint) rolls back the whole batch
+    /// instead of leaving a partial import. Returns how many were inserted. Caller pre-validates.
+    pub async fn import_nodes(&self, nodes: &[NewNode<'_>]) -> anyhow::Result<u32> {
+        let mut tx = self.pool.begin().await?;
+        for n in nodes {
+            sqlx::query(
+                "INSERT INTO nodes (id, name, address, profile_id, credential_id, vendor, model) \
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(n.name)
+            .bind(n.address.to_string())
+            .bind(n.profile)
+            .bind(n.credential)
+            .bind(n.vendor)
+            .bind(n.model)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(nodes.len() as u32)
     }
 
     /// Set (or clear) a node's profile, bound credential, and vendor/model metadata. Returns
@@ -411,7 +447,18 @@ impl NodeRepo {
             return Ok(());
         }
         let states: Vec<String> = counts.iter().map(|(s, _)| s.clone()).collect();
-        let nums: Vec<i32> = counts.iter().map(|(_, c)| *c as i32).collect();
+        // Saturate rather than silently wrap: a per-state node count above i32::MAX is not
+        // reachable at the design scale (tens of thousands), so flag it instead of corrupting
+        // the timeline with a negative value.
+        let nums: Vec<i32> = counts
+            .iter()
+            .map(|(_, c)| {
+                i32::try_from(*c).unwrap_or_else(|_| {
+                    tracing::warn!(count = *c, "state-snapshot count exceeds i32; saturating");
+                    i32::MAX
+                })
+            })
+            .collect();
         sqlx::query(
             "INSERT INTO node_state_snapshots (ts, state, count) \
              SELECT now(), s, c FROM unnest($1::text[], $2::int[]) AS t(s, c)",

@@ -21,7 +21,16 @@ function TreeRow({
   depth: number;
   names: Map<string, string>;
 }) {
-  if (depth > MAX_DEPTH) return null;
+  // Don't silently drop the subtree at the depth backstop — show why it stopped.
+  if (depth > MAX_DEPTH) {
+    return (
+      <li className="topo-item">
+        <div className="topo-row" style={{ paddingLeft: `${depth * 16}px` }}>
+          <span className="topo-name muted">… depth limit reached (possible dependency cycle)</span>
+        </div>
+      </li>
+    );
+  }
   const cause = node.node.root_cause ? names.get(node.node.root_cause) : null;
   return (
     <li className="topo-item">

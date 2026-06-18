@@ -43,9 +43,18 @@ export function sanitizeLayout(raw: unknown, reg: RegistryView): DashboardLayout
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as Partial<WidgetInstance>;
     if (typeof e.type !== 'string' || !reg.isKnownType(e.type)) continue;
-    // A missing or colliding id is repaired so React keys and edits stay stable.
-    let id = typeof e.instanceId === 'string' && e.instanceId ? e.instanceId : `${e.type}-${widgets.length}`;
-    while (seen.has(id)) id = `${id}-${widgets.length}`;
+    // A missing or colliding id is repaired so React keys and edits stay stable. On collision,
+    // append an incrementing counter (`base-1`, `base-2`, …) rather than re-suffixing the same
+    // length each pass, which would build absurd ids like `id-3-3-3`.
+    let id =
+      typeof e.instanceId === 'string' && e.instanceId ? e.instanceId : `${e.type}-${widgets.length}`;
+    if (seen.has(id)) {
+      const base = id;
+      let n = 1;
+      do {
+        id = `${base}-${n++}`;
+      } while (seen.has(id));
+    }
     seen.add(id);
     widgets.push({
       instanceId: id,

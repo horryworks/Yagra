@@ -167,11 +167,12 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
             placeholder="dwell"
             value={dwell}
             onChange={(e) => setDwell(e.target.value)}
+            title="Dwell: consecutive readings that must breach before the alert fires"
           />
         </div>
         <span className="modal-hint">
-          Warn / crit / dwell are optional. Dwell is the consecutive matching samples before the
-          breach commits (anti-flap).
+          Warn / crit / dwell are optional. Dwell is how many consecutive readings must cross the
+          bound before the alert fires — higher values suppress flapping (rapid on/off alerts).
         </span>
       </div>
       {error && <p className="form-error">{error}</p>}
@@ -220,7 +221,7 @@ function DeleteThresholdModal({
       }
     >
       <p className="modal-confirm-text">
-        Delete the <strong>{rule.level}</strong> rule on{' '}
+        Delete the <strong>{rule.scope_level}</strong> rule on{' '}
         <strong className="mono">{rule.metric}</strong> for{' '}
         <strong className="mono">{rule.scope_id}</strong>? This cannot be undone.
       </p>
@@ -313,7 +314,7 @@ export function ThresholdsPage() {
               rows.map((t) => (
                 <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={t.id}>
                   <div className="ytable-cell">
-                    <Badge tone="neutral">{t.level}</Badge>
+                    <Badge tone="neutral">{t.scope_level}</Badge>
                     <span className="mono">{t.scope_id}</span>
                   </div>
                   <div className="ytable-cell mono">{t.metric}</div>

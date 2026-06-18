@@ -33,8 +33,8 @@ const V3_AUTH_PROTOCOLS = ['sha', 'sha224', 'sha256', 'sha384', 'sha512', 'md5']
 const V3_PRIV_PROTOCOLS = ['aes', 'aes192', 'aes256', 'des'];
 
 const KIND_META: Record<string, { label: string; Icon: ComponentType }> = {
-  snmp_v2c: { label: 'SNMP v2c', Icon: HashIcon },
-  snmp_v3: { label: 'SNMP v3', Icon: ShieldIcon },
+  snmp_v2c: { label: 'SNMP v2c (community)', Icon: HashIcon },
+  snmp_v3: { label: 'SNMP v3 (user/password)', Icon: ShieldIcon },
   api_token: { label: 'API token', Icon: KeyIcon },
 };
 

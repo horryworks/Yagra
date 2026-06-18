@@ -34,6 +34,8 @@ export function MyDashboardPage() {
 
   const widgets = useLayoutStore((s) => s.widgets);
   const status = useLayoutStore((s) => s.status);
+  const saveError = useLayoutStore((s) => s.saveError);
+  const dismissSaveError = useLayoutStore((s) => s.dismissSaveError);
   const editing = useLayoutStore((s) => s.editing);
   const setEditing = useLayoutStore((s) => s.setEditing);
   const move = useLayoutStore((s) => s.move);
@@ -42,10 +44,21 @@ export function MyDashboardPage() {
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  // If the load hangs (no response), don't spin forever — surface a retry after a grace period.
+  const [loadSlow, setLoadSlow] = useState(false);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (status !== 'loading') {
+      setLoadSlow(false);
+      return;
+    }
+    const t = setTimeout(() => setLoadSlow(true), 12_000);
+    return () => clearTimeout(t);
+  }, [status]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -83,8 +96,26 @@ export function MyDashboardPage() {
         actions={actions}
       />
 
+      {saveError && (
+        <div className="mydash-save-error" role="alert">
+          <span>{saveError}</span>
+          <Button variant="ghost" onClick={dismissSaveError}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+
       {status === 'loading' && widgets.length === 0 ? (
-        <p className="muted">Loading your dashboard…</p>
+        loadSlow ? (
+          <div className="mydash-empty">
+            <p className="muted">Loading your dashboard is taking longer than expected.</p>
+            <Button variant="primary" onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <p className="muted">Loading your dashboard…</p>
+        )
       ) : widgets.length === 0 ? (
         <div className="mydash-empty">
           <p className="muted">Your dashboard is empty.</p>

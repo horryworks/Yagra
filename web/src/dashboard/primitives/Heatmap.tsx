@@ -9,7 +9,8 @@ interface Props {
   rowLabels: string[];
   /** Column headers; pass '' for unlabeled columns (e.g. only every 6th hour). */
   colLabels: string[];
-  /** values[row][col]; ragged rows are tolerated (missing ⇒ 0). */
+  /** values[row][col]; ragged rows are tolerated — a missing cell renders as a hatched
+   *  "no data" cell, visually distinct from a real 0 (which shades as the track color). */
   values: number[][];
   /** Denominator for intensity; defaults to the max cell value. */
   max?: number;
@@ -33,16 +34,25 @@ export function Heatmap({ rowLabels, colLabels, values, max, colorBase = 'var(--
         <div className="heatmap-rowgroup" key={`r${r}`} style={{ display: 'contents' }}>
           <div className="heatmap-rowhead">{row}</div>
           {colLabels.map((_, c) => {
-            const v = values[r]?.[c] ?? 0;
+            const raw = values[r]?.[c];
+            const missing = raw == null;
+            const v = raw ?? 0;
             const t = peak > 0 ? Math.min(100, (v / peak) * 100) : 0;
-            // 0 stays the track color; higher values mix toward the base.
+            // 0 stays the track color; higher values mix toward the base. A missing cell is
+            // hatched (.heatmap-cell-empty) so "no data" can't be misread as 0%.
             const bg = `color-mix(in oklab, ${colorBase} ${t}%, var(--bg-tertiary))`;
             return (
               <div
-                className="heatmap-cell"
+                className={missing ? 'heatmap-cell heatmap-cell-empty' : 'heatmap-cell'}
                 key={`${r}-${c}`}
-                style={{ background: bg }}
-                title={title ? title(row, colLabels[c], v) : String(v)}
+                style={missing ? undefined : { background: bg }}
+                title={
+                  missing
+                    ? `${row} · ${colLabels[c]}: no data`
+                    : title
+                      ? title(row, colLabels[c], v)
+                      : String(v)
+                }
               />
             );
           })}

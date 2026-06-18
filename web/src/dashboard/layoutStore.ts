@@ -4,7 +4,7 @@
 // default and never saves. All mutations delegate to the pure helpers in `layout.ts`.
 
 import { create } from 'zustand';
-import { api, getToken } from '../services/api';
+import { ApiError, api, getToken } from '../services/api';
 import {
   addInstance,
   countOfType,
@@ -38,9 +38,18 @@ function scheduleSave(widgets: WidgetInstance[]): void {
   if (!getToken()) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    api.putDashboard({ version: DASHBOARD_VERSION, widgets }).catch(() => {
-      // Transient/offline — local state stays; the next edit re-attempts the save.
-    });
+    api
+      .putDashboard({ version: DASHBOARD_VERSION, widgets })
+      .then(() => useLayoutStore.setState({ saveError: null }))
+      .catch((e: unknown) => {
+        // Don't swallow the failure: otherwise edits look saved but vanish on the next load.
+        // 401 ⇒ the session expired; anything else is treated as transient (retried next edit).
+        const msg =
+          e instanceof ApiError && e.status === 401
+            ? 'Your session expired — sign in again to save dashboard changes.'
+            : "Couldn't save your dashboard changes. They'll be retried on your next edit.";
+        useLayoutStore.setState({ saveError: msg });
+      });
   }, SAVE_DEBOUNCE_MS);
 }
 
@@ -49,9 +58,12 @@ type LayoutStatus = 'loading' | 'ready' | 'error';
 interface LayoutStore {
   widgets: WidgetInstance[];
   status: LayoutStatus;
+  /** A human-readable message when the last persist failed, else null. */
+  saveError: string | null;
   /** Customize mode: shows per-widget drag/remove/span controls + the catalog picker. */
   editing: boolean;
   load: () => Promise<void>;
+  dismissSaveError: () => void;
   setEditing: (on: boolean) => void;
   addWidget: (type: string) => void;
   removeWidget: (instanceId: string) => void;
@@ -72,10 +84,13 @@ export const useLayoutStore = create<LayoutStore>((set, get) => {
   return {
     widgets: [],
     status: 'loading',
+    saveError: null,
     editing: false,
 
+    dismissSaveError: () => set({ saveError: null }),
+
     load: async () => {
-      set({ status: 'loading' });
+      set({ status: 'loading', saveError: null });
       // Public-dashboard / not logged in: no per-user store — render the default, read-only.
       if (!getToken()) {
         set({ widgets: defaultLayout().widgets, status: 'ready' });

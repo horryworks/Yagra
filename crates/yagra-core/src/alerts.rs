@@ -50,8 +50,10 @@ const DWELL_SAMPLES: u32 = 3;
 /// Flapping detection window and threshold.
 const FLAP_WINDOW_MS: i64 = 600_000;
 const FLAP_THRESHOLD: usize = 5;
-/// SSE broadcast buffer.
-const EVENT_BUFFER: usize = 256;
+/// SSE broadcast buffer. Sized generously so a briefly-slow subscriber doesn't lag past the
+/// window and miss events; if one does lag, the stream handler logs it and emits a `resync`
+/// hint so the client can re-fetch the active-alert list (see `stream_alerts` in api.rs).
+const EVENT_BUFFER: usize = 1024;
 
 /// What the manager wants done about a committed transition.
 #[derive(Debug, Clone)]

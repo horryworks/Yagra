@@ -56,3 +56,17 @@
   gap: 12px;
   padding: 40px 0;
 }
+
+/* Banner shown when persisting the layout to the server failed (B-F1). */
+.mydash-save-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border-left: 3px solid var(--status-critical);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+}

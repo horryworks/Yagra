@@ -86,15 +86,15 @@ export function PollerHealthWidget() {
     <div className="statstrip">
       <div className="statstrip-item">
         <span className="statstrip-val">{lastSweep}</span>
-        <span className="statstrip-cap">last sweep</span>
+        <span className="statstrip-cap">last poll run</span>
       </div>
       <div className="statstrip-item">
         <span className="statstrip-val">{formatCount(data?.jobs_last_round ?? 0)}</span>
-        <span className="statstrip-cap">jobs / round</span>
+        <span className="statstrip-cap">jobs per run</span>
       </div>
       <div className="statstrip-item">
         <span className="statstrip-val">{formatCount(data?.results_total ?? 0)}</span>
-        <span className="statstrip-cap">results total</span>
+        <span className="statstrip-cap">results collected</span>
       </div>
     </div>
   );

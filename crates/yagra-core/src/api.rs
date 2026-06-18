@@ -189,7 +189,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id", delete(delete_user))
         .route("/api/v1/users/:id/role", put(set_user_role))
-        .route("/api/v1/users/:id/status", put(set_user_status))
+        .route("/api/v1/users/:id/enabled", put(set_user_status))
         .route("/api/v1/users/:id/password", put(set_user_password))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(auth_me))
@@ -410,10 +410,15 @@ async fn list_nodes(
         return resp;
     }
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    match st.nodes.list_page(q.cursor, limit).await {
-        Ok(nodes) => {
-            // A full page implies there may be more — hand back the last id as the cursor.
-            let next_cursor = if nodes.len() as i64 == limit {
+    // Fetch one extra row to tell "exactly a full page" from "a full page with more after it",
+    // so the client never makes a trailing request that returns an empty page at the boundary.
+    match st.nodes.list_page(q.cursor, limit + 1).await {
+        Ok(mut nodes) => {
+            let has_more = nodes.len() as i64 > limit;
+            if has_more {
+                nodes.truncate(limit as usize);
+            }
+            let next_cursor = if has_more {
                 nodes.last().map(|n| n.id.to_string())
             } else {
                 None
@@ -1039,6 +1044,16 @@ async fn fleet_state_history(
     let to = q.to.unwrap_or_else(now_unix_s);
     // Default window: the last 24h of snapshots.
     let from = q.from.unwrap_or(to - 24 * 3600);
+    // Bound the requested window so a client can't ask for an unboundedly large scan (defense in
+    // depth on top of snapshot retention): cap at 90 days and require from <= to.
+    const MAX_HISTORY_SECS: i64 = 90 * 24 * 3600;
+    if to < from || to - from > MAX_HISTORY_SECS {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_range",
+            "from must be <= to and the window must not exceed 90 days".to_owned(),
+        );
+    }
     let rows = match admin.repo.state_history(from, to).await {
         Ok(r) => r,
         Err(e) => {
@@ -1414,8 +1429,21 @@ async fn stream_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Respon
     }
     let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe()).filter_map(
         |r| async move {
-            r.ok()
-                .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
+            match r {
+                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
+                // The subscriber fell behind the buffer and missed `n` events (only this slow
+                // receiver is affected — other clients keep their own cursor). Log it and emit a
+                // named `resync` event so the client can re-fetch the active-alert list and close
+                // the gap. Browsers ignore named events they don't listen for, so this is
+                // backward-compatible with clients that only read the default message stream.
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        missed = n,
+                        "SSE alert subscriber lagged; emitting resync hint"
+                    );
+                    Some(Ok(Event::default().event("resync").data(n.to_string())))
+                }
+            }
         },
     );
     Sse::new(stream)
@@ -3045,7 +3073,9 @@ async fn import_discovered(
             Some(v) => v.parse::<Uuid>().map(Some).map_err(|_| ()),
         }
     };
-    let mut created = 0u32;
+    // Validate every node up front, then insert the whole batch in one transaction so a failure
+    // partway can't leave a partial import (atomicity — see NodeRepo::import_nodes).
+    let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
     for n in &body.nodes {
         let Ok(addr) = n.address.parse::<IpAddr>() else {
             return error_response(
@@ -3054,7 +3084,8 @@ async fn import_discovered(
                 format!("'{}' is not a valid IP address", n.address),
             );
         };
-        if n.name.trim().is_empty() {
+        let name = n.name.trim();
+        if name.is_empty() {
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_node",
@@ -3070,27 +3101,22 @@ async fn import_discovered(
                 "profile_id/credential_id must be UUIDs".to_owned(),
             );
         };
-        match admin
-            .repo
-            .create_node(
-                n.name.trim(),
-                addr,
-                None,
-                profile,
-                credential,
-                None,
-                n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-                n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-            )
-            .await
-        {
-            Ok(_) => created += 1,
-            Err(e) => {
-                tracing::error!(error = %e, "import discovered node failed");
-                return internal("failed to import a discovered node");
-            }
-        }
+        prepared.push(crate::repo::NewNode {
+            name,
+            address: addr,
+            profile,
+            credential,
+            vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        });
     }
+    let created = match admin.repo.import_nodes(&prepared).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "import discovered nodes failed");
+            return internal("failed to import discovered nodes");
+        }
+    };
     (
         StatusCode::CREATED,
         Json(serde_json::json!({ "created": created })),
@@ -4394,12 +4420,12 @@ async fn list_mutes(State(st): State<ApiState>, headers: HeaderMap) -> Response 
     }
 }
 
-/// Create-mute body. `check` is the check *name* (a metric name, or omitted for the whole
-/// node); `until` is RFC 3339.
+/// Create-mute body. `metric_name` is the metric to mute (omit to mute the whole node);
+/// `until` is RFC 3339.
 #[derive(Deserialize)]
 struct CreateMute {
     node_id: Uuid,
-    check: Option<String>,
+    metric_name: Option<String>,
     until: String,
     reason: Option<String>,
 }
@@ -4417,7 +4443,7 @@ async fn create_mute(
         return resp;
     }
     let check = body
-        .check
+        .metric_name
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty());
@@ -4426,7 +4452,8 @@ async fn create_mute(
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_mute",
-                "check must be a valid metric name (or omitted for the whole node)".to_owned(),
+                "metric_name must be a valid metric name (or omitted for the whole node)"
+                    .to_owned(),
             );
         }
     }
@@ -5017,13 +5044,13 @@ mod tests {
 
     #[tokio::test]
     async fn set_user_status_unavailable_without_admin() {
-        // The status-toggle route is wired; in skeleton mode (admin: None) it is 503.
+        // The enable/disable route is wired; in skeleton mode (admin: None) it is 503.
         let app = router(state_with(Arc::new(InMemorySink::default())));
         let resp = app
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/v1/users/00000000-0000-0000-0000-000000000000/status")
+                    .uri("/api/v1/users/00000000-0000-0000-0000-000000000000/enabled")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"enabled":false}"#))
                     .unwrap(),

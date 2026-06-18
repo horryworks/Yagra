@@ -122,10 +122,10 @@ export function DashboardPage() {
           {!chartError && series.timestamps.length === 0 && <p className="muted">No data yet…</p>}
           {series.timestamps.length > 0 && (
             <MetricChart
-              title={METRIC}
+              title="ICMP RTT"
               timestamps={series.timestamps}
               values={series.values}
-              yFormat={(v) => `${Math.round(v)}`}
+              yFormat={(v) => `${Math.round(v)} ms`}
               legendFormat={formatRtt}
             />
           )}
