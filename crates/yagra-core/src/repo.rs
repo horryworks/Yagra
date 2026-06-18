@@ -387,6 +387,23 @@ impl NodeRepo {
             .collect()
     }
 
+    /// The ids of nodes whose `group_id` is in `group_ids` — used to resolve a Troubleshoot
+    /// "group" scope to a group + its descendant subgroups (the caller flattens the subtree via
+    /// [`crate::groups::group_subtree`]). Parameterized `= ANY($1)` (security.md); empty input
+    /// short-circuits so we never run an empty-array query.
+    pub async fn nodes_in_groups(&self, group_ids: &[Uuid]) -> anyhow::Result<Vec<Uuid>> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT id FROM nodes WHERE group_id = ANY($1) ORDER BY sort_order, name, id",
+        )
+        .bind(group_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
+    }
+
     /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
     pub async fn place_node(
         &self,

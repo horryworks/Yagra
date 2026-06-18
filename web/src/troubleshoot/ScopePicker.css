@@ -1,0 +1,111 @@
+/* Scope picker: a field-styled trigger + popover with All/Group/Node modes. Mirrors the
+   CredentialPicker / UserMenu popover look; theme variables only (no hardcoded colours). */
+
+.scope-picker {
+  position: relative;
+}
+
+.scope-picker-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scope-picker-control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scope-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-picker-caret {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+/* Popover. z-index clears the launch drawer (.ts-drawer is z-index 61). */
+.scope-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 260px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 70;
+  box-shadow: 0 8px 24px var(--overlay);
+}
+
+.scope-pop-modes {
+  margin-bottom: 6px;
+}
+
+.scope-search {
+  margin-bottom: 6px;
+}
+
+.scope-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.scope-option {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.scope-option:hover,
+.scope-option.active {
+  background: var(--bg-tertiary);
+}
+
+.scope-option.selected {
+  color: var(--accent-color);
+}
+
+.scope-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Group option labels carry leading spaces for tree depth — preserve them. */
+.scope-opt-group {
+  white-space: pre;
+}
+
+.scope-opt-addr {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  flex: none;
+}
+
+.scope-empty {
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}

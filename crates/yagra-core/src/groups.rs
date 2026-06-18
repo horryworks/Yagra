@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 
 /// The kind of a group — drives the icon and is purely organizational (not a polling concept).
@@ -123,6 +124,28 @@ pub fn would_create_cycle(
         }
     }
     true
+}
+
+/// The `root` group plus every group beneath it, via BFS over `(id, parent_id)` edges (the shape
+/// [`GroupRepo::edges`] returns). Always includes `root`; a visited set bounds the walk so cyclic
+/// or malformed data can't loop forever. Pure, so the subtree maths is unit-tested without a DB.
+/// Used to resolve a Troubleshoot "group" scope to the group + all its descendant subgroups.
+#[must_use]
+pub fn group_subtree(edges: &[(Uuid, Option<Uuid>)], root: Uuid) -> Vec<Uuid> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(root);
+    seen.insert(root);
+    while let Some(cur) = queue.pop_front() {
+        out.push(cur);
+        for (id, parent) in edges {
+            if *parent == Some(cur) && seen.insert(*id) {
+                queue.push_back(*id);
+            }
+        }
+    }
+    out
 }
 
 /// PostgreSQL-backed group store.
@@ -365,5 +388,42 @@ mod tests {
         assert!(!would_create_cycle(&edges, c, Some(a)));
         // Moving to root is always fine.
         assert!(!would_create_cycle(&edges, b, None));
+    }
+
+    #[test]
+    fn group_subtree_collects_root_and_descendants() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let d = Uuid::from_u128(4);
+        // a → {b, c}, b → d.
+        let edges = vec![(a, None), (b, Some(a)), (c, Some(a)), (d, Some(b))];
+
+        let mut from_a = group_subtree(&edges, a);
+        from_a.sort();
+        assert_eq!(from_a, vec![a, b, c, d]); // whole subtree, incl. the root
+
+        let mut from_b = group_subtree(&edges, b);
+        from_b.sort();
+        assert_eq!(from_b, vec![b, d]); // a branch
+
+        assert_eq!(group_subtree(&edges, c), vec![c]); // a leaf is just itself
+    }
+
+    #[test]
+    fn group_subtree_unknown_root_is_just_itself() {
+        let x = Uuid::from_u128(9);
+        assert_eq!(group_subtree(&[], x), vec![x]);
+    }
+
+    #[test]
+    fn group_subtree_terminates_on_a_cycle() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        // Malformed data: a ↔ b parent each other. The visited set must stop the walk.
+        let edges = vec![(a, Some(b)), (b, Some(a))];
+        let mut sub = group_subtree(&edges, a);
+        sub.sort();
+        assert_eq!(sub, vec![a, b]);
     }
 }

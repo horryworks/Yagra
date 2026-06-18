@@ -1,0 +1,220 @@
+// Scope picker for Troubleshoot analyses: choose All nodes / a Group / a single Node, producing
+// a { kind, id, label }. A field-styled trigger opens a popover (mode tabs + a list), following
+// the CredentialPicker popover/click-outside pattern. The Node list is a scale-aware typeahead
+// (lazy-loaded, in-memory filtered, capped) — never a flat dropdown of the whole inventory.
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { SearchInput } from '../components/ui/TableToolbar';
+import { groupOptions } from '../lib/nodeTree';
+import { Segmented } from './Segmented';
+import { useScopeData } from './useScopeData';
+import { ALL_SCOPE, filterNodes, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
+import './ScopePicker.css';
+
+type Mode = 'all' | 'group' | 'node';
+const MODES = [
+  { value: 'all', label: 'All' },
+  { value: 'group', label: 'Group' },
+  { value: 'node', label: 'Node' },
+];
+/** Rendered node-result cap — filter first, then show this many (keep typing to narrow). */
+const MAX_RESULTS = 50;
+
+interface Props {
+  value: ScopeValue;
+  onChange: (v: ScopeValue) => void;
+  id?: string;
+  className?: string;
+  disabled?: boolean;
+}
+
+export function ScopePicker({ value, onChange, id, className, disabled }: Props) {
+  const { groups, nodes, nodesLoaded, loadNodes } = useScopeData();
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<Mode>(value.kind);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  const nodeBoxRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside + Escape close.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Focus the search box when Node mode is showing.
+  useEffect(() => {
+    if (open && mode === 'node') nodeBoxRef.current?.querySelector('input')?.focus();
+  }, [open, mode]);
+
+  const groupItems = useMemo(() => groupOptions(groups), [groups]);
+  const nameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
+
+  const filtered = useMemo(() => filterNodes(nodes, query), [nodes, query]);
+  const shown = filtered.slice(0, MAX_RESULTS);
+
+  const openPopover = () => {
+    if (disabled) return;
+    setMode(value.kind);
+    setQuery('');
+    setActive(0);
+    if (value.kind === 'node') loadNodes();
+    setOpen(true);
+  };
+
+  const changeMode = (m: Mode) => {
+    setMode(m);
+    setActive(0);
+    if (m === 'all') {
+      onChange(ALL_SCOPE);
+      setOpen(false);
+    } else if (m === 'node') {
+      loadNodes();
+    }
+  };
+
+  const pickGroup = (gid: string) => {
+    const name = nameById.get(gid) ?? gid;
+    onChange({ kind: 'group', id: gid, label: groupScopeLabel(name) });
+    setOpen(false);
+  };
+
+  const pickNode = (nid: string, name: string) => {
+    onChange({ kind: 'node', id: nid, label: nodeScopeLabel(name) });
+    setOpen(false);
+  };
+
+  // Arrow-key roving over the node results (Enter selects the active row).
+  const onNodeKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((a) => Math.min(a + 1, shown.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => Math.max(a - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const n = shown[active];
+      if (n) pickNode(n.id, n.name);
+    }
+  };
+
+  return (
+    <div className={['scope-picker', className].filter(Boolean).join(' ')} ref={ref}>
+      <button
+        type="button"
+        id={id}
+        className="scope-picker-control field"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openPopover())}
+      >
+        <span className="scope-picker-label">{value.label}</span>
+        <span className="scope-picker-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+
+      {open && (
+        <div className="scope-pop">
+          <div className="scope-pop-modes">
+            <Segmented options={MODES} value={mode} onChange={(m) => changeMode(m as Mode)} ariaLabel="Scope type" />
+          </div>
+
+          {mode === 'all' && (
+            <button type="button" className="scope-option" onClick={() => changeMode('all')}>
+              <span className="scope-opt-name">All nodes</span>
+            </button>
+          )}
+
+          {mode === 'group' && (
+            <div className="scope-list" role="listbox" aria-label="Groups">
+              {groupItems.length === 0 ? (
+                <div className="scope-empty">No node groups yet.</div>
+              ) : (
+                groupItems.map((g) => (
+                  <button
+                    type="button"
+                    key={g.id}
+                    role="option"
+                    aria-selected={value.kind === 'group' && value.id === g.id}
+                    className={
+                      value.kind === 'group' && value.id === g.id
+                        ? 'scope-option selected'
+                        : 'scope-option'
+                    }
+                    onClick={() => pickGroup(g.id)}
+                  >
+                    <span className="scope-opt-name scope-opt-group">{g.label}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
+          {mode === 'node' && (
+            <div ref={nodeBoxRef} onKeyDown={onNodeKeyDown}>
+              <div className="scope-search">
+                <SearchInput
+                  value={query}
+                  onChange={(v) => {
+                    setQuery(v);
+                    setActive(0);
+                  }}
+                  placeholder="Search nodes by name or address…"
+                  ariaLabel="Search nodes"
+                />
+              </div>
+              <div className="scope-list" role="listbox" aria-label="Nodes">
+                {!nodesLoaded ? (
+                  <div className="scope-empty">Loading nodes…</div>
+                ) : shown.length === 0 ? (
+                  <div className="scope-empty">No matching nodes.</div>
+                ) : (
+                  shown.map((n, i) => (
+                    <button
+                      type="button"
+                      key={n.id}
+                      role="option"
+                      aria-selected={value.kind === 'node' && value.id === n.id}
+                      className={
+                        i === active
+                          ? 'scope-option active'
+                          : value.kind === 'node' && value.id === n.id
+                            ? 'scope-option selected'
+                            : 'scope-option'
+                      }
+                      onMouseEnter={() => setActive(i)}
+                      onClick={() => pickNode(n.id, n.name)}
+                    >
+                      <span className="scope-opt-name">{n.name}</span>
+                      <span className="scope-opt-addr mono">{n.address}</span>
+                    </button>
+                  ))
+                )}
+                {nodesLoaded && filtered.length > MAX_RESULTS && (
+                  <div className="scope-empty">
+                    +{filtered.length - MAX_RESULTS} more — keep typing to narrow
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

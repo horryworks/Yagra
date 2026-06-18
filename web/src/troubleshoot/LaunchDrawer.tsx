@@ -1,16 +1,17 @@
 // Launch drawer (handoff §3): configure and submit any tool as a real background job (ADR-022).
-// Scope (real node groups + All nodes), Time window / Depth / "When done" (segmented), and a
+// Scope (All nodes / a group / a single node via ScopePicker), Time window / Depth / "When done"
+// (segmented), and a
 // Sensitivity slider for ML/Anomaly. On submit it POSTs the job, closes, and toasts (with a
 // View → link to the report for tools that have one). The created row appears in Analysis runs
 // and progresses over SSE.
 
 import { useEffect, useRef, useState } from 'react';
-import { Select } from '../components/ui/Field';
 import { Button } from '../components/ui/Button';
 import { Segmented } from './Segmented';
+import { ScopePicker } from './ScopePicker';
+import { ALL_SCOPE, type ScopeValue } from './scope';
 import { METHODS, toolById, type Tool } from './data';
 import { useTroubleshootStore } from './store';
-import { useScopeOptions } from './useScopeOptions';
 import type { AnalysisJobInput } from '../types/api';
 
 const WINDOWS = [
@@ -42,11 +43,10 @@ export function LaunchDrawer() {
   const closeDrawer = useTroubleshootStore((s) => s.closeDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
-  const scopes = useScopeOptions();
 
   // Mirror the selected tool so its content survives the slide-out after openToolId clears.
   const [tool, setTool] = useState<Tool | null>(null);
-  const [scopeIdx, setScopeIdx] = useState(0);
+  const [scope, setScope] = useState<ScopeValue>(ALL_SCOPE);
   const [windowVal, setWindowVal] = useState('604800');
   const [depth, setDepth] = useState('standard');
   const [sensitivity, setSensitivity] = useState(3);
@@ -62,7 +62,7 @@ export function LaunchDrawer() {
       const t = toolById(openToolId);
       if (t) {
         setTool(t);
-        setScopeIdx(0);
+        setScope(ALL_SCOPE);
         setWindowVal('604800');
         setDepth('standard');
         setSensitivity(3);
@@ -84,7 +84,6 @@ export function LaunchDrawer() {
 
   const submit = async () => {
     if (!tool || submitting) return;
-    const scope = scopes[scopeIdx] ?? scopes[0];
     const windowLabel = WINDOWS.find((w) => w.value === windowVal)?.label ?? windowVal;
     const input: AnalysisJobInput = {
       tool: tool.id,
@@ -142,18 +141,12 @@ export function LaunchDrawer() {
                 <label className="ts-flabel" htmlFor="ts-drawer-scope">
                   Scope
                 </label>
-                <Select
+                <ScopePicker
                   id="ts-drawer-scope"
                   className="ts-field-full"
-                  value={String(scopeIdx)}
-                  onChange={(e) => setScopeIdx(Number(e.target.value))}
-                >
-                  {scopes.map((s, i) => (
-                    <option key={`${s.kind}-${s.id ?? 'all'}`} value={i}>
-                      {s.label}
-                    </option>
-                  ))}
-                </Select>
+                  value={scope}
+                  onChange={setScope}
+                />
                 <span className="ts-fhint">{tool.scope}</span>
               </div>
 

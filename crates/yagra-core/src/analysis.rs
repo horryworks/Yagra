@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
+use crate::groups::{group_subtree, GroupRepo};
 use crate::repo::NodeRepo;
 use crate::store::{MetricPoint, MetricStore};
 
@@ -445,18 +446,26 @@ pub struct AnalysisRunner {
     repo: Arc<AnalysisRepo>,
     store: Arc<dyn MetricStore>,
     nodes: Arc<NodeRepo>,
+    /// Group hierarchy — to expand a "group" scope to the group + its descendant subgroups.
+    groups: Arc<GroupRepo>,
     tx: broadcast::Sender<String>,
     cancels: Mutex<std::collections::HashMap<Uuid, Arc<AtomicBool>>>,
 }
 
 impl AnalysisRunner {
     #[must_use]
-    pub fn new(repo: Arc<AnalysisRepo>, store: Arc<dyn MetricStore>, nodes: Arc<NodeRepo>) -> Self {
+    pub fn new(
+        repo: Arc<AnalysisRepo>,
+        store: Arc<dyn MetricStore>,
+        nodes: Arc<NodeRepo>,
+        groups: Arc<GroupRepo>,
+    ) -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         Self {
             repo,
             store,
             nodes,
+            groups,
             tx,
             cancels: Mutex::new(std::collections::HashMap::new()),
         }
@@ -610,8 +619,14 @@ impl AnalysisRunner {
                 .map(|n| n.id.as_uuid())
                 .collect()),
             ScopeKind::Group => {
-                let members = self.nodes.ordered_nodes_in_group(params.scope_id).await?;
-                Ok(members.into_iter().map(|(id, _)| id).collect())
+                let Some(root) = params.scope_id else {
+                    return Ok(Vec::new());
+                };
+                // A group scope covers the group AND every descendant subgroup (ADR-022): flatten
+                // the subtree from the group edges, then fetch the nodes filed under any of them.
+                let edges = self.groups.edges().await?;
+                let group_ids = group_subtree(&edges, root);
+                self.nodes.nodes_in_groups(&group_ids).await
             }
             ScopeKind::Node => Ok(params.scope_id.into_iter().collect()),
         }
