@@ -100,10 +100,39 @@ describe('api client', () => {
   });
 
   it('fetches the public client config', async () => {
-    mockFetch(200, { public_dashboard: false, auth_available: true });
+    mockFetch(200, {
+      public_dashboard: false,
+      auth_available: true,
+      default_poll_interval_secs: 45,
+    });
     const cfg = await api.getConfig();
     expect(cfg.public_dashboard).toBe(false);
     expect(cfg.auth_available).toBe(true);
+    expect(cfg.default_poll_interval_secs).toBe(45);
+  });
+
+  it('puts the default poll interval to the config endpoint', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.updateConfig({ default_poll_interval_secs: 120 });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/config');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ default_poll_interval_secs: 120 });
+  });
+
+  it('posts a profile with its poll-interval override in the body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'p1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createProfile({ name: 'Edge router', category: 'router', poll_interval_secs: 15 });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/profiles');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ name: 'Edge router', poll_interval_secs: 15 });
   });
 
   it('passes keyset cursor + limit on the node page request', async () => {

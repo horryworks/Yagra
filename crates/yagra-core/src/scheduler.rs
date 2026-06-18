@@ -7,13 +7,40 @@
 
 use crate::collection::CollectionRepo;
 use crate::secrets::{self, CredentialStore, SnmpV3Secret};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
     Bus, IcmpCheck, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck,
     SnmpV3Check,
 };
-use yagra_common::{builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId};
+use yagra_common::{
+    builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId, ProfileId,
+};
+
+/// The effective polling interval (seconds) for a node: its profile's override if one is set, else
+/// the global default. Pure (no I/O) so the scheduler's resolution is unit-testable.
+#[must_use]
+pub fn resolve_interval(
+    profile: Option<ProfileId>,
+    overrides: &HashMap<Uuid, u32>,
+    default_secs: u32,
+) -> u32 {
+    profile
+        .and_then(|p| overrides.get(&p.0).copied())
+        .unwrap_or(default_secs)
+}
+
+/// Whether a node is due to poll, given the time elapsed since its last dispatch. `None` ⇒ never
+/// dispatched (due immediately). Pure so the due-check is unit-testable without a clock.
+#[must_use]
+pub fn due(elapsed_since_last: Option<Duration>, interval: Duration) -> bool {
+    match elapsed_since_last {
+        Some(elapsed) => elapsed >= interval,
+        None => true,
+    }
+}
 
 /// Per-poll SNMP timeout pushed to the poller (ms). Matches the periodic and on-demand paths.
 const SNMP_TIMEOUT_MS: u32 = 2000;
@@ -196,7 +223,9 @@ pub struct PollDispatcher {
     collection: Arc<CollectionRepo>,
     /// v2c community fallback for nodes without a bound credential.
     env_community: Option<String>,
-    /// Default poll interval (seconds) stamped on every job (also the scheduler's round period).
+    /// Fallback poll interval (seconds) stamped on on-demand "poll now" jobs. The periodic
+    /// scheduler resolves the effective interval per node (profile override → DB default) and
+    /// passes it explicitly; this is only the manual-poll default (the poller ignores the value).
     interval_secs: u32,
 }
 
@@ -218,16 +247,15 @@ impl PollDispatcher {
         }
     }
 
-    /// The default poll interval (seconds) — also the scheduler's round period.
-    #[must_use]
-    pub fn interval_secs(&self) -> u32 {
-        self.interval_secs
-    }
-
     /// Resolve a node's SNMP auth (decrypted in core, never the poller — ADR-018/020) and its
-    /// effective collection set, then assemble all its poll jobs. Returns the jobs ready to
-    /// publish; the caller decides whether to jitter (periodic) or publish at once (poll now).
-    pub async fn build_node_jobs(&self, node: &Node) -> Vec<(PollJob, &'static str)> {
+    /// effective collection set, then assemble all its poll jobs stamped with `interval_secs`.
+    /// The caller resolves the effective interval (per-profile override → global default) and
+    /// decides whether to jitter (periodic) or publish at once (poll now).
+    pub async fn build_node_jobs(
+        &self,
+        node: &Node,
+        interval_secs: u32,
+    ) -> Vec<(PollJob, &'static str)> {
         let auth = resolve_snmp_auth(&self.creds, node, self.env_community.as_deref()).await;
         // Only resolve the collection set when SNMP is configured (ICMP needs none).
         let items = if auth.is_some() {
@@ -240,7 +268,7 @@ impl PollDispatcher {
         {
             tracing::debug!(node = %node.id, "v3 table items skipped (v3 walk not yet supported)");
         }
-        assemble_node_jobs(node, auth.as_ref(), &items, self.interval_secs)
+        assemble_node_jobs(node, auth.as_ref(), &items, interval_secs)
     }
 
     /// Publish one already-built job, bumping the published-jobs counter (used by the periodic
@@ -250,9 +278,10 @@ impl PollDispatcher {
     }
 
     /// Build and immediately publish every poll job for a node (no jitter) — the operator's
-    /// "poll now" action. Returns how many jobs were published.
+    /// "poll now" action. Returns how many jobs were published. Stamps the dispatcher's default
+    /// interval (the poller ignores the value; cadence is owned by the periodic scheduler).
     pub async fn poll_now(&self, node: &Node) -> usize {
-        let jobs = self.build_node_jobs(node).await;
+        let jobs = self.build_node_jobs(node, self.interval_secs).await;
         let mut published = 0u64;
         for (job, kind) in jobs {
             if publish(&self.bus, job, kind, node.id).await {
@@ -389,6 +418,33 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_bus::CheckSpec;
     use yagra_common::NodeId;
+
+    #[test]
+    fn interval_resolves_profile_override_then_default() {
+        let p1 = ProfileId::new();
+        let p2 = ProfileId::new();
+        let mut overrides = HashMap::new();
+        overrides.insert(p1.0, 15u32);
+        // Profile with an override → its value.
+        assert_eq!(resolve_interval(Some(p1), &overrides, 30), 15);
+        // Profile without an override → the global default.
+        assert_eq!(resolve_interval(Some(p2), &overrides, 30), 30);
+        // No profile at all → the global default.
+        assert_eq!(resolve_interval(None, &overrides, 30), 30);
+    }
+
+    #[test]
+    fn due_when_never_dispatched_or_interval_elapsed() {
+        let interval = Duration::from_secs(30);
+        // Never dispatched → due immediately.
+        assert!(due(None, interval));
+        // Less than the interval has passed → not due.
+        assert!(!due(Some(Duration::from_secs(29)), interval));
+        // Exactly the interval → due (>=).
+        assert!(due(Some(Duration::from_secs(30)), interval));
+        // Well past the interval → due.
+        assert!(due(Some(Duration::from_secs(120)), interval));
+    }
 
     #[test]
     fn icmp_job_targets_node_address_and_id() {

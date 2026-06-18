@@ -33,7 +33,13 @@ export function App() {
     api
       .getConfig()
       .then(setConfig)
-      .catch(() => setConfig({ public_dashboard: true, auth_available: false }));
+      .catch(() =>
+        setConfig({
+          public_dashboard: true,
+          auth_available: false,
+          default_poll_interval_secs: 30,
+        }),
+      );
   }, []);
 
   const gated = config != null && !config.public_dashboard && !authed;

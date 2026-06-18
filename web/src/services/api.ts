@@ -160,11 +160,17 @@ function jsonBody(method: string, body: unknown): RequestInit {
 export interface ClientConfig {
   public_dashboard: boolean;
   auth_available: boolean;
+  /** Global default polling interval (seconds); per-profile overrides take precedence. */
+  default_poll_interval_secs: number;
 }
 
 export const api = {
-  /** Public bootstrap config: whether reads are open and login is available. */
+  /** Public bootstrap config: whether reads are open, login availability, default poll interval. */
   getConfig: (): Promise<ClientConfig> => request('/config'),
+
+  /** Update the global default polling interval (seconds). ManageConfig-gated. */
+  updateConfig: (body: { default_poll_interval_secs: number }): Promise<void> =>
+    request('/config', jsonBody('PUT', body)),
 
   /** Latest reading for one node metric. */
   getNodeMetric: (

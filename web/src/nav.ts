@@ -119,9 +119,9 @@ export const NAV: NavSection[] = [
       { label: 'Authentication', path: '/settings/auth', implemented: false, mono: 'Au' },
       { label: 'Audit log', path: '/settings/audit', implemented: true, mono: 'Ad' },
       {
-        label: 'System & self-monitoring',
+        label: 'System settings',
         path: '/settings/system',
-        implemented: false,
+        implemented: true,
         mono: 'Sy',
       },
       { label: 'Preferences', path: '/settings/preferences', implemented: true, mono: 'Pf' },
