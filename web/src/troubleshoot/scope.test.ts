@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterNodes, groupScopeLabel, nodeScopeLabel } from './scope';
+import { defaultAnalysisInput, filterNodes, groupScopeLabel, nodeScopeLabel } from './scope';
 import type { NodeSummary } from '../types/api';
 
 function node(over: Partial<NodeSummary>): NodeSummary {
@@ -44,5 +44,14 @@ describe('scope helpers', () => {
   it('builds scope labels (group is recursive, node is single)', () => {
     expect(groupScopeLabel('Tokyo')).toBe('group: Tokyo (incl. subgroups)');
     expect(nodeScopeLabel('edge-tok-fw01')).toBe('node: edge-tok-fw01');
+  });
+
+  it('quick-run default input targets all nodes with standard defaults', () => {
+    const input = defaultAnalysisInput('anomaly');
+    expect(input.tool).toBe('anomaly');
+    expect(input.scope_kind).toBe('all');
+    expect(input.scope_id).toBeNull();
+    expect(input.depth).toBe('standard');
+    expect(input.window_secs).toBe(7 * 86_400);
   });
 });

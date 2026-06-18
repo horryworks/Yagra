@@ -315,6 +315,52 @@
   text-decoration: underline;
 }
 
+/* Split Run button: a primary "Run" + an attached caret that opens a small run-mode menu. */
+.ts-run-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.ts-run-split .ts-run-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ts-run-split .ts-run-caret {
+  padding: 0 7px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  /* Hairline divider between the two halves, visible on the orange fill. */
+  border-left: var(--border-width) solid var(--accent-hover);
+}
+.ts-run-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 190px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 4px;
+  z-index: 70;
+  box-shadow: 0 8px 24px var(--overlay);
+}
+.ts-run-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+.ts-run-menu-item:hover {
+  background: var(--bg-tertiary);
+}
+
 /* compute-depth pip indicator */
 .ts-depth {
   display: inline-flex;

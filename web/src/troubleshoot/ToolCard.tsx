@@ -1,11 +1,14 @@
 // Tool catalog card (handoff §1). Monogram tile + name + method line, description, a "Surfaces …"
-// reveal, and a footer meta row: cost estimate, a 5-pip compute-depth indicator, and the primary
-// Run button. Clicking the card (or Run) opens the launch drawer. Past results for a tool show in
-// the Analysis runs panel, so the card itself carries no per-tool "latest" link.
+// reveal, and a footer meta row: cost estimate, a 5-pip compute-depth indicator, and a SPLIT Run
+// button. The main "Run" opens the launch drawer to set scope/window/depth before running (so the
+// scope is never silently "all"); the ▾ menu holds explicit shortcuts — "Configure & run…" and a
+// clearly-labelled "Run on all nodes" quick path. Past results show in the Analysis runs panel.
 
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { METHODS, type Tool } from './data';
 import { useTroubleshootStore } from './store';
+import { defaultAnalysisInput } from './scope';
 
 function DepthPips({ depth }: { depth: number }) {
   return (
@@ -23,10 +26,49 @@ function DepthPips({ depth }: { depth: number }) {
 
 export function ToolCard({ tool }: { tool: Tool }) {
   const openDrawer = useTroubleshootStore((s) => s.openDrawer);
+  const createJob = useTroubleshootStore((s) => s.createJob);
+  const showToast = useTroubleshootStore((s) => s.showToast);
   const method = METHODS[tool.method];
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
+  const configure = () => {
+    setMenuOpen(false);
+    openDrawer(tool.id);
+  };
+
+  const quickRunAll = async () => {
+    setMenuOpen(false);
+    try {
+      const job = await createJob(defaultAnalysisInput(tool.id));
+      showToast(
+        `${tool.name} started on all nodes — running in background.`,
+        tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
+      );
+    } catch {
+      showToast('Could not start the analysis.');
+    }
+  };
+
   return (
-    <article className="ts-tool" onClick={() => openDrawer(tool.id)}>
+    <article className="ts-tool" onClick={configure}>
       <div className="ts-tool-top">
         <div className="ts-tool-mono">{tool.mono}</div>
         <div className="ts-tool-titles">
@@ -50,16 +92,57 @@ export function ToolCard({ tool }: { tool: Tool }) {
         </span>
         <DepthPips depth={tool.depth} />
         <div className="ts-tool-actions">
-          <Button
-            variant="primary"
-            className="btn-sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              openDrawer(tool.id);
-            }}
-          >
-            Run
-          </Button>
+          <div className="ts-run-split" ref={menuRef}>
+            <Button
+              variant="primary"
+              className="btn-sm ts-run-main"
+              onClick={(e) => {
+                e.stopPropagation();
+                configure();
+              }}
+            >
+              Run
+            </Button>
+            <Button
+              variant="primary"
+              className="btn-sm ts-run-caret"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label="More run options"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((o) => !o);
+              }}
+            >
+              ▾
+            </Button>
+            {menuOpen && (
+              <div className="ts-run-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ts-run-menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    configure();
+                  }}
+                >
+                  Configure &amp; run…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ts-run-menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void quickRunAll();
+                  }}
+                >
+                  Run on all nodes
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </article>
