@@ -16,7 +16,7 @@ export function SideBar() {
   const toggle = usePrefsStore((s) => s.toggleSidebar);
   // Live "Analysis runs" badge — the number of running troubleshoot jobs (like the TopBar bell
   // badge reads the alert store). Resolved from the item's `liveBadge` discriminator below.
-  const runningRuns = useTroubleshootStore((s) => runningCount(s.runs));
+  const runningRuns = useTroubleshootStore((s) => runningCount(s.jobs));
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>

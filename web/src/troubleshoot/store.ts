@@ -1,33 +1,31 @@
-// Troubleshoot UI state (Zustand). Ephemeral live data — the async-jobs list, the launch
-// drawer, and the transient toast — so it is NOT persisted (coding-conventions: live data ⇒
-// component/hook state, not the persisted store). Today the runs are seeded from mock data
-// (data.ts); once a jobs API exists this store is the seam that swaps to it (poll/SSE feed
-// `runs`, `addRun`/`cancelRun`/`retryRun` call the API).
+// Troubleshoot UI state (Zustand). The async-jobs list is now real — seeded from the jobs API
+// and kept live over SSE (ADR-022) — so this store holds the job list plus the ephemeral launch
+// drawer and toast. Live data ⇒ not persisted (coding-conventions).
 
 import { create } from 'zustand';
-import { INITIAL_RUNS, type Run } from './data';
+import { api } from '../services/api';
+import type { AnalysisJob, AnalysisJobInput } from '../types/api';
 
 export interface Toast {
   msg: string;
   /** Optional in-app route the "View →" action navigates to. */
   linkTo?: string;
-  /** Bumps on every showToast so the auto-dismiss timer restarts even for the same message. */
+  /** Bumps on every showToast so the auto-dismiss timer restarts for a repeat message. */
   key: number;
 }
 
 interface TroubleshootStore {
-  runs: Run[];
-  /** Monotonic counter for generated run ids (deterministic, no Math.random for keys). */
-  nextRunId: number;
+  jobs: AnalysisJob[];
+  /** True once the initial fetch has resolved (so the UI can tell "empty" from "loading"). */
+  loaded: boolean;
 
-  /** Prepend a freshly-launched run (drawer submit). */
-  addRun: (run: Omit<Run, 'id'>) => void;
-  /** Cancel a running job — drops it from the list. */
-  cancelRun: (id: string) => void;
-  /** Re-queue a failed job back to running. */
-  retryRun: (id: string) => void;
-  /** Advance every running job's progress one tick (drives the live feel). */
-  tickProgress: () => void;
+  setJobs: (jobs: AnalysisJob[]) => void;
+  /** Upsert one job by id (SSE tick or create response), keeping newest-first order. */
+  upsertJob: (job: AnalysisJob) => void;
+  /** Launch a job; returns the created row (already upserted). */
+  createJob: (input: AnalysisJobInput) => Promise<AnalysisJob>;
+  /** Cancel a running job (optimistically marks it cancelled; SSE confirms). */
+  cancelJob: (id: string) => Promise<void>;
 
   /** Currently-open tool in the launch drawer (id), or null when closed. */
   openToolId: string | null;
@@ -39,48 +37,39 @@ interface TroubleshootStore {
   dismissToast: () => void;
 }
 
-export const useTroubleshootStore = create<TroubleshootStore>((set) => ({
-  runs: INITIAL_RUNS,
-  nextRunId: 1,
+function byNewest(a: AnalysisJob, b: AnalysisJob): number {
+  return b.created_ms - a.created_ms;
+}
 
-  addRun: (run) =>
-    set((s) => ({
-      runs: [{ ...run, id: `new-${s.nextRunId}` }, ...s.runs],
-      nextRunId: s.nextRunId + 1,
-    })),
+export const useTroubleshootStore = create<TroubleshootStore>((set, get) => ({
+  jobs: [],
+  loaded: false,
 
-  cancelRun: (id) => set((s) => ({ runs: s.runs.filter((r) => r.id !== id) })),
+  setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewest), loaded: true }),
 
-  retryRun: (id) =>
-    set((s) => ({
-      runs: s.runs.map((r) =>
-        r.id === id && r.state === 'failed'
-          ? {
-              ...r,
-              state: 'running',
-              pct: 3,
-              phase: 'Queued — fetching history…',
-              eta: '~2m',
-              started: 'just now',
-              err: undefined,
-              when: undefined,
-            }
-          : r,
-      ),
-    })),
-
-  tickProgress: () =>
+  upsertJob: (job) =>
     set((s) => {
-      if (!s.runs.some((r) => r.state === 'running')) return s;
-      return {
-        runs: s.runs.map((r) => {
-          if (r.state !== 'running') return r;
-          // Climb toward — but never reach — 100%; real completion comes from job status.
-          const pct = Math.min(99, (r.pct ?? 0) + Math.random() * 5);
-          return { ...r, pct, phase: pct > 92 ? 'Finalizing report…' : r.phase };
-        }),
-      };
+      const rest = s.jobs.filter((j) => j.id !== job.id);
+      return { jobs: [job, ...rest].sort(byNewest) };
     }),
+
+  createJob: async (input) => {
+    const job = await api.createAnalysisJob(input);
+    get().upsertJob(job);
+    return job;
+  },
+
+  cancelJob: async (id) => {
+    await api.cancelAnalysisJob(id);
+    // Optimistic terminal state; the SSE stream will deliver the authoritative row.
+    set((s) => ({
+      jobs: s.jobs.map((j) =>
+        j.id === id && j.state === 'running'
+          ? { ...j, state: 'cancelled', phase: null }
+          : j,
+      ),
+    }));
+  },
 
   openToolId: null,
   openDrawer: (toolId) => set({ openToolId: toolId }),
@@ -92,7 +81,7 @@ export const useTroubleshootStore = create<TroubleshootStore>((set) => ({
   dismissToast: () => set({ toast: null }),
 }));
 
-/** Number of jobs currently running (drives the sidebar "Analysis runs" badge + intro stat). */
-export function runningCount(runs: Run[]): number {
-  return runs.filter((r) => r.state === 'running').length;
+/** Number of jobs currently running (drives the sidebar badge + intro stat). */
+export function runningCount(jobs: AnalysisJob[]): number {
+  return jobs.filter((j) => j.state === 'running').length;
 }

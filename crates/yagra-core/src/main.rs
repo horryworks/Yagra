@@ -10,6 +10,7 @@
 //! `cargo run` still serves the API.
 
 mod alerts;
+mod analysis;
 mod api;
 mod audit;
 mod auth;
@@ -263,6 +264,26 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             );
         }
     }
+    // Troubleshoot analysis runner (ADR-022): TSDB-read background diagnostics. Fail any job left
+    // `running` by a previous core process (it can't resume), then build the runner over the same
+    // TSDB seam and node inventory the rest of core uses.
+    let analysis_repo = Arc::new(analysis::AnalysisRepo::new(repo.pool()));
+    match analysis_repo.fail_orphans().await {
+        Ok(n) if n > 0 => {
+            tracing::warn!(
+                orphans = n,
+                "failed analysis jobs left running by a previous process"
+            );
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
+        _ => {}
+    }
+    let analysis = Arc::new(analysis::AnalysisRunner::new(
+        analysis_repo,
+        store.clone(),
+        repo.clone(),
+    ));
+
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
         creds,
@@ -280,6 +301,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
+        analysis,
     }));
     let sessions = Arc::new(SessionStore::new());
 

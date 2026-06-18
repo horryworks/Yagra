@@ -7,6 +7,9 @@ import type {
   AlertHistoryRow,
   AlertNodeCount,
   AlertTransition,
+  AnalysisFinding,
+  AnalysisJob,
+  AnalysisJobInput,
   ApiErrorBody,
   CalendarBucket,
   AuditRow,
@@ -314,6 +317,27 @@ export const api = {
 
   /** The node groups (the inventory folder tree; flat list with parent links). */
   listNodeGroups: (): Promise<NodeGroup[]> => request('/node-groups'),
+
+  // ── Troubleshoot analysis jobs (ADR-022) ──
+  /** Recent analysis jobs (the runs list), newest first. */
+  listAnalysisJobs: (limit?: number): Promise<AnalysisJob[]> =>
+    request(limit != null ? `/analysis/jobs?limit=${limit}` : '/analysis/jobs'),
+
+  /** One analysis job by id. */
+  getAnalysisJob: (id: string): Promise<AnalysisJob> =>
+    request(`/analysis/jobs/${encodeURIComponent(id)}`),
+
+  /** A job's findings (the report list), highest score first. */
+  getAnalysisFindings: (id: string): Promise<AnalysisFinding[]> =>
+    request(`/analysis/jobs/${encodeURIComponent(id)}/findings`),
+
+  /** Launch a background analysis job; the returned row progresses over SSE. */
+  createAnalysisJob: (body: AnalysisJobInput): Promise<AnalysisJob> =>
+    request('/analysis/jobs', jsonBody('POST', body)),
+
+  /** Cancel a running analysis job. */
+  cancelAnalysisJob: (id: string): Promise<{ cancelled: boolean }> =>
+    request(`/analysis/jobs/${encodeURIComponent(id)}/cancel`, jsonBody('POST', {})),
 
   /** Create a node group. `parent_id` nests it under another group. */
   createNodeGroup: (body: {

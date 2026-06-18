@@ -510,3 +510,66 @@ export interface TopologyNode {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: unknown };
 }
+
+// ── Troubleshoot analysis jobs (ADR-022) ─────────────────────────────────────
+
+/** Which diagnostic a job runs (mirrors the Rust `AnalysisTool`). */
+export type AnalysisToolKey = 'anomaly' | 'correlation' | 'capacity' | 'flap';
+
+/** An analysis job row / SSE event (`/api/v1/analysis/jobs`). Timestamps are epoch-millis. */
+export interface AnalysisJob {
+  id: string;
+  tool: AnalysisToolKey;
+  scope_kind: 'all' | 'group' | 'node';
+  scope_id: string | null;
+  scope_label: string;
+  params: Record<string, unknown>;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  pct: number;
+  phase: string | null;
+  finding_count: number;
+  summary: string | null;
+  error: string | null;
+  created_ms: number;
+  started_ms: number | null;
+  finished_ms: number | null;
+}
+
+/** One finding from an analysis (`GET /api/v1/analysis/jobs/:id/findings`). */
+export interface AnalysisFinding {
+  id: string;
+  score: number;
+  /** crit | warn | info (derived from score). */
+  severity: 'crit' | 'warn' | 'info';
+  node_id: string | null;
+  node_name: string;
+  metric: string;
+  /** Anomaly shape / correlation / capacity / flap kind. */
+  kind: string;
+  when_label: string;
+  duration: string;
+  /** Tool-specific payload (anomaly chart series: points/mean/sigma/recent_from). */
+  detail: AnomalyDetail | Record<string, unknown>;
+}
+
+/** Anomaly finding detail — the report chart's real series. */
+export interface AnomalyDetail {
+  points: { t: number; v: number; recent: boolean }[];
+  mean: number;
+  sigma: number;
+  recent_from: number;
+}
+
+/** Request body to launch an analysis (`POST /api/v1/analysis/jobs`). */
+export interface AnalysisJobInput {
+  tool: AnalysisToolKey;
+  scope_kind: 'all' | 'group' | 'node';
+  scope_id?: string | null;
+  scope_label: string;
+  window_secs: number;
+  baseline_secs?: number;
+  sensitivity?: number;
+  depth?: string;
+  family?: string;
+  notify?: boolean;
+}

@@ -1,18 +1,18 @@
 // Analysis runs — the full async-jobs view (handoff §2, `/troubleshoot/runs`). The same run list
-// the catalog summarises, on its own page. Live progress ticks via useRunTicker; cancel / retry /
+// the catalog summarises, on its own page. Live progress streams via useTroubleshootStream; cancel / retry /
 // view actions are wired through the store (toasts surface their results).
 
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { runningCount, useTroubleshootStore } from './store';
-import { useRunTicker } from './useRunTicker';
+import { useTroubleshootStream } from './useTroubleshootStream';
 import { AnalysisRuns } from './AnalysisRuns';
 import { TroubleshootToast } from './TroubleshootToast';
 import './troubleshoot.css';
 
 export function RunsPage() {
-  useRunTicker();
-  const running = useTroubleshootStore((s) => runningCount(s.runs));
+  useTroubleshootStream();
+  const running = useTroubleshootStore((s) => runningCount(s.jobs));
 
   return (
     <div>
