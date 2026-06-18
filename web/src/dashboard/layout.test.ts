@@ -67,6 +67,21 @@ describe('sanitizeLayout', () => {
     expect(new Set(ids).size).toBe(3); // all unique after repair
   });
 
+  it('repairs repeated duplicate ids with clean incrementing suffixes (no cascade)', () => {
+    const out = sanitizeLayout(
+      {
+        widgets: [
+          { instanceId: 'dup', type: 'a' },
+          { instanceId: 'dup', type: 'a' },
+          { instanceId: 'dup', type: 'a' },
+        ],
+      },
+      reg,
+    );
+    // base, base-1, base-2 — never base-1-1 / base-2-2.
+    expect(out.widgets.map((w) => w.instanceId)).toEqual(['dup', 'dup-1', 'dup-2']);
+  });
+
   it('returns an empty board for a non-object or missing widgets', () => {
     expect(sanitizeLayout(null, reg).widgets).toEqual([]);
     expect(sanitizeLayout({ widgets: 'nope' }, reg).widgets).toEqual([]);

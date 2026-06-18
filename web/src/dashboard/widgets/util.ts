@@ -133,7 +133,13 @@ export function topLevelRollup(nodes: NodeSummary[], groups: NodeGroup[]): Regio
   const topOf = (gid: string | null): string | null => {
     let cur = gid ? byId.get(gid) : undefined;
     const seen = new Set<string>();
-    while (cur && cur.parent_id && byId.has(cur.parent_id) && !seen.has(cur.id)) {
+    while (cur && cur.parent_id && byId.has(cur.parent_id)) {
+      if (seen.has(cur.id)) {
+        // A parent chain that loops back is a config error; stop and surface it instead of
+        // silently attributing the node to an arbitrary mid-chain ancestor.
+        console.warn('topLevelRollup: cycle in group hierarchy, stopping at', cur.id);
+        break;
+      }
       seen.add(cur.id);
       cur = byId.get(cur.parent_id);
     }

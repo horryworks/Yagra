@@ -49,13 +49,15 @@ import {
 } from './widgets/capacity';
 import './widgets/widgets.css';
 
+// Section order is the registry array order (catalogBySection preserves it), so these are plain
+// labels — no leading numbers that could read as versions or priorities.
 const SECTION = {
-  fleet: '01 · Fleet status',
-  alerts: '02 · Alerts',
-  performance: '03 · Performance hotspots',
-  sites: '04 · Sites & topology',
-  capacity: '05 · Capacity & traffic',
-  monitoring: '06 · Monitoring health',
+  fleet: 'Fleet status',
+  alerts: 'Alerts',
+  performance: 'Performance hotspots',
+  sites: 'Sites & topology',
+  capacity: 'Capacity & traffic',
+  monitoring: 'Monitoring health',
 } as const;
 
 export const REGISTRY: WidgetDefinition[] = [
@@ -185,7 +187,7 @@ export const REGISTRY: WidgetDefinition[] = [
     type: 'top-cpu',
     title: 'Top CPU',
     section: SECTION.performance,
-    blurb: 'Busiest control planes, % utilization (vendor CPU gauges).',
+    blurb: 'Nodes with the highest CPU usage % (vendor-reported).',
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
@@ -196,7 +198,7 @@ export const REGISTRY: WidgetDefinition[] = [
     type: 'top-memory',
     title: 'Top memory',
     section: SECTION.performance,
-    blurb: 'Nodes nearest the memory ceiling, % used (vendor % gauges).',
+    blurb: 'Nodes with the highest memory usage % (vendor-reported).',
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
@@ -240,7 +242,7 @@ export const REGISTRY: WidgetDefinition[] = [
     type: 'aggregate-throughput',
     title: 'Aggregate throughput',
     section: SECTION.capacity,
-    blurb: 'Total fleet ingress/egress (bits/sec) over 24h.',
+    blurb: 'Sum of all interface traffic, in + out (bits/sec), over 24h.',
     backing: 'rollup',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
@@ -310,7 +312,7 @@ export const REGISTRY: WidgetDefinition[] = [
     type: 'dependency-view',
     title: 'Dependency / root cause',
     section: SECTION.sites,
-    blurb: 'Parent→child dependency tree with active root-cause attribution.',
+    blurb: 'Parent→child dependency tree showing the upstream node blamed as root cause.',
     backing: 'rollup',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
@@ -330,7 +332,7 @@ export const REGISTRY: WidgetDefinition[] = [
     type: 'poller-health',
     title: 'Poller & collection health',
     section: SECTION.monitoring,
-    blurb: 'Last sweep, jobs per round, results consumed.',
+    blurb: 'Last poll run, jobs per run, results collected.',
     backing: 'new',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],

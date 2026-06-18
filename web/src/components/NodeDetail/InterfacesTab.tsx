@@ -129,7 +129,9 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         <div className="nd-if-head">
           <div className="nd-if-h">Interface</div>
           <div className="nd-if-h">Description</div>
-          <div className="nd-if-h">Oper</div>
+          <div className="nd-if-h" title="Operational status — whether the interface is up or down">
+            Oper
+          </div>
           <div className="nd-if-h">Throughput (1h)</div>
           <div className="nd-if-h right">In / Out</div>
         </div>

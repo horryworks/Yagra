@@ -15,8 +15,13 @@ export interface Polled<T> {
 
 const REFRESH_MS = 15_000;
 
-/** Poll `fetcher` on mount and every `intervalMs`. `deps` re-arms the effect (e.g. a changed
- *  query). `fetcher` should be stable or wrapped in `useCallback` to avoid a tight loop. */
+/** Poll `fetcher` on mount and every `intervalMs`, re-arming whenever `deps` change.
+ *
+ *  CONTRACT — avoid a stale closure: every value the `fetcher` closes over (query args, props,
+ *  state) MUST appear in `deps`. An inline arrow is fine — pass `[]` only when the fetcher
+ *  captures nothing that changes. Passing `[]` while the fetcher reads a changing prop/state
+ *  would keep polling with the first render's value. (e.g. `() => api.getTopMetrics(metric,
+ *  { agg })` needs `deps: [metric, agg]`.) */
 export function usePolled<T>(
   fetcher: () => Promise<T>,
   deps: readonly unknown[] = [],

@@ -41,6 +41,11 @@ export function CatalogModal({ onClose }: { onClose: () => void }) {
                   className="catalog-item"
                   key={def.type}
                   onClick={() => addWidget(def.type)}
+                  title={
+                    def.backing === 'new'
+                      ? 'Planned — the data backend for this widget is not available yet'
+                      : undefined
+                  }
                 >
                   <span className="catalog-item-head">
                     <span className="catalog-item-title">{def.title}</span>

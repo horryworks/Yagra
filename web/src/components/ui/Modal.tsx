@@ -36,7 +36,11 @@ export function Modal({ title, onClose, footer, children }: Props) {
     if (dialog && !dialog.contains(document.activeElement)) {
       dialog.focus();
     }
-    return () => previouslyFocused?.focus?.();
+    // Only restore focus if the trigger is still in the DOM; if it was removed while the modal
+    // was open, calling focus() is a no-op that drops focus to <body>.
+    return () => {
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
   }, []);
 
   return (

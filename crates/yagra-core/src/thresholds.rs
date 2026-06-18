@@ -14,6 +14,8 @@ use yagra_common::{Direction, ScopeLevel, ThresholdRule};
 #[derive(Debug, Clone, Serialize)]
 pub struct StoredThreshold {
     pub id: Uuid,
+    // Serialized as `scope_level` so the GET response matches the POST body field name.
+    #[serde(rename = "scope_level")]
     pub level: ScopeLevel,
     pub scope_id: String,
     #[serde(flatten)]

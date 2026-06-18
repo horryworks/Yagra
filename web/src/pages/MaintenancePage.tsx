@@ -283,8 +283,9 @@ export function MaintenancePage() {
 
   // Human label for a scope id (node/profile names resolved when known).
   const scopeLabel = (w: MaintenanceWindow): string => {
-    if (w.level === 'node') return nodes.find((n) => n.id === w.scope_id)?.name ?? w.scope_id;
-    if (w.level === 'profile')
+    if (w.scope_level === 'node')
+      return nodes.find((n) => n.id === w.scope_id)?.name ?? w.scope_id;
+    if (w.scope_level === 'profile')
       return profiles.find((p) => p.id === w.scope_id)?.name ?? w.scope_id;
     return w.scope_id;
   };
@@ -348,7 +349,7 @@ export function MaintenancePage() {
                     </div>
                     <div className="ytable-cell">
                       <span className="maint-scope">
-                        <Badge>{w.level}</Badge>
+                        <Badge>{w.scope_level}</Badge>
                         <span>{scopeLabel(w)}</span>
                       </span>
                     </div>

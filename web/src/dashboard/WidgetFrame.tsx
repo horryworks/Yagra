@@ -37,6 +37,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
           value={String(instance.span)}
           onChange={(e) => setSpan(instance.instanceId, Number(e.target.value))}
           aria-label="Widget width"
+          title="Widget width"
         >
           {def.allowedSpans.map((s) => (
             <option key={s} value={s}>

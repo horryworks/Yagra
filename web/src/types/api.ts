@@ -201,11 +201,10 @@ export type ScopeLevel = 'profile' | 'group' | 'node';
 export type Direction = 'above' | 'below';
 
 /** A stored threshold rule (`GET /api/v1/thresholds`, core `StoredThreshold`). The rule
- *  fields are flattened onto the row. Note: the GET shape names the scope `level`, while the
- *  POST body names it `scope_level`. */
+ *  fields are flattened onto the row. The GET shape uses `scope_level`, matching the POST body. */
 export interface StoredThreshold {
   id: string;
-  level: ScopeLevel;
+  scope_level: ScopeLevel;
   scope_id: string;
   metric: string;
   direction: Direction;
@@ -393,7 +392,7 @@ export interface MibCatalogEntry {
 export interface MaintenanceWindow {
   id: string;
   name: string;
-  level: ScopeLevel;
+  scope_level: ScopeLevel;
   scope_id: string;
   starts_at: string;
   ends_at: string;
@@ -402,11 +401,11 @@ export interface MaintenanceWindow {
 }
 
 /** A mute (`GET /api/v1/mutes`, core `StoredMute`): notifications for one node (optionally
- *  one check) are silenced until `until_at` — the alert still shows in the UI/history. */
+ *  one metric) are silenced until `until_at` — the alert still shows in the UI/history. */
 export interface Mute {
   id: string;
   node_id: string;
-  check_name: string | null;
+  metric_name: string | null;
   until_at: string;
   reason: string | null;
 }

@@ -79,6 +79,11 @@ impl SessionStore {
     /// Authorize a request: require a valid token whose principal has `perm`.
     pub fn authorize(&self, bearer: Option<&str>, perm: Permission) -> Result<Session, AuthError> {
         let token = bearer.ok_or(AuthError::Missing)?;
+        // Reject anything that isn't a well-formed token before touching the session map — parse
+        // at the edge, don't feed arbitrary header bytes into the lookup.
+        if !is_well_formed_token(token) {
+            return Err(AuthError::Invalid);
+        }
         let session = self.lookup(token).ok_or(AuthError::Invalid)?;
         if session.principal.can(perm) {
             Ok(session)
@@ -92,6 +97,12 @@ impl Default for SessionStore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A session token is exactly 64 lowercase-hex chars (32 bytes). Cheap shape check at the auth
+/// edge so malformed `Authorization` headers are rejected before the session-map lookup.
+fn is_well_formed_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 32 random bytes, hex-encoded — an opaque, unguessable session token.
@@ -177,7 +188,12 @@ impl UserStore {
             .bind("admin")
             .execute(&self.pool)
             .await?;
-        tracing::warn!("seeded default 'admin' user — change its password");
+        // Intentionally best-effort (not fail-fast) for first-boot UX, but make the log loud:
+        // a default credential left in place is a security risk.
+        tracing::warn!(
+            "SECURITY: seeded default 'admin' user with the bootstrap password — \
+             CHANGE THE DEFAULT ADMIN PASSWORD before exposing this instance"
+        );
         Ok(())
     }
 
@@ -417,6 +433,20 @@ mod tests {
             store.authorize(Some("deadbeef"), Permission::View),
             Err(AuthError::Invalid)
         ));
+    }
+
+    #[test]
+    fn token_shape_validation() {
+        // A real issued token is 64 lowercase-hex chars.
+        let store = SessionStore::new();
+        let token = store.issue(Principal::new(Role::Viewer, Scope::All), "v1");
+        assert!(is_well_formed_token(&token));
+        // Wrong length, non-hex, and embedded junk are all rejected before lookup.
+        assert!(!is_well_formed_token(""));
+        assert!(!is_well_formed_token("zz"));
+        assert!(!is_well_formed_token(&"a".repeat(63)));
+        assert!(!is_well_formed_token(&"a".repeat(65)));
+        assert!(!is_well_formed_token(&format!("{}!", "a".repeat(63))));
     }
 
     #[test]

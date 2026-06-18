@@ -138,6 +138,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(code, message, res.status);
   }
+  // 204 No Content: only ever returned by endpoints typed `Promise<void>` (DELETEs, PUT
+  // toggles), so the `undefined as T` is sound. A body-returning endpoint must not 204.
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -648,10 +650,10 @@ export const api = {
   /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
   listMutes: (): Promise<Mute[]> => request('/mutes'),
 
-  /** Create a mute. `check` omitted ⇒ the whole node; `until` is RFC 3339. */
+  /** Create a mute. `metric_name` omitted ⇒ the whole node; `until` is RFC 3339. */
   createMute: (body: {
     node_id: string;
-    check?: string;
+    metric_name?: string;
     until: string;
     reason?: string;
   }): Promise<{ id: string }> => request('/mutes', jsonBody('POST', body)),
@@ -684,7 +686,7 @@ export const api = {
   /** Enable or disable a user account. Refused (409 `last_admin`) when disabling the last
    *  admin that can still log in. A disabled account is kept for the audit trail. */
   setUserEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/users/${encodeURIComponent(id)}/status`, jsonBody('PUT', { enabled })),
+    request(`/users/${encodeURIComponent(id)}/enabled`, jsonBody('PUT', { enabled })),
 
   /** Reset a user's password (hashed server-side; never echoed back). */
   setUserPassword: (id: string, password: string): Promise<void> =>

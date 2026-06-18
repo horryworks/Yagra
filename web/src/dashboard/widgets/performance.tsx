@@ -23,10 +23,11 @@ export function TopAggActions({ instance, setSettings }: WidgetProps) {
     <Select
       value={agg}
       onChange={(e) => setSettings({ agg: e.target.value })}
-      aria-label="Window"
+      aria-label="Metric window"
+      title="Current value vs 1-hour peak"
     >
-      <option value="now">Now</option>
-      <option value="max_1h">1h max</option>
+      <option value="now">Current</option>
+      <option value="max_1h">1h peak</option>
     </Select>
   );
 }
@@ -127,7 +128,7 @@ export function MostErrorsWidget({ instance }: WidgetProps) {
     <InterfaceTopN
       agg={aggOf(instance.settings)}
       metric="errors"
-      format={(v) => `${v.toFixed(2)}/s`}
+      format={(v) => `${Number(v.toFixed(2))}/s`}
       empty="No interface errors. 🎉"
     />
   );
@@ -145,7 +146,12 @@ export function BusiestInterfacesWidget({ instance }: WidgetProps) {
   if (loading && !data) return <p className="muted">Loading…</p>;
   const withUtil = (data ?? [])
     .map((e) => {
-      const util = e.if_speed_bps && e.if_speed_bps > 0 ? (e.value / e.if_speed_bps) * 100 : null;
+      // Only compute utilization for a known positive link speed and a non-negative reading;
+      // a negative value (corrupt counter math) would yield a nonsensical negative %.
+      const util =
+        e.if_speed_bps && e.if_speed_bps > 0 && e.value >= 0
+          ? (e.value / e.if_speed_bps) * 100
+          : null;
       return { e, util };
     })
     .sort((a, b) => (b.util ?? -1) - (a.util ?? -1));
