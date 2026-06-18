@@ -6,7 +6,6 @@ describe('nav IA', () => {
     expect(sectionForPath('/dashboard').key).toBe('dashboard');
     expect(sectionForPath('/nodes').key).toBe('nodes');
     expect(sectionForPath('/alerts').key).toBe('alerts');
-    expect(sectionForPath('/metrics').key).toBe('metrics');
   });
 
   it('keeps sub-feature and drill-down paths within their section', () => {
@@ -15,6 +14,7 @@ describe('nav IA', () => {
     expect(sectionForPath('/alerts/rules').key).toBe('alerts');
     expect(sectionForPath('/settings/credentials').key).toBe('settings');
     expect(sectionForPath('/topology/map').key).toBe('topology');
+    expect(sectionForPath('/dashboard/reports').key).toBe('dashboard'); // Reports moved here from Metrics
   });
 
   it('falls back to the first section for unknown paths', () => {

@@ -24,7 +24,6 @@ import { RoutingPage } from './pages/RoutingPage';
 import { MaintenancePage } from './pages/MaintenancePage';
 import { MutesPage } from './pages/MutesPage';
 import { AuditPage } from './pages/AuditPage';
-import { MetricExplorerPage } from './pages/MetricExplorerPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
@@ -41,6 +40,7 @@ export function AppRoutes() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="dashboard/my" element={<MyDashboardPage />} />
         <Route path="dashboard/templates" element={<ComingSoon />} />
+        <Route path="dashboard/reports" element={<ComingSoon />} />
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}
         <Route path="nodes" element={<NodesPage />} />
@@ -64,11 +64,6 @@ export function AppRoutes() {
         <Route path="alerts/routing" element={<RoutingPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
-
-        {/* Metrics */}
-        <Route path="metrics" element={<MetricExplorerPage />} />
-        <Route path="metrics/reports" element={<ComingSoon />} />
-        <Route path="metrics/saved" element={<ComingSoon />} />
 
         {/* Settings */}
         <Route path="settings/pollers" element={<ComingSoon />} />
