@@ -90,6 +90,14 @@
   flex: none;
 }
 
+/* Live count badge (e.g. running analysis runs). Mono, muted — a count, not a status. */
+.sidebar-count {
+  font-size: var(--font-xs);
+  font-family: var(--font-family);
+  color: var(--text-tertiary);
+  flex: none;
+}
+
 .sidebar.collapsed .sidebar-item {
   justify-content: center;
   padding: 0;

@@ -6,6 +6,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { sectionForPath } from '../../nav';
 import { usePrefsStore } from '../../prefs';
+import { runningCount, useTroubleshootStore } from '../../troubleshoot/store';
 import './SideBar.css';
 
 export function SideBar() {
@@ -13,6 +14,9 @@ export function SideBar() {
   const section = sectionForPath(pathname);
   const collapsed = usePrefsStore((s) => s.sidebarCollapsed);
   const toggle = usePrefsStore((s) => s.toggleSidebar);
+  // Live "Analysis runs" badge — the number of running troubleshoot jobs (like the TopBar bell
+  // badge reads the alert store). Resolved from the item's `liveBadge` discriminator below.
+  const runningRuns = useTroubleshootStore((s) => runningCount(s.runs));
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
@@ -42,6 +46,9 @@ export function SideBar() {
             ) : (
               <>
                 <span className="sidebar-label">{item.label}</span>
+                {item.liveBadge === 'troubleshoot-runs' && runningRuns > 0 && (
+                  <span className="sidebar-count">{runningRuns}</span>
+                )}
                 {!item.implemented && <span className="sidebar-soon" title="Not implemented yet" />}
               </>
             )}

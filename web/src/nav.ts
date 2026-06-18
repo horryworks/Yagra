@@ -12,6 +12,9 @@ export interface NavItem {
   implemented: boolean;
   /** Short monogram shown in the collapsed icon rail. */
   mono: string;
+  /** Optional live count badge keyed by a discriminator the SideBar resolves to a store value
+   *  (e.g. 'troubleshoot-runs' ⇒ number of running analysis jobs). */
+  liveBadge?: 'troubleshoot-runs';
 }
 
 export interface NavSection {
@@ -79,6 +82,23 @@ export const NAV: NavSection[] = [
       { label: 'Routing & notifications', path: '/alerts/routing', implemented: true, mono: 'Rt' },
       { label: 'Maintenance windows', path: '/alerts/maintenance', implemented: true, mono: 'Mw' },
       { label: 'Mutes', path: '/alerts/mutes', implemented: true, mono: 'Mu' },
+    ],
+  },
+  {
+    key: 'troubleshoot',
+    label: 'Troubleshoot',
+    path: '/troubleshoot',
+    items: [
+      { label: 'All tools', path: '/troubleshoot', implemented: true, mono: 'At' },
+      {
+        label: 'Analysis runs',
+        path: '/troubleshoot/runs',
+        implemented: true,
+        mono: 'Ar',
+        liveBadge: 'troubleshoot-runs',
+      },
+      { label: 'Scheduled', path: '/troubleshoot/scheduled', implemented: false, mono: 'Sc' },
+      { label: 'Saved findings', path: '/troubleshoot/findings', implemented: false, mono: 'Sf' },
     ],
   },
   {

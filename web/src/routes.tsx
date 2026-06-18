@@ -27,6 +27,9 @@ import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
+import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
+import { RunsPage } from './troubleshoot/RunsPage';
+import { AnomalyReportPage } from './troubleshoot/AnomalyReportPage';
 
 export function AppRoutes() {
   return (
@@ -64,6 +67,13 @@ export function AppRoutes() {
         <Route path="alerts/routing" element={<RoutingPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
+
+        {/* Troubleshoot — deep diagnostics run as background jobs */}
+        <Route path="troubleshoot" element={<TroubleshootCatalogPage />} />
+        <Route path="troubleshoot/runs" element={<RunsPage />} />
+        <Route path="troubleshoot/anomaly" element={<AnomalyReportPage />} />
+        <Route path="troubleshoot/scheduled" element={<ComingSoon />} />
+        <Route path="troubleshoot/findings" element={<ComingSoon />} />
 
         {/* Settings */}
         <Route path="settings/pollers" element={<ComingSoon />} />
