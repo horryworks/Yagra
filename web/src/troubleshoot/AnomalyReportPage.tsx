@@ -14,7 +14,8 @@ import { api } from '../services/api';
 import { KINDS, kindMeta, type Kind } from './data';
 import { runningCount, useTroubleshootStore } from './store';
 import { useTroubleshootStream } from './useTroubleshootStream';
-import { useScopeOptions } from './useScopeOptions';
+import { ScopePicker } from './ScopePicker';
+import { ALL_SCOPE, type ScopeValue } from './scope';
 import { AnomalyChart } from './AnomalyChart';
 import { TroubleshootToast } from './TroubleshootToast';
 import { relTime } from './format';
@@ -110,10 +111,9 @@ export function AnomalyReportPage() {
   const createJob = useTroubleshootStore((s) => s.createJob);
   const cancelJob = useTroubleshootStore((s) => s.cancelJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
-  const scopes = useScopeOptions();
 
   // Config bar state.
-  const [scopeIdx, setScopeIdx] = useState(0);
+  const [scope, setScope] = useState<ScopeValue>(ALL_SCOPE);
   const [windowVal, setWindowVal] = useState('86400');
   const [baselineVal, setBaselineVal] = useState(String(14 * 86_400));
   const [sensitivity, setSensitivity] = useState(3);
@@ -141,7 +141,6 @@ export function AnomalyReportPage() {
   }, [job, loadedFor]);
 
   const run = async () => {
-    const scope = scopes[scopeIdx] ?? scopes[0];
     const windowLabel = WINDOWS.find((w) => w.value === windowVal)?.label ?? windowVal;
     try {
       const j = await createJob({
@@ -183,17 +182,7 @@ export function AnomalyReportPage() {
         <label className="ts-flabel" htmlFor="ts-cfg-scope">
           Scope
         </label>
-        <Select
-          id="ts-cfg-scope"
-          value={String(scopeIdx)}
-          onChange={(e) => setScopeIdx(Number(e.target.value))}
-        >
-          {scopes.map((s, i) => (
-            <option key={`${s.kind}-${s.id ?? 'all'}`} value={i}>
-              {s.label}
-            </option>
-          ))}
-        </Select>
+        <ScopePicker id="ts-cfg-scope" value={scope} onChange={setScope} />
       </div>
       <div className="ts-fgroup">
         <label className="ts-flabel" htmlFor="ts-cfg-window">

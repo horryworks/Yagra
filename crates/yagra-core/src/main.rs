@@ -283,10 +283,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
         _ => {}
     }
+    // Shared group repo: the analysis runner expands a group scope to its subtree, and AdminState
+    // serves group CRUD — both read the same hierarchy.
+    let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo,
         store.clone(),
         repo.clone(),
+        group_repo.clone(),
     ));
 
     let admin = Some(Arc::new(AdminState {
@@ -301,7 +305,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         maintenance,
         classification,
         classifier,
-        groups: Arc::new(groups::GroupRepo::new(repo.pool())),
+        groups: group_repo,
         audit: Arc::new(AuditRepo::new(repo.pool())),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
