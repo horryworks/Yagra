@@ -1,0 +1,40 @@
+.sys-setting {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.sys-setting-label {
+  flex: 1;
+}
+
+.sys-setting-name {
+  font-weight: var(--weight-medium);
+}
+
+.sys-setting-help {
+  font-size: var(--font-sm);
+  margin-top: 2px;
+}
+
+.sys-setting-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sys-setting-input {
+  width: 96px;
+  text-align: right;
+  font-family: var(--font-family);
+}
+
+.sys-setting-unit {
+  font-size: var(--font-sm);
+}
+
+.sys-setting-saved {
+  margin-top: 12px;
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+}

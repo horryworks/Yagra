@@ -27,6 +27,8 @@ pub struct ProfileSummary {
     pub category: String,
     /// Vendor label, if known (descriptive metadata only — never a TSDB label).
     pub vendor: Option<String>,
+    /// Per-profile polling-interval override (seconds); `None` ⇒ inherit the global default.
+    pub poll_interval_secs: Option<i32>,
 }
 
 /// One interface's stored metadata (from a table walk). Descriptive attributes only —
@@ -601,9 +603,11 @@ impl NodeRepo {
 
     /// All device-class profiles.
     pub async fn list_profiles(&self) -> anyhow::Result<Vec<ProfileSummary>> {
-        let rows = sqlx::query("SELECT id, name, category, vendor FROM profiles ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT id, name, category, vendor, poll_interval_secs FROM profiles ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(ProfileSummary {
@@ -611,48 +615,120 @@ impl NodeRepo {
                     name: row.try_get("name")?,
                     category: row.try_get("category")?,
                     vendor: row.try_get("vendor")?,
+                    poll_interval_secs: row.try_get("poll_interval_secs")?,
                 })
             })
             .collect()
     }
 
-    /// Create a profile; returns its id.
+    /// Create a profile; returns its id. `poll_interval_secs` is the optional per-profile interval
+    /// override (`None` ⇒ inherit the global default).
     pub async fn create_profile(
         &self,
         name: &str,
         category: &str,
         vendor: Option<&str>,
+        poll_interval_secs: Option<i32>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO profiles (id, name, category, vendor) VALUES ($1, $2, $3, $4)")
-            .bind(id)
-            .bind(name)
-            .bind(category)
-            .bind(vendor)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO profiles (id, name, category, vendor, poll_interval_secs) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(category)
+        .bind(vendor)
+        .bind(poll_interval_secs)
+        .execute(&self.pool)
+        .await?;
         Ok(id)
     }
 
-    /// Update a profile's name / category / vendor. Returns whether the row existed.
+    /// Update a profile's name / category / vendor / interval override. Returns whether the row
+    /// existed. A `None` `poll_interval_secs` clears the override (back to the global default).
     pub async fn update_profile(
         &self,
         id: Uuid,
         name: &str,
         category: &str,
         vendor: Option<&str>,
+        poll_interval_secs: Option<i32>,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE profiles SET name = $2, category = $3, vendor = $4, updated_at = now() \
-             WHERE id = $1",
+            "UPDATE profiles SET name = $2, category = $3, vendor = $4, poll_interval_secs = $5, \
+             updated_at = now() WHERE id = $1",
         )
         .bind(id)
         .bind(name)
         .bind(category)
         .bind(vendor)
+        .bind(poll_interval_secs)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// The global default polling interval (seconds) from the singleton `app_settings` row. Falls
+    /// back to the compiled default if the row is somehow absent (it is seeded at startup).
+    pub async fn get_default_poll_interval(&self) -> anyhow::Result<u32> {
+        let row =
+            sqlx::query("SELECT default_poll_interval_secs FROM app_settings WHERE id = TRUE")
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some(r) => {
+                let secs: i32 = r.try_get("default_poll_interval_secs")?;
+                Ok(u32::try_from(secs).unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS))
+            }
+            None => Ok(crate::config::DEFAULT_POLL_INTERVAL_SECS),
+        }
+    }
+
+    /// Set the global default polling interval (seconds), upserting the singleton row. Callers
+    /// validate the bounds at the API edge; the table CHECK is the backstop.
+    pub async fn set_default_poll_interval(&self, secs: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, default_poll_interval_secs, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET default_poll_interval_secs = $1, updated_at = now()",
+        )
+        .bind(i32::try_from(secs).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Seed the singleton settings row on first boot with `secs` (the env-var initial default).
+    /// Idempotent: `ON CONFLICT DO NOTHING` preserves any operator-edited value across restarts.
+    pub async fn seed_default_poll_interval(&self, secs: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, default_poll_interval_secs) VALUES (TRUE, $1) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(i32::try_from(secs).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Per-profile interval overrides (only profiles that set one), keyed by profile id. The
+    /// scheduler resolves each node against this map, falling back to the global default.
+    pub async fn profile_interval_overrides(&self) -> anyhow::Result<HashMap<Uuid, u32>> {
+        let rows = sqlx::query(
+            "SELECT id, poll_interval_secs FROM profiles WHERE poll_interval_secs IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let secs: i32 = row.try_get("poll_interval_secs")?;
+            if let Ok(secs) = u32::try_from(secs) {
+                map.insert(id, secs);
+            }
+        }
+        Ok(map)
     }
 
     /// Delete a profile. Returns whether a row was removed.

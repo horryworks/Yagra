@@ -182,6 +182,8 @@ export interface ProfileSummary {
   name: string;
   category: string;
   vendor: string | null;
+  /** Per-profile polling-interval override (seconds); `null` ⇒ inherit the system default. */
+  poll_interval_secs: number | null;
 }
 
 /** Create/update-profile request body (`POST`/`PUT /api/v1/profiles`). */
@@ -189,6 +191,8 @@ export interface ProfileInput {
   name: string;
   category?: string;
   vendor?: string | null;
+  /** Optional polling-interval override (seconds); omit/`null` to inherit the system default. */
+  poll_interval_secs?: number | null;
 }
 
 /** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */

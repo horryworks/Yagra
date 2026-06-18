@@ -107,7 +107,7 @@ pub struct ApiState {
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/api/v1/config", get(get_config))
+        .route("/api/v1/config", get(get_config).put(update_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
@@ -317,13 +317,63 @@ async fn healthz() -> &'static str {
 
 /// Public client bootstrap config (no secrets): tells the WebUI whether read endpoints
 /// are open and whether interactive login is available, so it can decide up front whether
-/// to gate behind a login screen. Intentionally unauthenticated.
+/// to gate behind a login screen. Also exposes the current global default polling interval so
+/// the System-settings page can render it. Intentionally unauthenticated (no secrets here).
 async fn get_config(State(st): State<ApiState>) -> Response {
+    let default_poll_interval_secs = match st.admin.as_ref() {
+        Some(admin) => admin
+            .repo
+            .get_default_poll_interval()
+            .await
+            .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS),
+        None => crate::config::DEFAULT_POLL_INTERVAL_SECS,
+    };
     Json(serde_json::json!({
         "public_dashboard": st.public_dashboard,
         "auth_available": st.admin.is_some(),
+        "default_poll_interval_secs": default_poll_interval_secs,
     }))
     .into_response()
+}
+
+/// Update the global default polling interval (seconds). `ManageConfig`-gated and audited (by the
+/// mutating-request middleware). The scheduler re-reads this each round, so a change applies on the
+/// next poll round without a restart. 503 in skeleton mode (no metadata store).
+#[derive(Deserialize)]
+struct ConfigBody {
+    default_poll_interval_secs: u32,
+}
+
+async fn update_config(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ConfigBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let secs = body.default_poll_interval_secs;
+    if !crate::config::interval_in_bounds(secs) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_poll_interval",
+            format!(
+                "default poll interval must be {}-{} seconds",
+                crate::config::MIN_POLL_INTERVAL_SECS,
+                crate::config::MAX_POLL_INTERVAL_SECS
+            ),
+        );
+    }
+    match admin.repo.set_default_poll_interval(secs).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "update config failed");
+            internal("failed to update config")
+        }
+    }
 }
 
 fn now_unix_s() -> i64 {
@@ -2326,13 +2376,24 @@ struct ProfileBody {
     category: Option<String>,
     #[serde(default)]
     vendor: Option<String>,
+    /// Optional per-profile polling-interval override (seconds). Omitted/`null` ⇒ inherit the
+    /// global default; when present it must fall within `[MIN, MAX]`.
+    #[serde(default)]
+    poll_interval_secs: Option<u32>,
 }
 
-/// Validate the body into `(name, category_token, vendor)` or `(error_code, message)` for a
-/// 400. Returns the small error tuple (not a `Response`) so the helper stays cheap to return.
-fn parse_profile_body(
-    body: &ProfileBody,
-) -> Result<(String, &'static str, Option<String>), (&'static str, String)> {
+/// Validated profile fields ready for the repo: name, category token, vendor, and the optional
+/// interval override (as `i32` for the INTEGER column; `None` ⇒ inherit the global default).
+struct ParsedProfile {
+    name: String,
+    category: &'static str,
+    vendor: Option<String>,
+    poll_interval_secs: Option<i32>,
+}
+
+/// Validate the body into [`ParsedProfile`] or `(error_code, message)` for a 400. Returns the
+/// small error tuple (not a `Response`) so the helper stays cheap to return.
+fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, (&'static str, String)> {
     let name = body.name.trim();
     if name.is_empty() {
         return Err(("invalid_name", "profile name must not be empty".to_owned()));
@@ -2352,7 +2413,28 @@ fn parse_profile_body(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    Ok((name.to_owned(), category.as_str(), vendor))
+    let poll_interval_secs = match body.poll_interval_secs {
+        None => None,
+        Some(n) => {
+            if !crate::config::interval_in_bounds(n) {
+                return Err((
+                    "invalid_poll_interval",
+                    format!(
+                        "poll interval must be {}-{} seconds",
+                        crate::config::MIN_POLL_INTERVAL_SECS,
+                        crate::config::MAX_POLL_INTERVAL_SECS
+                    ),
+                ));
+            }
+            Some(n as i32)
+        }
+    };
+    Ok(ParsedProfile {
+        name: name.to_owned(),
+        category: category.as_str(),
+        vendor,
+        poll_interval_secs,
+    })
 }
 
 async fn create_profile(
@@ -2366,13 +2448,18 @@ async fn create_profile(
     if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
         return resp;
     }
-    let (name, category, vendor) = match parse_profile_body(&body) {
+    let p = match parse_profile_body(&body) {
         Ok(v) => v,
         Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
     };
     match admin
         .repo
-        .create_profile(&name, category, vendor.as_deref())
+        .create_profile(
+            &p.name,
+            p.category,
+            p.vendor.as_deref(),
+            p.poll_interval_secs,
+        )
         .await
     {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
@@ -2395,13 +2482,19 @@ async fn update_profile(
     if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
         return resp;
     }
-    let (name, category, vendor) = match parse_profile_body(&body) {
+    let p = match parse_profile_body(&body) {
         Ok(v) => v,
         Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
     };
     match admin
         .repo
-        .update_profile(id, &name, category, vendor.as_deref())
+        .update_profile(
+            id,
+            &p.name,
+            p.category,
+            p.vendor.as_deref(),
+            p.poll_interval_secs,
+        )
         .await
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),

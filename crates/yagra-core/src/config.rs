@@ -5,8 +5,14 @@
 //! falls back to the in-memory **skeleton** so a bare `cargo run` still serves the API.
 //! Compose always injects all three.
 
-/// Default polling interval when `YAGRA_POLL_INTERVAL_SECS` is unset/invalid.
-const DEFAULT_POLL_INTERVAL_SECS: u32 = 30;
+/// Default polling interval when `YAGRA_POLL_INTERVAL_SECS` is unset/invalid, and the fallback
+/// when the DB-backed `app_settings` row is somehow absent (skeleton mode / pre-seed).
+pub const DEFAULT_POLL_INTERVAL_SECS: u32 = 30;
+/// Smallest polling interval (seconds) an operator may configure. A tight floor protects both the
+/// monitored devices and Yagra, and keeps the anti-stampede jitter window from collapsing.
+pub const MIN_POLL_INTERVAL_SECS: u32 = 10;
+/// Largest polling interval (seconds) an operator may configure (1 hour).
+pub const MAX_POLL_INTERVAL_SECS: u32 = 3600;
 /// Default API bind address.
 const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
 
@@ -59,10 +65,21 @@ fn parse_bool(raw: Option<String>) -> bool {
     )
 }
 
-/// Parse a polling interval, clamping to a sane floor and defaulting on bad input.
+/// Whether a polling interval (seconds) is within the operator-configurable band `[MIN, MAX]`.
+/// Shared by every write path (API profile + default-interval validation) so the bound lives in
+/// one place.
+#[must_use]
+pub fn interval_in_bounds(secs: u32) -> bool {
+    (MIN_POLL_INTERVAL_SECS..=MAX_POLL_INTERVAL_SECS).contains(&secs)
+}
+
+/// Parse a polling interval and clamp it into the allowed `[MIN, MAX]` band, defaulting on bad
+/// input. This is only the *initial* default (seeded into `app_settings` on first boot); the
+/// runtime-editable value lives in the DB thereafter.
 fn parse_interval(raw: Option<String>) -> u32 {
     raw.and_then(|s| s.parse::<u32>().ok())
         .filter(|&n| n > 0)
+        .map(|n| n.clamp(MIN_POLL_INTERVAL_SECS, MAX_POLL_INTERVAL_SECS))
         .unwrap_or(DEFAULT_POLL_INTERVAL_SECS)
 }
 
@@ -83,6 +100,28 @@ mod tests {
     #[test]
     fn interval_parses_valid_value() {
         assert_eq!(parse_interval(Some("60".into())), 60);
+    }
+
+    #[test]
+    fn interval_bounds_check() {
+        assert!(!interval_in_bounds(9));
+        assert!(interval_in_bounds(MIN_POLL_INTERVAL_SECS)); // 10
+        assert!(interval_in_bounds(1800));
+        assert!(interval_in_bounds(MAX_POLL_INTERVAL_SECS)); // 3600
+        assert!(!interval_in_bounds(3601));
+        assert!(!interval_in_bounds(0));
+    }
+
+    #[test]
+    fn interval_clamps_into_allowed_band() {
+        // Below the floor and above the ceiling are pulled into [MIN, MAX].
+        assert_eq!(parse_interval(Some("5".into())), MIN_POLL_INTERVAL_SECS);
+        assert_eq!(
+            parse_interval(Some("999999".into())),
+            MAX_POLL_INTERVAL_SECS
+        );
+        assert_eq!(parse_interval(Some("10".into())), MIN_POLL_INTERVAL_SECS);
+        assert_eq!(parse_interval(Some("3600".into())), MAX_POLL_INTERVAL_SECS);
     }
 
     #[test]

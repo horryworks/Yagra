@@ -11,7 +11,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { CollectionTemplate, ProfileSummary } from '../types/api';
+import type { CollectionTemplate, ProfileInput, ProfileSummary } from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -23,7 +23,7 @@ import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../componen
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
 
-const COLS = '1.8fr 1fr 130px 96px';
+const COLS = '1.8fr 1fr 120px 130px 96px';
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
@@ -126,6 +126,7 @@ export function ProfilesPage() {
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
               <div className="ytable-h">Name</div>
               <div className="ytable-h">Vendor</div>
+              <div className="ytable-h">Poll interval</div>
               <div className="ytable-h">Templates</div>
               <div className="ytable-h right">Actions</div>
             </div>
@@ -160,6 +161,13 @@ export function ProfilesPage() {
                           </div>
                           <div className="ytable-cell">
                             {p.vendor ? p.vendor : <span className="muted">—</span>}
+                          </div>
+                          <div className="ytable-cell">
+                            {p.poll_interval_secs ? (
+                              `${p.poll_interval_secs}s`
+                            ) : (
+                              <span className="muted">default</span>
+                            )}
                           </div>
                           <div className="ytable-cell">
                             <Button
@@ -257,14 +265,30 @@ function ProfileModal({
   const [name, setName] = useState(profile?.name ?? '');
   const [category, setCategory] = useState(profile?.category ?? 'generic-snmp');
   const [vendor, setVendor] = useState(profile?.vendor ?? '');
+  const [pollInterval, setPollInterval] = useState(
+    profile?.poll_interval_secs != null ? String(profile.poll_interval_secs) : '',
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = () => {
     if (!name.trim()) return;
+    const trimmedInterval = pollInterval.trim();
+    if (trimmedInterval !== '') {
+      const n = Number(trimmedInterval);
+      if (!Number.isInteger(n) || n < 10 || n > 3600) {
+        setError('Poll interval must be a whole number of seconds between 10 and 3600.');
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
-    const body = { name: name.trim(), category, vendor: vendor.trim() || null };
+    const body: ProfileInput = {
+      name: name.trim(),
+      category,
+      vendor: vendor.trim() || null,
+      poll_interval_secs: trimmedInterval === '' ? null : Number(trimmedInterval),
+    };
     const call =
       mode === 'edit' && profile
         ? api.updateProfile(profile.id, body)
@@ -320,6 +344,19 @@ function ProfileModal({
             onChange={(e) => setVendor(e.target.value)}
           />
         </div>
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">Poll interval (seconds)</label>
+        <TextInput
+          placeholder="leave blank to use the system default"
+          value={pollInterval}
+          onChange={(e) => setPollInterval(e.target.value)}
+          inputMode="numeric"
+        />
+        <span className="modal-hint">
+          Overrides the system default for nodes using this profile. 10–3600 seconds; leave blank
+          to inherit the default.
+        </span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>

@@ -87,6 +87,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     repo.migrate().await?;
     repo.seed_demo_nodes_if_empty().await?;
     repo.seed_builtin_profiles().await?;
+    // Seed the runtime-settings singleton, honoring YAGRA_POLL_INTERVAL_SECS as the *initial*
+    // default on first boot only (ON CONFLICT DO NOTHING preserves later UI edits). After this the
+    // DB value is authoritative and the scheduler re-reads it each round.
+    repo.seed_default_poll_interval(cfg.poll_interval_secs)
+        .await?;
     let mib = Arc::new(MibRepo::new(repo.pool()));
     mib.seed_builtin().await?;
 
@@ -423,44 +428,89 @@ async fn consume_results<S>(
     tracing::warn!("result stream ended");
 }
 
-/// Periodically turn the inventory into poll jobs (ICMP + SNMP), spread across the interval
-/// with per-job jitter so N nodes don't poll on the same tick (anti-stampede). Job-building is
-/// delegated to the shared [`PollDispatcher`] so the periodic and on-demand paths agree.
+/// Periodically turn the inventory into poll jobs (ICMP + SNMP) on each node's *own* cadence.
+///
+/// The effective interval per node is `profile override → global default` (both re-read from the
+/// DB each round, so a UI edit applies on the next round without a restart). A node polls only when
+/// its resolved interval has elapsed since its last dispatch (`last_dispatched`, in-memory: on
+/// restart every node is treated as due and re-polls once). The loop wakes at the smallest interval
+/// in play and jitters each publish across that window so N nodes don't poll on the same tick
+/// (anti-stampede). With no overrides this degrades to the old behavior: one global round period,
+/// every node dispatched every round. Job-building is delegated to the shared [`PollDispatcher`] so
+/// the periodic and on-demand paths agree.
 async fn run_scheduler(
     repo: Arc<NodeRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
 ) {
-    let interval_secs = dispatcher.interval_secs();
-    let interval = Duration::from_secs(u64::from(interval_secs));
-    // Clamp to [1, u64::MAX] before narrowing u128→u64 so an extreme interval can't wrap to a
-    // tiny jitter window (which would defeat the anti-stampede spread).
-    let window_ms = interval.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
-    let jitter = || Duration::from_millis(rand::random::<u64>() % window_ms);
+    use std::collections::HashSet;
+    use std::time::Instant;
+    let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
     loop {
+        // Resolve the round's intervals: the global default (DB-backed) and any per-profile
+        // overrides. On a read failure, degrade to the compiled default / no overrides rather than
+        // stalling the poll loop.
+        let default_secs = repo
+            .get_default_poll_interval()
+            .await
+            .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
+        let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
+        let mut min_interval = default_secs;
+
         match repo.list_nodes().await {
             Ok(nodes) => {
-                tracing::debug!(count = nodes.len(), "scheduling poll round");
+                // Pair each node with its resolved interval, and find the round's smallest so the
+                // jitter window matches the sleep period (a node is never double-scheduled per round).
+                let resolved: Vec<_> = nodes
+                    .into_iter()
+                    .map(|node| {
+                        let secs =
+                            scheduler::resolve_interval(node.profile, &overrides, default_secs);
+                        (node, secs)
+                    })
+                    .collect();
+                for (_, secs) in &resolved {
+                    min_interval = min_interval.min(*secs);
+                }
+                let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
+
+                tracing::debug!(
+                    count = resolved.len(),
+                    default_secs,
+                    min_interval,
+                    "scheduling poll round"
+                );
+                let now = Instant::now();
+                let mut present: HashSet<Uuid> = HashSet::with_capacity(resolved.len());
                 let mut jobs_round: u64 = 0;
-                for node in nodes {
-                    // Resolve auth + collection and build the node's jobs up front; jitter only
-                    // the publish so polls spread across the window without a stampede.
-                    for (job, kind) in dispatcher.build_node_jobs(&node).await {
+                for (node, secs) in resolved {
+                    let id = node.id.as_uuid();
+                    present.insert(id);
+                    let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
+                    if !scheduler::due(elapsed, Duration::from_secs(u64::from(secs))) {
+                        continue;
+                    }
+                    last_dispatched.insert(id, now);
+                    // Resolve auth + collection and build the node's jobs up front; jitter only the
+                    // publish so polls spread across the window without a stampede.
+                    for (job, kind) in dispatcher.build_node_jobs(&node, secs).await {
                         jobs_round += 1;
                         let dispatcher = dispatcher.clone();
                         let node_id = node.id;
-                        let delay = jitter();
+                        let delay = Duration::from_millis(rand::random::<u64>() % window_ms);
                         tokio::spawn(async move {
                             tokio::time::sleep(delay).await;
                             dispatcher.publish_job(job, kind, node_id).await;
                         });
                     }
                 }
+                // Forget nodes no longer in the inventory so the map can't grow unbounded.
+                last_dispatched.retain(|id, _| present.contains(id));
                 stats.record_sweep(jobs_round);
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
-        tokio::time::sleep(interval).await;
+        tokio::time::sleep(Duration::from_secs(u64::from(min_interval))).await;
     }
 }
 
