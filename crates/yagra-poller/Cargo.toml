@@ -16,6 +16,7 @@ path = "src/main.rs"
 yagra-common = { path = "../yagra-common" }
 yagra-transport = { path = "../yagra-transport" }
 yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+yagra-discovery = { path = "../yagra-discovery" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

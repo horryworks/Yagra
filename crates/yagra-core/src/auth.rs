@@ -115,6 +115,19 @@ fn random_token() -> String {
     s
 }
 
+/// A random one-time bootstrap password (12 bytes / 24 hex chars ≈ 96 bits) used to seed the
+/// first `admin` account when no `YAGRA_ADMIN_PASSWORD` is supplied — so the instance never boots
+/// with a well-known default credential. Strong and unguessable; surfaced to the operator once.
+#[must_use]
+pub fn generate_bootstrap_password() -> String {
+    let bytes: [u8; 12] = rand::random();
+    let mut s = String::with_capacity(24);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
 /// Parse a stored role string (defaults to the least-privileged role on garbage).
 fn parse_role(s: &str) -> Role {
     match s {
@@ -171,14 +184,16 @@ impl UserStore {
     }
 
     /// Seed a default `admin` account if the users table is empty. The password is hashed
-    /// (never stored or logged in plaintext).
-    pub async fn ensure_default_admin(&self, password: &str) -> anyhow::Result<()> {
+    /// (never stored or logged in plaintext). Returns `true` if it actually seeded a new admin,
+    /// `false` if one already existed — the caller uses this to announce a generated bootstrap
+    /// password exactly once (and only when it was used).
+    pub async fn ensure_default_admin(&self, password: &str) -> anyhow::Result<bool> {
         let count: i64 = sqlx::query("SELECT count(*) AS n FROM users")
             .fetch_one(&self.pool)
             .await?
             .try_get("n")?;
         if count > 0 {
-            return Ok(());
+            return Ok(false);
         }
         let hash = hash_password(password).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
         sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES ($1,$2,$3,$4)")
@@ -188,13 +203,7 @@ impl UserStore {
             .bind("admin")
             .execute(&self.pool)
             .await?;
-        // Intentionally best-effort (not fail-fast) for first-boot UX, but make the log loud:
-        // a default credential left in place is a security risk.
-        tracing::warn!(
-            "SECURITY: seeded default 'admin' user with the bootstrap password — \
-             CHANGE THE DEFAULT ADMIN PASSWORD before exposing this instance"
-        );
-        Ok(())
+        Ok(true)
     }
 
     /// Verify a username/password and return the principal on success.

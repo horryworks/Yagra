@@ -9,6 +9,7 @@ web/node_modules/
 web/dist/
 dist/
 *.tsbuildinfo
+*.zip
 
 # ── Env / secrets ──
 .env

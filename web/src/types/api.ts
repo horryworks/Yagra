@@ -13,9 +13,6 @@ export type NodeState =
 /** Alert severity (yagra-common `Severity`), ordered info < warning < critical. */
 export type Severity = 'info' | 'warning' | 'critical';
 
-/** Address family. */
-export type AddressFamily = 'v4' | 'v6';
-
 /** Optional server-side aggregation for a node metric read. `max` collapses a per-entity
  *  table gauge (e.g. CPU% per entPhysicalIndex) into one node-level value. */
 export type MetricAgg = 'max';

@@ -1,0 +1,11 @@
+# cargo-audit configuration.
+#
+# RUSTSEC-2023-0071 — `rsa` "Marvin Attack" timing side-channel (medium, no fixed release).
+# The `rsa` crate is pulled in ONLY by sqlx's optional MySQL driver (`sqlx-mysql`). Yagra uses
+# PostgreSQL exclusively: the root Cargo.toml declares sqlx with `default-features = false` and
+# only the `postgres` driver feature, so `sqlx-mysql` (and `rsa`) are never compiled. This is a
+# locked-but-unbuilt optional dependency — `cargo tree -i rsa --all-features --target all` finds
+# nothing in the build graph. There is no fixed `rsa` version to upgrade to. Re-evaluate (and
+# remove this entry) if a MySQL driver is ever enabled.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

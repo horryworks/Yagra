@@ -88,6 +88,9 @@
   --table-col-tint: rgba(35, 35, 35, 0.04);
   /* Ink that sits on the fixed orange brand surface (login panel / seal). */
   --on-brand: var(--brand-mark);
+  /* Ink that sits on a filled status surface (e.g. white-on-critical danger button / badge).
+     Status fills are saturated in both themes, so this stays constant across light/dark. */
+  --on-status: #fff;
 }
 
 /* ---- Dark theme — blue-slate, lets the complementary orange pop (§1.5) ---- */

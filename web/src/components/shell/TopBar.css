@@ -115,7 +115,7 @@
   align-items: center;
   justify-content: center;
   font-size: 10px;
-  color: #fff;
+  color: var(--on-status);
   background: var(--status-critical);
   border-radius: 8px;
 }

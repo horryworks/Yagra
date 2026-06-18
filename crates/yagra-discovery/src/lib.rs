@@ -2,8 +2,8 @@
 //!
 //! IP-range / SNMP sweep / LLDP-CDP based discovery, classification into profiles, and
 //! the built-in **Credential Finder** that probes candidate credentials to find the one a
-//! device accepts. The per-device probe rate limiter ([`credential_finder`]) is in place;
-//! the sweep itself runs on the poller (raw-socket ICMP). Profile suggestion is owned by the
+//! device accepts. The per-device probe rate limiter ([`credential_finder`]) is enforced by the
+//! poller's discovery sweep (raw-socket ICMP). Profile suggestion is owned by the
 //! core `Classifier` (authoritative `sysObjectID` rules); [`identify`] here only extracts a
 //! best-effort vendor/model from the free-form `sysDescr` to pre-fill the import form.
 

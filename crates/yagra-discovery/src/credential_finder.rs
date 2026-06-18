@@ -8,6 +8,7 @@
 //! deterministic and testable without a clock. Attempted credentials are never logged.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use yagra_common::NodeId;
 
 /// Tunables for credential probing.
@@ -49,14 +50,16 @@ struct DeviceState {
     cooldown_until_ms: Option<i64>,
 }
 
-/// Per-device probe limiter enforcing spacing and post-failure cooldown.
+/// Per-device probe limiter enforcing spacing and post-failure cooldown. Generic over the device
+/// key so it serves both imported nodes (`NodeId`, the default) and in-flight discovery targets
+/// keyed by `IpAddr` (the poller sweep has no `NodeId` yet).
 #[derive(Debug, Clone)]
-pub struct CredentialProbeLimiter {
+pub struct CredentialProbeLimiter<K = NodeId> {
     config: LimiterConfig,
-    devices: HashMap<NodeId, DeviceState>,
+    devices: HashMap<K, DeviceState>,
 }
 
-impl CredentialProbeLimiter {
+impl<K: Eq + Hash> CredentialProbeLimiter<K> {
     /// New limiter with the given config.
     #[must_use]
     pub fn new(config: LimiterConfig) -> Self {
@@ -74,7 +77,7 @@ impl CredentialProbeLimiter {
 
     /// Decide whether a probe on `device` may proceed at `now_ms`. On [`AttemptDecision::Allow`]
     /// the attempt is recorded (advancing the spacing clock).
-    pub fn begin_attempt(&mut self, device: NodeId, now_ms: i64) -> AttemptDecision {
+    pub fn begin_attempt(&mut self, device: K, now_ms: i64) -> AttemptDecision {
         let cfg = self.config;
         let state = self.devices.entry(device).or_default();
 
@@ -101,7 +104,7 @@ impl CredentialProbeLimiter {
     }
 
     /// Record that the last attempt on `device` failed. Trips cooldown at the failure limit.
-    pub fn record_failure(&mut self, device: NodeId, now_ms: i64) {
+    pub fn record_failure(&mut self, device: K, now_ms: i64) {
         let cfg = self.config;
         let state = self.devices.entry(device).or_default();
         state.consecutive_failures += 1;
@@ -112,7 +115,7 @@ impl CredentialProbeLimiter {
 
     /// Record that a probe on `device` succeeded — clears failures and any cooldown. The
     /// finder stops on first success (ADR-018), so this also ends probing for the device.
-    pub fn record_success(&mut self, device: NodeId) {
+    pub fn record_success(&mut self, device: K) {
         let state = self.devices.entry(device).or_default();
         state.consecutive_failures = 0;
         state.cooldown_until_ms = None;

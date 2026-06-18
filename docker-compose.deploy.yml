@@ -49,8 +49,10 @@ services:
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
-      # Default local-auth admin password seeded on first start (change for real use).
-      YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-admin}
+      # Local-auth admin password seeded on first start. Left empty by default: core then
+      # generates a one-time random admin password and prints it once in its logs
+      # (`docker compose logs core`). Set YAGRA_ADMIN_PASSWORD in .env to choose your own.
+      YAGRA_ADMIN_PASSWORD: ${YAGRA_ADMIN_PASSWORD:-}
       # Read-only dashboard exposure: unset/false = viewing requires login (default);
       # set true to serve node/metric/alert reads without authentication.
       YAGRA_PUBLIC_DASHBOARD: ${YAGRA_PUBLIC_DASHBOARD:-false}
