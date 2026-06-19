@@ -18,6 +18,7 @@ type ErrTone = 'danger' | 'warning';
 
 export function LoginPage({ embedded = false }: { embedded?: boolean }) {
   const setAuthed = useAuthStore((s) => s.setAuthed);
+  const setRole = useAuthStore((s) => s.setRole);
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -33,8 +34,9 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
     setBusy(true);
     api
       .login(username, password)
-      .then(() => {
+      .then((res) => {
         setPassword('');
+        setRole(res.role);
         setAuthed(true);
         if (!embedded) navigate('/dashboard');
       })

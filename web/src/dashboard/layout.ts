@@ -2,11 +2,16 @@
 // injects registry-derived predicates), so they're trivially unit-testable in the node env.
 // Every mutator returns a new array (immutable update for Zustand).
 
-import type { DashboardLayout, Span, WidgetInstance, WidgetSettings } from './types';
+import type { Board, DashboardLayout, Span, WidgetInstance, WidgetSettings } from './types';
 
 /** Current layout schema version. Bump when the persisted shape changes; `sanitizeLayout`
- *  then migrates/drops anything it no longer understands. */
-export const DASHBOARD_VERSION = 1;
+ *  then migrates/drops anything it no longer understands. v2 introduced multiple boards
+ *  (`{ boards }`); v1 was a flat `{ widgets }`. */
+export const DASHBOARD_VERSION = 2;
+
+/** Id/name used for the first board when migrating a v1 doc or repairing an empty one. */
+const FALLBACK_BOARD_ID = 'board-1';
+const FALLBACK_BOARD_NAME = 'Dashboard 1';
 
 /** Registry-derived facts the pure helpers need, injected so this file stays dependency-free. */
 export interface RegistryView {
@@ -29,17 +34,14 @@ export function clampSpan(type: string, span: number, reg: RegistryView): Span {
   );
 }
 
-/** Normalize an untrusted/old layout document: keep only known widget types, clamp spans,
- *  repair missing/duplicate instanceIds, and drop malformed entries. Order is preserved. A
- *  non-object or missing `widgets` yields an empty board (version-stamped). */
-export function sanitizeLayout(raw: unknown, reg: RegistryView): DashboardLayout {
+/** Normalize an untrusted/old *widget array*: keep only known widget types, clamp spans, repair
+ *  missing/duplicate instanceIds, and drop malformed entries. Order is preserved. Extracted so
+ *  both the v2 board path and the v1 single-board migration reuse it. */
+export function sanitizeWidgets(rawWidgets: unknown, reg: RegistryView): WidgetInstance[] {
   const widgets: WidgetInstance[] = [];
   const seen = new Set<string>();
-  const rawWidgets =
-    raw && typeof raw === 'object' && Array.isArray((raw as { widgets?: unknown }).widgets)
-      ? ((raw as { widgets: unknown[] }).widgets)
-      : [];
-  for (const entry of rawWidgets) {
+  const list = Array.isArray(rawWidgets) ? rawWidgets : [];
+  for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as Partial<WidgetInstance>;
     if (typeof e.type !== 'string' || !reg.isKnownType(e.type)) continue;
@@ -64,7 +66,58 @@ export function sanitizeLayout(raw: unknown, reg: RegistryView): DashboardLayout
         e.settings && typeof e.settings === 'object' ? (e.settings as WidgetSettings) : undefined,
     });
   }
-  return { version: DASHBOARD_VERSION, widgets };
+  return widgets;
+}
+
+/** A single empty board (used to repair a doc that has no valid board). */
+function emptyBoard(): Board {
+  return { id: FALLBACK_BOARD_ID, name: FALLBACK_BOARD_NAME, widgets: [] };
+}
+
+/** Normalize an untrusted/old document into a v2 multi-board layout. Sanitizes each board's
+ *  widgets, repairs missing/duplicate board ids, defaults blank names, and guarantees ≥1 board.
+ *  Migrates a v1 doc (a flat `{ widgets }`) by wrapping its widgets in a single board. An
+ *  unrecognized shape yields a single empty board (version-stamped). */
+export function sanitizeLayout(raw: unknown, reg: RegistryView): DashboardLayout {
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined;
+
+  // v2: a `boards` array.
+  if (obj && Array.isArray(obj.boards)) {
+    const boards: Board[] = [];
+    const seenIds = new Set<string>();
+    for (const entry of obj.boards) {
+      if (!entry || typeof entry !== 'object') continue;
+      const b = entry as Partial<Board>;
+      let id = typeof b.id === 'string' && b.id ? b.id : `board-${boards.length + 1}`;
+      if (seenIds.has(id)) {
+        const base = id;
+        let n = 1;
+        do {
+          id = `${base}-${n++}`;
+        } while (seenIds.has(id));
+      }
+      seenIds.add(id);
+      const name =
+        typeof b.name === 'string' && b.name.trim() ? b.name : `Dashboard ${boards.length + 1}`;
+      boards.push({ id, name, widgets: sanitizeWidgets(b.widgets, reg) });
+    }
+    if (boards.length === 0) boards.push(emptyBoard());
+    return { version: DASHBOARD_VERSION, boards };
+  }
+
+  // v1: a flat `widgets` array ⇒ migrate into one board (an empty array stays an empty board,
+  // so a user who cleared their old board keeps it cleared rather than getting the default back).
+  if (obj && Array.isArray(obj.widgets)) {
+    return {
+      version: DASHBOARD_VERSION,
+      boards: [
+        { id: FALLBACK_BOARD_ID, name: FALLBACK_BOARD_NAME, widgets: sanitizeWidgets(obj.widgets, reg) },
+      ],
+    };
+  }
+
+  // Unrecognized ⇒ a single empty board.
+  return { version: DASHBOARD_VERSION, boards: [emptyBoard()] };
 }
 
 /** Append a fully-formed instance. */
@@ -130,4 +183,29 @@ export function setSettingsById(
 /** How many instances of `type` are present (for `maxInstances` enforcement). */
 export function countOfType(widgets: WidgetInstance[], type: string): number {
   return widgets.reduce((n, w) => (w.type === type ? n + 1 : n), 0);
+}
+
+// ── Board-level helpers (multi-board My Dashboard) ───────────────────────────
+// Each returns a new boards array (immutable update for Zustand).
+
+/** Append a board. */
+export function addBoard(boards: Board[], board: Board): Board[] {
+  return [...boards, board];
+}
+
+/** Remove the board with `id` — but never leave zero boards (no-op if it would, or if absent). */
+export function removeBoard(boards: Board[], id: string): Board[] {
+  if (boards.length <= 1) return boards;
+  const next = boards.filter((b) => b.id !== id);
+  return next.length === boards.length ? boards : next;
+}
+
+/** Rename one board (no-op if `id` is absent). */
+export function renameBoard(boards: Board[], id: string, name: string): Board[] {
+  return boards.map((b) => (b.id === id ? { ...b, name } : b));
+}
+
+/** Replace one board's widget list (no-op if `id` is absent). */
+export function setBoardWidgets(boards: Board[], id: string, widgets: WidgetInstance[]): Board[] {
+  return boards.map((b) => (b.id === id ? { ...b, widgets } : b));
 }

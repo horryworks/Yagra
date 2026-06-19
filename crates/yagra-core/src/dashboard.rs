@@ -56,3 +56,49 @@ impl DashboardRepo {
         Ok(res.rows_affected() > 0)
     }
 }
+
+/// The single global "Shared Dashboard" layout (`shared_dashboard`, one row keyed `id = TRUE`).
+///
+/// Like [`DashboardRepo`] this round-trips an opaque JSON document the WebUI owns. Unlike it the
+/// layout is global, not per-user: everyone reads the same row and only admins write it (the write
+/// authorization is enforced at the API edge, not here).
+pub struct SharedDashboardRepo {
+    pool: PgPool,
+}
+
+impl SharedDashboardRepo {
+    /// New store over the metadata pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// The saved global layout, or `None` if no admin has ever saved one (the WebUI then falls
+    /// back to its default layout).
+    pub async fn get_shared(&self) -> anyhow::Result<Option<Value>> {
+        let row = sqlx::query("SELECT layout_json FROM shared_dashboard WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(row) => Ok(Some(row.try_get::<Value, _>("layout_json")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert the global layout, recording which admin (`updated_by`) last saved it. The single
+    /// row is replaced wholesale (the WebUI always sends the full layout, not a patch).
+    pub async fn upsert_shared(&self, layout: &Value, updated_by: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO shared_dashboard (id, layout_json, updated_by) VALUES (TRUE, $1, $2) \
+             ON CONFLICT (id) DO UPDATE \
+                 SET layout_json = EXCLUDED.layout_json, \
+                     updated_by = EXCLUDED.updated_by, \
+                     updated_at = now()",
+        )
+        .bind(layout)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}

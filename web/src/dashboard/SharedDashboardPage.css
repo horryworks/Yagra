@@ -1,0 +1,10 @@
+/* Persistent warning shown while editing the shared dashboard — changes apply to every user. */
+.shared-dash-warning {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border-left: 3px solid var(--status-warning);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}

@@ -921,6 +921,28 @@ describe('api client', () => {
     });
   });
 
+  it('reads the shared dashboard layout (null when none saved)', async () => {
+    mockFetch(200, null);
+    const layout = await api.getSharedDashboard();
+    expect(layout).toBeNull();
+  });
+
+  it('saves the shared dashboard layout as a JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) } as Response);
+    globalThis.fetch = spy;
+    const doc = {
+      version: 2,
+      boards: [{ id: 'b1', name: 'Dashboard 1', widgets: [{ instanceId: 'w1', type: 'health-ring', span: 4 }] }],
+    };
+    await api.putSharedDashboard(doc);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/shared-dashboard');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual(doc);
+  });
+
   it('clears a stale token and notifies on a 401 with a token attached', async () => {
     setToken('stale-token');
     const onUnauth = vi.fn();

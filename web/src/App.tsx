@@ -7,14 +7,35 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { AppRoutes } from './routes';
-import { api, setUnauthorizedHandler, type ClientConfig } from './services/api';
+import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
 import { applyTheme, usePrefsStore } from './prefs';
 import { useAuthStore } from './store';
 
 export function App() {
   const authed = useAuthStore((s) => s.authed);
+  const role = useAuthStore((s) => s.role);
+  const setRole = useAuthStore((s) => s.setRole);
   const theme = usePrefsStore((s) => s.theme);
   const [config, setConfig] = useState<ClientConfig | null>(null);
+
+  // Resolve the current principal's role once we're authenticated but don't yet know it (e.g. after
+  // a page reload, where the token is in localStorage but the role isn't). Role-gated UI reads it
+  // from the auth store. Clears when signed out.
+  useEffect(() => {
+    if (!authed || !getToken()) {
+      setRole(null);
+      return;
+    }
+    if (role != null) return;
+    let cancelled = false;
+    api
+      .me()
+      .then((r) => !cancelled && setRole(r.role))
+      .catch(() => !cancelled && setRole(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, role, setRole]);
 
   // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).
   useEffect(() => {

@@ -7,7 +7,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Card } from '../components/ui/Card';
 import { Select } from '../components/ui/Field';
-import { useLayoutStore } from './layoutStore';
+import { useLayoutStoreContext } from './LayoutStoreContext';
 import { getDefinition } from './registry';
 import type { Span, WidgetInstance, WidgetSettings } from './types';
 import './WidgetFrame.css';
@@ -16,9 +16,10 @@ import './WidgetFrame.css';
 const SPAN_LABEL: Record<Span, string> = { 4: '⅓ width', 6: '½ width', 8: '⅔ width', 12: 'Full width' };
 
 export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; editing: boolean }) {
-  const setSpan = useLayoutStore((s) => s.setSpan);
-  const removeWidget = useLayoutStore((s) => s.removeWidget);
-  const setSettingsAction = useLayoutStore((s) => s.setSettings);
+  const useStore = useLayoutStoreContext();
+  const setSpan = useStore((s) => s.setSpan);
+  const removeWidget = useStore((s) => s.removeWidget);
+  const setSettingsAction = useStore((s) => s.setSettings);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: instance.instanceId,
     disabled: !editing,

@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addBoard,
   addInstance,
   clampSpan,
   countOfType,
   DASHBOARD_VERSION,
   moveItem,
+  removeBoard,
   removeInstance,
+  renameBoard,
   reorderByIds,
   sanitizeLayout,
+  sanitizeWidgets,
+  setBoardWidgets,
   setSettingsById,
   setSpanById,
   type RegistryView,
 } from './layout';
-import type { WidgetInstance } from './types';
+import type { Board, WidgetInstance } from './types';
 
 // Fake registry: type `a` allows spans 4/6 (default 4); `b` allows only 12 (default 12).
 const reg: RegistryView = {
@@ -39,10 +44,10 @@ describe('clampSpan', () => {
 });
 
 describe('sanitizeLayout', () => {
-  it('drops unknown types, clamps spans, and stamps the version', () => {
+  it('migrates a v1 doc (flat widgets) into a single board, clamping/dropping', () => {
     const out = sanitizeLayout(
       {
-        version: 0,
+        version: 1,
         widgets: [
           { instanceId: 'x', type: 'a', span: 99 }, // span clamped to 6
           { instanceId: 'y', type: 'gone', span: 4 }, // unknown type dropped
@@ -52,40 +57,114 @@ describe('sanitizeLayout', () => {
       reg,
     );
     expect(out.version).toBe(DASHBOARD_VERSION);
-    expect(out.widgets.map((w) => w.instanceId)).toEqual(['x', 'z']);
-    expect(out.widgets[0].span).toBe(6);
-    expect(out.widgets[1].span).toBe(12);
+    expect(out.boards).toHaveLength(1);
+    expect(out.boards[0].name).toBe('Dashboard 1');
+    const w = out.boards[0].widgets;
+    expect(w.map((x) => x.instanceId)).toEqual(['x', 'z']);
+    expect(w[0].span).toBe(6);
+    expect(w[1].span).toBe(12);
   });
 
-  it('repairs missing and duplicate instanceIds while preserving order', () => {
-    const out = sanitizeLayout(
-      { widgets: [{ type: 'a' }, { instanceId: 'dup', type: 'a' }, { instanceId: 'dup', type: 'a' }] },
-      reg,
-    );
-    const ids = out.widgets.map((w) => w.instanceId);
-    expect(ids.length).toBe(3);
-    expect(new Set(ids).size).toBe(3); // all unique after repair
-  });
-
-  it('repairs repeated duplicate ids with clean incrementing suffixes (no cascade)', () => {
+  it('sanitizes a v2 doc: dedupes board ids, defaults blank names, keeps ≥1 board', () => {
     const out = sanitizeLayout(
       {
-        widgets: [
-          { instanceId: 'dup', type: 'a' },
-          { instanceId: 'dup', type: 'a' },
-          { instanceId: 'dup', type: 'a' },
+        version: 2,
+        boards: [
+          { id: 'dup', name: 'One', widgets: [{ instanceId: 'x', type: 'a', span: 4 }] },
+          { id: 'dup', name: '', widgets: [{ type: 'b' }] }, // duplicate id, blank name
+          { id: 'gone', name: 'Empty', widgets: [{ type: 'gone' }] }, // unknown widget dropped
+        ],
+      },
+      reg,
+    );
+    expect(out.version).toBe(DASHBOARD_VERSION);
+    expect(out.boards.map((b) => b.id)).toEqual(['dup', 'dup-1', 'gone']);
+    expect(out.boards[1].name).toBe('Dashboard 2'); // blank ⇒ positional default
+    expect(out.boards[0].widgets).toHaveLength(1);
+    expect(out.boards[2].widgets).toHaveLength(0);
+  });
+
+  it('returns a single empty board for a non-object or unrecognized shape', () => {
+    for (const raw of [null, 42, { boards: 'nope', widgets: 'nope' }]) {
+      const out = sanitizeLayout(raw, reg);
+      expect(out.boards).toHaveLength(1);
+      expect(out.boards[0].widgets).toEqual([]);
+    }
+  });
+
+  it('repairs missing/duplicate widget ids within a board (no cascade)', () => {
+    const out = sanitizeLayout(
+      {
+        version: 2,
+        boards: [
+          {
+            id: 'b1',
+            name: 'B',
+            widgets: [
+              { instanceId: 'dup', type: 'a' },
+              { instanceId: 'dup', type: 'a' },
+              { instanceId: 'dup', type: 'a' },
+            ],
+          },
         ],
       },
       reg,
     );
     // base, base-1, base-2 — never base-1-1 / base-2-2.
-    expect(out.widgets.map((w) => w.instanceId)).toEqual(['dup', 'dup-1', 'dup-2']);
+    expect(out.boards[0].widgets.map((w) => w.instanceId)).toEqual(['dup', 'dup-1', 'dup-2']);
+  });
+});
+
+describe('sanitizeWidgets', () => {
+  it('keeps known types, clamps spans, drops malformed/unknown, repairs ids', () => {
+    const w = sanitizeWidgets(
+      [
+        { instanceId: 'x', type: 'a', span: 99 }, // clamped to 6
+        { instanceId: 'y', type: 'gone' }, // unknown ⇒ dropped
+        null,
+        'nope',
+        { type: 'b', span: 4 }, // missing id ⇒ repaired; span clamped to 12
+      ],
+      reg,
+    );
+    expect(w.map((x) => x.instanceId)).toEqual(['x', 'b-1']);
+    expect(w[0].span).toBe(6);
+    expect(w[1].span).toBe(12);
   });
 
-  it('returns an empty board for a non-object or missing widgets', () => {
-    expect(sanitizeLayout(null, reg).widgets).toEqual([]);
-    expect(sanitizeLayout({ widgets: 'nope' }, reg).widgets).toEqual([]);
-    expect(sanitizeLayout(42, reg).widgets).toEqual([]);
+  it('returns [] for a non-array', () => {
+    expect(sanitizeWidgets('nope', reg)).toEqual([]);
+  });
+});
+
+describe('board helpers', () => {
+  const board = (id: string, name = id, widgets: WidgetInstance[] = []): Board => ({
+    id,
+    name,
+    widgets,
+  });
+
+  it('addBoard appends', () => {
+    expect(addBoard([board('a')], board('c')).map((x) => x.id)).toEqual(['a', 'c']);
+  });
+
+  it('removeBoard drops by id but never empties the set', () => {
+    const base = [board('a'), board('c')];
+    expect(removeBoard(base, 'a').map((x) => x.id)).toEqual(['c']);
+    expect(removeBoard([board('only')], 'only')).toHaveLength(1); // last board guarded
+    expect(removeBoard(base, 'nope')).toBe(base); // unknown id ⇒ unchanged (same ref)
+  });
+
+  it('renameBoard renames the matching board (no-op if absent)', () => {
+    expect(renameBoard([board('a', 'One')], 'a', 'Two')[0].name).toBe('Two');
+    expect(renameBoard([board('a', 'One')], 'nope', 'Two')[0].name).toBe('One');
+  });
+
+  it('setBoardWidgets replaces one board widget list', () => {
+    const base = [board('a'), board('c')];
+    const next = setBoardWidgets(base, 'a', [inst('w1')]);
+    expect(next[0].widgets).toHaveLength(1);
+    expect(next[1].widgets).toHaveLength(0);
   });
 });
 

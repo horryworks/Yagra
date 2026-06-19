@@ -18,15 +18,22 @@ const sessionStore = (): StateStorage =>
 
 // Shared authentication state so the app-level login gate and the Admin pane stay in
 // sync (a single source of truth for "am I logged in"). The token itself lives in the
-// api client (localStorage); this just tracks the boolean for re-rendering.
+// api client (localStorage); this just tracks the boolean for re-rendering, plus the current
+// principal's role (snake_case, e.g. 'admin') so role-gated UI (e.g. the Shared Dashboard
+// customize control) can render synchronously without each consumer re-fetching /auth/me.
 interface AuthStore {
   authed: boolean;
+  /** Current principal's role (e.g. 'admin' | 'operator' | 'viewer'), or null when unknown/signed out. */
+  role: string | null;
   setAuthed: (authed: boolean) => void;
+  setRole: (role: string | null) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   authed: getToken() != null,
+  role: null,
   setAuthed: (authed) => set({ authed }),
+  setRole: (role) => set({ role }),
 }));
 
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces

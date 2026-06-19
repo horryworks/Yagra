@@ -1,8 +1,10 @@
-// My Dashboard — the customizable widget board (/dashboard/my). The fixed Overview
-// (/dashboard) is unchanged; this is the per-user, add/remove/move board. Layout loads from and
-// saves to the server (per account). The page owns the single alert SSE subscription so alert
-// widgets stay live; each widget otherwise self-fetches. dnd-kit handles reordering (pointer +
-// keyboard) in edit mode; widgets keep their declared 12-col span.
+// Shared Dashboard — the global widget board (/dashboard), the customizable replacement for the old
+// fixed "Overview". One layout shown to all users; **only admins** may customize it (the change
+// applies to everyone, so entering edit mode requires a confirmation). Non-admins see it read-only.
+//
+// Reuses the My Dashboard machinery: it provides the shared store via LayoutStoreContext so
+// WidgetFrame/CatalogModal edit the global layout, and borrows MyDashboardPage.css for the grid.
+// Single-board (no board tabs).
 
 import { useEffect, useState } from 'react';
 import {
@@ -23,30 +25,34 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useAlertStream } from '../hooks/useAlertStream';
-import { BoardTabs } from './BoardTabs';
+import { useAuthStore } from '../store';
 import { CatalogModal } from './CatalogModal';
 import { LayoutStoreProvider } from './LayoutStoreContext';
-import { useLayoutStore } from './layoutStore';
+import { useSharedLayoutStore } from './layoutStore';
 import { WidgetFrame } from './WidgetFrame';
 import './MyDashboardPage.css';
+import './SharedDashboardPage.css';
 
-export function MyDashboardPage() {
+export function SharedDashboardPage() {
   // One SSE subscription for the whole board (alert widgets read the shared store).
   useAlertStream();
 
-  const widgets = useLayoutStore((s) => s.widgets);
-  const status = useLayoutStore((s) => s.status);
-  const saveError = useLayoutStore((s) => s.saveError);
-  const dismissSaveError = useLayoutStore((s) => s.dismissSaveError);
-  const editing = useLayoutStore((s) => s.editing);
-  const setEditing = useLayoutStore((s) => s.setEditing);
-  const move = useLayoutStore((s) => s.move);
-  const load = useLayoutStore((s) => s.load);
-  const resetToDefault = useLayoutStore((s) => s.resetToDefault);
+  const isAdmin = useAuthStore((s) => s.role) === 'admin';
+
+  const widgets = useSharedLayoutStore((s) => s.widgets);
+  const status = useSharedLayoutStore((s) => s.status);
+  const saveError = useSharedLayoutStore((s) => s.saveError);
+  const dismissSaveError = useSharedLayoutStore((s) => s.dismissSaveError);
+  const editing = useSharedLayoutStore((s) => s.editing);
+  const setEditing = useSharedLayoutStore((s) => s.setEditing);
+  const move = useSharedLayoutStore((s) => s.move);
+  const load = useSharedLayoutStore((s) => s.load);
+  const resetToDefault = useSharedLayoutStore((s) => s.resetToDefault);
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
-  // If the load hangs (no response), don't spin forever — surface a retry after a grace period.
+  // Warn before entering edit mode: changes here are global (apply to every user).
+  const [confirmEdit, setConfirmEdit] = useState(false);
   const [loadSlow, setLoadSlow] = useState(false);
 
   useEffect(() => {
@@ -87,17 +93,29 @@ export function MyDashboardPage() {
       </Button>
     </>
   ) : (
-    <Button onClick={() => setEditing(true)}>Customize</Button>
+    <Button
+      onClick={() => setConfirmEdit(true)}
+      disabled={!isAdmin}
+      title={isAdmin ? undefined : 'Only admins can customize the shared dashboard'}
+    >
+      Customize
+    </Button>
   );
 
   return (
-    <LayoutStoreProvider store={useLayoutStore}>
+    <LayoutStoreProvider store={useSharedLayoutStore}>
       <div>
         <PageHeader
-          title="My dashboard"
-          trail={[{ label: 'Dashboard' }, { label: 'My dashboard' }]}
+          title="Shared dashboard"
+          trail={[{ label: 'Dashboard' }, { label: 'Shared dashboard' }]}
           actions={actions}
         />
+
+        {editing && (
+          <div className="shared-dash-warning" role="status">
+            Editing the shared dashboard — changes are visible to all users.
+          </div>
+        )}
 
         {saveError && (
           <div className="mydash-save-error" role="alert">
@@ -108,31 +126,25 @@ export function MyDashboardPage() {
           </div>
         )}
 
-        {status !== 'loading' && <BoardTabs editing={editing} />}
-
         {status === 'loading' && widgets.length === 0 ? (
           loadSlow ? (
             <div className="mydash-empty">
-              <p className="muted">Loading your dashboard is taking longer than expected.</p>
+              <p className="muted">Loading the shared dashboard is taking longer than expected.</p>
               <Button variant="primary" onClick={() => void load()}>
                 Retry
               </Button>
             </div>
           ) : (
-            <p className="muted">Loading your dashboard…</p>
+            <p className="muted">Loading the shared dashboard…</p>
           )
         ) : widgets.length === 0 ? (
           <div className="mydash-empty">
-            <p className="muted">This board is empty.</p>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setEditing(true);
-                setCatalogOpen(true);
-              }}
-            >
-              Add your first widget
-            </Button>
+            <p className="muted">The shared dashboard has no widgets yet.</p>
+            {isAdmin && (
+              <Button variant="primary" onClick={() => setConfirmEdit(true)}>
+                Customize
+              </Button>
+            )}
           </div>
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
@@ -151,9 +163,35 @@ export function MyDashboardPage() {
 
         {catalogOpen && <CatalogModal onClose={() => setCatalogOpen(false)} />}
 
+        {confirmEdit && (
+          <Modal
+            title="Customize the shared dashboard?"
+            onClose={() => setConfirmEdit(false)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmEdit(false)}>Cancel</Button>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setConfirmEdit(false);
+                    setEditing(true);
+                  }}
+                >
+                  Customize for everyone
+                </Button>
+              </>
+            }
+          >
+            <p>
+              Changes you make here apply to <strong>every user</strong> — everyone’s Shared
+              Dashboard updates. Continue?
+            </p>
+          </Modal>
+        )}
+
         {confirmReset && (
           <Modal
-            title="Reset board?"
+            title="Reset shared dashboard?"
             onClose={() => setConfirmReset(false)}
             footer={
               <>
@@ -170,7 +208,10 @@ export function MyDashboardPage() {
               </>
             }
           >
-            <p>This replaces this board’s widgets with the default set. It can’t be undone.</p>
+            <p>
+              This replaces the shared dashboard’s widgets with the default set — for all users. It
+              can’t be undone.
+            </p>
           </Modal>
         )}
       </div>

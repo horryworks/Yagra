@@ -43,7 +43,7 @@ use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
-use dashboard::DashboardRepo;
+use dashboard::{DashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
@@ -319,6 +319,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         groups: group_repo,
         audit: Arc::new(AuditRepo::new(repo.pool())),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
+        shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
         analysis,
