@@ -9,18 +9,21 @@
 // (NODE_CAP) and flags when an inventory is larger than that — virtualized lazy loading is the
 // follow-up for very large fleets.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
   CredentialSummary,
   GroupType,
+  MaintenanceWindow,
+  Mute,
   NodeGroup,
   NodeSummary,
   ProfileSummary,
 } from '../types/api';
 import { groupOptions, isSelfOrDescendant, tallyStates } from '../lib/nodeTree';
+import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -30,6 +33,8 @@ import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
+import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
+import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
 
 const PAGE = 100;
@@ -117,6 +122,17 @@ export function NodesPage() {
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [movingNode, setMovingNode] = useState<NodeSummary | null>(null);
 
+  // Suppression: active maintenance windows + mutes drive the per-row icons; the right-click
+  // "Custom…" path opens a prefilled create modal (preset durations POST directly).
+  const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
+  const [mutes, setMutes] = useState<Mute[]>([]);
+  const [maintenanceTarget, setMaintenanceTarget] = useState<SuppressionTarget | null>(null);
+  const [muteTarget, setMuteTarget] = useState<SuppressionTarget | null>(null);
+  const suppression = useMemo(
+    () => buildSuppressionIndex(windows, mutes, groups, nodes),
+    [windows, mutes, groups, nodes],
+  );
+
   const reload = useCallback(async () => {
     setError(null);
     try {
@@ -137,6 +153,55 @@ export function NodesPage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
+  // maintenance/mute action from the tree so the icons update immediately (node `maintenance`
+  // state catches up on the engine's next ~30s refresh).
+  const reloadSuppression = useCallback(() => {
+    api.listMaintenanceWindows().then(setWindows).catch(() => undefined);
+    api.listMutes().then(setMutes).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    reloadSuppression();
+  }, [reloadSuppression]);
+
+  // Right-click → maintenance/mute. A preset duration POSTs now → now+duration immediately; the
+  // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.
+  const scopeError = (e: unknown, fallback: string) => setError(errMsg(e, fallback));
+
+  const setMaintenance = (target: SuppressionTarget, durationMs: number | null) => {
+    if (durationMs === null) {
+      setMaintenanceTarget(target);
+      return;
+    }
+    const now = new Date();
+    api
+      .createMaintenanceWindow({
+        name: `Maintenance — ${target.name}`,
+        scope_level: target.kind === 'group' ? 'group_id' : 'node',
+        scope_id: target.id,
+        starts_at: now.toISOString(),
+        ends_at: new Date(now.getTime() + durationMs).toISOString(),
+      })
+      .then(reloadSuppression)
+      .catch((e: unknown) => scopeError(e, 'failed to set maintenance'));
+  };
+
+  const setMute = (target: SuppressionTarget, durationMs: number | null) => {
+    if (durationMs === null) {
+      setMuteTarget(target);
+      return;
+    }
+    api
+      .createMute({
+        scope_kind: target.kind === 'group' ? 'group' : 'node',
+        scope_id: target.id,
+        until: new Date(Date.now() + durationMs).toISOString(),
+      })
+      .then(reloadSuppression)
+      .catch((e: unknown) => scopeError(e, 'failed to mute'));
+  };
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
   // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
@@ -309,6 +374,9 @@ export function NodesPage() {
             onMoveGroup={moveGroup}
             onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}
+            suppression={suppression}
+            onSetMaintenance={authed ? setMaintenance : undefined}
+            onSetMute={authed ? setMute : undefined}
           />
         </div>
 
@@ -486,6 +554,25 @@ export function NodesPage() {
             setMovingNode(null);
             void reload();
           }}
+        />
+      )}
+
+      {maintenanceTarget && (
+        <AddMaintenanceWindowModal
+          nodes={nodes}
+          groups={groups}
+          initialScope={maintenanceTarget}
+          onClose={() => setMaintenanceTarget(null)}
+          onSaved={reloadSuppression}
+        />
+      )}
+      {muteTarget && (
+        <AddMuteModal
+          nodes={nodes}
+          groups={groups}
+          initialScope={muteTarget}
+          onClose={() => setMuteTarget(null)}
+          onSaved={reloadSuppression}
         />
       )}
     </div>

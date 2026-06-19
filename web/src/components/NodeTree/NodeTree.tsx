@@ -23,8 +23,14 @@ import {
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { usePrefsStore } from '../../prefs';
+import {
+  DURATION_PRESETS,
+  type SuppressionIndex,
+  type SuppressionTarget,
+} from '../../lib/suppression';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
+import { WrenchIcon, BellOffIcon } from '../ui/icons';
 import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
@@ -92,6 +98,13 @@ interface Props {
     groupId: string,
     dest: { parentId: string | null; before?: string; after?: string },
   ) => void;
+  /** Which nodes/groups are currently in maintenance or muted (drives the per-row markers). */
+  suppression?: SuppressionIndex;
+  /** Right-click → put a node/group into maintenance. `durationMs` = preset length from now;
+   *  `null` = open the full create form prefilled with the scope ("Custom…"). */
+  onSetMaintenance?: (target: SuppressionTarget, durationMs: number | null) => void;
+  /** Right-click → mute a node/group. `durationMs`/`null` as for `onSetMaintenance`. */
+  onSetMute?: (target: SuppressionTarget, durationMs: number | null) => void;
 }
 
 export function NodeTree({
@@ -113,6 +126,9 @@ export function NodeTree({
   onMoveGroup,
   onReorderNode,
   onReorderGroup,
+  suppression,
+  onSetMaintenance,
+  onSetMute,
 }: Props) {
   const tree = buildNodeTree(groups, nodes);
   // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
@@ -132,6 +148,68 @@ export function NodeTree({
   // legacy "open node" behaviour so the tree still works on its own.
   const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
   const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
+
+  // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active.
+  const suppressionMarks = (maint: boolean, muted: boolean): React.ReactNode => {
+    if (!maint && !muted) return null;
+    return (
+      <span className="ntree-supp">
+        {maint && (
+          <span className="ntree-supp-icon maint" title="In a maintenance window">
+            <WrenchIcon />
+          </span>
+        )}
+        {muted && (
+          <span className="ntree-supp-icon mute" title="Muted — notifications suppressed">
+            <BellOffIcon />
+          </span>
+        )}
+      </span>
+    );
+  };
+
+  // The Maintenance/Mute quick-duration section appended to a row's context menu. A preset fires
+  // immediately (now + length); "Custom…" opens the full create form prefilled with the scope.
+  const suppressionMenu = (target: SuppressionTarget): React.ReactNode => {
+    if (!onSetMaintenance && !onSetMute) return null;
+    const row = (label: string, handler: (t: SuppressionTarget, ms: number | null) => void) => (
+      <div className="ntree-menu-section">
+        <div className="ntree-menu-label">{label}</div>
+        <div className="ntree-menu-durs">
+          {DURATION_PRESETS.map((p) => (
+            <button
+              type="button"
+              key={p.label}
+              className="ntree-dur"
+              onClick={() => {
+                handler(target, p.ms);
+                setMenu(null);
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="ntree-dur"
+            onClick={() => {
+              handler(target, null);
+              setMenu(null);
+            }}
+          >
+            Custom…
+          </button>
+        </div>
+      </div>
+    );
+    return (
+      <>
+        <div className="ntree-menu-sep" />
+        {onSetMaintenance && row('Maintenance', onSetMaintenance)}
+        {onSetMute && row('Mute', onSetMute)}
+      </>
+    );
+  };
 
   // Close the context menu on any outside click / Escape.
   useEffect(() => {
@@ -295,6 +373,10 @@ export function NodeTree({
           </button>
           <HealthBar nodes={members} className="ntree-health" />
           <span className="ntree-count">{members.length}</span>
+          {suppressionMarks(
+            !!suppression?.maintenanceGroups.has(group.id),
+            !!suppression?.muteGroups.has(group.id),
+          )}
           {canEdit && (
             <span className="ntree-actions">
               <button
@@ -382,6 +464,10 @@ export function NodeTree({
         >
           {node.name}
         </button>
+        {suppressionMarks(
+          node.state === 'maintenance' || !!suppression?.maintenanceNodes.has(node.id),
+          !!suppression?.muteNodes.has(node.id),
+        )}
         {canEdit && (
           <span className="ntree-actions">
             <button
@@ -466,6 +552,7 @@ export function NodeTree({
               <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
                 Edit / move…
               </button>
+              {suppressionMenu({ kind: 'group', id: menu.group.id, name: menu.group.name })}
               <div className="ntree-menu-sep" />
               <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
                 Delete
@@ -479,6 +566,7 @@ export function NodeTree({
               <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
                 Move to group…
               </button>
+              {suppressionMenu({ kind: 'node', id: menu.node.id, name: menu.node.name })}
             </>
           )}
         </div>

@@ -4593,7 +4593,8 @@ async fn list_maintenance_windows(State(st): State<ApiState>, headers: HeaderMap
     }
 }
 
-/// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013).
+/// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
+/// `group_id` (a folder-group UUID, resolved recursively — the All Nodes right-click scope).
 #[derive(Deserialize)]
 struct CreateWindow {
     name: String,
@@ -4601,6 +4602,26 @@ struct CreateWindow {
     scope_id: String,
     starts_at: String,
     ends_at: String,
+}
+
+/// Whether `group_id` names an existing folder group. `None` = exists; `Some(resp)` = the error
+/// response to return (bad UUID, missing group, or DB failure). Shared by window + mute creation.
+async fn validate_group_scope(admin: &AdminState, scope_id: &str) -> Option<Response> {
+    let Ok(gid) = Uuid::parse_str(scope_id.trim()) else {
+        return Some(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_scope",
+            "scope_id must be a group UUID for a folder-group scope".to_owned(),
+        ));
+    };
+    match admin.groups.edges().await {
+        Ok(edges) if edges.iter().any(|(id, _)| *id == gid) => None,
+        Ok(_) => Some(not_found("group_not_found", format!("no group {gid}"))),
+        Err(e) => {
+            tracing::error!(error = %e, "validate group scope failed");
+            Some(internal("failed to validate group scope"))
+        }
+    }
 }
 
 async fn create_maintenance_window(
@@ -4616,13 +4637,23 @@ async fn create_maintenance_window(
     }
     if body.name.trim().is_empty()
         || body.scope_id.trim().is_empty()
-        || !matches!(body.scope_level.as_str(), "profile" | "group" | "node")
+        || !matches!(
+            body.scope_level.as_str(),
+            "profile" | "group" | "node" | "group_id"
+        )
     {
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_window",
-            "name/scope_id must not be empty; scope_level must be profile|group|node".to_owned(),
+            "name/scope_id must not be empty; scope_level must be profile|group|node|group_id"
+                .to_owned(),
         );
+    }
+    // A folder-group scope (`group_id`) must reference an existing group.
+    if body.scope_level == "group_id" {
+        if let Some(resp) = validate_group_scope(admin, &body.scope_id).await {
+            return resp;
+        }
     }
     let (Some(starts), Some(ends)) = (parse_rfc3339(&body.starts_at), parse_rfc3339(&body.ends_at))
     else {
@@ -4717,11 +4748,13 @@ async fn list_mutes(State(st): State<ApiState>, headers: HeaderMap) -> Response 
     }
 }
 
-/// Create-mute body. `metric_name` is the metric to mute (omit to mute the whole node);
-/// `until` is RFC 3339.
+/// Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or
+/// `group` (silence every node under a folder group, recursive — `metric_name` is ignored);
+/// `scope_id` is the node/group UUID. `until` is RFC 3339.
 #[derive(Deserialize)]
 struct CreateMute {
-    node_id: Uuid,
+    scope_kind: String,
+    scope_id: Uuid,
     metric_name: Option<String>,
     until: String,
     reason: Option<String>,
@@ -4739,11 +4772,23 @@ async fn create_mute(
     if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
         return resp;
     }
-    let check = body
-        .metric_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|c| !c.is_empty());
+    if !matches!(body.scope_kind.as_str(), "node" | "group") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_mute",
+            "scope_kind must be node|group".to_owned(),
+        );
+    }
+    let group = body.scope_kind == "group";
+    // A group mute silences the whole node-set, so a per-metric mute only applies to a node scope.
+    let check = if group {
+        None
+    } else {
+        body.metric_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+    };
     if let Some(check) = check {
         if !is_valid_metric_name(check) {
             return error_response(
@@ -4752,6 +4797,12 @@ async fn create_mute(
                 "metric_name must be a valid metric name (or omitted for the whole node)"
                     .to_owned(),
             );
+        }
+    }
+    // A group mute must reference an existing folder group.
+    if group {
+        if let Some(resp) = validate_group_scope(admin, &body.scope_id.to_string()).await {
+            return resp;
         }
     }
     let Some(until) = parse_rfc3339(&body.until) else {
@@ -4770,7 +4821,13 @@ async fn create_mute(
     }
     match admin
         .maintenance
-        .create_mute(body.node_id, check, until, body.reason.as_deref())
+        .create_mute(
+            &body.scope_kind,
+            body.scope_id,
+            check,
+            until,
+            body.reason.as_deref(),
+        )
         .await
     {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),

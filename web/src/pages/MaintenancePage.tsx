@@ -9,34 +9,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type {
-  MaintenanceWindow,
-  NodeSummary,
-  ProfileSummary,
-  ScopeLevel,
-} from '../types/api';
+import type { MaintenanceWindow, NodeGroup, NodeSummary, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
-import { localTimeZone } from '../lib/format';
+import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import './MaintenancePage.css';
-
-const LEVELS: ScopeLevel[] = ['node', 'profile', 'group'];
-const TZ = localTimeZone();
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
-
-/** datetime-local input value → RFC 3339 (UTC) for the API. */
-const toRfc3339 = (local: string) => new Date(local).toISOString();
 
 /** RFC 3339 → compact local display. */
 const fmtTime = (iso: string) =>
@@ -53,148 +41,6 @@ function windowStatus(w: MaintenanceWindow): { label: string; tone: 'info' | 'ne
   if (w.active) return { label: 'active', tone: 'info' };
   if (new Date(w.ends_at).getTime() < Date.now()) return { label: 'ended', tone: 'neutral' };
   return { label: 'scheduled', tone: 'neutral' };
-}
-
-/** Create a maintenance window (scope-driven focused-editing modal). */
-function AddWindowModal({
-  nodes,
-  profiles,
-  onClose,
-  onSaved,
-}: {
-  nodes: NodeSummary[];
-  profiles: ProfileSummary[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [level, setLevel] = useState<ScopeLevel>('node');
-  const [scopeId, setScopeId] = useState('');
-  const [startsAt, setStartsAt] = useState('');
-  const [endsAt, setEndsAt] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const ready = !(!name.trim() || !scopeId.trim() || !startsAt || !endsAt);
-
-  const submit = () => {
-    if (!ready) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createMaintenanceWindow({
-        name: name.trim(),
-        scope_level: level,
-        scope_id: scopeId.trim(),
-        starts_at: toRfc3339(startsAt),
-        ends_at: toRfc3339(endsAt),
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add window'));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title="Add maintenance window"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            Add window
-          </Button>
-        </>
-      }
-    >
-      <div className="modal-field">
-        <label className="modal-field-label">Name</label>
-        <TextInput
-          placeholder="e.g. core switch firmware"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">Scope level</label>
-        <Select
-          value={level}
-          onChange={(e) => {
-            setLevel(e.target.value as ScopeLevel);
-            setScopeId('');
-          }}
-        >
-          {LEVELS.map((l) => (
-            <option key={l} value={l}>
-              {l}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">Scope</label>
-        {level === 'node' ? (
-          <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-            <option value="">(pick a node)</option>
-            {nodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name}
-              </option>
-            ))}
-          </Select>
-        ) : level === 'profile' ? (
-          <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-            <option value="">(pick a profile)</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-        ) : (
-          <TextInput
-            className="mono"
-            placeholder="group (tag value)"
-            value={scopeId}
-            onChange={(e) => setScopeId(e.target.value)}
-          />
-        )}
-        {level === 'group' && (
-          <span className="modal-hint">
-            Scope “group” matches nodes by their group tag value (e.g. a site name).
-          </span>
-        )}
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">From</label>
-        <TextInput
-          type="datetime-local"
-          value={startsAt}
-          onChange={(e) => setStartsAt(e.target.value)}
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">To</label>
-        <TextInput
-          type="datetime-local"
-          value={endsAt}
-          onChange={(e) => setEndsAt(e.target.value)}
-        />
-        <span className="modal-hint">
-          “From”/“To” are in {TZ} (your browser’s local time) and are stored as UTC.
-        </span>
-      </div>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
-  );
 }
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
@@ -249,6 +95,7 @@ export function MaintenancePage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -272,6 +119,7 @@ export function MaintenancePage() {
   useEffect(() => {
     load();
     api.listNodes().then(setNodes).catch(() => undefined);
+    api.listNodeGroups().then(setGroups).catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, [load]);
 
@@ -281,12 +129,22 @@ export function MaintenancePage() {
       .then(load)
       .catch((e: unknown) => setError(errMsg(e, 'failed to update window')));
 
-  // Human label for a scope id (node/profile names resolved when known).
+  // Short badge for the scope level: `group_id` is a folder group, plain `group` the legacy tag.
+  const scopeBadge = (w: MaintenanceWindow): string =>
+    w.scope_level === 'group_id'
+      ? 'group'
+      : w.scope_level === 'group'
+        ? 'group (tag)'
+        : w.scope_level;
+
+  // Human label for a scope id (node/profile/folder-group names resolved when known).
   const scopeLabel = (w: MaintenanceWindow): string => {
     if (w.scope_level === 'node')
       return nodes.find((n) => n.id === w.scope_id)?.name ?? w.scope_id;
     if (w.scope_level === 'profile')
       return profiles.find((p) => p.id === w.scope_id)?.name ?? w.scope_id;
+    if (w.scope_level === 'group_id')
+      return groups.find((g) => g.id === w.scope_id)?.name ?? w.scope_id;
     return w.scope_id;
   };
 
@@ -349,7 +207,7 @@ export function MaintenancePage() {
                     </div>
                     <div className="ytable-cell">
                       <span className="maint-scope">
-                        <Badge>{w.scope_level}</Badge>
+                        <Badge>{scopeBadge(w)}</Badge>
                         <span>{scopeLabel(w)}</span>
                       </span>
                     </div>
@@ -380,8 +238,9 @@ export function MaintenancePage() {
       )}
 
       {adding && (
-        <AddWindowModal
+        <AddMaintenanceWindowModal
           nodes={nodes}
+          groups={groups}
           profiles={profiles}
           onClose={() => setAdding(false)}
           onSaved={load}
