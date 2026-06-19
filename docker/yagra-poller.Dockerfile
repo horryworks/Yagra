@@ -5,7 +5,10 @@
 # capability to the binary itself via a file capability (`setcap cap_net_raw+ep`),
 # so only this one program (still non-root) can open raw ICMP sockets.
 
-FROM rust:1.90-slim AS build
+# Pin the build base to bookworm so the binary's glibc matches the bookworm runtime below
+# (`rust:1.90-slim` is a moving tag now on Debian trixie / glibc 2.39 — a mismatch with the
+# bookworm runtime causes a `GLIBC_2.39 not found` crash at startup).
+FROM rust:1.90-slim-bookworm AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release --bin yagra-poller
