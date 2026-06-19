@@ -932,15 +932,20 @@ impl NodeRepo {
             .await?;
         }
         // 4. Default thresholds for the built-in URL/HTTP endpoint profile so a freshly created URL
-        //    monitor alerts out of the box: `http_up` below 1 ⇒ critical (down or wrong status), and
-        //    `ssl_cert_days_to_expiry` below 30/7 ⇒ warning/critical. Stable ids + ON CONFLICT DO
-        //    NOTHING keep operator edits/deletes from being resurrected on the next boot.
+        //    monitor alerts out of the box: `http_up` below 0.5 ⇒ critical (down or wrong status),
+        //    and `ssl_cert_days_to_expiry` below 30/7 ⇒ warning/critical. Stable ids + ON CONFLICT
+        //    DO NOTHING keep operator edits/deletes from being resurrected on the next boot.
+        //
+        //    NB: `http_up` is a 0/1 gauge and the engine's "below" comparison is INCLUSIVE
+        //    (`value <= bound`, thresholds.rs). A bound of 1.0 would therefore fire on the healthy
+        //    value 1 too — so the bound sits between the two states (0.5): only 0 (down/wrong-status)
+        //    trips it. Migration 0030 corrects already-seeded rows that used the old 1.0 bound.
         const URL_THRESHOLD_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_a000;
         if let Some(&url_profile_id) = profile_id_by_name.get("URL / HTTP endpoint") {
             let scope_id = url_profile_id.to_string();
             // (offset, metric, direction, warning, critical, dwell_samples)
             let defaults = [
-                (0u128, "http_up", "below", None::<f64>, Some(1.0), 2i32),
+                (0u128, "http_up", "below", None::<f64>, Some(0.5), 2i32),
                 (
                     1u128,
                     "ssl_cert_days_to_expiry",

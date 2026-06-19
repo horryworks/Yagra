@@ -15,7 +15,8 @@ use std::net::{IpAddr, Ipv6Addr};
 
 /// Stable TSDB metric: `1` = the endpoint answered **and** its status matched expectation,
 /// `0` = unreachable, connection failed, or the status did not match. One metric expresses
-/// "down or wrong status" so a single threshold (`http_up` below 1) covers both.
+/// "down or wrong status" so a single threshold (`http_up` below 0.5 — only the 0 state, since
+/// the engine's below-comparison is inclusive) covers both.
 pub const METRIC_HTTP_UP: &str = "http_up";
 /// Stable TSDB metric: the HTTP status code observed (diagnostic/display only — no threshold).
 pub const METRIC_HTTP_STATUS_CODE: &str = "http_status_code";

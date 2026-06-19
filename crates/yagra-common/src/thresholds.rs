@@ -283,6 +283,22 @@ mod tests {
     }
 
     #[test]
+    fn boolean_up_gauge_below_half_only_trips_when_down() {
+        // `http_up` is a 0/1 gauge. Because "below" is inclusive (`value <= bound`), the default
+        // bound must sit between the states (0.5) — a bound of 1.0 would mis-fire on the healthy
+        // value 1. Regression guard for the "URL monitor permanently Critical" bug.
+        let eff = EffectiveThreshold {
+            metric: "http_up".into(),
+            direction: Direction::Below,
+            warning: None,
+            critical: Some(0.5),
+            dwell_samples: 2,
+        };
+        assert_eq!(eff.evaluate(1.0), NodeState::Ok); // up + status OK
+        assert_eq!(eff.evaluate(0.0), NodeState::Critical); // down / wrong status
+    }
+
+    #[test]
     fn empty_resolves_to_none() {
         assert_eq!(resolve_effective(&[]), None);
     }
