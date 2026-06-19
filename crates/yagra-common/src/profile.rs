@@ -32,11 +32,13 @@ pub enum ProfileCategory {
     #[default]
     GenericSnmp,
     PingOnly,
+    /// A URL / HTTP(S) endpoint monitor (no SNMP/ICMP — polled over HTTP).
+    UrlCheck,
 }
 
 impl ProfileCategory {
     /// Every category, in display order (router → switches → … → generic).
-    pub const ALL: [ProfileCategory; 14] = [
+    pub const ALL: [ProfileCategory; 15] = [
         ProfileCategory::Router,
         ProfileCategory::L3Switch,
         ProfileCategory::L2Switch,
@@ -51,6 +53,7 @@ impl ProfileCategory {
         ProfileCategory::Printer,
         ProfileCategory::GenericSnmp,
         ProfileCategory::PingOnly,
+        ProfileCategory::UrlCheck,
     ];
 
     /// The stable kebab-case token stored in the DB / sent over the API.
@@ -71,6 +74,7 @@ impl ProfileCategory {
             ProfileCategory::Printer => "printer",
             ProfileCategory::GenericSnmp => "generic-snmp",
             ProfileCategory::PingOnly => "ping-only",
+            ProfileCategory::UrlCheck => "url-check",
         }
     }
 

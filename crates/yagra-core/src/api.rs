@@ -44,8 +44,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    resolve_collection_set, IfIndex, NodeId, NodeState, Permission, ProfileCategory, Role,
-    SeriesKey, Severity,
+    is_ssrf_blocked, resolve_collection_set, IfIndex, NodeId, NodeState, Permission,
+    ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -76,6 +76,8 @@ pub struct AdminState {
     /// Troubleshoot deep-diagnostic jobs (anomaly/correlation/capacity/flap). A TSDB-read
     /// background computation in core (ADR-022) — not a poller/bus job.
     pub analysis: Arc<AnalysisRunner>,
+    /// Per-node URL-monitor configs (HTTP/HTTPS endpoint checks).
+    pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -113,6 +115,13 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
+        .route(
+            "/api/v1/nodes/:node_id/url-check",
+            get(get_url_check)
+                .put(set_url_check)
+                .delete(delete_url_check),
+        )
+        .route("/api/v1/url-monitors", post(create_url_monitor))
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
@@ -562,6 +571,8 @@ struct NodeDetail {
     model: Option<String>,
     /// The group this node belongs to; `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
+    /// URL-monitor config when this node is a URL monitor; `null` otherwise.
+    url_check: Option<UrlCheckConfig>,
 }
 
 async fn get_node(
@@ -576,18 +587,23 @@ async fn get_node(
         return not_found("node_not_found", format!("no node {node_id}"));
     };
     match admin.repo.get_node(node_id).await {
-        Ok(Some(node)) => Json(NodeDetail {
-            id: node.id,
-            name: node.name,
-            address: node.address.to_string(),
-            profile_id: node.profile.map(|p| p.0),
-            credential_id: node.credential.map(|c| c.as_uuid()),
-            parent_id: node.parent.map(|p| p.as_uuid()),
-            vendor: node.vendor,
-            model: node.model,
-            group_id: node.group.map(|g| g.as_uuid()),
-        })
-        .into_response(),
+        Ok(Some(node)) => {
+            // Best-effort: a URL-check load failure shouldn't fail the whole node detail.
+            let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
+            Json(NodeDetail {
+                id: node.id,
+                name: node.name,
+                address: node.address.to_string(),
+                profile_id: node.profile.map(|p| p.0),
+                credential_id: node.credential.map(|c| c.as_uuid()),
+                parent_id: node.parent.map(|p| p.as_uuid()),
+                vendor: node.vendor,
+                model: node.model,
+                group_id: node.group.map(|g| g.as_uuid()),
+                url_check,
+            })
+            .into_response()
+        }
         Ok(None) => not_found("node_not_found", format!("no node {node_id}")),
         Err(e) => {
             tracing::error!(error = %e, "get node failed");
@@ -1978,6 +1994,226 @@ async fn set_node_bindings(
             internal("failed to update node")
         }
     }
+}
+
+/// Validate an operator-supplied monitor URL at the API edge (security.md: validate input; ADR
+/// §229: SSRF). Scheme must be http/https; an IP-literal host that is loopback/link-local
+/// (incl. cloud metadata)/multicast/unspecified is refused. Hostnames are allowed here (the
+/// transport does a deeper resolved-address check before the request). `Ok` ⇒ the parsed URL.
+// The `Err` is the standard axum `Response` used by every handler in this module; boxing it just
+// to satisfy the lint would make call sites noisier than the win.
+#[allow(clippy::result_large_err)]
+fn validate_monitor_url(url: &str) -> Result<reqwest::Url, Response> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_url",
+            format!("{url:?} is not a valid URL"),
+        )
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_url_scheme",
+            "url scheme must be http or https".to_owned(),
+        ));
+    }
+    if let Some(host) = parsed.host_str() {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if is_ssrf_blocked(ip) {
+                return Err(error_response(
+                    StatusCode::BAD_REQUEST,
+                    "blocked_target",
+                    "target address is not allowed (loopback / link-local / metadata)".to_owned(),
+                ));
+            }
+        }
+    } else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_url",
+            "url must have a host".to_owned(),
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Best-effort resolve a URL's host to a single management IP for the node's `address` column
+/// (used for display only — URL monitors skip ICMP and the probe re-resolves the URL each poll).
+/// Falls back to the unspecified address if the host can't be resolved.
+async fn resolve_monitor_address(url: &reqwest::Url) -> IpAddr {
+    let unspecified = IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+    let Some(host) = url.host_str() else {
+        return unspecified;
+    };
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip;
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(mut addrs) => addrs.next().map_or(unspecified, |a| a.ip()),
+        Err(_) => unspecified,
+    }
+}
+
+/// The URL-monitor config for a node, or 404 if the node isn't a URL monitor.
+async fn get_url_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.url_checks.get(node_id).await {
+        Ok(Some(cfg)) => Json(cfg).into_response(),
+        Ok(None) => not_found(
+            "url_check_not_found",
+            format!("no url check for node {node_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "get url check failed");
+            internal("failed to load url check")
+        }
+    }
+}
+
+/// Create or replace a node's URL-monitor config. The node must already exist.
+async fn set_url_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Json(cfg): Json<UrlCheckConfig>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if let Err(resp) = validate_monitor_url(&cfg.url) {
+        return resp;
+    }
+    match admin.repo.get_node(node_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set url check: load node failed");
+            return internal("failed to load node");
+        }
+    }
+    match admin.url_checks.upsert(node_id, &cfg).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "set url check failed");
+            internal("failed to save url check")
+        }
+    }
+}
+
+/// Remove a node's URL-monitor config (the node itself is untouched).
+async fn delete_url_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.url_checks.delete(node_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(
+            "url_check_not_found",
+            format!("no url check for node {node_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "delete url check failed");
+            internal("failed to delete url check")
+        }
+    }
+}
+
+/// Create a URL monitor in one call: a node bound to the built-in URL/HTTP profile (so it inherits
+/// the default thresholds) plus its URL-check config. `name`/`parent_id`/`pool` plus a flattened
+/// [`UrlCheckConfig`] (only `url` is required; everything else defaults).
+#[derive(Deserialize)]
+struct CreateUrlMonitor {
+    name: String,
+    #[serde(default)]
+    parent_id: Option<Uuid>,
+    #[serde(default)]
+    pool: Option<String>,
+    #[serde(flatten)]
+    config: UrlCheckConfig,
+}
+
+async fn create_url_monitor(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateUrlMonitor>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "monitor name must not be empty".to_owned(),
+        );
+    }
+    let parsed = match validate_monitor_url(&body.config.url) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    // Bind to the built-in URL/HTTP profile (if present) so default thresholds are inherited.
+    let profile = admin
+        .repo
+        .profile_id_for_category(ProfileCategory::UrlCheck.as_str())
+        .await
+        .unwrap_or(None);
+    let address = resolve_monitor_address(&parsed).await;
+    let node_id = match admin
+        .repo
+        .create_node(
+            body.name.trim(),
+            address,
+            body.pool.as_deref(),
+            profile,
+            None,
+            body.parent_id,
+            None,
+            None,
+        )
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "create url monitor: create node failed");
+            return internal("failed to create url monitor");
+        }
+    };
+    if let Err(e) = admin.url_checks.upsert(node_id, &body.config).await {
+        // The node exists but the check didn't save — roll back the node so we don't leave a
+        // half-created monitor (a URL-category node with no check would just get no jobs).
+        let _ = admin.repo.delete_node(node_id).await;
+        tracing::error!(error = %e, "create url monitor: save check failed");
+        return internal("failed to create url monitor");
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": node_id })),
+    )
+        .into_response()
 }
 
 /// Trigger an immediate poll of one node (the "poll now" action): dispatches its full configured

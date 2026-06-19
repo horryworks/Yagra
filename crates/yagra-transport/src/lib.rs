@@ -15,10 +15,13 @@ use std::net::IpAddr;
 use std::time::Duration;
 use thiserror::Error;
 
+mod http;
 mod icmp;
 mod snmp;
 mod snmp_v3;
 pub use icmp::{summarize, SurgePingTransport};
+
+pub use yagra_common::HttpMethod;
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +78,35 @@ pub struct SnmpTableString {
     pub ifindex: u32,
     /// The string value (lossily decoded UTF-8; device-supplied, treat as untrusted).
     pub value: String,
+}
+
+/// What a URL/HTTP(S) probe needs from the job (the non-secret request shape). The poller maps
+/// a [`yagra_bus::HttpCheck`] into this; expected-status matching is applied poller-side, not here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpProbeSpec {
+    /// Full URL to request, e.g. `https://api.example.com/health`.
+    pub url: String,
+    /// Request method.
+    pub method: HttpMethod,
+    /// Verify the TLS certificate chain (default on; off only by operator opt-in).
+    pub verify_tls: bool,
+    /// Follow 3xx redirects.
+    pub follow_redirects: bool,
+}
+
+/// Outcome of an HTTP/HTTPS probe. Raw observations only (ADR-012) — the poller derives
+/// `http_up` from `reachable` + the expected-status match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpProbe {
+    /// Whether an HTTP response was received at all (any status counts).
+    pub reachable: bool,
+    /// The HTTP status code, if a response arrived.
+    pub status_code: Option<u16>,
+    /// Wall-clock request time in milliseconds.
+    pub response_time_ms: f64,
+    /// Days until the TLS server certificate expires (HTTPS only); `None` for plain HTTP or
+    /// if the certificate couldn't be read.
+    pub cert_days_to_expiry: Option<f64>,
 }
 
 /// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job). Keys are
@@ -164,6 +196,16 @@ pub trait Transport: Send + Sync {
         column_oids: &[String],
         timeout: Duration,
     ) -> Result<Vec<SnmpTableString>, TransportError>;
+
+    /// Probe an HTTP/HTTPS URL endpoint: reachability + status code + response time, and (for
+    /// HTTPS) the server certificate's days-to-expiry. A network failure is reported as
+    /// `reachable = false` (an outage), not an `Err`; `Err` is for un-runnable configs only
+    /// (bad URL/scheme, SSRF-blocked target).
+    async fn probe_http(
+        &self,
+        spec: &HttpProbeSpec,
+        timeout: Duration,
+    ) -> Result<HttpProbe, TransportError>;
 }
 
 /// A canned [`Transport`] for tests and the single-process walking skeleton.
@@ -182,10 +224,12 @@ pub struct FakeTransport {
     pub snmp_table_strings: Vec<SnmpTableString>,
     /// The string scalars every SNMP v3 string GET returns.
     pub snmp_v3_strings: Vec<SnmpStringSample>,
+    /// The probe every HTTP call returns.
+    pub http: HttpProbe,
 }
 
 impl FakeTransport {
-    /// A fake that always reports the target reachable with the given RTT.
+    /// A fake that always reports the target reachable with the given RTT (and an HTTP 200).
     #[must_use]
     pub fn reachable(rtt_ms: f64) -> Self {
         Self {
@@ -198,10 +242,16 @@ impl FakeTransport {
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
             snmp_v3_strings: Vec::new(),
+            http: HttpProbe {
+                reachable: true,
+                status_code: Some(200),
+                response_time_ms: rtt_ms,
+                cert_days_to_expiry: None,
+            },
         }
     }
 
-    /// A fake that always reports the target unreachable (100% loss).
+    /// A fake that always reports the target unreachable (100% loss; HTTP unreachable).
     #[must_use]
     pub fn unreachable() -> Self {
         Self {
@@ -214,6 +264,12 @@ impl FakeTransport {
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
             snmp_v3_strings: Vec::new(),
+            http: HttpProbe {
+                reachable: false,
+                status_code: None,
+                response_time_ms: 0.0,
+                cert_days_to_expiry: None,
+            },
         }
     }
 
@@ -242,6 +298,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_v3_strings(mut self, rows: Vec<SnmpStringSample>) -> Self {
         self.snmp_v3_strings = rows;
+        self
+    }
+
+    /// Set the canned HTTP probe this fake returns.
+    #[must_use]
+    pub fn with_http(mut self, probe: HttpProbe) -> Self {
+        self.http = probe;
         self
     }
 }
@@ -321,6 +384,14 @@ impl Transport for FakeTransport {
             .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
             .cloned()
             .collect())
+    }
+
+    async fn probe_http(
+        &self,
+        _spec: &HttpProbeSpec,
+        _timeout: Duration,
+    ) -> Result<HttpProbe, TransportError> {
+        Ok(self.http.clone())
     }
 }
 

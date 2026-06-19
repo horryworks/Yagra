@@ -420,6 +420,26 @@ export interface Mute {
   reason: string | null;
 }
 
+/** Which HTTP status codes count as "up" for a URL monitor (mirrors yagra_common::ExpectedStatus,
+ *  a tagged object). */
+export type ExpectedStatus =
+  | { kind: 'two_xx' }
+  | { kind: 'exact'; codes: number[] }
+  | { kind: 'range'; lo: number; hi: number };
+
+/** A node's URL-monitor configuration (1:1 with the node). `url` is the only required field on
+ *  create; the rest default server-side. */
+export interface UrlCheckConfig {
+  url: string;
+  method: 'GET' | 'HEAD' | 'POST';
+  expected_status: ExpectedStatus;
+  verify_tls: boolean;
+  follow_redirects: boolean;
+  timeout_ms: number;
+  /** Reserved for Basic/Bearer/Header auth; unused in the MVP. */
+  credential: string | null;
+}
+
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
 export interface NodeDetail {
   id: string;
@@ -433,6 +453,8 @@ export interface NodeDetail {
   model: string | null;
   /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
   group_id: string | null;
+  /** URL-monitor config when this node is a URL monitor; `null` otherwise. */
+  url_check: UrlCheckConfig | null;
 }
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).

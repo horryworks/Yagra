@@ -101,6 +101,13 @@ code,
   color: var(--text-secondary);
 }
 
+/* A checkbox + label on one line (overrides the column layout of .form-label). */
+.form-label.form-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
 .form-error {
   margin: 0;
   font-size: var(--font-sm);

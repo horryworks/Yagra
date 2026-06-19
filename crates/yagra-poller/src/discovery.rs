@@ -320,7 +320,8 @@ mod tests {
     use std::net::Ipv4Addr;
     use yagra_bus::{DiscoveryCredential, DiscoveryV3};
     use yagra_transport::{
-        IcmpProbe, SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, TransportError,
+        HttpProbe, HttpProbeSpec, IcmpProbe, SnmpSample, SnmpStringSample, SnmpTableSample,
+        SnmpTableString, TransportError,
     };
 
     /// Answers SNMP only for a specific v2c community and/or v3 user, so tests can assert
@@ -423,6 +424,19 @@ mod tests {
             } else {
                 Ok(Vec::new())
             }
+        }
+
+        async fn probe_http(
+            &self,
+            _spec: &HttpProbeSpec,
+            _timeout: Duration,
+        ) -> Result<HttpProbe, TransportError> {
+            Ok(HttpProbe {
+                reachable: false,
+                status_code: None,
+                response_time_ms: 0.0,
+                cert_days_to_expiry: None,
+            })
         }
     }
 
@@ -663,6 +677,18 @@ mod tests {
             ) -> Result<Vec<SnmpTableString>, TransportError> {
                 self.attempts.fetch_add(1, Ordering::SeqCst);
                 Ok(Vec::new()) // empty ⇒ this candidate "failed"
+            }
+            async fn probe_http(
+                &self,
+                _spec: &HttpProbeSpec,
+                _to: Duration,
+            ) -> Result<HttpProbe, TransportError> {
+                Ok(HttpProbe {
+                    reachable: false,
+                    status_code: None,
+                    response_time_ms: 0.0,
+                    cert_days_to_expiry: None,
+                })
             }
         }
 

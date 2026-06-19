@@ -19,6 +19,7 @@ pub mod rbac;
 pub mod severity;
 pub mod state;
 pub mod thresholds;
+pub mod url_check;
 
 pub use address::AddressFamily;
 pub use classification::{
@@ -38,4 +39,8 @@ pub use severity::Severity;
 pub use state::NodeState;
 pub use thresholds::{
     resolve_effective, Direction, EffectiveThreshold, ScopeLevel, ScopedThreshold, ThresholdRule,
+};
+pub use url_check::{
+    is_ssrf_blocked, ExpectedStatus, HttpMethod, UrlCheckConfig, METRIC_HTTP_STATUS_CODE,
+    METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
 };

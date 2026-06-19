@@ -638,6 +638,18 @@ impl NodeRepo {
             .collect()
     }
 
+    /// The id of one profile with the given `ProfileCategory` token (e.g. `url-check`), if any.
+    /// Used to bind a freshly created URL monitor to the built-in URL/HTTP profile so it inherits
+    /// the default thresholds. Lowest name wins for determinism if several share the category.
+    pub async fn profile_id_for_category(&self, category: &str) -> anyhow::Result<Option<Uuid>> {
+        let row =
+            sqlx::query("SELECT id FROM profiles WHERE category = $1 ORDER BY name, id LIMIT 1")
+                .bind(category)
+                .fetch_optional(&self.pool)
+                .await?;
+        row.map(|r| Ok(r.try_get("id")?)).transpose()
+    }
+
     /// Create a profile; returns its id. `poll_interval_secs` is the optional per-profile interval
     /// override (`None` ⇒ inherit the global default).
     pub async fn create_profile(
@@ -918,6 +930,42 @@ impl NodeRepo {
             .bind(rule.model)
             .execute(&self.pool)
             .await?;
+        }
+        // 4. Default thresholds for the built-in URL/HTTP endpoint profile so a freshly created URL
+        //    monitor alerts out of the box: `http_up` below 1 ⇒ critical (down or wrong status), and
+        //    `ssl_cert_days_to_expiry` below 30/7 ⇒ warning/critical. Stable ids + ON CONFLICT DO
+        //    NOTHING keep operator edits/deletes from being resurrected on the next boot.
+        const URL_THRESHOLD_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_a000;
+        if let Some(&url_profile_id) = profile_id_by_name.get("URL / HTTP endpoint") {
+            let scope_id = url_profile_id.to_string();
+            // (offset, metric, direction, warning, critical, dwell_samples)
+            let defaults = [
+                (0u128, "http_up", "below", None::<f64>, Some(1.0), 2i32),
+                (
+                    1u128,
+                    "ssl_cert_days_to_expiry",
+                    "below",
+                    Some(30.0),
+                    Some(7.0),
+                    1i32,
+                ),
+            ];
+            for (offset, metric, direction, warning, critical, dwell) in defaults {
+                sqlx::query(
+                    "INSERT INTO thresholds \
+                        (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
+                     VALUES ($1, 'profile', $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(Uuid::from_u128(URL_THRESHOLD_ID_BASE + offset))
+                .bind(&scope_id)
+                .bind(metric)
+                .bind(direction)
+                .bind(warning)
+                .bind(critical)
+                .bind(dwell)
+                .execute(&self.pool)
+                .await?;
+            }
         }
         tracing::info!(
             "seeded built-in collection templates + device profiles + classification rules"

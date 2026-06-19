@@ -59,6 +59,7 @@ import type {
   StoredThreshold,
   TopEntry,
   TopologyNode,
+  UrlCheckConfig,
   UserSummary,
 } from '../types/api';
 
@@ -268,6 +269,38 @@ export const api = {
     vendor?: string;
     model?: string;
   }): Promise<{ id: string }> => request('/nodes', jsonBody('POST', body)),
+
+  /** Create a URL monitor in one call: a node bound to the built-in URL/HTTP profile plus its
+   *  URL-check config. Only `url`+`name` are required; the rest default server-side. */
+  createUrlMonitor: (body: {
+    name: string;
+    parent_id?: string;
+    pool?: string;
+    url: string;
+    method?: 'GET' | 'HEAD' | 'POST';
+    expected_status?: UrlCheckConfig['expected_status'];
+    verify_tls?: boolean;
+    follow_redirects?: boolean;
+    timeout_ms?: number;
+  }): Promise<{ id: string }> => request('/url-monitors', jsonBody('POST', body)),
+
+  /** A node's URL-monitor config, or `null` if it isn't a URL monitor (404 → null). */
+  getUrlCheck: async (id: string): Promise<UrlCheckConfig | null> => {
+    try {
+      return await request(`/nodes/${encodeURIComponent(id)}/url-check`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+
+  /** Create or replace a node's URL-monitor config (the node must already exist). */
+  setUrlCheck: (id: string, body: UrlCheckConfig): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/url-check`, jsonBody('PUT', body)),
+
+  /** Remove a node's URL-monitor config (the node itself is untouched). */
+  deleteUrlCheck: (id: string): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/url-check`, { method: 'DELETE' }),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>

@@ -48,8 +48,12 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 # DB / storage
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid", "json", "migrate"] }
 redis = { version = "0.27", features = ["tokio-comp"] }
-# HTTP client (VictoriaMetrics import/query — in-cluster plaintext, so no TLS feature)
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# HTTP client. VictoriaMetrics import/query is in-cluster plaintext; URL monitoring
+# (yagra-transport) needs TLS, so rustls is enabled (no native-tls/NASM). `tls_info` exposes
+# the peer certificate so the URL probe can read the cert's notAfter for expiry.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# X.509 parsing for TLS-certificate expiry (URL monitoring) — pure Rust, no NASM.
+x509-parser = "0.16"
 # Message bus (core⇄poller over NATS, ADR-007)
 async-nats = "0.49"
 # Raw-socket ICMP for the poller (needs CAP_NET_RAW at runtime, ADR build-prereqs)

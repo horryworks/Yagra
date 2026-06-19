@@ -931,6 +931,11 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             Some("Cisco Meraki"),
             vec![TEMPLATE_STANDARD_SNMP],
         ),
+        // URL / HTTP(S) endpoint monitor. Polled over HTTP (status/up + cert expiry), not SNMP —
+        // so it carries no collection templates; the per-node URL config drives the probe and the
+        // profile only exists to group these nodes and host their default thresholds. Kept at the
+        // array end for seed-id stability (see the note above).
+        prof("URL / HTTP endpoint", C::UrlCheck, None, Vec::new()),
     ]
 }
 
@@ -1130,8 +1135,17 @@ mod tests {
     #[test]
     fn every_profile_has_templates_except_ping_only() {
         for p in builtin_profiles() {
-            if p.category == ProfileCategory::PingOnly {
-                assert!(p.templates.is_empty(), "{} should be ICMP-only", p.name);
+            // ICMP-only (ping) and URL/HTTP monitors carry no SNMP collection templates — the
+            // probe is driven by the per-node config, not an OID set.
+            if matches!(
+                p.category,
+                ProfileCategory::PingOnly | ProfileCategory::UrlCheck
+            ) {
+                assert!(
+                    p.templates.is_empty(),
+                    "{} should carry no SNMP templates",
+                    p.name
+                );
             } else {
                 assert!(
                     !p.templates.is_empty(),
