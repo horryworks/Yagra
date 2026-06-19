@@ -26,12 +26,15 @@ describe('widget registry', () => {
     expect(registryView.isKnownType('does-not-exist')).toBe(false);
   });
 
-  it('produces a default layout referencing only known types with valid spans', () => {
+  it('produces a v2 default layout: one board of known types with valid spans', () => {
     const layout = defaultLayout();
-    expect(layout.widgets.length).toBeGreaterThan(0);
-    const ids = layout.widgets.map((w) => w.instanceId);
+    expect(layout.version).toBe(2);
+    expect(layout.boards).toHaveLength(1);
+    const widgets = layout.boards[0].widgets;
+    expect(widgets.length).toBeGreaterThan(0);
+    const ids = widgets.map((w) => w.instanceId);
     expect(new Set(ids).size).toBe(ids.length); // stable, unique ids
-    for (const w of layout.widgets) {
+    for (const w of widgets) {
       const def = getDefinition(w.type);
       expect(def).toBeDefined();
       expect(def!.allowedSpans).toContain(w.span);

@@ -1,35 +1,21 @@
 // User menu (top-right, always present §2.1): shows the current principal's role and a
-// logout action. Role comes from GET /api/v1/auth/me; in public-dashboard mode there may be
-// no session, in which case it shows a sign-in affordance.
+// logout action. Role is resolved into the auth store (App bootstrap / login); in public-dashboard
+// mode there may be no session, in which case it shows a sign-in affordance.
 
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, getToken } from '../../services/api';
+import { api } from '../../services/api';
 import { useAuthStore } from '../../store';
 import './UserMenu.css';
 
 export function UserMenu() {
   const authed = useAuthStore((s) => s.authed);
   const setAuthed = useAuthStore((s) => s.setAuthed);
+  const setRole = useAuthStore((s) => s.setRole);
+  const role = useAuthStore((s) => s.role);
   const navigate = useNavigate();
-  const [role, setRole] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!authed || !getToken()) {
-      setRole(null);
-      return;
-    }
-    let cancelled = false;
-    api
-      .me()
-      .then((r) => !cancelled && setRole(r.role))
-      .catch(() => !cancelled && setRole(null));
-    return () => {
-      cancelled = true;
-    };
-  }, [authed]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -42,6 +28,7 @@ export function UserMenu() {
   const logout = () => {
     api.logout();
     setAuthed(false);
+    setRole(null);
     setOpen(false);
     navigate('/dashboard');
   };

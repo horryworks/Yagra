@@ -7,7 +7,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/shell/AppShell';
 import { ComingSoon } from './components/ui/ComingSoon';
 import { LoginPage } from './pages/LoginPage';
-import { DashboardPage } from './pages/DashboardPage';
+import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
 import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
@@ -41,7 +41,7 @@ export function AppRoutes() {
         <Route index element={<Navigate to="/dashboard" replace />} />
 
         {/* Dashboard */}
-        <Route path="dashboard" element={<DashboardPage />} />
+        <Route path="dashboard" element={<SharedDashboardPage />} />
         <Route path="dashboard/my" element={<MyDashboardPage />} />
         <Route path="dashboard/templates" element={<ComingSoon />} />
         <Route path="dashboard/reports" element={<ComingSoon />} />

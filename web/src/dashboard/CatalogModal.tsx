@@ -5,7 +5,7 @@
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { useLayoutStore } from './layoutStore';
+import { useLayoutStoreContext } from './LayoutStoreContext';
 import { catalogBySection } from './registry';
 import type { Backing } from './types';
 import './CatalogModal.css';
@@ -22,7 +22,8 @@ const BACKING_LABEL: Record<Backing, string> = {
 };
 
 export function CatalogModal({ onClose }: { onClose: () => void }) {
-  const addWidget = useLayoutStore((s) => s.addWidget);
+  const useStore = useLayoutStoreContext();
+  const addWidget = useStore((s) => s.addWidget);
   const sections = catalogBySection();
   return (
     <Modal

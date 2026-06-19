@@ -418,7 +418,11 @@ const DEFAULT_WIDGETS: WidgetInstance[] = [
   { instanceId: 'w-rtt', type: 'top-rtt', span: 4 },
 ];
 
-/** A fresh copy of the default layout (callers mutate their own copy). */
+/** A fresh copy of the default layout — one board with the starter widgets (callers mutate their
+ *  own copy). */
 export function defaultLayout(): DashboardLayout {
-  return { version: DASHBOARD_VERSION, widgets: DEFAULT_WIDGETS.map((w) => ({ ...w })) };
+  return {
+    version: DASHBOARD_VERSION,
+    boards: [{ id: 'board-1', name: 'Dashboard 1', widgets: DEFAULT_WIDGETS.map((w) => ({ ...w })) }],
+  };
 }

@@ -60,8 +60,20 @@ export interface WidgetInstance {
   settings?: WidgetSettings;
 }
 
-/** The persisted board document. `version` lets the client migrate older shapes. */
+/** A named board: an ordered list of widget instances. My Dashboard holds 1..N of these (the user
+ *  switches/adds/removes them); the Shared Dashboard holds exactly one. */
+export interface Board {
+  /** Stable id (persisted; used as the React key and the active-board selector). */
+  id: string;
+  /** User-facing tab label. */
+  name: string;
+  widgets: WidgetInstance[];
+}
+
+/** The persisted dashboard document (schema v2). `version` lets the client migrate older shapes
+ *  (v1 was a flat `{ widgets }`). The *active* board is an ephemeral UI selection and is
+ *  deliberately not persisted in the document. */
 export interface DashboardLayout {
   version: number;
-  widgets: WidgetInstance[];
+  boards: Board[];
 }

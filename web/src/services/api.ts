@@ -788,6 +788,15 @@ export const api = {
   putDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
     request('/dashboard', jsonBody('PUT', layout)),
 
+  /** The global Shared Dashboard layout (one board shown to all users), or null until an admin
+   *  has saved one. Open-read; the write side is admin-only. Same opaque-JSON contract. */
+  getSharedDashboard: (): Promise<unknown> => request('/shared-dashboard'),
+
+  /** Save (replace) the global Shared Dashboard layout. Admin only — a 403 means the caller's role
+   *  may not change it (the change applies to every user). */
+  putSharedDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
+    request('/shared-dashboard', jsonBody('PUT', layout)),
+
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => request('/auth/me'),
 
