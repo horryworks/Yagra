@@ -4,6 +4,7 @@ import {
   parseAlertEvent,
   parseAnalysisJob,
   parseReportRun,
+  subscribeAlerts,
   subscribeAnalysis,
 } from './sse';
 import { setToken } from './api';
@@ -30,6 +31,23 @@ describe('parseAlertEvent', () => {
 
   it('returns null when required fields are missing', () => {
     expect(parseAlertEvent(JSON.stringify({ state: 'ok' }))).toBeNull();
+  });
+
+  it('parses an inbound ack event (acked present, no resolved flag)', () => {
+    const data = JSON.stringify({
+      node: 'n1',
+      check: 'c1',
+      severity: 'critical',
+      state: 'unreachable',
+      at_unix_ms: 1000,
+      root_cause: null,
+      flapping: false,
+      acked: { at_unix_ms: 1200, by: 'pd-user', source: 'pagerduty' },
+    });
+    const event = parseAlertEvent(data);
+    expect(event?.acked?.source).toBe('pagerduty');
+    // No `resolved` flag ⇒ subscribeAlerts treats it as an upsert, not a recovery.
+    expect(event?.resolved).toBeUndefined();
   });
 });
 
@@ -122,6 +140,33 @@ describe('subscribeAnalysis over fetch', () => {
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer tok-123' }) }),
     );
     expect(jobs[0]).toEqual({ id: 'j1', state: 'done' });
+  });
+
+  it('routes an inbound ack event to onAlert (upsert), not onResolve', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          streamOf(
+            'data: {"node":"n1","check":"c1","severity":"critical","state":"unreachable","at_unix_ms":1,"root_cause":null,"flapping":false,"acked":{"at_unix_ms":2,"by":"pd","source":"pagerduty"}}\n\n',
+          ),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const upserts: { acked?: { source: string } | null }[] = [];
+    const resolves: unknown[] = [];
+    const unsubscribe = subscribeAlerts(
+      (a) => upserts.push({ acked: a.acked }),
+      (a) => resolves.push(a),
+    );
+
+    await vi.waitFor(() => expect(upserts.length).toBe(1));
+    unsubscribe();
+
+    expect(resolves).toHaveLength(0);
+    expect(upserts[0].acked?.source).toBe('pagerduty');
   });
 
   it('does not reconnect-loop on a 401 with a token (drops the stale session)', async () => {

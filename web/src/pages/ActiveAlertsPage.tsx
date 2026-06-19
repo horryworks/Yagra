@@ -1,8 +1,9 @@
 // Active alerts — triage only (§3.2). Per the responsibility split, Yagra detects/correlates/
-// suppresses/routes; acknowledgement, escalation and on-call live in external tools
-// (PagerDuty/JSM). So there is NO Ack button and NO acked column. The only per-alert actions
+// suppresses/routes; the acknowledgement *action*, escalation and on-call live in external tools
+// (PagerDuty/JSM). So there is NO Ack button — but ack *state* mirrored back from the external
+// tool is shown read-only as an "acked" pill (ADR-015, inbound only). The only per-alert actions
 // are Mute and "open in external tool" — both pending their backends, shown disabled so the
-// intended affordance is visible without implying it works. Alerts arrive live over SSE.
+// intended affordance is visible without implying it works. Alerts (and acks) arrive live over SSE.
 
 import { useAlertStream } from '../hooks/useAlertStream';
 import { useAlertStore } from '../store';

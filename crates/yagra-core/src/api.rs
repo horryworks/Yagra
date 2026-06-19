@@ -7,6 +7,7 @@
 //! served from the live [`AlertManager`] (committed liveness + threshold roll-up + active
 //! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
 
+use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, AnalysisTool, JobParams, ScopeKind};
 use crate::audit::AuditRepo;
@@ -16,7 +17,7 @@ use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
-use crate::history::AlertHistoryStore;
+use crate::history::{AlertHistoryRow, AlertHistoryStore};
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
@@ -44,6 +45,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use yagra_alert::Alert;
 use yagra_common::{
     is_ssrf_blocked, resolve_collection_set, IfIndex, NodeId, NodeState, Permission,
     ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
@@ -106,6 +108,9 @@ pub struct ApiState {
     pub sessions: Arc<SessionStore>,
     /// Alert history (read); `None` in skeleton mode.
     pub history: Option<Arc<AlertHistoryStore>>,
+    /// Inbound ack reflection from external tools (read-only display, ADR-015); `None` in
+    /// skeleton mode.
+    pub ack: Option<Arc<AckRepo>>,
     /// When true, read-only endpoints skip authentication (public read-only dashboard).
     /// When false (default), they require a valid session with `View` (every role has it).
     pub public_dashboard: bool,
@@ -214,6 +219,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/alerts", get(list_alerts))
+        .route("/api/v1/alerts/ack", post(ack_alert))
         .route("/api/v1/alerts/history", get(list_alert_history))
         .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
         .route("/api/v1/alerts/calendar", get(alert_calendar))
@@ -1351,11 +1357,77 @@ async fn poller_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
 }
 
 /// Currently active alerts (from the in-memory alert engine).
+/// An active alert plus its inbound (read-only) ack state, for the API. Yagra holds no ack
+/// action — `acked` is mirrored from the external tool (ADR-015), shown for triage only.
+#[derive(Serialize)]
+struct ActiveAlertView {
+    #[serde(flatten)]
+    alert: Alert,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acked: Option<AckView>,
+}
+
+/// An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all
+/// transitions of one incident share it).
+#[derive(Serialize)]
+struct AlertHistoryView {
+    #[serde(flatten)]
+    row: AlertHistoryRow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acked: Option<AckView>,
+}
+
+/// Join the ack map into the active-alert list (pure; unit-tested without a DB).
+fn decorate_alerts(
+    alerts: Vec<Alert>,
+    acks: &std::collections::HashMap<AckKey, AckView>,
+) -> Vec<ActiveAlertView> {
+    alerts
+        .into_iter()
+        .map(|alert| {
+            let key: AckKey = (
+                alert.node.as_uuid(),
+                alert.check.as_uuid(),
+                alert.severity.as_str().to_owned(),
+            );
+            let acked = acks.get(&key).cloned();
+            ActiveAlertView { alert, acked }
+        })
+        .collect()
+}
+
+/// Join the ack map into a history page (pure; unit-tested without a DB).
+fn decorate_history(
+    rows: Vec<AlertHistoryRow>,
+    acks: &std::collections::HashMap<AckKey, AckView>,
+) -> Vec<AlertHistoryView> {
+    rows.into_iter()
+        .map(|row| {
+            let key: AckKey = (row.node, row.check, row.severity.clone());
+            let acked = acks.get(&key).cloned();
+            AlertHistoryView { row, acked }
+        })
+        .collect()
+}
+
+/// Load the current ack map, or an empty map when ack is unavailable (skeleton) or the query
+/// errors — ack state is decorative, so a failure here must not blank the alert list.
+async fn ack_map(st: &ApiState) -> std::collections::HashMap<AckKey, AckView> {
+    match st.ack.as_ref() {
+        Some(repo) => repo.all().await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "load ack map failed; serving alerts without ack state");
+            std::collections::HashMap::new()
+        }),
+        None => std::collections::HashMap::new(),
+    }
+}
+
 async fn list_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
-    Json(st.alerts.active_alerts()).into_response()
+    let acks = ack_map(&st).await;
+    Json(decorate_alerts(st.alerts.active_alerts(), &acks)).into_response()
 }
 
 /// Recent alert-history rows. Query: `?limit=` (default 100). Empty in skeleton mode.
@@ -1373,14 +1445,88 @@ async fn list_alert_history(
         return resp;
     }
     let Some(history) = st.history.as_ref() else {
-        return Json(Vec::<serde_json::Value>::new()).into_response();
+        return Json(Vec::<AlertHistoryView>::new()).into_response();
     };
     match history.recent(q.limit.unwrap_or(100)).await {
-        Ok(rows) => Json(rows).into_response(),
+        Ok(rows) => {
+            let acks = ack_map(&st).await;
+            Json(decorate_history(rows, &acks)).into_response()
+        }
         Err(e) => {
             tracing::error!(error = %e, "list alert history failed");
             internal("failed to list alert history")
         }
+    }
+}
+
+/// Default for `AckRequest::acked` when the field is omitted (a bare body means "ack").
+fn default_acked() -> bool {
+    true
+}
+
+/// Inbound ack reflection (ADR-015, A1). An external incident tool (PagerDuty / JSM) mirrors ack
+/// state into Yagra by the alert dedup identity `(node, check, severity)`; `acked:false` clears
+/// it. Yagra never writes ack back out (one-way inbound). `AckAlerts`-gated; the mutating-request
+/// middleware records the audit entry.
+#[derive(Deserialize)]
+struct AckRequest {
+    node: Uuid,
+    check: Uuid,
+    severity: Severity,
+    /// `true` = acked (upsert), `false` = cleared (delete). Defaults to `true`.
+    #[serde(default = "default_acked")]
+    acked: bool,
+    /// External actor reference (id / handle) — never a secret.
+    #[serde(default)]
+    by: Option<String>,
+    /// Originating tool: `pagerduty` | `jsm` | `manual` | …
+    #[serde(default)]
+    source: Option<String>,
+    /// Optional free-text note from the external tool.
+    #[serde(default)]
+    note: Option<String>,
+    /// When the external tool recorded the ack (Unix ms, UTC); defaults to now.
+    #[serde(default)]
+    at_unix_ms: Option<i64>,
+}
+
+async fn ack_alert(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<AckRequest>,
+) -> Response {
+    let Some(repo) = st.ack.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    let severity = body.severity.as_str();
+    if body.acked {
+        let view = AckView {
+            at_unix_ms: body.at_unix_ms.unwrap_or_else(|| now_unix_s() * 1000),
+            by: body.by.unwrap_or_else(|| "external".to_owned()),
+            source: body.source.unwrap_or_else(|| "external".to_owned()),
+            note: body.note,
+        };
+        if let Err(e) = repo.set(body.node, body.check, severity, &view).await {
+            tracing::error!(error = %e, "record inbound ack failed");
+            return internal("failed to record acknowledgement");
+        }
+        // Live-update any matching active alert so the read-only acked pill appears without a
+        // refetch (the event carries the alert shape + `acked`, no `resolved` ⇒ an upsert).
+        let acked_value = serde_json::to_value(&view).ok();
+        st.alerts
+            .broadcast_acked(body.node, body.check, body.severity, acked_value);
+        Json(serde_json::json!({ "acked": true, "ack": view })).into_response()
+    } else {
+        if let Err(e) = repo.clear(body.node, body.check, severity).await {
+            tracing::error!(error = %e, "clear inbound ack failed");
+            return internal("failed to clear acknowledgement");
+        }
+        st.alerts
+            .broadcast_acked(body.node, body.check, body.severity, None);
+        Json(serde_json::json!({ "acked": false })).into_response()
     }
 }
 
@@ -5841,6 +5987,7 @@ mod tests {
             admin: None,
             sessions: Arc::new(SessionStore::new()),
             history: None,
+            ack: None,
             public_dashboard: true,
         }
     }
@@ -5857,6 +6004,7 @@ mod tests {
             admin: None,
             sessions,
             history: None,
+            ack: None,
             public_dashboard: false,
         };
         (state, token)
@@ -5875,6 +6023,7 @@ mod tests {
             admin: None,
             sessions,
             history: None,
+            ack: None,
             public_dashboard: false,
         };
         (state, token)
@@ -6764,5 +6913,126 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    // ── Inbound ack reflection (ADR-015, A1) ────────────────────────────────
+
+    #[test]
+    fn decorate_alerts_attaches_inbound_ack_by_dedup_key() {
+        use std::collections::HashMap;
+        let node = NodeId::from(Uuid::from_u128(1));
+        let check = yagra_common::CheckId::from(Uuid::from_u128(2));
+        let acked_alert = Alert {
+            node,
+            check,
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 100,
+            root_cause: None,
+            flapping: false,
+        };
+        let other = Alert {
+            node: NodeId::from(Uuid::from_u128(9)),
+            check: yagra_common::CheckId::from(Uuid::from_u128(8)),
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms: 50,
+            root_cause: None,
+            flapping: false,
+        };
+        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
+        acks.insert(
+            (node.as_uuid(), check.as_uuid(), "critical".to_owned()),
+            AckView {
+                at_unix_ms: 123,
+                by: "pd-user".to_owned(),
+                source: "pagerduty".to_owned(),
+                note: Some("acked".to_owned()),
+            },
+        );
+
+        let out = decorate_alerts(vec![acked_alert, other], &acks);
+        assert_eq!(
+            out[0].acked.as_ref().map(|a| a.source.as_str()),
+            Some("pagerduty")
+        );
+        assert!(out[1].acked.is_none(), "unrelated alert must not be acked");
+
+        // Serialized shape flattens the alert fields and includes the ack view.
+        let json = serde_json::to_value(&out[0]).unwrap();
+        assert_eq!(json["severity"], "critical");
+        assert_eq!(json["acked"]["by"], "pd-user");
+        // A non-acked alert omits the field entirely (skip_serializing_if).
+        let json2 = serde_json::to_value(&out[1]).unwrap();
+        assert!(json2.get("acked").is_none());
+    }
+
+    #[test]
+    fn decorate_history_shares_ack_across_an_incidents_transitions() {
+        use std::collections::HashMap;
+        let node = Uuid::from_u128(1);
+        let check = Uuid::from_u128(2);
+        let fire = AlertHistoryRow {
+            node,
+            check,
+            severity: "critical".to_owned(),
+            state: "critical".to_owned(),
+            at_unix_ms: 10,
+            resolved: false,
+        };
+        let clear = AlertHistoryRow {
+            node,
+            check,
+            severity: "critical".to_owned(),
+            state: "ok".to_owned(),
+            at_unix_ms: 20,
+            resolved: true,
+        };
+        let unrelated = AlertHistoryRow {
+            node: Uuid::from_u128(7),
+            check,
+            severity: "warning".to_owned(),
+            state: "warning".to_owned(),
+            at_unix_ms: 5,
+            resolved: false,
+        };
+        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
+        acks.insert(
+            (node, check, "critical".to_owned()),
+            AckView {
+                at_unix_ms: 11,
+                by: "x".to_owned(),
+                source: "jsm".to_owned(),
+                note: None,
+            },
+        );
+
+        let out = decorate_history(vec![fire, clear, unrelated], &acks);
+        assert!(out[0].acked.is_some(), "fire of acked incident is acked");
+        assert!(
+            out[1].acked.is_some(),
+            "clear of same incident shares the ack"
+        );
+        assert!(out[2].acked.is_none(), "unrelated transition is not acked");
+    }
+
+    #[tokio::test]
+    async fn ack_endpoint_unavailable_without_ack_store() {
+        // Skeleton/public state has no ack store ⇒ the inbound ack endpoint is unavailable.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/alerts/ack")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"node":"00000000-0000-0000-0000-000000000001","check":"00000000-0000-0000-0000-000000000002","severity":"critical","acked":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
