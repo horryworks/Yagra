@@ -258,3 +258,63 @@
   background: var(--border-color);
   margin: 4px 0;
 }
+
+/* Maintenance/Mute quick-duration sections in the context menu: a label over a row of preset
+   buttons (1h / 4h / 24h / Custom…). */
+.ntree-menu-section {
+  padding: 4px 14px 6px;
+}
+
+.ntree-menu-label {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.ntree-menu-durs {
+  display: flex;
+  gap: 4px;
+}
+
+/* Override the generic `.ntree-menu button` block padding for the compact duration chips. */
+.ntree-menu .ntree-dur {
+  padding: 3px 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.ntree-menu .ntree-dur:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+/* Per-row suppression markers (maintenance wrench + mute bell-off), always visible when active. */
+.ntree-supp {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ntree-supp-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ntree-supp-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ntree-supp-icon.maint {
+  color: var(--status-maintenance);
+}
+
+.ntree-supp-icon.mute {
+  color: var(--text-tertiary);
+}

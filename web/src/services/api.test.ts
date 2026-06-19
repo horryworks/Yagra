@@ -486,15 +486,42 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ enabled: false });
   });
 
-  it('creates a mute, omitting the optional check/reason when empty', async () => {
+  it('creates a node mute, omitting the optional check/reason when empty', async () => {
     const spy = vi
       .fn()
       .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'm1' }) } as Response);
     globalThis.fetch = spy;
-    await api.createMute({ node_id: 'n1', until: '2026-06-12T02:00:00.000Z' });
+    await api.createMute({
+      scope_kind: 'node',
+      scope_id: 'n1',
+      until: '2026-06-12T02:00:00.000Z',
+    });
     const [url, init] = spy.mock.calls[0];
     expect(url).toBe('/api/v1/mutes');
-    expect(JSON.parse(init.body)).toEqual({ node_id: 'n1', until: '2026-06-12T02:00:00.000Z' });
+    expect(JSON.parse(init.body)).toEqual({
+      scope_kind: 'node',
+      scope_id: 'n1',
+      until: '2026-06-12T02:00:00.000Z',
+    });
+  });
+
+  it('creates a folder-group mute', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'm2' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createMute({
+      scope_kind: 'group',
+      scope_id: 'g1',
+      until: '2026-06-12T02:00:00.000Z',
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/mutes');
+    expect(JSON.parse(init.body)).toEqual({
+      scope_kind: 'group',
+      scope_id: 'g1',
+      until: '2026-06-12T02:00:00.000Z',
+    });
   });
 
   it('lifts a mute via DELETE', async () => {

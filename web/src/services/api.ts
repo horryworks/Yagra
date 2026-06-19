@@ -30,6 +30,7 @@ import type {
   InterfaceTopEntry,
   InterfaceTopMetric,
   InterfaceSeries,
+  MaintenanceScopeLevel,
   MaintenanceWindow,
   MetricAgg,
   MetricKind,
@@ -669,10 +670,11 @@ export const api = {
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),
 
-  /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds. */
+  /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds plus `group_id`
+   *  (a folder group, resolved recursively). */
   createMaintenanceWindow: (body: {
     name: string;
-    scope_level: ScopeLevel;
+    scope_level: MaintenanceScopeLevel;
     scope_id: string;
     starts_at: string;
     ends_at: string;
@@ -689,9 +691,12 @@ export const api = {
   /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
   listMutes: (): Promise<Mute[]> => request('/mutes'),
 
-  /** Create a mute. `metric_name` omitted ⇒ the whole node; `until` is RFC 3339. */
+  /** Create a mute. `scope_kind` is `node` (one node, optionally one `metric_name`) or `group`
+   *  (every node under a folder group, recursive — `metric_name` ignored); `scope_id` is the
+   *  node/group id. `until` is RFC 3339. */
   createMute: (body: {
-    node_id: string;
+    scope_kind: 'node' | 'group';
+    scope_id: string;
     metric_name?: string;
     until: string;
     reason?: string;

@@ -1,3 +1,10 @@
 /* Mutes — data-table standard v2. The chrome (toolbar, sticky header, badges, hover actions,
    reason ellipsis) comes from styles/table.css and the add/lift dialogs from the shared Modal
-   scaffolding; no page-local styling is needed here. */
+   scaffolding. Only the target cell's inline layout lives here. */
+
+/* Target cell: optional "group" badge + resolved node/group name on one line. */
+.mute-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

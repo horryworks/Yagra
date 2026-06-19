@@ -198,6 +198,11 @@ export interface ProfileInput {
 /** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */
 export type ScopeLevel = 'profile' | 'group' | 'node';
 
+/** Maintenance-window scope. The threshold scopes plus `group_id` — a hierarchical folder group
+ *  (the All Nodes tree), resolved recursively incl. subgroups (ADR-022). Distinct from the legacy
+ *  tag-based `group` scope (`scope_id` is a group UUID, not a tag value). */
+export type MaintenanceScopeLevel = ScopeLevel | 'group_id';
+
 /** Breach direction (yagra-common `Direction`, snake_case). */
 export type Direction = 'above' | 'below';
 
@@ -393,7 +398,7 @@ export interface MibCatalogEntry {
 export interface MaintenanceWindow {
   id: string;
   name: string;
-  scope_level: ScopeLevel;
+  scope_level: MaintenanceScopeLevel;
   scope_id: string;
   starts_at: string;
   ends_at: string;
@@ -401,11 +406,15 @@ export interface MaintenanceWindow {
   active: boolean;
 }
 
-/** A mute (`GET /api/v1/mutes`, core `StoredMute`): notifications for one node (optionally
- *  one metric) are silenced until `until_at` — the alert still shows in the UI/history. */
+/** A mute (`GET /api/v1/mutes`, core `StoredMute`): notifications are silenced until `until_at`
+ *  — the alert still shows in the UI/history. A `node` mute targets one node (optionally one
+ *  `metric_name`); a `group` mute targets every node under a folder group (recursive). Exactly
+ *  one of `node_id` / `group_id` is set, per `scope_kind`. */
 export interface Mute {
   id: string;
-  node_id: string;
+  scope_kind: 'node' | 'group';
+  node_id: string | null;
+  group_id: string | null;
   metric_name: string | null;
   until_at: string;
   reason: string | null;

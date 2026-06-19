@@ -173,18 +173,24 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // periodically so edits (and window start/end boundaries) take effect without a restart.
     let thresholds = Arc::new(ThresholdStore::new(repo.pool()));
     let maintenance = Arc::new(MaintenanceRepo::new(repo.pool()));
-    alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance).await);
+    // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
+    // group to its subtree, and AdminState serves group CRUD — one hierarchy, read in several places.
+    let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
+    alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await);
     {
         let alerts = alerts.clone();
         let repo = repo.clone();
         let thresholds = thresholds.clone();
         let maintenance = maintenance.clone();
+        let group_repo = group_repo.clone();
         let classifier = classifier.clone();
         let classification = classification.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance).await);
+                alerts.set_config(
+                    load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await,
+                );
                 // Pick up classification-rule edits without a restart (also reloaded inline by
                 // the rule-edit handlers; this catches any drift / multi-instance future).
                 if let Err(e) = classifier.reload(&classification).await {
@@ -229,16 +235,18 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // refresh periodically so edits take effect without a restart (env channels stay
     // always-on; expired mutes drop out on refresh).
     load_routing(&notifier, &notifications).await;
-    load_mutes(&notifier, &maintenance).await;
+    load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
     {
         let notifier = notifier.clone();
         let notifications = notifications.clone();
         let maintenance = maintenance.clone();
+        let repo = repo.clone();
+        let group_repo = group_repo.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 load_routing(&notifier, &notifications).await;
-                load_mutes(&notifier, &maintenance).await;
+                load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
             }
         });
     }
@@ -283,9 +291,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
         _ => {}
     }
-    // Shared group repo: the analysis runner expands a group scope to its subtree, and AdminState
-    // serves group CRUD — both read the same hierarchy.
-    let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
+    // `group_repo` is created earlier (shared with maintenance/mute scope resolution).
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo,
         store.clone(),
@@ -541,6 +547,7 @@ async fn load_alert_config(
     repo: &NodeRepo,
     thresholds: &ThresholdStore,
     maintenance: &MaintenanceRepo,
+    groups: &groups::GroupRepo,
 ) -> AlertConfig {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load thresholds");
@@ -551,7 +558,33 @@ async fn load_alert_config(
         Vec::new()
     });
     let nodes = repo.list_nodes().await.unwrap_or_default();
-    let in_maintenance = maintenance::nodes_in_maintenance(&scopes, &nodes);
+    let mut in_maintenance = maintenance::nodes_in_maintenance(&scopes, &nodes);
+    // Folder-group scopes resolve against the inventory tree (recursive incl. subgroups, ADR-022)
+    // — the same chain the Troubleshoot scope uses. Only touch the DB when one is actually active.
+    let folder_groups: Vec<Uuid> = scopes
+        .iter()
+        .filter(|(level, _)| *level == maintenance::WindowScope::FolderGroup)
+        .filter_map(|(_, id)| Uuid::parse_str(id).ok())
+        .collect();
+    if !folder_groups.is_empty() {
+        match groups.edges().await {
+            Ok(edges) => {
+                let mut group_ids: Vec<Uuid> = Vec::new();
+                for root in folder_groups {
+                    group_ids.extend(groups::group_subtree(&edges, root));
+                }
+                match repo.nodes_in_groups(&group_ids).await {
+                    Ok(node_ids) => {
+                        in_maintenance.extend(node_ids.into_iter().map(yagra_common::NodeId::from))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to resolve folder-group maintenance");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to load group edges for maintenance"),
+        }
+    }
     let mut meta = HashMap::new();
     let mut topology = Topology::new();
     for node in nodes {
@@ -572,19 +605,58 @@ async fn load_alert_config(
         .with_maintenance(in_maintenance)
 }
 
-/// Load the unexpired mutes into the notifier (check ids recomputed from names here).
-/// Failures degrade to the existing snapshot (warn) rather than dropping mutes.
-async fn load_mutes(notifier: &Notifier, maintenance: &MaintenanceRepo) {
-    match maintenance.list_mutes().await {
-        Ok(mutes) => {
-            let active: Vec<ActiveMute> = mutes
-                .iter()
-                .map(|m| ActiveMute::new(m.node_id, m.check_name.as_deref()))
-                .collect();
-            notifier.set_mutes(active).await;
+/// Load the unexpired mutes into the notifier (check ids recomputed from names here). A
+/// group-scoped mute is expanded to one per-node entry across the folder-group subtree (recursive,
+/// ADR-022), so the notifier's per-node matching is unchanged; the expansion re-runs each refresh
+/// so membership changes are honored. Failures degrade to the existing snapshot (warn).
+async fn load_mutes(
+    notifier: &Notifier,
+    maintenance: &MaintenanceRepo,
+    repo: &NodeRepo,
+    groups: &groups::GroupRepo,
+) {
+    let mutes = match maintenance.list_mutes().await {
+        Ok(mutes) => mutes,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load mutes");
+            return;
         }
-        Err(e) => tracing::warn!(error = %e, "failed to load mutes"),
+    };
+    let mut active: Vec<ActiveMute> = Vec::new();
+    let mut group_roots: Vec<Uuid> = Vec::new();
+    for m in &mutes {
+        match m.scope_kind {
+            maintenance::MuteScope::Node => {
+                if let Some(node_id) = m.node_id {
+                    active.push(ActiveMute::new(node_id, m.check_name.as_deref()));
+                }
+            }
+            maintenance::MuteScope::Group => {
+                if let Some(group_id) = m.group_id {
+                    group_roots.push(group_id);
+                }
+            }
+        }
     }
+    if !group_roots.is_empty() {
+        match groups.edges().await {
+            Ok(edges) => {
+                let mut group_ids: Vec<Uuid> = Vec::new();
+                for root in group_roots {
+                    group_ids.extend(groups::group_subtree(&edges, root));
+                }
+                match repo.nodes_in_groups(&group_ids).await {
+                    // A group mute silences the whole node (check=None).
+                    Ok(node_ids) => {
+                        active.extend(node_ids.into_iter().map(|n| ActiveMute::new(n, None)));
+                    }
+                    Err(e) => tracing::warn!(error = %e, "failed to resolve group mute nodes"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to load group edges for mutes"),
+        }
+    }
+    notifier.set_mutes(active).await;
 }
 
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
