@@ -98,6 +98,15 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
 
+// Drop a stale session and trigger the app's re-sign-in prompt. `request` handles its own 401s
+// inline; the SSE client (services/sse.ts) handles its 401s out of band and calls this so both
+// paths share one source of truth for "the stored token is no longer valid".
+export function notifyAuthFailure(): void {
+  if (!authToken) return;
+  setToken(null);
+  onUnauthorized?.();
+}
+
 /** A decoded API error carrying the stable machine-readable `code`. */
 export class ApiError extends Error {
   constructor(

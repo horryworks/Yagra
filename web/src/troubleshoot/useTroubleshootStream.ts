@@ -18,7 +18,6 @@ export function useTroubleshootStream(): void {
       .catch(() => {
         /* transient / gated */
       });
-    if (typeof EventSource === 'undefined') return;
     return subscribeAnalysis(upsertJob);
   }, [setJobs, upsertJob]);
 }
