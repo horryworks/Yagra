@@ -17,7 +17,6 @@ export function useAlertStream(): void {
       .catch(() => {
         /* transient / gated — live SSE still delivers events */
       });
-    if (typeof EventSource === 'undefined') return;
     return subscribeAlerts(upsertAlert, (a) => resolveAlert(a));
   }, [upsertAlert, resolveAlert]);
 }
