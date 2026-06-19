@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { dataFromEventBlock, parseAlertEvent, parseAnalysisJob, subscribeAnalysis } from './sse';
+import {
+  dataFromEventBlock,
+  parseAlertEvent,
+  parseAnalysisJob,
+  parseReportRun,
+  subscribeAnalysis,
+} from './sse';
 import { setToken } from './api';
 
 describe('parseAlertEvent', () => {
@@ -59,6 +65,19 @@ describe('parseAnalysisJob', () => {
 
   it('returns null when id/state are missing', () => {
     expect(parseAnalysisJob(JSON.stringify({ pct: 50 }))).toBeNull();
+  });
+});
+
+describe('parseReportRun', () => {
+  it('parses a run row with id + state', () => {
+    const run = parseReportRun(JSON.stringify({ id: 'r1', state: 'running', pct: 40 }));
+    expect(run?.id).toBe('r1');
+    expect(run?.state).toBe('running');
+  });
+
+  it('returns null when id/state are missing', () => {
+    expect(parseReportRun(JSON.stringify({ pct: 10 }))).toBeNull();
+    expect(parseReportRun('{not json')).toBeNull();
   });
 });
 

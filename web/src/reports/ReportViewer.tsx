@@ -1,0 +1,149 @@
+// Report viewer — a full-bleed overlay showing a generated run. The report body is the server-
+// rendered HTML (the same artifact the PDF is made from, so screen and PDF match), shown in a
+// sandboxed iframe (no scripts execute; device strings are already escaped server-side). The
+// toolbar exports the run (HTML/CSV/PDF) and prints. While a run is still generating it polls until
+// the result is ready.
+
+import { useEffect, useRef, useState } from 'react';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { api, ApiError } from '../services/api';
+import { formatTimestamp } from '../lib/format';
+import type { ReportRunDetail } from '../types/api';
+import './reports.css';
+
+interface Props {
+  runId: string;
+  onClose: () => void;
+}
+
+export function ReportViewer({ runId, onClose }: Props) {
+  const [detail, setDetail] = useState<ReportRunDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      api
+        .getReportRun(runId)
+        .then((d) => {
+          if (!alive) return;
+          setDetail(d);
+          // Still generating → poll until it reaches a terminal state.
+          if (d.state === 'running' || d.state === 'queued') {
+            timer = setTimeout(load, 2500);
+          }
+        })
+        .catch((e: unknown) => {
+          if (alive) setError(e instanceof ApiError ? e.message : 'Failed to load the report.');
+        });
+    };
+    load();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [runId]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  async function download(format: 'html' | 'csv' | 'pdf') {
+    setBusy(format);
+    setError(null);
+    try {
+      const blob = await api.exportReportRun(runId, format);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `report-${runId}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : `Failed to export ${format.toUpperCase()}.`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function print() {
+    iframeRef.current?.contentWindow?.print();
+  }
+
+  const ready = detail?.state === 'succeeded' && detail.result_html;
+
+  return (
+    <div className="rp-viewer-overlay" onClick={onClose}>
+      <div className="rp-viewer" onClick={(e) => e.stopPropagation()}>
+        <header className="rp-viewer-head">
+          <div className="rp-viewer-title">
+            <strong>{detail?.name ?? 'Report'}</strong>
+            {detail && (
+              <span className="muted rp-viewer-meta">
+                {formatTimestamp(detail.created_ms)} · {detail.trigger}
+              </span>
+            )}
+          </div>
+          <div className="rp-actions">
+            {ready && (
+              <>
+                <Button variant="ghost" disabled={busy != null} onClick={() => download('csv')}>
+                  {busy === 'csv' ? '…' : 'CSV'}
+                </Button>
+                <Button variant="ghost" disabled={busy != null} onClick={() => download('pdf')}>
+                  {busy === 'pdf' ? '…' : 'PDF'}
+                </Button>
+                <Button variant="ghost" disabled={busy != null} onClick={() => download('html')}>
+                  {busy === 'html' ? '…' : 'HTML'}
+                </Button>
+                <Button variant="ghost" onClick={print}>
+                  Print
+                </Button>
+              </>
+            )}
+            <Button onClick={onClose}>Close</Button>
+          </div>
+        </header>
+
+        {error && <div className="rp-viewer-error">{error}</div>}
+
+        <div className="rp-viewer-body">
+          {!detail && !error && <div className="rp-viewer-state">Loading…</div>}
+          {detail && (detail.state === 'running' || detail.state === 'queued') && (
+            <div className="rp-viewer-state">
+              <div className="rp-progress">
+                <div className="rp-progress-bar" style={{ width: `${detail.pct}%` }} />
+              </div>
+              <p className="muted">Generating report… {detail.pct}%</p>
+            </div>
+          )}
+          {detail?.state === 'failed' && (
+            <div className="rp-viewer-state">
+              <Badge tone="critical">Failed</Badge>
+              <p className="muted">{detail.error ?? 'Report generation failed.'}</p>
+            </div>
+          )}
+          {ready && (
+            <iframe
+              ref={iframeRef}
+              className="rp-frame"
+              title={detail?.name ?? 'Report'}
+              sandbox="allow-same-origin allow-modals"
+              srcDoc={detail.result_html ?? ''}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
