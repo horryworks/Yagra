@@ -25,6 +25,7 @@ mod maintenance;
 mod mib;
 mod notifications;
 mod repo;
+mod reports;
 mod scheduler;
 mod secrets;
 mod sink;
@@ -304,6 +305,32 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         group_repo.clone(),
     ));
 
+    // Reports (Dashboard → Reports): a TSDB+PostgreSQL-read background generator in core (mirrors the
+    // analysis runner). Fail any run left `running` by a previous process, then build the runner over
+    // the same store/inventory/alert/history seams. A 60s loop fires due schedules.
+    let reports_repo = Arc::new(reports::ReportsRepo::new(repo.pool()));
+    match reports_repo.fail_orphans().await {
+        Ok(n) if n > 0 => {
+            tracing::warn!(
+                orphans = n,
+                "failed report runs left running by a previous process"
+            );
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned report runs"),
+        _ => {}
+    }
+    let reports = Arc::new(reports::ReportRunner::new(
+        reports_repo,
+        store.clone(),
+        repo.clone(),
+        alerts.clone(),
+        history.clone(),
+    ));
+    {
+        let reports = reports.clone();
+        tokio::spawn(run_report_scheduler(reports));
+    }
+
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
         creds,
@@ -323,6 +350,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
         analysis,
+        reports,
         url_checks,
     }));
     let sessions = Arc::new(SessionStore::new());
@@ -528,6 +556,59 @@ async fn run_scheduler(
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
         tokio::time::sleep(Duration::from_secs(u64::from(min_interval))).await;
+    }
+}
+
+/// Fire due report schedules on a fixed tick, and prune old report runs hourly.
+///
+/// Each round: list schedules whose `next_run_at` has passed, enqueue a run for each (trigger =
+/// scheduled), and advance `next_run_at` from the preset cadence. Generation is in-process in core
+/// (no device I/O), so this loop only enqueues — the runner's background task does the work. Failures
+/// degrade to a warn so one bad schedule never stalls the others.
+async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
+    use chrono::Utc;
+    const TICK_SECS: u64 = 60;
+    const RETENTION_SECS: i64 = 90 * 86_400;
+    // Prune ~hourly (every 60 ticks) rather than every minute.
+    let mut tick: u64 = 0;
+    let repo = reports.repo();
+    loop {
+        tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
+        tick = tick.wrapping_add(1);
+        match repo.due_schedules().await {
+            Ok(due) => {
+                for sched in due {
+                    let next = reports::compute_next_run(
+                        &sched.frequency,
+                        sched.day_of_week,
+                        sched.day_of_month,
+                        sched.at_hour,
+                        sched.at_minute,
+                        Utc::now(),
+                    );
+                    let status = match reports
+                        .run_now(sched.definition_id, "scheduled", None)
+                        .await
+                    {
+                        Ok(Some(_)) => "queued",
+                        Ok(None) => "missing-definition",
+                        Err(e) => {
+                            tracing::warn!(error = %e, schedule = %sched.id, "scheduled report failed to start");
+                            "error"
+                        }
+                    };
+                    if let Err(e) = repo.mark_fired(sched.id, status, next).await {
+                        tracing::warn!(error = %e, schedule = %sched.id, "failed to advance schedule");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "report scheduler: due-query failed"),
+        }
+        if tick.is_multiple_of(60) {
+            if let Err(e) = repo.prune_runs(RETENTION_SECS).await {
+                tracing::warn!(error = %e, "prune report runs failed");
+            }
+        }
     }
 }
 

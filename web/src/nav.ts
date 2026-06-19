@@ -34,7 +34,7 @@ export const NAV: NavSection[] = [
       { label: 'Shared dashboard', path: '/dashboard', implemented: true, mono: 'Sh' },
       { label: 'My dashboard', path: '/dashboard/my', implemented: true, mono: 'My' },
       { label: 'Templates', path: '/dashboard/templates', implemented: false, mono: 'Tp' },
-      { label: 'Reports', path: '/dashboard/reports', implemented: false, mono: 'Rp' },
+      { label: 'Reports', path: '/dashboard/reports', implemented: true, mono: 'Rp' },
     ],
   },
   {

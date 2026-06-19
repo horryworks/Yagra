@@ -608,3 +608,120 @@ export interface AnalysisJobInput {
   family?: string;
   notify?: boolean;
 }
+
+// ── Reports (Dashboard → Reports) ──
+// Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
+// preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
+
+/** One choice for a `select` section setting. */
+export interface ReportSettingOption {
+  value: string;
+  label: string;
+}
+
+/** A configurable setting on a report section (drives the builder controls). */
+export interface ReportSectionSetting {
+  key: string;
+  label: string;
+  kind: 'number' | 'select';
+  default: unknown;
+  options?: ReportSettingOption[];
+}
+
+/** A report-section type from the catalog (`GET /api/v1/reports/sections`). */
+export interface ReportSectionDef {
+  kind: string;
+  title: string;
+  blurb: string;
+  group: string;
+  settings: ReportSectionSetting[];
+}
+
+/** One placed section instance in a report definition's spec. */
+export interface ReportSectionInstance {
+  id: string;
+  kind: string;
+  settings: Record<string, unknown>;
+}
+
+/** The report document (definition `spec`) — the frontend owns and migrates this shape. */
+export interface ReportSpec {
+  version: number;
+  params: { range_secs: number };
+  sections: ReportSectionInstance[];
+}
+
+/** A saved report definition (template). */
+export interface ReportDefinition {
+  id: string;
+  name: string;
+  description: string | null;
+  spec: ReportSpec;
+  updated_by: string | null;
+  created_ms: number;
+  updated_ms: number;
+}
+
+/** Create/update body for a report definition. */
+export interface ReportDefinitionInput {
+  name: string;
+  description?: string;
+  spec: ReportSpec;
+}
+
+/** Schedule cadence preset. */
+export type ReportFrequency = 'daily' | 'weekly' | 'monthly';
+
+/** A report schedule (joined with its definition's name). */
+export interface ReportSchedule {
+  id: string;
+  definition_id: string;
+  definition_name: string;
+  frequency: ReportFrequency;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  at_hour: number;
+  at_minute: number;
+  enabled: boolean;
+  next_run_ms: number;
+  last_run_ms: number | null;
+  last_status: string | null;
+}
+
+/** Create/update body for a report schedule. */
+export interface ReportScheduleInput {
+  definition_id: string;
+  frequency: ReportFrequency;
+  day_of_week?: number | null;
+  day_of_month?: number | null;
+  at_hour: number;
+  at_minute: number;
+  enabled?: boolean;
+}
+
+/** Lifecycle of a generated report run. */
+export type ReportRunState = 'queued' | 'running' | 'succeeded' | 'failed';
+
+/** A saved report run (the saved-reports list; no heavy payloads). */
+export interface ReportRun {
+  id: string;
+  definition_id: string | null;
+  name: string;
+  trigger: 'manual' | 'scheduled';
+  state: ReportRunState;
+  pct: number;
+  error: string | null;
+  range_from_ms: number | null;
+  range_to_ms: number | null;
+  section_count: number;
+  created_by: string | null;
+  created_ms: number;
+  started_ms: number | null;
+  finished_ms: number | null;
+}
+
+/** A run plus its rendered result (the viewer). */
+export interface ReportRunDetail extends ReportRun {
+  result_json: unknown | null;
+  result_html: string | null;
+}

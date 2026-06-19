@@ -9,6 +9,7 @@ import { ComingSoon } from './components/ui/ComingSoon';
 import { LoginPage } from './pages/LoginPage';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
+import { ReportsPage } from './reports/ReportsPage';
 import { NodesPage } from './pages/NodesPage';
 import { NodeDetailPage } from './pages/NodeDetailPage';
 import { ProfilesPage } from './pages/ProfilesPage';
@@ -44,7 +45,7 @@ export function AppRoutes() {
         <Route path="dashboard" element={<SharedDashboardPage />} />
         <Route path="dashboard/my" element={<MyDashboardPage />} />
         <Route path="dashboard/templates" element={<ComingSoon />} />
-        <Route path="dashboard/reports" element={<ComingSoon />} />
+        <Route path="dashboard/reports" element={<ReportsPage />} />
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}
         <Route path="nodes" element={<NodesPage />} />

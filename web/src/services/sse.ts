@@ -7,7 +7,7 @@
 // token and streams the response body. The event *parsing* stays split out as pure functions so
 // it can be tested without a network stream.
 
-import type { Alert, AnalysisJob } from '../types/api';
+import type { Alert, AnalysisJob, ReportRun } from '../types/api';
 import { getToken, notifyAuthFailure } from './api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -36,6 +36,19 @@ export function parseAnalysisJob(data: string): AnalysisJob | null {
     const obj = JSON.parse(data) as Partial<AnalysisJob>;
     if (typeof obj.id === 'string' && typeof obj.state === 'string') {
       return obj as AnalysisJob;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse one report-run SSE payload, or null if malformed. */
+export function parseReportRun(data: string): ReportRun | null {
+  try {
+    const obj = JSON.parse(data) as Partial<ReportRun>;
+    if (typeof obj.id === 'string' && typeof obj.state === 'string') {
+      return obj as ReportRun;
     }
     return null;
   } catch {
@@ -181,6 +194,24 @@ export function subscribeAnalysis(
     (data) => {
       const job = parseAnalysisJob(data);
       if (job) onJob(job);
+    },
+    onError,
+  );
+}
+
+/**
+ * Subscribe to the report-run status stream. Each event is a run's current row; `onRun` upserts
+ * it into the runs store so generation progress shows live. Returns an unsubscribe function.
+ */
+export function subscribeReportRuns(
+  onRun: (run: ReportRun) => void,
+  onError?: (err: unknown) => void,
+): () => void {
+  return subscribeSSE(
+    '/stream/report-runs',
+    (data) => {
+      const run = parseReportRun(data);
+      if (run) onRun(run);
     },
     onError,
   );

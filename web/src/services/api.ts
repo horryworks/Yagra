@@ -48,6 +48,13 @@ import type {
   PollerHealth,
   ProfileSummary,
   ProfileInput,
+  ReportDefinition,
+  ReportDefinitionInput,
+  ReportRun,
+  ReportRunDetail,
+  ReportSchedule,
+  ReportScheduleInput,
+  ReportSectionDef,
   Role,
   RoleMatrix,
   RoutingRule,
@@ -387,6 +394,86 @@ export const api = {
   /** Cancel a running analysis job. */
   cancelAnalysisJob: (id: string): Promise<{ cancelled: boolean }> =>
     request(`/analysis/jobs/${encodeURIComponent(id)}/cancel`, jsonBody('POST', {})),
+
+  // ── Reports (Dashboard → Reports) ──
+  /** The report-section catalog (drives the builder). */
+  listReportSections: (): Promise<ReportSectionDef[]> => request('/reports/sections'),
+
+  /** All report definitions (templates). */
+  listReportDefinitions: (): Promise<ReportDefinition[]> => request('/reports/definitions'),
+
+  /** One report definition by id. */
+  getReportDefinition: (id: string): Promise<ReportDefinition> =>
+    request(`/reports/definitions/${encodeURIComponent(id)}`),
+
+  /** Create a report definition (admin only). */
+  createReportDefinition: (body: ReportDefinitionInput): Promise<ReportDefinition> =>
+    request('/reports/definitions', jsonBody('POST', body)),
+
+  /** Update a report definition (admin only). */
+  updateReportDefinition: (id: string, body: ReportDefinitionInput): Promise<{ ok: boolean }> =>
+    request(`/reports/definitions/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete a report definition (admin only). */
+  deleteReportDefinition: (id: string): Promise<void> =>
+    request(`/reports/definitions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Generate a report from a definition now (admin only); the run progresses over SSE. */
+  runReport: (id: string): Promise<ReportRun> =>
+    request(`/reports/definitions/${encodeURIComponent(id)}/run`, jsonBody('POST', {})),
+
+  /** Saved report runs, newest first. */
+  listReportRuns: (limit?: number): Promise<ReportRun[]> =>
+    request(limit != null ? `/reports/runs?limit=${limit}` : '/reports/runs'),
+
+  /** One report run with its rendered result (the viewer). */
+  getReportRun: (id: string): Promise<ReportRunDetail> =>
+    request(`/reports/runs/${encodeURIComponent(id)}`),
+
+  /** Delete a saved report run (admin only). */
+  deleteReportRun: (id: string): Promise<void> =>
+    request(`/reports/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Download a report run as html|csv|pdf. Fetches with the bearer token (so it works on an
+   *  auth-enabled deployment, unlike a plain anchor href) and returns a Blob to save. */
+  exportReportRun: async (id: string, format: 'html' | 'csv' | 'pdf'): Promise<Blob> => {
+    const headers: Record<string, string> = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const res = await fetch(
+      `${BASE}/reports/runs/${encodeURIComponent(id)}/export?format=${format}`,
+      { headers },
+    );
+    if (!res.ok) {
+      let code = 'export_failed';
+      let message = `export failed with status ${res.status}`;
+      try {
+        const body = (await res.json()) as ApiErrorBody;
+        if (body?.error) {
+          code = body.error.code;
+          message = body.error.message;
+        }
+      } catch {
+        // non-JSON body — keep generic
+      }
+      throw new ApiError(code, message, res.status);
+    }
+    return res.blob();
+  },
+
+  /** All report schedules. */
+  listReportSchedules: (): Promise<ReportSchedule[]> => request('/reports/schedules'),
+
+  /** Create a report schedule (admin only). */
+  createReportSchedule: (body: ReportScheduleInput): Promise<{ id: string }> =>
+    request('/reports/schedules', jsonBody('POST', body)),
+
+  /** Update a report schedule (admin only). */
+  updateReportSchedule: (id: string, body: ReportScheduleInput): Promise<{ ok: boolean }> =>
+    request(`/reports/schedules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete a report schedule (admin only). */
+  deleteReportSchedule: (id: string): Promise<void> =>
+    request(`/reports/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Create a node group. `parent_id` nests it under another group. */
   createNodeGroup: (body: {
