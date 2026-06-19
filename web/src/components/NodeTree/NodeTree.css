@@ -293,28 +293,40 @@
   border-color: var(--accent-color);
 }
 
-/* Per-row suppression markers (maintenance wrench + mute bell-off), always visible when active. */
+/* Per-row suppression markers (maintenance wrench + mute bell-off), always visible when active.
+   Each is a tinted, rounded chip so it reads at a glance against the row. */
 .ntree-supp {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .ntree-supp-icon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius);
 }
 
 .ntree-supp-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.1;
 }
 
 .ntree-supp-icon.maint {
   color: var(--status-maintenance);
+  background: color-mix(in srgb, var(--status-maintenance) 18%, transparent);
 }
 
+/* Mute is an operator action, not an alert state — keep it neutral (no status colour) but give
+   the chip a clear border + fill so it still reads at a glance. */
 .ntree-supp-icon.mute {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
 }
