@@ -409,6 +409,38 @@ impl AlertManager {
         // Fire-and-forget: no subscribers is not an error.
         let _ = self.tx.send(event.to_string());
     }
+
+    /// Broadcast an inbound ack-state change for one alert so subscribers update the read-only
+    /// acked indicator live (ADR-015). Finds the matching active alert by its dedup identity
+    /// `(node, check, severity)` and re-sends its wire shape with `acked` attached (the external
+    /// tool's view as a JSON value, or `null` when cleared). No `resolved` flag ⇒ the client
+    /// treats it as an upsert, not a recovery. If the alert isn't currently active there's
+    /// nothing on screen to update, so this is a no-op (History reflects it on next fetch).
+    pub fn broadcast_acked(
+        &self,
+        node: Uuid,
+        check: Uuid,
+        severity: Severity,
+        acked: Option<serde_json::Value>,
+    ) {
+        let active = self.active.lock().expect("alerts mutex poisoned");
+        let Some(alert) = active.values().find(|a| {
+            a.node.as_uuid() == node && a.check.as_uuid() == check && a.severity == severity
+        }) else {
+            return;
+        };
+        let event = serde_json::json!({
+            "node": alert.node,
+            "check": alert.check,
+            "severity": alert.severity,
+            "state": alert.state,
+            "at_unix_ms": alert.at_unix_ms,
+            "root_cause": alert.root_cause,
+            "flapping": alert.flapping,
+            "acked": acked,
+        });
+        let _ = self.tx.send(event.to_string());
+    }
 }
 
 impl Default for AlertManager {
@@ -1072,5 +1104,47 @@ mod tests {
         let states = mgr.node_states();
         assert_eq!(states.get(&parent), Some(&NodeState::Unreachable));
         assert_eq!(states.get(&child), Some(&NodeState::Unreachable));
+    }
+
+    #[tokio::test]
+    async fn broadcast_acked_emits_upsert_for_active_alert() {
+        // Fire a liveness alert, then mirror an inbound ack for it (ADR-015).
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+        for i in 0..DWELL_SAMPLES {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
+        }
+        let active = mgr.active_alerts();
+        let alert = active.first().expect("one active alert after dwell");
+
+        // Subscribe *after* the fire so only the ack event is observed.
+        let mut rx = mgr.subscribe();
+        mgr.broadcast_acked(
+            alert.node.as_uuid(),
+            alert.check.as_uuid(),
+            alert.severity,
+            Some(serde_json::json!({ "by": "pd-user", "source": "pagerduty" })),
+        );
+
+        let msg = rx.try_recv().expect("ack event broadcast");
+        let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(v["acked"]["by"], "pd-user");
+        // No `resolved` flag ⇒ the client upserts (keeps the alert), it doesn't clear it.
+        assert!(v.get("resolved").is_none());
+        assert_eq!(v["node"], serde_json::to_value(node).unwrap());
+    }
+
+    #[tokio::test]
+    async fn broadcast_acked_is_noop_when_alert_not_active() {
+        let mgr = AlertManager::new();
+        let mut rx = mgr.subscribe();
+        // No matching active alert ⇒ nothing on screen to update, so no event is sent.
+        mgr.broadcast_acked(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Severity::Critical,
+            None,
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

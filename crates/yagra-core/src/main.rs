@@ -9,6 +9,7 @@
 //! PostgreSQL + NATS + VictoriaMetrics), else an in-memory **skeleton** so a bare
 //! `cargo run` still serves the API.
 
+mod ack;
 mod alerts;
 mod analysis;
 mod api;
@@ -37,6 +38,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ack::AckRepo;
 use alerts::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
 use audit::AuditRepo;
@@ -115,6 +117,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::from_env(repo.pool()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
+    // Inbound ack reflection from external tools (PagerDuty / JSM); read-only display (ADR-015).
+    let acks = Arc::new(AckRepo::new(repo.pool()));
 
     // Result consumer: bus → TSDB + alert engine (+ history + notifications + interface
     // inventory upsert).
@@ -363,6 +367,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         admin,
         sessions,
         history: Some(history),
+        ack: Some(acks),
         public_dashboard: cfg.public_dashboard,
     };
     serve(state, &cfg.api_addr, metrics).await
@@ -390,6 +395,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         admin: None,
         sessions: Arc::new(SessionStore::new()),
         history: None,
+        ack: None,
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
         public_dashboard: true,

@@ -43,6 +43,16 @@
   padding: 0 5px;
 }
 
+/* Read-only "acked" indicator mirrored from the external tool (ADR-015). Neutral (not a status
+   color — acknowledgement is not a node state). */
+.alertrow-acked {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+
 .alertrow-time {
   margin-left: auto;
   font-size: var(--font-xs);

@@ -34,6 +34,23 @@ const COLUMNS: Column<AlertHistoryRow>[] = [
       r.resolved ? <Badge tone="up">cleared</Badge> : <Badge tone="critical">fired</Badge>,
   },
   {
+    // Read-only ack mirrored from the external tool (ADR-015) — Yagra has no ack action.
+    key: 'acked',
+    header: 'Acked',
+    width: '120px',
+    render: (r) =>
+      r.acked ? (
+        <span
+          className="muted"
+          title={`Acknowledged in ${r.acked.source} by ${r.acked.by}${r.acked.note ? ` — ${r.acked.note}` : ''} (read-only, mirrored from your external tool)`}
+        >
+          {r.acked.source}
+        </span>
+      ) : (
+        <span className="muted">—</span>
+      ),
+  },
+  {
     key: 'at',
     header: 'When',
     width: '1fr',

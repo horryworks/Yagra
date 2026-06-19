@@ -1,7 +1,8 @@
 // Presentational alert rows (worst-first), shared by the dashboard widget and the Active
-// alerts triage screen. Each row: severity dot + node + root-cause + flapping flag + age.
-// Triage-only per §3.2 — NO Ack control here (Yagra holds no ack/escalation; that's external
-// PagerDuty/JSM). The optional actions slot is for Mute / "open in external tool" only.
+// alerts triage screen. Each row: severity dot + node + root-cause + flapping flag + acked
+// pill + age. Triage-only per §3.2 — NO Ack *control* here (Yagra holds no ack action; that's
+// external PagerDuty/JSM). The `acked` pill is a READ-ONLY indicator mirrored inbound from the
+// external tool (ADR-015). The optional actions slot is for Mute / "open in external tool" only.
 
 import type { ReactNode } from 'react';
 import { formatTimestamp, severityColorVar } from '../lib/format';
@@ -36,6 +37,14 @@ export function AlertRows({ limit, actions, empty }: Props) {
             <span className="alertrow-cause muted">← {a.root_cause}</span>
           )}
           {a.flapping && <span className="alertrow-flap">flapping</span>}
+          {a.acked && (
+            <span
+              className="alertrow-acked"
+              title={`Acknowledged in ${a.acked.source} by ${a.acked.by}${a.acked.note ? ` — ${a.acked.note}` : ''} (read-only, mirrored from your external tool)`}
+            >
+              acked
+            </span>
+          )}
           <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
           {actions && <span className="alertrow-actions">{actions(a)}</span>}
         </div>

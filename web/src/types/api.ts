@@ -63,7 +63,22 @@ export interface InterfaceTopEntry {
   value: number;
 }
 
-/** An alert as produced by the engine (`yagra_alert::Alert`). */
+/**
+ * Inbound acknowledgement state mirrored from an external incident tool (PagerDuty / JSM),
+ * shown read-only (ADR-015). Yagra has no ack action of its own — this is reflected in only.
+ */
+export interface AckView {
+  /** When the external tool recorded the ack (Unix ms, UTC). */
+  at_unix_ms: number;
+  /** External actor reference (id / handle). */
+  by: string;
+  /** Originating tool: 'pagerduty' | 'jsm' | 'manual' | … */
+  source: string;
+  /** Optional free-text note from the external tool. */
+  note?: string;
+}
+
+/** An alert as produced by the engine (`yagra_alert::Alert`), plus inbound ack state. */
 export interface Alert {
   node: string;
   check: string;
@@ -72,6 +87,8 @@ export interface Alert {
   at_unix_ms: number;
   root_cause: string | null;
   flapping: boolean;
+  /** Read-only ack mirrored from the external tool (absent ⇒ not acknowledged). */
+  acked?: AckView | null;
 }
 
 /** A node row for inventory listings. */
@@ -227,6 +244,8 @@ export interface AlertHistoryRow {
   state: NodeState;
   at_unix_ms: number;
   resolved: boolean;
+  /** Read-only ack mirrored from the external tool, keyed by incident (absent ⇒ not acked). */
+  acked?: AckView | null;
 }
 
 /** A chronic-offender row (`GET /api/v1/alerts/top-nodes`). */
