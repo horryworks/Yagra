@@ -138,6 +138,14 @@ impl Transport for SurgePingTransport {
     ) -> Result<Vec<crate::SnmpTableString>, TransportError> {
         crate::snmp::snmp_walk_strings_v2c(target, community, column_oids, timeout).await
     }
+
+    async fn probe_http(
+        &self,
+        spec: &crate::HttpProbeSpec,
+        timeout: Duration,
+    ) -> Result<crate::HttpProbe, TransportError> {
+        crate::http::probe_http(spec, timeout).await
+    }
 }
 
 /// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply

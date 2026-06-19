@@ -4,6 +4,7 @@ import {
   formatBps,
   formatBytes,
   formatCount,
+  formatDaysToExpiry,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -160,6 +161,14 @@ describe('format', () => {
     expect(httpStatusLabel(409)).toBe('Conflict');
     expect(httpStatusLabel(404)).toBe('Client error');
     expect(httpStatusLabel(503)).toBe('Server error');
+  });
+
+  it('labels a TLS certificate days-to-expiry (future / today / expired)', () => {
+    expect(formatDaysToExpiry(45)).toBe('45 days left');
+    expect(formatDaysToExpiry(1)).toBe('1 day left');
+    expect(formatDaysToExpiry(29.6)).toBe('30 days left'); // rounds to whole days
+    expect(formatDaysToExpiry(0.4)).toBe('expires today');
+    expect(formatDaysToExpiry(-3)).toBe('expired 3d ago');
   });
 
   it('derives up to two monogram initials', () => {

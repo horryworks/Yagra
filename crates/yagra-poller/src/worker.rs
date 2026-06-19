@@ -15,8 +15,11 @@ use yagra_bus::{
     Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
     SnmpMetaColumn, SnmpTableCheck, BUS_SCHEMA_VERSION,
 };
-use yagra_common::{IfIndex, InterfaceField, OID_IF_HIGH_SPEED};
-use yagra_transport::Transport;
+use yagra_common::{
+    IfIndex, InterfaceField, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP,
+    METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+};
+use yagra_transport::{HttpProbeSpec, Transport};
 
 /// sysDescr.0 — system description scalar (the v3 GET form).
 const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
@@ -150,6 +153,50 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         CheckSpec::SnmpTable(table) => {
             let timeout = Duration::from_millis(u64::from(table.timeout_ms));
             execute_snmp_table(job, transport, at_unix_ms, table, timeout).await
+        }
+        CheckSpec::Http(http) => {
+            let timeout = Duration::from_millis(u64::from(http.timeout_ms));
+            let spec = HttpProbeSpec {
+                url: http.url.clone(),
+                method: http.method,
+                verify_tls: http.verify_tls,
+                follow_redirects: http.follow_redirects,
+            };
+            match transport.probe_http(&spec, timeout).await {
+                Ok(probe) => {
+                    // http_up = reachable AND the status matched expectation (down or wrong-status
+                    // both read as 0 so a single threshold covers them).
+                    let status_ok = probe
+                        .status_code
+                        .is_some_and(|c| http.expected_status.matches(c));
+                    let up = probe.reachable && status_ok;
+                    let mut samples =
+                        vec![Sample::gauge(METRIC_HTTP_UP, if up { 1.0 } else { 0.0 })];
+                    if let Some(code) = probe.status_code {
+                        samples.push(Sample::gauge(METRIC_HTTP_STATUS_CODE, f64::from(code)));
+                    }
+                    if let Some(days) = probe.cert_days_to_expiry {
+                        samples.push(Sample::gauge(METRIC_SSL_CERT_DAYS_TO_EXPIRY, days));
+                    }
+                    let outcome = if probe.reachable {
+                        CheckOutcome::Reachable
+                    } else {
+                        CheckOutcome::Unreachable
+                    };
+                    result(job, at_unix_ms, outcome, samples)
+                }
+                Err(err) => {
+                    // An un-runnable config (bad URL / SSRF-blocked): record http_up = 0 so the
+                    // series exists and alerts can fire, then report the error outcome.
+                    tracing::warn!(job_id = %job.job_id, error = %err, "http probe failed");
+                    result(
+                        job,
+                        at_unix_ms,
+                        CheckOutcome::Error,
+                        vec![Sample::gauge(METRIC_HTTP_UP, 0.0)],
+                    )
+                }
+            }
         }
     }
 }
@@ -763,6 +810,89 @@ mod tests {
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert!(r.samples.is_empty());
         assert!(r.interfaces.is_empty());
+    }
+
+    fn http_job(check: yagra_bus::HttpCheck) -> PollJob {
+        PollJob::http(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            check,
+            60,
+        )
+    }
+
+    fn http_check(url: &str) -> yagra_bus::HttpCheck {
+        yagra_bus::HttpCheck {
+            url: url.to_owned(),
+            method: yagra_common::HttpMethod::Get,
+            expected_status: yagra_common::ExpectedStatus::TwoXx,
+            verify_tls: true,
+            follow_redirects: true,
+            timeout_ms: 5000,
+        }
+    }
+
+    #[tokio::test]
+    async fn http_up_when_reachable_and_status_matches() {
+        use yagra_transport::HttpProbe;
+        let t = FakeTransport::reachable(0.0).with_http(HttpProbe {
+            reachable: true,
+            status_code: Some(200),
+            response_time_ms: 12.0,
+            cert_days_to_expiry: Some(45.0),
+        });
+        let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_UP && s.value == 1.0));
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_STATUS_CODE && s.value == 200.0));
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_SSL_CERT_DAYS_TO_EXPIRY && s.value == 45.0));
+    }
+
+    #[tokio::test]
+    async fn http_down_when_status_unexpected() {
+        use yagra_transport::HttpProbe;
+        // Reachable, but a 500 doesn't match the default any-2xx expectation → http_up = 0.
+        let t = FakeTransport::reachable(0.0).with_http(HttpProbe {
+            reachable: true,
+            status_code: Some(500),
+            response_time_ms: 8.0,
+            cert_days_to_expiry: None,
+        });
+        let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_UP && s.value == 0.0));
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_STATUS_CODE && s.value == 500.0));
+    }
+
+    #[tokio::test]
+    async fn http_down_and_unreachable_when_no_response() {
+        let t = FakeTransport::unreachable(); // http probe: reachable=false, no status
+        let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_UP && s.value == 0.0));
+        assert!(!r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_STATUS_CODE));
     }
 
     /// Walking skeleton: a job published to the bus flows through the poll loop and a

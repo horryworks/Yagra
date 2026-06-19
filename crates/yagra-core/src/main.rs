@@ -30,6 +30,7 @@ mod secrets;
 mod sink;
 mod store;
 mod thresholds;
+mod url_check;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -150,13 +151,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         .ok()
         .filter(|c| !c.is_empty());
     let collection = Arc::new(CollectionRepo::new(repo.pool()));
+    // URL monitors: per-node HTTP/HTTPS check configs. Shared by the dispatcher (a node with one
+    // becomes an HTTP-only poll) and the admin API (CRUD).
+    let url_checks = Arc::new(url_check::UrlCheckRepo::new(repo.pool()));
 
-    // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP). Shared by the periodic scheduler
-    // and the on-demand "poll now" API action so both build jobs the same way.
+    // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors). Shared by
+    // the periodic scheduler and the on-demand "poll now" API action so both build jobs the same way.
     let dispatcher = Arc::new(scheduler::PollDispatcher::new(
         bus.clone(),
         creds.clone(),
         collection.clone(),
+        url_checks.clone(),
         env_community.clone(),
         cfg.poll_interval_secs,
     ));
@@ -317,6 +322,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
         analysis,
+        url_checks,
     }));
     let sessions = Arc::new(SessionStore::new());
 

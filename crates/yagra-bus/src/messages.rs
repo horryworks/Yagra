@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{IfIndex, InterfaceField, MetricKind, NodeId, SeriesKey};
+use yagra_common::{
+    ExpectedStatus, HttpMethod, IfIndex, InterfaceField, MetricKind, NodeId, SeriesKey,
+};
 
 /// Current bus message schema version. Bump on a backward-compatible change; a
 /// breaking change needs an N/N-1 migration plan (ADR-017).
@@ -135,6 +137,28 @@ impl PollJob {
             probe_identity: false,
         }
     }
+
+    /// A new HTTP/HTTPS URL-monitor poll job for `node`. The real request target is the
+    /// `check.url`; `target` carries the node's management IP (display / optional ICMP).
+    #[must_use]
+    pub fn http(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: HttpCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::Http(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+        }
+    }
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
@@ -153,7 +177,9 @@ pub enum CheckSpec {
     /// A new variant: older pollers that don't know this tag simply skip the job
     /// (the poller's malformed-message handling), preserving N-1 compatibility.
     SnmpTable(SnmpTableCheck),
-    // Http(...) lands in a later phase.
+    /// HTTP/HTTPS URL-endpoint check (status/up + TLS cert expiry). Like the variants above,
+    /// an older poller that doesn't know this tag simply skips the job (N-1 compatible).
+    Http(HttpCheck),
 }
 
 /// ICMP echo parameters.
@@ -172,6 +198,34 @@ impl Default for IcmpCheck {
             timeout_ms: 1000,
         }
     }
+}
+
+/// HTTP/HTTPS URL-endpoint check parameters. The `url` is the actual request target (the
+/// enclosing [`PollJob::target`] stays the node's management IP, for display / optional ICMP).
+/// Auth lands later (resolved/inlined by core, ADR-018/020); the MVP probe is unauthenticated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HttpCheck {
+    /// Full URL to probe, e.g. `https://api.example.com/health`.
+    pub url: String,
+    /// Request method (default `GET`).
+    #[serde(default)]
+    pub method: HttpMethod,
+    /// Which status codes count as healthy (default: any 2xx).
+    #[serde(default)]
+    pub expected_status: ExpectedStatus,
+    /// Verify the TLS certificate chain (default `true`).
+    #[serde(default = "default_true")]
+    pub verify_tls: bool,
+    /// Follow 3xx redirects (default `true`).
+    #[serde(default = "default_true")]
+    pub follow_redirects: bool,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_http_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+const fn default_http_timeout_ms() -> u32 {
+    5000
 }
 
 /// SNMP v2c check parameters. The community is the resolved credential, inlined by core

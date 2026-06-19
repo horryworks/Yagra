@@ -101,6 +101,15 @@ export function httpStatusLabel(status: number): string {
   return 'Server error';
 }
 
+/** Human label for a TLS certificate's days-to-expiry. Negative ⇒ already expired. */
+export function formatDaysToExpiry(days: number): string {
+  const d = Math.round(days);
+  if (d < 0) return `expired ${Math.abs(d)}d ago`;
+  if (d === 0) return 'expires today';
+  if (d === 1) return '1 day left';
+  return `${d} days left`;
+}
+
 /** Up to two initials for a monogram avatar. Splits on `.`/`-`/`_`; `unknown`/empty ⇒ "?". */
 export function initials(name: string): string {
   if (!name || name === 'unknown') return '?';

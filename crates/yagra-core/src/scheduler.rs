@@ -7,16 +7,18 @@
 
 use crate::collection::CollectionRepo;
 use crate::secrets::{self, CredentialStore, SnmpV3Secret};
+use crate::url_check::UrlCheckRepo;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    Bus, IcmpCheck, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck,
-    SnmpV3Check,
+    Bus, HttpCheck, IcmpCheck, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn,
+    SnmpTableCheck, SnmpV3Check,
 };
 use yagra_common::{
     builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId, ProfileId,
+    UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -77,6 +79,27 @@ pub fn build_snmp_v3_job(
     job_id: Uuid,
 ) -> PollJob {
     PollJob::snmp_v3(job_id, node.id, node.address, check, interval_secs)
+}
+
+/// Map a stored [`UrlCheckConfig`] into the bus [`HttpCheck`]. Auth is not inlined yet (MVP probe
+/// is unauthenticated); when it lands, core resolves/decrypts `cfg.credential` here (ADR-018/020).
+#[must_use]
+pub fn build_http_check(cfg: &UrlCheckConfig) -> HttpCheck {
+    HttpCheck {
+        url: cfg.url.clone(),
+        method: cfg.method,
+        expected_status: cfg.expected_status.clone(),
+        verify_tls: cfg.verify_tls,
+        follow_redirects: cfg.follow_redirects,
+        timeout_ms: cfg.timeout_ms,
+    }
+}
+
+/// Build an HTTP/HTTPS URL-monitor poll job. `target` is the node's management address (display /
+/// optional ICMP); the real request target is `check.url`.
+#[must_use]
+pub fn build_http_job(node: &Node, check: HttpCheck, interval_secs: u32, job_id: Uuid) -> PollJob {
+    PollJob::http(job_id, node.id, node.address, check, interval_secs)
 }
 
 /// Build the SNMP v3 scalar check for a node from its resolved collection set and v3
@@ -179,8 +202,15 @@ pub fn assemble_node_jobs(
     node: &Node,
     auth: Option<&SnmpAuth>,
     items: &[CollectionItem],
+    url_check: Option<&UrlCheckConfig>,
     interval_secs: u32,
 ) -> Vec<(PollJob, &'static str)> {
+    // A URL monitor is its own node kind: dispatch the HTTP job and nothing else. ICMP is *not*
+    // added (a URL target may be non-pingable, e.g. behind a CDN); SNMP doesn't apply here.
+    if let Some(cfg) = url_check {
+        let job = build_http_job(node, build_http_check(cfg), interval_secs, Uuid::new_v4());
+        return vec![(job, "http")];
+    }
     let mut jobs = Vec::new();
     let probe_identity = node.vendor.is_none();
     match auth {
@@ -221,6 +251,8 @@ pub struct PollDispatcher {
     bus: Arc<NatsBus>,
     creds: Arc<CredentialStore>,
     collection: Arc<CollectionRepo>,
+    /// Per-node URL-monitor configs (a node with one is a URL monitor → HTTP job, no ICMP/SNMP).
+    url_checks: Arc<UrlCheckRepo>,
     /// v2c community fallback for nodes without a bound credential.
     env_community: Option<String>,
     /// Fallback poll interval (seconds) stamped on on-demand "poll now" jobs. The periodic
@@ -235,6 +267,7 @@ impl PollDispatcher {
         bus: Arc<NatsBus>,
         creds: Arc<CredentialStore>,
         collection: Arc<CollectionRepo>,
+        url_checks: Arc<UrlCheckRepo>,
         env_community: Option<String>,
         interval_secs: u32,
     ) -> Self {
@@ -242,20 +275,29 @@ impl PollDispatcher {
             bus,
             creds,
             collection,
+            url_checks,
             env_community,
             interval_secs,
         }
     }
 
-    /// Resolve a node's SNMP auth (decrypted in core, never the poller — ADR-018/020) and its
-    /// effective collection set, then assemble all its poll jobs stamped with `interval_secs`.
-    /// The caller resolves the effective interval (per-profile override → global default) and
-    /// decides whether to jitter (periodic) or publish at once (poll now).
+    /// Resolve a node's poll jobs. A URL monitor (it has a `url_checks` row) gets a single HTTP
+    /// job; otherwise SNMP auth (decrypted in core, never the poller — ADR-018/020) + collection
+    /// set + the always-on ICMP. The caller resolves the effective interval and decides whether to
+    /// jitter (periodic) or publish at once (poll now).
     pub async fn build_node_jobs(
         &self,
         node: &Node,
         interval_secs: u32,
     ) -> Vec<(PollJob, &'static str)> {
+        // URL monitor short-circuit: a node with a URL check is HTTP-only.
+        match self.url_checks.get(node.id.as_uuid()).await {
+            Ok(Some(cfg)) => return assemble_node_jobs(node, None, &[], Some(&cfg), interval_secs),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
+            }
+        }
         let auth = resolve_snmp_auth(&self.creds, node, self.env_community.as_deref()).await;
         // Only resolve the collection set when SNMP is configured (ICMP needs none).
         let items = if auth.is_some() {
@@ -268,7 +310,7 @@ impl PollDispatcher {
         {
             tracing::debug!(node = %node.id, "v3 table items skipped (v3 walk not yet supported)");
         }
-        assemble_node_jobs(node, auth.as_ref(), &items, interval_secs)
+        assemble_node_jobs(node, auth.as_ref(), &items, None, interval_secs)
     }
 
     /// Publish one already-built job, bumping the published-jobs counter (used by the periodic
@@ -603,9 +645,18 @@ mod tests {
     #[test]
     fn assemble_without_auth_yields_icmp_only() {
         // No SNMP credential resolved ⇒ liveness only, regardless of the collection set.
-        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], 30);
+        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], None, 30);
         assert_eq!(kinds(&jobs), vec!["icmp"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Icmp(_)));
+    }
+
+    #[test]
+    fn assemble_url_monitor_yields_http_only_no_icmp() {
+        // A URL monitor is HTTP-only: no ICMP (target may be non-pingable) and no SNMP.
+        let cfg = UrlCheckConfig::new("https://api.example.com/health");
+        let jobs = assemble_node_jobs(&node("url-mon"), None, &[], Some(&cfg), 30);
+        assert_eq!(kinds(&jobs), vec!["http"]);
+        assert!(matches!(jobs[0].0.check, CheckSpec::Http(_)));
     }
 
     #[test]
@@ -623,7 +674,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, 30);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp", "snmp_table", "icmp"]);
         // The maker is unknown (vendor None), so the scalar SNMP job carries the identity probe.
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
@@ -640,7 +691,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&n, Some(&auth), &items, 30);
+        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, 30);
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
         assert!(
             !snmp.0.probe_identity,
@@ -664,7 +715,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V3(v3_secret());
-        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, 30);
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp_v3", "icmp"]);
         assert!(matches!(
             jobs.iter().find(|(_, k)| *k == "snmp_v3").unwrap().0.check,

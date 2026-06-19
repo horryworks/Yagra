@@ -106,6 +106,8 @@ export function NodesPage() {
 
   // Add-node modal.
   const [adding, setAdding] = useState(false);
+  /** Which kind of monitor to add: an SNMP/ICMP device, or a URL/HTTP(S) endpoint. */
+  const [monType, setMonType] = useState<'device' | 'url'>('device');
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [profileId, setProfileId] = useState('');
@@ -113,6 +115,10 @@ export function NodesPage() {
   const [parentId, setParentId] = useState('');
   const [vendor, setVendor] = useState('');
   const [model, setModel] = useState('');
+  // URL-monitor fields (used when monType === 'url').
+  const [url, setUrl] = useState('');
+  const [urlMethod, setUrlMethod] = useState<'GET' | 'HEAD' | 'POST'>('GET');
+  const [verifyTls, setVerifyTls] = useState(true);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
@@ -237,30 +243,49 @@ export function NodesPage() {
       .catch(() => setCredentials([]));
   }, [adding]);
 
+  const resetAddForm = () => {
+    setAdding(false);
+    setMonType('device');
+    setName('');
+    setAddress('');
+    setProfileId('');
+    setCredentialId('');
+    setParentId('');
+    setVendor('');
+    setModel('');
+    setUrl('');
+    setUrlMethod('GET');
+    setVerifyTls(true);
+  };
+
   const submitAdd = () => {
     setAddError(null);
-    api
-      .createNode({
-        name,
-        address,
-        profile_id: profileId || undefined,
-        credential_id: credentialId || undefined,
-        parent_id: parentId || undefined,
-        vendor: vendor.trim() || undefined,
-        model: model.trim() || undefined,
-      })
+    const created =
+      monType === 'url'
+        ? api.createUrlMonitor({
+            name,
+            url,
+            method: urlMethod,
+            verify_tls: verifyTls,
+            parent_id: parentId || undefined,
+          })
+        : api.createNode({
+            name,
+            address,
+            profile_id: profileId || undefined,
+            credential_id: credentialId || undefined,
+            parent_id: parentId || undefined,
+            vendor: vendor.trim() || undefined,
+            model: model.trim() || undefined,
+          });
+    created
       .then(() => {
-        setAdding(false);
-        setName('');
-        setAddress('');
-        setProfileId('');
-        setCredentialId('');
-        setParentId('');
-        setVendor('');
-        setModel('');
+        resetAddForm();
         void reload();
       })
-      .catch((e: unknown) => setAddError(errMsg(e, 'failed to add node')));
+      .catch((e: unknown) =>
+        setAddError(errMsg(e, monType === 'url' ? 'failed to add URL monitor' : 'failed to add node')),
+      );
   };
 
   // Direct moves (drag-drop): assign immediately and refresh.
@@ -413,57 +438,110 @@ export function NodesPage() {
 
       {adding && (
         <Modal
-          title="Add node"
-          onClose={() => setAdding(false)}
+          title={monType === 'url' ? 'Add URL monitor' : 'Add node'}
+          onClose={resetAddForm}
           footer={
             <>
-              <Button onClick={() => setAdding(false)}>Cancel</Button>
-              <Button variant="primary" onClick={submitAdd} disabled={!name || !address}>
-                Add node
+              <Button onClick={resetAddForm}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={submitAdd}
+                disabled={!name || (monType === 'url' ? !url : !address)}
+              >
+                {monType === 'url' ? 'Add URL monitor' : 'Add node'}
               </Button>
             </>
           }
         >
           <div className="form-stack">
             <label className="form-label">
+              Monitoring type
+              <Select
+                value={monType}
+                onChange={(e) => setMonType(e.target.value as 'device' | 'url')}
+              >
+                <option value="device">Device (ICMP / SNMP)</option>
+                <option value="url">URL monitor (HTTP / HTTPS)</option>
+              </Select>
+            </label>
+            <label className="form-label">
               <span>
                 Name <RequiredMark />
               </span>
               <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
             </label>
-            <label className="form-label">
-              <span>
-                IP address <RequiredMark />
-              </span>
-              <TextInput
-                className="mono"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="10.0.0.1 or 2001:db8::1"
-              />
-            </label>
-            <label className="form-label">
-              Device profile (optional)
-              <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-                <option value="">— none —</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="form-label">
-              SNMP credential (optional — enables SNMP polling)
-              <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-                <option value="">— none —</option>
-                {credentials.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
+            {monType === 'url' ? (
+              <>
+                <label className="form-label">
+                  <span>
+                    URL <RequiredMark />
+                  </span>
+                  <TextInput
+                    className="mono"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://api.example.com/health"
+                  />
+                </label>
+                <div className="form-row">
+                  <label className="form-label">
+                    Method
+                    <Select
+                      value={urlMethod}
+                      onChange={(e) => setUrlMethod(e.target.value as 'GET' | 'HEAD' | 'POST')}
+                    >
+                      <option value="GET">GET</option>
+                      <option value="HEAD">HEAD</option>
+                      <option value="POST">POST</option>
+                    </Select>
+                  </label>
+                  <label className="form-label form-check">
+                    <input
+                      type="checkbox"
+                      checked={verifyTls}
+                      onChange={(e) => setVerifyTls(e.target.checked)}
+                    />
+                    <span>Verify TLS certificate</span>
+                  </label>
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="form-label">
+                  <span>
+                    IP address <RequiredMark />
+                  </span>
+                  <TextInput
+                    className="mono"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="10.0.0.1 or 2001:db8::1"
+                  />
+                </label>
+                <label className="form-label">
+                  Device profile (optional)
+                  <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+                    <option value="">— none —</option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label className="form-label">
+                  SNMP credential (optional — enables SNMP polling)
+                  <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
+                    <option value="">— none —</option>
+                    {credentials.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              </>
+            )}
             <label className="form-label">
               Parent node (optional — for dependency suppression)
               <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
@@ -475,25 +553,27 @@ export function NodesPage() {
                 ))}
               </Select>
             </label>
-            <div className="form-row">
-              <label className="form-label">
-                Maker (optional)
-                <TextInput
-                  value={vendor}
-                  onChange={(e) => setVendor(e.target.value)}
-                  placeholder="e.g. Cisco"
-                />
-              </label>
-              <label className="form-label">
-                Model (optional)
-                <TextInput
-                  className="mono"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="e.g. C2960"
-                />
-              </label>
-            </div>
+            {monType === 'device' && (
+              <div className="form-row">
+                <label className="form-label">
+                  Maker (optional)
+                  <TextInput
+                    value={vendor}
+                    onChange={(e) => setVendor(e.target.value)}
+                    placeholder="e.g. Cisco"
+                  />
+                </label>
+                <label className="form-label">
+                  Model (optional)
+                  <TextInput
+                    className="mono"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="e.g. C2960"
+                  />
+                </label>
+              </div>
+            )}
             {addError && <p className="form-error">{addError}</p>}
           </div>
         </Modal>

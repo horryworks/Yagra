@@ -10,11 +10,14 @@ import {
   deriveMem,
   formatBytes,
   formatCount,
+  formatDaysToExpiry,
   formatRtt,
   formatSi,
   formatTimestamp,
   formatUptimeTicks,
   formatUtil,
+  httpStatusLabel,
+  httpStatusTone,
   pointsToSeries,
   scalarDisplay,
   severityColorVar,
@@ -98,9 +101,123 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
         </section>
       )}
 
+      {node.url_check && <UrlHealth nodeId={node.id} url={node.url_check.url} />}
       <DeviceHealth nodeId={node.id} />
       <SnmpScalars nodeId={node.id} />
     </div>
+  );
+}
+
+/** CSS status-palette variable for an HTTP tone (up/warning/critical). */
+function httpToneVar(tone: 'up' | 'warning' | 'critical'): string {
+  if (tone === 'up') return 'var(--status-ok)';
+  if (tone === 'warning') return 'var(--status-warning)';
+  return 'var(--status-critical)';
+}
+
+/** Tone for a TLS cert's days-to-expiry against the built-in URL thresholds (warn < 30, crit < 7). */
+function certTone(days: number): 'up' | 'warning' | 'critical' {
+  if (days < 7) return 'critical';
+  if (days < 30) return 'warning';
+  return 'up';
+}
+
+/** URL-monitor health: availability (`http_up`), the last HTTP status code, and (for HTTPS) the
+ *  TLS certificate's days-to-expiry. Mirrors the Device-health card layout; self-refreshes. Shown
+ *  only for URL-monitor nodes (the caller guards on `node.url_check`). */
+function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
+  const [up, setUp] = useState<number | null>(null);
+  const [statusCode, setStatusCode] = useState<number | null>(null);
+  const [certDays, setCertDays] = useState<number | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const { from, to } = resolveRange(range);
+      void Promise.allSettled([
+        api.getNodeMetric(nodeId, 'http_up'),
+        api.getNodeMetric(nodeId, 'http_status_code'),
+        api.getNodeMetric(nodeId, 'ssl_cert_days_to_expiry'),
+        api.getNodeMetricRange(nodeId, 'http_status_code', { from, to }),
+      ]).then(([u, s, c, r]) => {
+        if (cancelled) return;
+        setUp(u.status === 'fulfilled' ? u.value.value : null);
+        setStatusCode(s.status === 'fulfilled' ? s.value.value : null);
+        setCertDays(c.status === 'fulfilled' ? c.value.value : null);
+        setSeries(
+          r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
+        );
+      });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId, range]);
+
+  const code = statusCode == null ? null : Math.round(statusCode);
+  const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
+
+  return (
+    <section>
+      <div className="nd-section-head">
+        <div className="nd-section-t">URL monitor</div>
+        <RangeControl value={range} onChange={setRange} />
+      </div>
+      <div className="nd-fact-v mono nd-url-target">{url}</div>
+      <div className="nd-health-metrics">
+        <div className="nd-health-metric">
+          <div className="nd-health-metric-head">
+            <span className="nd-health-metric-label">Availability</span>
+            <span
+              className="nd-health-metric-value"
+              style={{ color: httpToneVar(availabilityTone) }}
+            >
+              {up == null ? '—' : up === 1 ? 'Up' : 'Down'}
+            </span>
+          </div>
+          <div className="nd-url-status-line">
+            {code == null ? (
+              <span className="nd-muted">No response yet…</span>
+            ) : (
+              <span style={{ color: httpToneVar(httpStatusTone(code)) }}>
+                HTTP {code} · {httpStatusLabel(code)}
+              </span>
+            )}
+          </div>
+          {series.timestamps.length > 0 && (
+            <MetricChart
+              title=""
+              timestamps={series.timestamps}
+              values={series.values}
+              yFormat={(v) => `${Math.round(v)}`}
+              legendFormat={(v) => `HTTP ${Math.round(v)}`}
+            />
+          )}
+        </div>
+        {certDays != null && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">TLS certificate</span>
+              <span
+                className="nd-health-metric-value"
+                style={{ color: httpToneVar(certTone(certDays)) }}
+              >
+                {formatDaysToExpiry(certDays)}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

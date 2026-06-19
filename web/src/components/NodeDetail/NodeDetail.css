@@ -335,6 +335,17 @@
   color: var(--text-tertiary);
 }
 
+/* URL-monitor card: the monitored URL under the section head, and the status-code line. */
+.nd-url-target {
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+
+.nd-url-status-line {
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .nd-scalars {
   display: flex;
   flex-direction: column;

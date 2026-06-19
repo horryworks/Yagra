@@ -18,6 +18,9 @@ surge-ping = { workspace = true }
 csnmp = { workspace = true }
 snmp2 = { workspace = true }
 rand = { workspace = true }
+# URL/HTTP(S) monitoring transport.
+reqwest = { workspace = true }
+x509-parser = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
