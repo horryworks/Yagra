@@ -61,6 +61,7 @@ type Target =
 type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
   | { x: number; y: number; kind: 'node'; node: NodeSummary }
+  | { x: number; y: number; kind: 'root' }
   | null;
 
 interface Props {
@@ -82,6 +83,11 @@ interface Props {
   onAddGroup: (parentId: string | null) => void;
   onEditGroup: (group: NodeGroup) => void;
   onDeleteGroup: (group: NodeGroup) => void;
+  /** Right-click → add a monitoring node, placed into `groupId` (`null` = top level / Ungrouped).
+   *  The manual, Discovery-free way to add a target. Omit to hide the menu item. */
+  onAddNode?: (groupId: string | null) => void;
+  /** Right-click → delete a node (opens a destructive-consent modal). Omit to hide the item. */
+  onDeleteNode?: (node: NodeSummary) => void;
   /** Open the "move node" picker (context-menu / button path, keyboard-accessible). */
   onRequestMoveNode: (node: NodeSummary) => void;
   /** Move a node into a group (or null = ungroup), appending it — drop onto a group / picker. */
@@ -121,6 +127,8 @@ export function NodeTree({
   onAddGroup,
   onEditGroup,
   onDeleteGroup,
+  onAddNode,
+  onDeleteNode,
   onRequestMoveNode,
   onMoveNode,
   onMoveGroup,
@@ -523,7 +531,15 @@ export function NodeTree({
               dropOnRoot();
             }}
           >
-            <div className="ntree-row ntree-ungrouped-head" style={{ paddingLeft: BASE_PAD }}>
+            <div
+              className="ntree-row ntree-ungrouped-head"
+              style={{ paddingLeft: BASE_PAD }}
+              onContextMenu={(e) => {
+                if (!canEdit) return;
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
+              }}
+            >
               <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
               <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
               <span className="ntree-grp-name ntree-ungrouped-label">Ungrouped</span>
@@ -538,7 +554,16 @@ export function NodeTree({
           (loading ? (
             <p className="muted ntree-empty">Loading nodes…</p>
           ) : (
-            <p className="muted ntree-empty">No nodes in inventory. Add one to start monitoring.</p>
+            <p
+              className="muted ntree-empty"
+              onContextMenu={(e) => {
+                if (!canEdit) return;
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
+              }}
+            >
+              No nodes in inventory. Add one to start monitoring.
+            </p>
           ))}
       </div>
 
@@ -549,6 +574,11 @@ export function NodeTree({
               <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
                 Add subgroup
               </button>
+              {onAddNode && (
+                <button type="button" onClick={() => { onAddNode(menu.group.id); setMenu(null); }}>
+                  Add node here…
+                </button>
+              )}
               <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
                 Edit / move…
               </button>
@@ -558,7 +588,7 @@ export function NodeTree({
                 Delete
               </button>
             </>
-          ) : (
+          ) : menu.kind === 'node' ? (
             <>
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 Open
@@ -566,8 +596,28 @@ export function NodeTree({
               <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
                 Move to group…
               </button>
+              {onAddNode && (
+                <button type="button" onClick={() => { onAddNode(menu.node.group_id); setMenu(null); }}>
+                  Add node…
+                </button>
+              )}
               {suppressionMenu({ kind: 'node', id: menu.node.id, name: menu.node.name })}
+              {onDeleteNode && (
+                <>
+                  <div className="ntree-menu-sep" />
+                  <button type="button" className="danger" onClick={() => { onDeleteNode(menu.node); setMenu(null); }}>
+                    Delete…
+                  </button>
+                </>
+              )}
             </>
+          ) : (
+            // kind === 'root': right-click on the Ungrouped header / empty tree → add at top level.
+            onAddNode && (
+              <button type="button" onClick={() => { onAddNode(null); setMenu(null); }}>
+                Add node here…
+              </button>
+            )
           )}
         </div>
       )}
