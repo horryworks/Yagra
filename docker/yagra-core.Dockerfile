@@ -2,7 +2,11 @@
 # Multi-stage: build the workspace binary, ship a slim runtime. Stub — flesh out
 # the build cache layers (cargo-chef) once the crate has real dependencies.
 
-FROM rust:1.90-slim AS build
+# Pin the build base to bookworm so the binary's glibc matches the bookworm runtime below.
+# `rust:1.90-slim` is a moving tag that has rolled to Debian trixie (glibc 2.39); building there
+# while the runtime is `debian:bookworm-slim` (glibc 2.36) yields a binary that fails at startup
+# with `GLIBC_2.39 not found`. Keep both on bookworm.
+FROM rust:1.90-slim-bookworm AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release --bin yagra-core
