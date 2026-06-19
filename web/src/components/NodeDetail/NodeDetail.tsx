@@ -310,8 +310,9 @@ function StatePill({ state }: { state: NodeState }) {
   );
 }
 
-/** Confirm + delete a node (destructive-consent modal). On success the caller navigates away. */
-function DeleteNodeModal({
+/** Confirm + delete a node (destructive-consent modal). On success the caller navigates away
+ *  (full-page detail) or clears the selection + reloads (the All-nodes tree right-click path). */
+export function DeleteNodeModal({
   nodeId,
   name,
   onClose,

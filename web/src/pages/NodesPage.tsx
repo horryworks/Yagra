@@ -30,7 +30,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
-import { NodeDetail } from '../components/NodeDetail/NodeDetail';
+import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
@@ -106,6 +106,9 @@ export function NodesPage() {
 
   // Add-node modal.
   const [adding, setAdding] = useState(false);
+  /** Folder the new node lands in (group_id): set from the right-clicked group/node; `null` = top
+   *  level. createNode itself takes no group_id, so on success we follow up with setNodeGroup. */
+  const [addGroupId, setAddGroupId] = useState<string | null>(null);
   /** Which kind of monitor to add: an SNMP/ICMP device, or a URL/HTTP(S) endpoint. */
   const [monType, setMonType] = useState<'device' | 'url'>('device');
   const [name, setName] = useState('');
@@ -126,6 +129,7 @@ export function NodesPage() {
   // Group + move modals.
   const [groupModal, setGroupModal] = useState<GroupModalState | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
+  const [deletingNode, setDeletingNode] = useState<NodeSummary | null>(null);
   const [movingNode, setMovingNode] = useState<NodeSummary | null>(null);
 
   // Suppression: active maintenance windows + mutes drive the per-row icons; the right-click
@@ -245,6 +249,7 @@ export function NodesPage() {
 
   const resetAddForm = () => {
     setAdding(false);
+    setAddGroupId(null);
     setMonType('device');
     setName('');
     setAddress('');
@@ -278,7 +283,12 @@ export function NodesPage() {
             vendor: vendor.trim() || undefined,
             model: model.trim() || undefined,
           });
+    // createNode/createUrlMonitor take no group_id, so a node lands Ungrouped; if the add was
+    // launched from a folder's right-click, place it there with the canonical setNodeGroup op
+    // (same as drag-drop). A placement failure is soft — the node still exists, just at top level.
+    const groupId = addGroupId;
     created
+      .then(({ id }) => (groupId ? api.setNodeGroup(id, groupId) : undefined))
       .then(() => {
         resetAddForm();
         void reload();
@@ -342,7 +352,13 @@ export function NodesPage() {
         }
         actions={
           authed && (
-            <Button variant="primary" onClick={() => setAdding(true)}>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setAddGroupId(null);
+                setAdding(true);
+              }}
+            >
               Add node
             </Button>
           )
@@ -394,6 +410,15 @@ export function NodesPage() {
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
+            onAddNode={
+              authed
+                ? (gid) => {
+                    setAddGroupId(gid);
+                    setAdding(true);
+                  }
+                : undefined
+            }
+            onDeleteNode={authed ? (n) => setDeletingNode(n) : undefined}
             onRequestMoveNode={(n) => setMovingNode(n)}
             onMoveNode={moveNode}
             onMoveGroup={moveGroup}
@@ -454,6 +479,10 @@ export function NodesPage() {
           }
         >
           <div className="form-stack">
+            <p className="form-note">
+              Adding to{' '}
+              <strong>{groups.find((g) => g.id === addGroupId)?.name ?? 'top level'}</strong>.
+            </p>
             <label className="form-label">
               Monitoring type
               <Select
@@ -623,6 +652,20 @@ export function NodesPage() {
             <strong>no nodes are deleted</strong>.
           </p>
         </Modal>
+      )}
+
+      {deletingNode && (
+        <DeleteNodeModal
+          nodeId={deletingNode.id}
+          name={deletingNode.name}
+          onClose={() => setDeletingNode(null)}
+          onDeleted={() => {
+            // If the deleted node was the open selection, clear the right pane.
+            if (selected?.kind === 'node' && selected.id === deletingNode.id) select(null);
+            setDeletingNode(null);
+            void reload();
+          }}
+        />
       )}
 
       {movingNode && (
