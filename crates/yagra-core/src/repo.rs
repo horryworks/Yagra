@@ -43,6 +43,10 @@ pub struct InterfaceMeta {
     pub last_seen_s: Option<i64>,
 }
 
+/// One interface row to batch-upsert: `(ifindex, if_name, if_alias, if_speed)`, metadata borrowed
+/// from the poll result. A `None` name/alias/speed leaves the stored value untouched (COALESCE).
+pub type InterfaceUpsert<'a> = (i32, Option<&'a str>, Option<&'a str>, Option<i64>);
+
 /// Interface identity for a fleet Top-N name join (no timestamp — just labels + speed).
 pub struct InterfaceIdent {
     pub if_name: Option<String>,
@@ -583,22 +587,42 @@ impl NodeRepo {
             .collect()
     }
 
-    /// Upsert an interface discovered during a table walk: insert it, or refresh its
-    /// metadata and `last_seen`. Names/aliases are device-supplied metadata kept in
-    /// PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011). A
-    /// `None` field leaves the stored value untouched (COALESCE). Staleness is judged by
-    /// `last_seen` age; rows are not deleted here.
-    pub async fn upsert_interface(
+    /// Upsert all interfaces discovered on one poll (table walk) in a **single** statement:
+    /// insert each, or refresh its metadata and `last_seen`. This is the busiest ingest path
+    /// (every SNMP-table poll of every node), so it must not fan out into one round-trip per
+    /// interface — a core switch has hundreds. Names/aliases are device-supplied metadata kept
+    /// in PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011). A `None`
+    /// field leaves the stored value untouched (COALESCE). Staleness is judged by `last_seen`
+    /// age; rows are not deleted here.
+    pub async fn upsert_interfaces(
         &self,
         node_id: Uuid,
-        ifindex: i32,
-        if_name: Option<&str>,
-        if_alias: Option<&str>,
-        if_speed: Option<i64>,
+        rows: &[InterfaceUpsert<'_>],
     ) -> anyhow::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // Dedup within the batch keeping the last occurrence: `ON CONFLICT DO UPDATE` cannot
+        // touch the same (node_id, ifindex) twice in one statement, and a multi-index table
+        // can fold several rows onto one synthetic ifindex. Last-wins matches the previous
+        // per-row loop's overwrite semantics.
+        type OwnedIfaceMeta = (Option<String>, Option<String>, Option<i64>);
+        let mut by_ifindex: BTreeMap<i32, OwnedIfaceMeta> = BTreeMap::new();
+        for &(ifindex, name, alias, speed) in rows {
+            by_ifindex.insert(
+                ifindex,
+                (name.map(str::to_owned), alias.map(str::to_owned), speed),
+            );
+        }
+        let ifindexes: Vec<i32> = by_ifindex.keys().copied().collect();
+        let names: Vec<Option<String>> = by_ifindex.values().map(|v| v.0.clone()).collect();
+        let aliases: Vec<Option<String>> = by_ifindex.values().map(|v| v.1.clone()).collect();
+        let speeds: Vec<Option<i64>> = by_ifindex.values().map(|v| v.2).collect();
         sqlx::query(
             "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, last_seen) \
-             VALUES ($1, $2, $3, $4, $5, now()) \
+             SELECT $1, t.ifindex, t.if_name, t.if_alias, t.if_speed, now() \
+             FROM unnest($2::int[], $3::text[], $4::text[], $5::int8[]) \
+                  AS t(ifindex, if_name, if_alias, if_speed) \
              ON CONFLICT (node_id, ifindex) DO UPDATE SET \
                 if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
                 if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
@@ -606,10 +630,10 @@ impl NodeRepo {
                 last_seen = now()",
         )
         .bind(node_id)
-        .bind(ifindex)
-        .bind(if_name)
-        .bind(if_alias)
-        .bind(if_speed)
+        .bind(&ifindexes)
+        .bind(&names)
+        .bind(&aliases)
+        .bind(&speeds)
         .execute(&self.pool)
         .await?;
         Ok(())

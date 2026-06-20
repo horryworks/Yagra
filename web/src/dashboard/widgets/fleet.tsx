@@ -2,7 +2,7 @@
 // health ring (donut of node states with % healthy), and a nodes-down KPI tile. All read the
 // shared `useNodes()` poll, so adding several costs one inventory fetch.
 
-import { stateColorVar } from '../../lib/format';
+import { stateColorValue, stateColorVar } from '../../lib/format';
 import { api } from '../../services/api';
 import { MetricChart } from '../../components/MetricChart/MetricChart';
 import { StatusSummary } from '../../widgets/StatusSummary';
@@ -40,12 +40,6 @@ export function NodesDownWidget() {
   return <KpiTile value={String(downCount(nodes))} caption="nodes down" />;
 }
 
-// Chart series colors are passed to the canvas (uPlot can't read CSS vars) — the documented
-// exemption to the no-hardcoded-color rule. These mirror the dark-theme status palette.
-const DOWN_COLOR = '#ef5350';
-const WARN_COLOR = '#e2a526';
-const UNKNOWN_COLOR = '#8a93a3';
-
 export function FleetHealthTimelineWidget() {
   const { data, loading, error } = usePolled(() => api.getStateHistory(), []);
   if (error) return <p className="muted">{error}</p>;
@@ -58,6 +52,9 @@ export function FleetHealthTimelineWidget() {
   const at = (k: string, i: number) => s[k]?.[i] ?? 0;
   // "Down" merges critical + unreachable (both hard-down) into one problem line.
   const down = ts.map((_, i) => at('critical', i) + at('unreachable', i));
+  // Series colors go to the canvas (uPlot can't read CSS vars), so resolve the *active theme's*
+  // status palette to concrete colors — keeping the timeline's Down/Warning/Unknown identical to
+  // the table/donut/tree in both light and dark, instead of freezing the dark-theme hex.
   return (
     <MetricChart
       title=""
@@ -65,9 +62,9 @@ export function FleetHealthTimelineWidget() {
       height={180}
       yFormat={(v) => String(Math.round(v))}
       series={[
-        { label: 'Down', values: down, color: DOWN_COLOR },
-        { label: 'Warning', values: s.warning ?? [], color: WARN_COLOR },
-        { label: 'Unknown', values: s.unknown ?? [], color: UNKNOWN_COLOR },
+        { label: 'Down', values: down, color: stateColorValue('critical') },
+        { label: 'Warning', values: s.warning ?? [], color: stateColorValue('warning') },
+        { label: 'Unknown', values: s.unknown ?? [], color: stateColorValue('unknown') },
       ]}
     />
   );

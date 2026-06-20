@@ -689,9 +689,15 @@ export const api = {
   /** Active alerts. */
   listAlerts: (): Promise<Alert[]> => request('/alerts'),
 
-  /** Recent alert history (default 100 rows). */
-  listAlertHistory: (limit?: number): Promise<AlertHistoryRow[]> =>
-    request(limit != null ? `/alerts/history?limit=${limit}` : '/alerts/history'),
+  /** Alert history page, newest first. `before` is the keyset cursor: pass the last row's
+   *  `recorded_at` to fetch the next (older) page (mirrors the audit log's paging). */
+  listAlertHistory: (opts?: { limit?: number; before?: string }): Promise<AlertHistoryRow[]> => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.before) params.set('before', opts.before);
+    const qs = params.toString();
+    return request(qs ? `/alerts/history?${qs}` : '/alerts/history');
+  },
 
   /** Nodes generating the most alert fires over a trailing window (chronic offenders). */
   getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<AlertNodeCount[]> => {

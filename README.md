@@ -6,10 +6,10 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **early development.** The tested core logic and a single-process "walking
-> skeleton" (core → bus → poller → metric → API) are in place; runtime integration with
-> the external services (NATS, VictoriaMetrics, PostgreSQL, raw-socket ICMP, SNMP) is in
-> progress.
+> Status: **v0.1.0 — first release.** A functional single-node stack (ICMP / SNMP v2c+v3 /
+> URL monitoring, discovery & classification, alerting, dashboards, and reports) over
+> PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose. Architected to scale out
+> (distributed pollers, HA stores) by configuration, not rewrite.
 
 ## Components
 
@@ -50,7 +50,7 @@ cargo test
 # Frontend (web/)
 cd web && npm install && npm run dev
 
-# Full stack (skeleton)
+# Full stack (single-node Docker Compose)
 docker compose up --build
 ```
 

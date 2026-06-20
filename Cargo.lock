@@ -3692,7 +3692,6 @@ dependencies = [
  "tokio",
  "uuid",
  "yagra-common",
- "yagra-topology",
 ]
 
 [[package]]
@@ -3757,7 +3756,6 @@ name = "yagra-discovery"
 version = "0.1.0"
 dependencies = [
  "yagra-common",
- "yagra-transport",
 ]
 
 [[package]]

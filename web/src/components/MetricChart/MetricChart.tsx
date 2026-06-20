@@ -69,15 +69,31 @@ export function MetricChart({
   referenceLine,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const plotRef = useRef<uPlot | null>(null);
+  // Latest render-varying props, read by the uPlot option closures at draw time. This is what
+  // lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a fresh
+  // `referenceLine` object each render don't change the instance, only what its closures read.
+  const live = useRef({ yFormat, legendFormat, referenceLine });
+  live.current = { yFormat, legendFormat, referenceLine };
 
+  const resolved: ChartSeries[] =
+    series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
+  // A full rebuild is needed only when the chart *shape* changes (title, height, series
+  // count/labels/colors) — not when the data values, axis ranges, or formatters change. Those
+  // update the existing instance in place (see the data effect below).
+  const structKey =
+    `${title}|${height}|` + resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
+  // Content signature of the optional reference line, so a value/label change redraws in place.
+  const refKey = referenceLine ? `${referenceLine.value}:${referenceLine.label ?? ''}` : '';
+
+  // ── Create (or structurally rebuild) the uPlot instance ──────────────────────────────────
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const resolved: ChartSeries[] =
-      series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
 
     // Canvas can't read CSS variables, so resolve the theme's axis/grid colors here (adapts
-    // to light/dark). Charts re-create on data refresh, so a theme switch is picked up then.
+    // to light/dark). The instance is rebuilt on a structural/theme-affecting change, so a theme
+    // switch is picked up then (and on the next data tick's redraw via the live refs).
     const cs = getComputedStyle(el);
     const axisColor = cs.getPropertyValue('--text-tertiary').trim() || '#8a8f98';
     const gridColor = cs.getPropertyValue('--border-color').trim() || 'rgba(255,255,255,0.1)';
@@ -88,16 +104,16 @@ export function MetricChart({
       grid: { stroke: gridColor, width: 1 },
       ticks: { stroke: gridColor, width: 1 },
     };
-    const yAxis = yFormat
-      ? {
-          ...axis,
-          // Compact Y tick labels (e.g. SI suffixes) so wide numbers aren't clipped.
-          values: (_u: uPlot, splits: number[]) =>
-            splits.map((s) => (s == null ? '' : yFormat(s))),
-        }
-      : axis;
-    // Cursor-legend value formatter: an explicit one (units the axis omits) else the axis one.
-    const legendFmt = legendFormat ?? yFormat;
+    const yAxis = {
+      ...axis,
+      // Compact Y tick labels (e.g. SI suffixes) so wide numbers aren't clipped. Reads the live
+      // formatter so a formatter swap is picked up on the next redraw without a rebuild.
+      values: (_u: uPlot, splits: number[]) =>
+        splits.map((s) => {
+          const f = live.current.yFormat;
+          return s == null ? '' : f ? f(s) : String(s);
+        }),
+    };
 
     const opts: uPlot.Options = {
       title,
@@ -114,24 +130,29 @@ export function MetricChart({
           stroke: s.color ?? PALETTE[i % PALETTE.length],
           width: 2,
           // Cursor-legend "Value" readout — format with units so a hover reads "75%" / "12 ms",
-          // not a bare number. Prefer an explicit legend formatter, else the axis formatter.
-          value: (_u: uPlot, v: number | null) =>
-            v == null ? '--' : legendFmt ? legendFmt(v) : `${v}`,
+          // not a bare number. Reads the live formatters (explicit legend formatter, else the axis
+          // one) so a formatter swap is picked up on redraw without rebuilding the chart.
+          value: (_u: uPlot, v: number | null) => {
+            const f = live.current.legendFormat ?? live.current.yFormat;
+            return v == null ? '--' : f ? f(v) : `${v}`;
+          },
         })),
       ],
-      // Horizontal reference line (e.g. configured bandwidth), drawn over the series. Canvas works
-      // in device pixels, so scale stroke/text by the pixel ratio. When the value sits inside the
-      // visible range it's drawn at its true Y; when it's off-scale (auto-fit mode with traffic
-      // well below the bandwidth) the line is pinned to the nearest edge and its label gets a ↑/↓
-      // marker — so the operator can still see the threshold and that the real value is beyond the
-      // edge, rather than the line silently vanishing.
-      hooks: referenceLine
-        ? {
-            draw: [
-              (u: uPlot) => {
-                const refv = referenceLine.value;
-                if (!Number.isFinite(refv)) return;
-                const { left, top, width, height } = u.bbox;
+      // Horizontal reference line (e.g. configured bandwidth), drawn over the series. Always
+      // installed and reads the *live* reference line, so it can appear/disappear/change between
+      // data ticks without rebuilding the chart. Canvas works in device pixels, so scale
+      // stroke/text by the pixel ratio. When the value sits inside the visible range it's drawn at
+      // its true Y; when it's off-scale the line is pinned to the nearest edge and its label gets a
+      // ↑/↓ marker — so the operator can still see the threshold and that the real value is beyond
+      // the edge, rather than the line silently vanishing.
+      hooks: {
+        draw: [
+          (u: uPlot) => {
+            const referenceLine = live.current.referenceLine;
+            if (!referenceLine) return;
+            const refv = referenceLine.value;
+            if (!Number.isFinite(refv)) return;
+            const { left, top, width, height } = u.bbox;
                 const trueY = u.valToPos(refv, 'y', true);
                 const aboveRange = trueY < top; // value greater than the visible max
                 const belowRange = trueY > top + height; // value less than the visible min
@@ -166,11 +187,11 @@ export function MetricChart({
                 ctx.restore();
               },
             ],
-          }
-        : undefined,
+          },
     };
     const data = [timestamps, ...resolved.map((s) => s.values)] as uPlot.AlignedData;
     const plot = new uPlot(opts, data, el);
+    plotRef.current = plot;
 
     // Track the container width so the chart fills the pane (and reflows on layout change).
     const ro = new ResizeObserver(() => {
@@ -182,8 +203,25 @@ export function MetricChart({
     return () => {
       ro.disconnect();
       plot.destroy();
+      plotRef.current = null;
     };
-  }, [title, timestamps, values, series, height, yFormat, yRange, xRange, legendFormat, referenceLine]);
+    // Rebuild only on a structural/theme-affecting change; data & ranges update in place below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structKey, height]);
+
+  // ── Update data, axis ranges, and the reference line in place (no rebuild per poll tick) ──
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot) return;
+    const data = [timestamps, ...resolved.map((s) => s.values)] as uPlot.AlignedData;
+    // setData (resetScales=true) auto-fits both axes; then re-pin any axis the caller fixed.
+    plot.setData(data);
+    if (xRange) plot.setScale('x', { min: xRange[0], max: xRange[1] });
+    if (yRange) plot.setScale('y', { min: yRange[0], max: yRange[1] });
+    // `live` already holds the current formatters / reference line; setData triggered the redraw.
+    // Keyed on data + range/refline *content* so a parent re-render with unchanged data is a no-op.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timestamps, values, series, xRange, yRange, refKey, structKey]);
 
   return <div ref={ref} />;
 }

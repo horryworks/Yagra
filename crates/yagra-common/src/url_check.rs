@@ -143,6 +143,13 @@ impl UrlCheckConfig {
 /// and again in the transport (defense in depth).
 #[must_use]
 pub fn is_ssrf_blocked(ip: IpAddr) -> bool {
+    // Normalize IPv4-mapped IPv6 (`::ffff:a.b.c.d`) to its V4 form first. Otherwise a mapped
+    // literal like `::ffff:169.254.169.254` / `::ffff:127.0.0.1` slips past the V6 branch (which
+    // never recognizes it as link-local / loopback) and reaches the metadata/loopback address.
+    let ip = match ip {
+        IpAddr::V6(a) => a.to_ipv4_mapped().map_or(IpAddr::V6(a), IpAddr::V4),
+        v4 => v4,
+    };
     match ip {
         IpAddr::V4(a) => {
             a.is_loopback()
@@ -234,5 +241,16 @@ mod tests {
         assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))));
         assert!(!is_ssrf_blocked(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_ssrf_blocked("2001:db8::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn ssrf_normalizes_ipv4_mapped_ipv6() {
+        // IPv4-mapped IPv6 must be judged by the V4 rules, not slip past the V6 branch.
+        assert!(is_ssrf_blocked("::ffff:169.254.169.254".parse().unwrap())); // mapped metadata
+        assert!(is_ssrf_blocked("::ffff:127.0.0.1".parse().unwrap())); // mapped loopback
+        assert!(is_ssrf_blocked("::ffff:0.0.0.0".parse().unwrap())); // mapped unspecified
+                                                                     // A mapped *private* address stays allowed (still a legitimate internal target).
+        assert!(!is_ssrf_blocked("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_ssrf_blocked("::ffff:192.168.1.2".parse().unwrap()));
     }
 }

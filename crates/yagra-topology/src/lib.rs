@@ -30,15 +30,6 @@ impl Topology {
         self.parents.entry(child).or_default().insert(parent);
     }
 
-    /// Direct parents (upstreams) of a node.
-    #[must_use]
-    pub fn parents(&self, node: NodeId) -> Vec<NodeId> {
-        self.parents
-            .get(&node)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default()
-    }
-
     /// Whether `node`'s alert should be suppressed given the set of currently-down nodes.
     ///
     /// Suppressed iff the node has at least one parent and **all** parents are down (no

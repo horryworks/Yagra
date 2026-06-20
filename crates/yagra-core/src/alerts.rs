@@ -37,8 +37,8 @@ use yagra_alert::{
 };
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
-    resolve_effective, CheckId, Direction, EffectiveThreshold, NodeId, NodeState, ScopeLevel,
-    ScopedThreshold, Severity,
+    is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, NodeId, NodeState,
+    ScopeLevel, ScopedThreshold, Severity,
 };
 use yagra_topology::Topology;
 
@@ -532,16 +532,60 @@ pub struct WebhookChannel {
 impl WebhookChannel {
     #[must_use]
     pub fn new(url: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            url,
+        // Hardened client: a bounded timeout and — importantly for SSRF — NO redirect following.
+        // A webhook endpoint that 30x-redirects to a loopback/metadata address is an escalation
+        // vector, so core never follows a redirect on the notification path. (The config is static,
+        // so building the client cannot fail at runtime; the fallback keeps the no-redirect policy.)
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent("Yagra-core")
+            .build()
+            .unwrap_or_default();
+        Self { http, url }
+    }
+}
+
+/// Whether a webhook target must be refused (SSRF, runtime/defense-in-depth alongside the API-edge
+/// [`crate::api`] check). An IP-literal host is judged directly; a hostname is resolved and refused
+/// only if **every** answer is blocked. A DNS failure is *not* treated as blocked — the POST then
+/// fails naturally and is reported as a delivery error.
+async fn webhook_target_blocked(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
+        return is_ssrf_blocked(ip);
+    }
+    let port = url
+        .port_or_known_default()
+        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addrs) => {
+            let addrs: Vec<_> = addrs.collect();
+            !addrs.is_empty() && addrs.iter().all(|a| is_ssrf_blocked(a.ip()))
         }
+        Err(_) => false,
     }
 }
 
 #[async_trait]
 impl NotifyChannel for WebhookChannel {
     async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        // SSRF guard at delivery time (the API edge validates the configured URL, but DNS can
+        // change between config and delivery): refuse a target whose every resolved address is
+        // blocked before any request leaves core.
+        if let Ok(url) = reqwest::Url::parse(&self.url) {
+            if webhook_target_blocked(&url).await {
+                return Err(NotifyError::Delivery(
+                    "webhook target address is not allowed (SSRF)".to_owned(),
+                ));
+            }
+        }
         self.http
             .post(&self.url)
             .header("content-type", "application/json")
@@ -868,6 +912,19 @@ mod tests {
             url: "http://example.test/hook".to_owned(),
         });
         assert!(ch.is_some());
+    }
+
+    #[tokio::test]
+    async fn webhook_target_blocked_for_metadata_literal_allows_private() {
+        async fn blocked(u: &str) -> bool {
+            webhook_target_blocked(&reqwest::Url::parse(u).unwrap()).await
+        }
+        // SSRF-escalation surface (resolved before any request leaves core).
+        assert!(blocked("http://169.254.169.254/hook").await);
+        assert!(blocked("http://127.0.0.1/hook").await);
+        assert!(blocked("http://[::ffff:169.254.169.254]/").await);
+        // A legitimate internal (private-range) webhook stays allowed.
+        assert!(!blocked("http://10.0.0.5/hook").await);
     }
 
     #[test]

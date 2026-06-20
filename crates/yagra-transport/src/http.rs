@@ -34,27 +34,44 @@ pub(crate) async fn probe_http(
     // (incl. cloud metadata) / multicast / unspecified targets. Private ranges are allowed —
     // an NMS legitimately monitors internal endpoints.
     if let Some(host) = url.host_str() {
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            if is_ssrf_blocked(ip) {
-                return Err(TransportError::Io("blocked target address".to_owned()));
-            }
-        } else {
-            let port = url
-                .port_or_known_default()
-                .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
-            // A resolvable name whose every answer is blocked is refused; a DNS failure falls
-            // through and is reported as unreachable below (reqwest will fail the same way).
-            if let Ok(addrs) = tokio::net::lookup_host((host, port)).await {
-                let addrs: Vec<_> = addrs.collect();
-                if !addrs.is_empty() && addrs.iter().all(|a| is_ssrf_blocked(a.ip())) {
+        match parse_host_ip(host) {
+            Some(ip) => {
+                if is_ssrf_blocked(ip) {
                     return Err(TransportError::Io("blocked target address".to_owned()));
+                }
+            }
+            None => {
+                let port = url
+                    .port_or_known_default()
+                    .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+                // A resolvable name whose every answer is blocked is refused; a DNS failure falls
+                // through and is reported as unreachable below (reqwest will fail the same way).
+                if let Ok(addrs) = tokio::net::lookup_host((host, port)).await {
+                    let addrs: Vec<_> = addrs.collect();
+                    if !addrs.is_empty() && addrs.iter().all(|a| is_ssrf_blocked(a.ip())) {
+                        return Err(TransportError::Io("blocked target address".to_owned()));
+                    }
                 }
             }
         }
     }
 
     let redirect = if spec.follow_redirects {
-        reqwest::redirect::Policy::limited(5)
+        // Re-validate every redirect hop, not just the initial target: a `302 Location:
+        // http://169.254.169.254/…` (or any loopback/link-local IP literal) would otherwise
+        // defeat the guard above. Refuse any hop to an unsupported scheme or an SSRF-blocked
+        // IP-literal host before the request to it is ever made. (A hop to a *hostname* is
+        // allowed here; the initial target's resolved addresses were already checked, and the
+        // metadata/loopback escalation surface always arrives as an IP literal in `Location`.)
+        reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.stop();
+            }
+            if redirect_hop_blocked(attempt.url()) {
+                return attempt.error("redirect target address is not allowed (SSRF)");
+            }
+            attempt.follow()
+        })
     } else {
         reqwest::redirect::Policy::none()
     };
@@ -103,6 +120,28 @@ pub(crate) async fn probe_http(
             })
         }
     }
+}
+
+/// Parse a URL host string as an IP literal, tolerating the bracketed IPv6 form (`[::1]`).
+/// Returns `None` for a domain name (resolution is checked separately).
+fn parse_host_ip(host: &str) -> Option<IpAddr> {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<IpAddr>().ok()
+}
+
+/// Whether a redirect hop's URL must be refused (per-hop SSRF defense). Blocks non-http(s)
+/// schemes and IP-literal hosts that are SSRF-blocked; a hostname hop is allowed (see the
+/// redirect-policy comment in `probe_http`).
+fn redirect_hop_blocked(url: &reqwest::Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return true;
+    }
+    url.host_str()
+        .and_then(parse_host_ip)
+        .is_some_and(is_ssrf_blocked)
 }
 
 /// Days until a DER-encoded X.509 certificate's `notAfter` (may be negative if already expired).
@@ -158,5 +197,19 @@ mod tests {
     #[test]
     fn unparseable_cert_yields_none() {
         assert_eq!(cert_days_to_expiry(b"not a cert"), None);
+    }
+
+    #[test]
+    fn redirect_hop_blocks_metadata_loopback_and_bad_scheme() {
+        let blocked = |u: &str| redirect_hop_blocked(&reqwest::Url::parse(u).unwrap());
+        // The exact attack: a redirect to the cloud-metadata / loopback IP literal.
+        assert!(blocked("http://169.254.169.254/latest/meta-data/"));
+        assert!(blocked("http://127.0.0.1/"));
+        assert!(blocked("http://[::1]/")); // bracketed IPv6 loopback
+        assert!(blocked("http://[::ffff:169.254.169.254]/")); // mapped metadata
+        assert!(blocked("ftp://example.com/")); // non-http(s) scheme
+                                                // Allowed hops: a hostname (resolution checked at hop 0) and a private internal target.
+        assert!(!blocked("http://example.com/login"));
+        assert!(!blocked("http://10.0.0.5/health"));
     }
 }

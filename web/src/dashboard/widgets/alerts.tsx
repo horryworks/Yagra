@@ -64,7 +64,7 @@ export function FlappingWatchlistWidget() {
 }
 
 export function AlertVolumeWidget() {
-  const { data, loading, error } = usePolled(() => api.listAlertHistory(1000), []);
+  const { data, loading, error } = usePolled(() => api.listAlertHistory({ limit: 1000 }), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">Loading…</p>;
   const buckets = bucketAlertsByHour(data ?? [], 24, Date.now());
