@@ -17,6 +17,7 @@ import {
   scalarDisplay,
   severityColorVar,
   severityRank,
+  stateColorValue,
   stateColorVar,
   stateLabel,
 } from './format';
@@ -33,6 +34,14 @@ describe('format', () => {
     expect(stateColorVar('ok')).toBe('var(--status-up)');
     expect(stateColorVar('warning')).toBe('var(--status-warning)');
     expect(stateColorVar('maintenance')).toBe('var(--status-maintenance)');
+  });
+
+  it('resolves a node state to a concrete color (never a CSS var), falling back without a DOM', () => {
+    // Canvas charts (uPlot) can't read CSS vars, so this must return a concrete color. In the node
+    // test env there's no document, so it returns the concrete fallback — and never a `var(...)`.
+    expect(stateColorValue('critical', '#fallback')).toBe('#fallback');
+    expect(stateColorValue('warning')).not.toContain('var(');
+    expect(stateColorValue('unknown')).not.toContain('var(');
   });
 
   it('ranks severities for sorting', () => {

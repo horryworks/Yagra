@@ -70,6 +70,7 @@ describe('bucketAlertsByHour', () => {
       state: 'critical',
       at_unix_ms: 100 * HOUR - offsetHours * HOUR + 60_000, // one minute into that hour
       resolved,
+      recorded_at: '1970-01-01T00:00:00Z', // unused by bucketing; required by the type
     });
     const buckets = bucketAlertsByHour(
       [row(0), row(0), row(1), row(2, true), row(30) /* out of 24h range */],

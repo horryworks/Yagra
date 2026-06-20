@@ -253,6 +253,9 @@ export interface AlertHistoryRow {
   threshold_value?: number | null;
   /** Breach direction (threshold checks only). */
   direction?: Direction | null;
+  /** Insertion time (RFC 3339). The keyset cursor for paging: pass the last row's `recorded_at`
+   *  as `before` to fetch the next (older) page. */
+  recorded_at: string;
   /** Read-only ack mirrored from the external tool, keyed by incident (absent ⇒ not acked). */
   acked?: AckView | null;
 }

@@ -1542,10 +1542,12 @@ async fn list_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response
     Json(decorate_alerts(st.alerts.active_alerts(), &acks)).into_response()
 }
 
-/// Recent alert-history rows. Query: `?limit=` (default 100). Empty in skeleton mode.
+/// Recent alert-history rows. Query: `?limit=` (default 100) + optional `before` keyset cursor
+/// (an RFC 3339 timestamp — pass the last row's `recorded_at` to page back). Empty in skeleton mode.
 #[derive(Deserialize)]
 struct HistoryQuery {
     limit: Option<i64>,
+    before: Option<String>,
 }
 
 async fn list_alert_history(
@@ -1559,7 +1561,20 @@ async fn list_alert_history(
     let Some(history) = st.history.as_ref() else {
         return Json(Vec::<AlertHistoryView>::new()).into_response();
     };
-    match history.recent(q.limit.unwrap_or(100)).await {
+    let before = match q.before.as_deref() {
+        Some(s) => match parse_rfc3339(s) {
+            Some(t) => Some(t),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "before must be an RFC 3339 timestamp".to_owned(),
+                )
+            }
+        },
+        None => None,
+    };
+    match history.recent(q.limit.unwrap_or(100), before).await {
         Ok(rows) => {
             let acks = ack_map(&st).await;
             Json(decorate_history(rows, &acks)).into_response()
@@ -1770,7 +1785,7 @@ async fn alert_transitions(
     let Some(history) = st.history.as_ref() else {
         return Json(Vec::<AlertTransition>::new()).into_response();
     };
-    let rows = match history.recent(q.limit.unwrap_or(12)).await {
+    let rows = match history.recent(q.limit.unwrap_or(12), None).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "alert transitions failed");
@@ -4186,7 +4201,7 @@ fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
 /// Light validation of a channel's connection config at the API edge.
 fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
     match c {
-        ChannelConfig::Webhook { url } if url.trim().is_empty() => Err("webhook url required"),
+        ChannelConfig::Webhook { url } => validate_webhook_url(url),
         ChannelConfig::Email { host, from, to, .. }
             if host.trim().is_empty() || from.trim().is_empty() || to.trim().is_empty() =>
         {
@@ -4194,6 +4209,35 @@ fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
         }
         _ => Ok(()),
     }
+}
+
+/// Validate a notification-webhook URL at the API edge (SSRF: a `ManageConfig` user could
+/// otherwise point a channel at `http://169.254.169.254/…`, and core — which holds the DB and
+/// the KEK — would POST there on every alert). Scheme must be http/https; an IP-literal host
+/// that is loopback/link-local (incl. cloud metadata)/multicast/unspecified is refused. The
+/// runtime delivery path re-checks resolved addresses (defense in depth — see `WebhookChannel`).
+fn validate_webhook_url(url: &str) -> Result<(), &'static str> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("webhook url required");
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|_| "webhook url is not a valid URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("webhook url scheme must be http or https");
+    }
+    let Some(host) = parsed.host_str() else {
+        return Err("webhook url must have a host");
+    };
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = literal.parse::<IpAddr>() {
+        if is_ssrf_blocked(ip) {
+            return Err("webhook url target is not allowed (loopback / link-local / metadata)");
+        }
+    }
+    Ok(())
 }
 
 // ── MIB repository (curated OID catalog) — browse (View) / edit (ManageConfig) ──
@@ -6214,6 +6258,21 @@ mod tests {
     }
 
     #[test]
+    fn webhook_url_validation_blocks_ssrf_targets() {
+        // Allowed: public and legitimate internal (private-range) webhook endpoints.
+        assert!(validate_webhook_url("https://hooks.example.com/abc").is_ok());
+        assert!(validate_webhook_url("http://10.0.0.5:8080/notify").is_ok());
+        // Rejected: SSRF-escalation surface (loopback / cloud metadata / mapped metadata).
+        assert!(validate_webhook_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_webhook_url("http://127.0.0.1/hook").is_err());
+        assert!(validate_webhook_url("http://[::ffff:169.254.169.254]/").is_err());
+        // Rejected: bad scheme / empty / hostless.
+        assert!(validate_webhook_url("ftp://example.com/x").is_err());
+        assert!(validate_webhook_url("   ").is_err());
+        assert!(validate_webhook_url("not a url").is_err());
+    }
+
+    #[test]
     fn oid_validation_accepts_dotted_digits_only() {
         assert!(is_valid_oid("1.3.6.1.2.1.31.1.1.1.6"));
         assert!(is_valid_oid("0"));
@@ -7131,6 +7190,7 @@ mod tests {
             observed_value: Some(150.0),
             threshold_value: Some(100.0),
             direction: Some("above".to_owned()),
+            recorded_at: "1970-01-01T00:00:10Z".to_owned(),
         };
         let clear = AlertHistoryRow {
             node,
@@ -7143,6 +7203,7 @@ mod tests {
             observed_value: None,
             threshold_value: None,
             direction: None,
+            recorded_at: "1970-01-01T00:00:20Z".to_owned(),
         };
         let unrelated = AlertHistoryRow {
             node: Uuid::from_u128(7),
@@ -7155,6 +7216,7 @@ mod tests {
             observed_value: None,
             threshold_value: None,
             direction: None,
+            recorded_at: "1970-01-01T00:00:05Z".to_owned(),
         };
         let mut acks: HashMap<AckKey, AckView> = HashMap::new();
         acks.insert(

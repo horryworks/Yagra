@@ -4,6 +4,7 @@
 //! active set. Live-only (PostgreSQL); the read endpoint returns an empty list in skeleton
 //! mode.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -36,6 +37,10 @@ pub struct AlertHistoryRow {
     pub threshold_value: Option<f64>,
     /// Breach direction, `"above"`/`"below"` (threshold checks only).
     pub direction: Option<String>,
+    /// Insertion time as an RFC 3339 timestamp. This is the **keyset cursor**: the WebUI passes
+    /// the last row's `recorded_at` as `before` to fetch the next (older) page (matches the audit
+    /// log's paging). Distinct from `at_unix_ms` (the event time), which can collide across rows.
+    pub recorded_at: String,
 }
 
 /// PostgreSQL-backed alert history.
@@ -140,18 +145,28 @@ impl AlertHistoryStore {
         Ok(res.rows_affected())
     }
 
-    /// The most recent `limit` history rows (newest first).
-    pub async fn recent(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
+    /// A page of history rows (newest first). `before` is the keyset cursor — when set, only rows
+    /// strictly older than it (by `recorded_at`, the indexed sort column) are returned, so the
+    /// WebUI can page back through the whole log instead of being capped at one fetch.
+    pub async fn recent(
+        &self,
+        limit: i64,
+        before: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(
             "SELECT node, check_id, severity, state, at_unix_ms, resolved, \
-                    metric, observed_value, threshold_value, direction \
-             FROM alert_history ORDER BY recorded_at DESC LIMIT $1",
+                    metric, observed_value, threshold_value, direction, recorded_at \
+             FROM alert_history \
+             WHERE ($2::timestamptz IS NULL OR recorded_at < $2) \
+             ORDER BY recorded_at DESC LIMIT $1",
         )
         .bind(limit.clamp(1, 1000))
+        .bind(before)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
             .map(|row| {
+                let recorded_at: DateTime<Utc> = row.try_get("recorded_at")?;
                 Ok(AlertHistoryRow {
                     node: row.try_get("node")?,
                     check: row.try_get("check_id")?,
@@ -163,6 +178,7 @@ impl AlertHistoryStore {
                     observed_value: row.try_get("observed_value")?,
                     threshold_value: row.try_get("threshold_value")?,
                     direction: row.try_get("direction")?,
+                    recorded_at: recorded_at.to_rfc3339(),
                 })
             })
             .collect()

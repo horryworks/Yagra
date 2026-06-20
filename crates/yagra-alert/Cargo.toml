@@ -10,7 +10,6 @@ repository.workspace = true
 
 [dependencies]
 yagra-common = { path = "../yagra-common" }
-yagra-topology = { path = "../yagra-topology" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

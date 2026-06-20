@@ -45,6 +45,17 @@ export function stateColorVar(state: NodeState): string {
   }
 }
 
+/** Resolve a node state's status color to a **concrete** color string for canvas charts (uPlot
+ *  strokes can't read CSS vars). Reads the active theme's variable off the document root, so the
+ *  chart's status colors track light/dark and stay identical to the table/donut/tree — unlike a
+ *  per-component hardcoded hex. Falls back to `fallback` when there's no DOM or the var is unset. */
+export function stateColorValue(state: NodeState, fallback = '#8a93a3'): string {
+  const name = stateColorVar(state).replace(/^var\((--[^)]+)\)$/, '$1');
+  if (typeof document === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 /** Human label for a state. */
 export function stateLabel(state: NodeState): string {
   return state.charAt(0).toUpperCase() + state.slice(1);

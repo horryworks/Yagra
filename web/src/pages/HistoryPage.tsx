@@ -3,7 +3,7 @@
 // external and not measured here). Empty in skeleton mode (no persistent store). Rendered with
 // the virtualized DataTable on the v2 table standard.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { alertWhat, formatTimestamp, severityColorVar, stateLabel } from '../lib/format';
 import { api } from '../services/api';
 import type { AlertHistoryRow } from '../types/api';
@@ -29,18 +29,46 @@ function WhatCell({ row }: { row: AlertHistoryRow }) {
   );
 }
 
+const PAGE_SIZE = 100;
+
 export function HistoryPage() {
   const [rows, setRows] = useState<AlertHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [exhausted, setExhausted] = useState(false);
+  // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
+  // so coalesce overlapping page loads into one in-flight request.
+  const loadingMore = useRef(false);
   const { nodeName } = useEntityNames();
 
   useEffect(() => {
     api
-      .listAlertHistory(200)
-      .then(setRows)
+      .listAlertHistory({ limit: PAGE_SIZE })
+      .then((page) => {
+        setRows(page);
+        setExhausted(page.length < PAGE_SIZE);
+      })
       .catch(() => undefined)
       .finally(() => setLoading(false));
   }, []);
+
+  // Keyset "load older": fetch the next page strictly older than the last loaded row. The log is
+  // append-only and can grow without bound, so we page on scroll instead of one capped fetch.
+  const loadMore = useCallback(() => {
+    if (loadingMore.current || exhausted) return;
+    const last = rows[rows.length - 1];
+    if (!last) return;
+    loadingMore.current = true;
+    api
+      .listAlertHistory({ limit: PAGE_SIZE, before: last.recorded_at })
+      .then((page) => {
+        setRows((cur) => [...cur, ...page]);
+        setExhausted(page.length < PAGE_SIZE);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loadingMore.current = false;
+      });
+  }, [rows, exhausted]);
 
   // Columns close over `nodeName`, so rebuild them when the inventory resolves.
   const columns = useMemo<Column<AlertHistoryRow>[]>(
@@ -107,12 +135,13 @@ export function HistoryPage() {
       />
       <TableToolbar>
         <TableSpacer />
-        <ResultCount shown={rows.length} noun="recent transitions" />
+        <ResultCount shown={rows.length} noun={exhausted ? 'transitions' : 'transitions loaded'} />
       </TableToolbar>
       <DataTable
         rows={rows}
         columns={columns}
         rowKey={(r) => `${r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`}
+        onReachEnd={loadMore}
         empty="No alert history yet."
         loading={loading}
       />

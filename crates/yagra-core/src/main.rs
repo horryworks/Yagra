@@ -421,22 +421,28 @@ async fn consume_results<S>(
         metrics::counter!("yagra_poll_results_total").increment(1);
         stats.record_result();
         store.write(&result).await;
-        // Upsert any interfaces discovered on this poll (table walks). Metadata only —
-        // names/aliases live in PostgreSQL, joined to metrics at query time (ADR-011).
-        // Best-effort: a failed upsert must not drop the metric write or alerting.
-        for iface in &result.interfaces {
-            let ifindex = i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX);
+        // Batch-upsert all interfaces discovered on this poll (table walks) in ONE statement —
+        // this is the hottest ingest path, so it must not fan out into a round-trip per
+        // interface. Metadata only — names/aliases live in PostgreSQL, joined to metrics at
+        // query time (ADR-011). Best-effort: a failure must not drop the metric write or alerting.
+        if !result.interfaces.is_empty() {
+            let rows: Vec<_> = result
+                .interfaces
+                .iter()
+                .map(|iface| {
+                    (
+                        i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
+                        iface.if_name.as_deref(),
+                        iface.if_alias.as_deref(),
+                        iface.if_speed,
+                    )
+                })
+                .collect();
             if let Err(e) = repo
-                .upsert_interface(
-                    result.node_id.as_uuid(),
-                    ifindex,
-                    iface.if_name.as_deref(),
-                    iface.if_alias.as_deref(),
-                    iface.if_speed,
-                )
+                .upsert_interfaces(result.node_id.as_uuid(), &rows)
                 .await
             {
-                tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interface");
+                tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interfaces");
             }
         }
         // Identity probe: if the poll fetched sysDescr, classify it and fill the node's blank

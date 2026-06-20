@@ -118,13 +118,16 @@ pub fn resolve_collection_set(items: &[ScopedCollectionItem]) -> Vec<CollectionI
 // metric_name here is a fixed identifier — the bounded set is what keeps TSDB cardinality
 // controlled.
 
-/// sysUpTime.0 — system uptime in hundredths of a second (scalar).
-pub const OID_SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
+/// sysUpTime.0 — system uptime in hundredths of a second (scalar). Module-internal: used by the
+/// built-in catalog builder below; not part of the crate's public OID surface (cf. the re-exported
+/// [`OID_IF_HIGH_SPEED`], which the poller references directly).
+const OID_SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
 
 /// hrProcessorLoad — HOST-RESOURCES-MIB per-processor load %, walked as a table column.
 /// The standard cross-vendor CPU metric (net-snmp/host agents); network gear that lacks
-/// HOST-RESOURCES simply returns no rows for it (skipped by the poller).
-pub const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
+/// HOST-RESOURCES simply returns no rows for it (skipped by the poller). Module-internal (see
+/// [`OID_SYS_UPTIME`]).
+const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
 
 /// ifHighSpeed — ifXTable interface speed in **units of 1,000,000 bits/sec** (Mbps). Required
 /// for links faster than the 32-bit `ifSpeed` gauge can report (it saturates at 4,294,967,295,

@@ -10,4 +10,3 @@ repository.workspace = true
 
 [dependencies]
 yagra-common = { path = "../yagra-common" }
-yagra-transport = { path = "../yagra-transport" }
