@@ -135,6 +135,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
     timestamps: [],
     values: [],
   });
+  const [win, setWin] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +154,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
         setSeries(
           r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
         );
+        setWin([from, to]);
       });
     };
     load();
@@ -200,6 +202,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
               values={series.values}
               yFormat={(v) => `${Math.round(v)}`}
               legendFormat={(v) => `HTTP ${Math.round(v)}`}
+              xRange={win ?? undefined}
             />
           )}
         </div>
@@ -517,6 +520,7 @@ function SessionHealth({
     timestamps: [],
     values: [],
   });
+  const [win, setWin] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -535,6 +539,7 @@ function SessionHealth({
         setSeries(
           r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
         );
+        setWin([from, to]);
       });
     };
     load();
@@ -559,6 +564,7 @@ function SessionHealth({
           values={series.values}
           yFormat={formatSi}
           legendFormat={fmt}
+          xRange={win ?? undefined}
         />
       ) : (
         <p className="nd-muted">No history yet…</p>
@@ -582,6 +588,7 @@ function CpuHealth({
     timestamps: [],
     values: [],
   });
+  const [win, setWin] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -596,6 +603,7 @@ function CpuHealth({
         setSeries(
           r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
         );
+        setWin([from, to]);
       });
     };
     load();
@@ -619,6 +627,7 @@ function CpuHealth({
           values={series.values}
           yFormat={formatUtil}
           yRange={PCT_RANGE}
+          xRange={win ?? undefined}
         />
       ) : (
         <p className="nd-muted">No history yet…</p>
@@ -647,6 +656,7 @@ function MemHealth({
     timestamps: [],
     values: [],
   });
+  const [win, setWin] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -677,6 +687,7 @@ function MemHealth({
           byMetric[m] = r.status === 'fulfilled' ? r.value.points : [];
         });
         setSeries(memPctSeries(mem, byMetric));
+        setWin([from, to]);
       });
     };
     load();
@@ -711,6 +722,7 @@ function MemHealth({
           values={series.values}
           yFormat={formatUtil}
           yRange={PCT_RANGE}
+          xRange={win ?? undefined}
         />
       ) : (
         <p className="nd-muted">No history yet…</p>

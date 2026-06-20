@@ -281,6 +281,7 @@ function InterfaceDock({
   const throughputScale = usePrefsStore((s) => s.throughputScale);
   const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
+  const [win, setWin] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,7 +289,11 @@ function InterfaceDock({
       const { from, to } = resolveRange(range);
       api
         .getInterfaceSeries(nodeId, row.ifindex, { from, to })
-        .then((s) => !cancelled && setSeries(s))
+        .then((s) => {
+          if (cancelled) return;
+          setSeries(s);
+          setWin([from, to]);
+        })
         .catch(() => undefined);
     };
     setSeries(null);
@@ -375,6 +380,7 @@ function InterfaceDock({
               yFormat={formatSi}
               legendFormat={formatBps}
               yRange={bw.yRange}
+              xRange={win ?? undefined}
               referenceLine={bw.referenceLine}
               series={[
                 { label: 'In', values: series!.in_bps, color: SERIES_IN },
@@ -400,6 +406,7 @@ function InterfaceDock({
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={(v) => `${formatSi(v)}/s`}
+              xRange={win ?? undefined}
               series={[
                 { label: 'In', values: series!.in_errors, color: SERIES_IN },
                 { label: 'Out', values: series!.out_errors, color: SERIES_OUT },

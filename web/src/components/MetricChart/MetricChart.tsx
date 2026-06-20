@@ -6,6 +6,7 @@
 import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
+import { buildChartScales } from './scales';
 import './MetricChart.css';
 
 /** Default series palette (In / Out / aux …), indexed by series position. Canvas strokes can't
@@ -40,6 +41,12 @@ interface Props {
    *  CPU/Mem % pass `[0, 100]` so the baseline is 0, not the data's min. Pass a stable reference
    *  (e.g. a module-level constant) so the chart isn't rebuilt on every render. */
   yRange?: [number, number];
+  /** Fixed X-axis `[from, to]` in unix seconds — pins the time window so a chart whose data
+   *  doesn't fill the requested range renders the full window (the empty span stays visible)
+   *  instead of auto-fitting to the data extent. Omit to auto-fit (uPlot default). Pass a stable
+   *  reference (e.g. captured alongside the fetched series) so the chart isn't rebuilt on every
+   *  render. See `buildChartScales`. */
+  xRange?: [number, number];
   /** Formatter for the cursor-legend value (the "Value" readout on hover). Use it to show a unit
    *  the compact axis omits (e.g. ms / bps). Falls back to `yFormat` when not given. */
   legendFormat?: (v: number) => string;
@@ -57,6 +64,7 @@ export function MetricChart({
   height = 220,
   yFormat,
   yRange,
+  xRange,
   legendFormat,
   referenceLine,
 }: Props) {
@@ -96,8 +104,9 @@ export function MetricChart({
       width: el.clientWidth || 460,
       height,
       axes: [axis, yAxis],
-      // Force a fixed Y range when asked (e.g. 0–100% gauges); otherwise uPlot auto-fits.
-      scales: yRange ? { y: { range: yRange } } : undefined,
+      // Force a fixed Y range (e.g. 0–100% gauges) and/or X window (pin to the requested time
+      // range) when asked; otherwise uPlot auto-fits the respective axis to the data.
+      scales: buildChartScales(xRange, yRange),
       series: [
         {},
         ...resolved.map((s, i) => ({
@@ -174,7 +183,7 @@ export function MetricChart({
       ro.disconnect();
       plot.destroy();
     };
-  }, [title, timestamps, values, series, height, yFormat, yRange, legendFormat, referenceLine]);
+  }, [title, timestamps, values, series, height, yFormat, yRange, xRange, legendFormat, referenceLine]);
 
   return <div ref={ref} />;
 }
