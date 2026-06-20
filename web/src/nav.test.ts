@@ -32,4 +32,11 @@ describe('nav IA', () => {
       expect(sectionForPath(s.path).key).toBe(s.key);
     }
   });
+
+  it('Settings ▸ Pollers is backed by a real page', () => {
+    const pollers = NAV.find((s) => s.key === 'settings')?.items.find(
+      (i) => i.path === '/settings/pollers',
+    );
+    expect(pollers?.implemented).toBe(true);
+  });
 });

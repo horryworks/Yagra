@@ -850,6 +850,8 @@ describe('api client', () => {
     globalThis.fetch = spy;
     await api.getPollerHealth();
     expect(spy).toHaveBeenCalledWith('/api/v1/poller-health');
+    await api.getSystemHealth();
+    expect(spy).toHaveBeenCalledWith('/api/v1/system-health');
     await api.getDiscoveryCandidates(10);
     expect(spy).toHaveBeenLastCalledWith('/api/v1/discovery/candidates?limit=10');
   });

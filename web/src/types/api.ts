@@ -551,6 +551,21 @@ export interface PollerHealth {
   results_total: number;
 }
 
+/** Reachability of one Yagra backing dependency (no secrets — just a flag + label). */
+export interface DependencyHealth {
+  reachable: boolean;
+  detail: string;
+}
+
+/** Yagra self-health: backing-service reachability (`GET /api/v1/system-health`). `bus` is an
+ *  indirect signal inferred from poll-loop activity, not a direct NATS ping. */
+export interface SystemHealth {
+  overall: 'ok' | 'degraded';
+  postgres: DependencyHealth;
+  tsdb: DependencyHealth;
+  bus: DependencyHealth;
+}
+
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
 export interface FleetCoverage {
   total: number;

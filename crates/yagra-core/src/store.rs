@@ -62,6 +62,11 @@ pub struct MetricPoint {
 /// Somewhere poll results are written and read back.
 #[async_trait]
 pub trait MetricStore: Send + Sync {
+    /// Liveness probe for the backing store, for the system-health endpoint. Defaults to `true`
+    /// (the in-memory sink is always up); [`VmStore`] overrides it to ping VictoriaMetrics.
+    async fn healthy(&self) -> bool {
+        true
+    }
     /// Persist every sample in a completed poll.
     async fn write(&self, result: &PollResult);
     /// The latest value for a series, if any.
@@ -550,6 +555,18 @@ fn parse_top_nodes(json: &serde_json::Value) -> Vec<(Uuid, f64)> {
 
 #[async_trait]
 impl MetricStore for VmStore {
+    async fn healthy(&self) -> bool {
+        // VictoriaMetrics exposes a liveness endpoint that returns 200 when serving.
+        let url = format!("{}/-/healthy", self.base);
+        match self.http.get(&url).send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics health check failed");
+                false
+            }
+        }
+    }
+
     async fn write(&self, result: &PollResult) {
         if result.samples.is_empty() {
             return;

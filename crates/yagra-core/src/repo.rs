@@ -179,6 +179,12 @@ impl NodeRepo {
         self.pool.clone()
     }
 
+    /// Cheap liveness probe: `SELECT 1` against the pool. `false` on any failure (DB down,
+    /// pool exhausted, or the 5s acquire timeout elapsing). Used by the system-health endpoint.
+    pub async fn healthy(&self) -> bool {
+        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
+    }
+
     /// Apply all embedded migrations (expand-contract, ADR-017). Embedded at compile
     /// time, so this needs no database at build.
     pub async fn migrate(&self) -> anyhow::Result<()> {

@@ -230,6 +230,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
         .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/poller-health", get(poller_health))
+        .route("/api/v1/system-health", get(system_health))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -1354,6 +1355,117 @@ async fn poller_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         return unavailable();
     };
     Json(admin.scheduler_stats.snapshot()).into_response()
+}
+
+/// Reachability of one backing dependency, for the system-health endpoint. Carries only a
+/// boolean and a human label — no connection strings or secrets.
+#[derive(Serialize)]
+struct DependencyHealth {
+    /// Whether the dependency answered a cheap liveness probe.
+    reachable: bool,
+    /// Short human description of what was checked (no secrets).
+    detail: String,
+}
+
+/// Yagra's own health: the reachability of its backing services. `bus` is an *indirect* signal
+/// (NATS isn't held in `ApiState`, so it's inferred from poll-loop liveness — see `system_health`).
+#[derive(Serialize)]
+struct SystemHealth {
+    /// `"ok"` when every dependency is reachable, else `"degraded"`.
+    overall: String,
+    /// PostgreSQL (metadata store) — `SELECT 1`.
+    postgres: DependencyHealth,
+    /// VictoriaMetrics (TSDB) — `/-/healthy`.
+    tsdb: DependencyHealth,
+    /// NATS bus — inferred from a recent scheduler sweep (publish+consume working), not a direct ping.
+    bus: DependencyHealth,
+}
+
+/// Whether the last scheduler sweep is recent enough to treat the bus as healthy. The poll loop
+/// records a sweep every round (cadence = the smallest poll interval in play, ≤ the default), so a
+/// sweep within `2 × default_interval + 60s` means jobs are publishing and results consuming over
+/// NATS. A stale (or never-recorded) sweep means the poll loop — and thus the bus path — is stalled.
+fn bus_sweep_is_fresh(
+    last_sweep_unix_ms: Option<i64>,
+    default_interval_secs: u32,
+    now_ms: i64,
+) -> bool {
+    match last_sweep_unix_ms {
+        Some(ms) => {
+            let window_ms = (i64::from(default_interval_secs) * 2 + 60) * 1000;
+            now_ms.saturating_sub(ms) <= window_ms
+        }
+        None => false,
+    }
+}
+
+/// Yagra self-health: reachability of the backing services (PostgreSQL, TSDB) plus an indirect bus
+/// signal derived from poll-loop liveness. Read-only and secret-free, so it is `View`-gated like
+/// poller-health. Degrades to a `"degraded"` JSON body in skeleton mode (no admin/DB) rather than
+/// 503, so the UI can always render the page.
+async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+
+    // TSDB: ping the metric store (VictoriaMetrics `/-/healthy`; the in-memory sink is always up).
+    let tsdb = DependencyHealth {
+        reachable: st.store.healthy().await,
+        detail: "VictoriaMetrics (TSDB)".to_owned(),
+    };
+
+    // PostgreSQL and the bus signal both depend on the live write side. In skeleton mode there is
+    // no DB and no poll loop, so both are reported unreachable (not an error).
+    let (postgres, bus) = match st.admin.as_ref() {
+        Some(admin) => {
+            let postgres = DependencyHealth {
+                reachable: admin.repo.healthy().await,
+                detail: "PostgreSQL (metadata)".to_owned(),
+            };
+            let default_secs = admin
+                .repo
+                .get_default_poll_interval()
+                .await
+                .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+                .unwrap_or(0);
+            let fresh = bus_sweep_is_fresh(
+                admin.scheduler_stats.snapshot().last_sweep_unix_ms,
+                default_secs,
+                now_ms,
+            );
+            let bus = DependencyHealth {
+                reachable: fresh,
+                detail: "NATS bus (inferred from poll-loop activity)".to_owned(),
+            };
+            (postgres, bus)
+        }
+        None => (
+            DependencyHealth {
+                reachable: false,
+                detail: "PostgreSQL not configured (skeleton mode)".to_owned(),
+            },
+            DependencyHealth {
+                reachable: false,
+                detail: "poll loop not running (skeleton mode)".to_owned(),
+            },
+        ),
+    };
+
+    let overall = if postgres.reachable && tsdb.reachable && bus.reachable {
+        "ok"
+    } else {
+        "degraded"
+    };
+    Json(SystemHealth {
+        overall: overall.to_owned(),
+        postgres,
+        tsdb,
+        bus,
+    })
+    .into_response()
 }
 
 /// Currently active alerts (from the in-memory alert engine).
@@ -6632,6 +6744,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn system_health_returns_degraded_json_in_skeleton_mode() {
+        // No admin/DB and no poll loop ⇒ 200 with a degraded body (never 503), so the UI renders.
+        // The in-memory sink's `healthy()` defaults to true, so only tsdb is reachable.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/system-health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["overall"], "degraded");
+        assert_eq!(body["tsdb"]["reachable"], true);
+        assert_eq!(body["postgres"]["reachable"], false);
+        assert_eq!(body["bus"]["reachable"], false);
+    }
+
+    #[test]
+    fn bus_sweep_freshness_window_tracks_default_interval() {
+        // Default 30s ⇒ window = 30*2 + 60 = 120s. A sweep 100s ago is fresh; 200s ago is stale.
+        let now = 1_000_000i64;
+        assert!(bus_sweep_is_fresh(Some(now - 100_000), 30, now));
+        assert!(!bus_sweep_is_fresh(Some(now - 200_000), 30, now));
+        // Never-swept ⇒ never fresh, regardless of interval.
+        assert!(!bus_sweep_is_fresh(None, 30, now));
     }
 
     #[tokio::test]

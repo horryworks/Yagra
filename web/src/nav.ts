@@ -33,7 +33,6 @@ export const NAV: NavSection[] = [
     items: [
       { label: 'Shared dashboard', path: '/dashboard', implemented: true, mono: 'Sh' },
       { label: 'My dashboard', path: '/dashboard/my', implemented: true, mono: 'My' },
-      { label: 'Templates', path: '/dashboard/templates', implemented: false, mono: 'Tp' },
       { label: 'Reports', path: '/dashboard/reports', implemented: true, mono: 'Rp' },
     ],
   },
@@ -106,7 +105,7 @@ export const NAV: NavSection[] = [
     label: 'Settings',
     path: '/settings/credentials',
     items: [
-      { label: 'Pollers', path: '/settings/pollers', implemented: false, mono: 'Po' },
+      { label: 'Pollers', path: '/settings/pollers', implemented: true, mono: 'Po' },
       { label: 'Integrations', path: '/settings/integrations', implemented: false, mono: 'In' },
       {
         label: 'Credentials & secrets',

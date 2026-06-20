@@ -46,6 +46,7 @@ import type {
   NodeSummary,
   NotificationChannel,
   PollerHealth,
+  SystemHealth,
   ProfileSummary,
   ProfileInput,
   ReportDefinition,
@@ -606,6 +607,9 @@ export const api = {
 
   /** Poll-loop self-monitoring (last sweep / jobs per round / results total). */
   getPollerHealth: (): Promise<PollerHealth> => request('/poller-health'),
+
+  /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
+  getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (

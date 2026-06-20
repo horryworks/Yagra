@@ -26,6 +26,7 @@ import { MaintenancePage } from './pages/MaintenancePage';
 import { MutesPage } from './pages/MutesPage';
 import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
+import { PollersPage } from './pages/PollersPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
@@ -44,7 +45,6 @@ export function AppRoutes() {
         {/* Dashboard */}
         <Route path="dashboard" element={<SharedDashboardPage />} />
         <Route path="dashboard/my" element={<MyDashboardPage />} />
-        <Route path="dashboard/templates" element={<ComingSoon />} />
         <Route path="dashboard/reports" element={<ReportsPage />} />
 
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}
@@ -78,7 +78,7 @@ export function AppRoutes() {
         <Route path="troubleshoot/findings" element={<ComingSoon />} />
 
         {/* Settings */}
-        <Route path="settings/pollers" element={<ComingSoon />} />
+        <Route path="settings/pollers" element={<PollersPage />} />
         <Route path="settings/integrations" element={<ComingSoon />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />
