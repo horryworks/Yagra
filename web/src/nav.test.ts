@@ -33,10 +33,17 @@ describe('nav IA', () => {
     }
   });
 
-  it('Settings ▸ Pollers is backed by a real page', () => {
+  it('Settings ▸ System health is backed by a real page', () => {
+    const health = NAV.find((s) => s.key === 'settings')?.items.find(
+      (i) => i.path === '/settings/system-health',
+    );
+    expect(health?.implemented).toBe(true);
+  });
+
+  it('Settings ▸ Pollers is reserved (placeholder) for future distributed pollers', () => {
     const pollers = NAV.find((s) => s.key === 'settings')?.items.find(
       (i) => i.path === '/settings/pollers',
     );
-    expect(pollers?.implemented).toBe(true);
+    expect(pollers?.implemented).toBe(false);
   });
 });

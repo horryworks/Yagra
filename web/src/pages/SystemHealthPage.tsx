@@ -1,7 +1,10 @@
-// Pollers & system health (Settings ▸ Pollers). Yagra's own health in one place: the poll loop's
+// System Health (Settings ▸ System Health). Yagra's own health in one place: the poll loop's
 // live counters, backing-service reachability (PostgreSQL / TSDB / bus), and fleet data coverage.
 // Read-only; the backend gates each read with View. Reuses the dashboard monitoring widgets so this
 // page and the dashboard cards stay in sync.
+//
+// Split out of the former "Pollers & system health" page so Settings ▸ Pollers can be reserved for
+// future distributed-poller configuration.
 
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -10,7 +13,7 @@ import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
 import type { DependencyHealth } from '../types/api';
-import './PollersPage.css';
+import './SystemHealthPage.css';
 
 /** One backing dependency as a name + detail + reachability badge. */
 function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | undefined }) {
@@ -40,15 +43,15 @@ function DependencyHealthCard() {
   );
 }
 
-export function PollersPage() {
+export function SystemHealthPage() {
   return (
     <div>
       <PageHeader
-        title="Pollers & system health"
-        trail={[{ label: 'Settings' }, { label: 'Pollers' }]}
+        title="System health"
+        trail={[{ label: 'Settings' }, { label: 'System health' }]}
         note="Yagra's own health: the poll loop, its backing services, and fleet data coverage."
       />
-      <div className="pollers-grid">
+      <div className="system-health-grid">
         <Card title="Poll-loop health">
           <PollerHealthWidget />
         </Card>
