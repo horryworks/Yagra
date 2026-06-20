@@ -26,6 +26,18 @@ pub struct GroupKey {
     pub root: NodeId,
 }
 
+/// Numeric breach detail for a threshold alert (absent for a liveness up/down alert).
+/// Carried for the history log + notification payload — not part of alert identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Breach {
+    /// Observed sample value that committed the transition.
+    pub value: f64,
+    /// The bound crossed for the committed severity, if the rule defines one at that level.
+    pub threshold: Option<f64>,
+    /// Breach direction: `"above"` or `"below"`.
+    pub direction: String,
+}
+
 /// A single alert produced by the engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Alert {
@@ -43,6 +55,12 @@ pub struct Alert {
     pub root_cause: Option<NodeId>,
     /// Whether the underlying check is currently flapping.
     pub flapping: bool,
+    /// Metric the check measured (e.g. `"icmp_rtt_ms"`; the liveness sentinel for up/down).
+    /// Carried for the history log + notification payload so a human can read *what* fired —
+    /// not part of alert identity (dedup/grouping ignore it).
+    pub metric: String,
+    /// Numeric breach detail for a threshold alert; `None` for a liveness alert.
+    pub breach: Option<Breach>,
 }
 
 impl Alert {
@@ -78,6 +96,8 @@ mod tests {
             at_unix_ms: 0,
             root_cause: root,
             flapping: false,
+            metric: "__liveness__".to_string(),
+            breach: None,
         }
     }
 

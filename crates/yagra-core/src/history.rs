@@ -27,6 +27,15 @@ pub struct AlertHistoryRow {
     pub state: String,
     pub at_unix_ms: i64,
     pub resolved: bool,
+    /// Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for
+    /// rows recorded before this was captured (legacy) so the WebUI can show "—".
+    pub metric: Option<String>,
+    /// Observed sample value that committed the transition (threshold checks only).
+    pub observed_value: Option<f64>,
+    /// The bound crossed for the committed severity (threshold checks only).
+    pub threshold_value: Option<f64>,
+    /// Breach direction, `"above"`/`"below"` (threshold checks only).
+    pub direction: Option<String>,
 }
 
 /// PostgreSQL-backed alert history.
@@ -40,12 +49,19 @@ impl AlertHistoryStore {
         Self { pool }
     }
 
-    /// Append a fire (`resolved=false`) or recovery (`resolved=true`) record.
+    /// Append a fire (`resolved=false`) or recovery (`resolved=true`) record. Captures the
+    /// metric (and numeric breach detail, if a threshold check) so the history is human-readable.
     pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
+        let (value, threshold, direction) = match &alert.breach {
+            Some(b) => (Some(b.value), b.threshold, Some(b.direction.clone())),
+            None => (None, None, None),
+        };
+        let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
         sqlx::query(
             "INSERT INTO alert_history \
-             (id, node, check_id, severity, state, at_unix_ms, resolved) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (id, node, check_id, severity, state, at_unix_ms, resolved, \
+              metric, observed_value, threshold_value, direction) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(Uuid::new_v4())
         .bind(alert.node.as_uuid())
@@ -54,6 +70,10 @@ impl AlertHistoryStore {
         .bind(alert.state.as_str())
         .bind(alert.at_unix_ms)
         .bind(resolved)
+        .bind(metric)
+        .bind(value)
+        .bind(threshold)
+        .bind(direction)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -123,7 +143,8 @@ impl AlertHistoryStore {
     /// The most recent `limit` history rows (newest first).
     pub async fn recent(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(
-            "SELECT node, check_id, severity, state, at_unix_ms, resolved \
+            "SELECT node, check_id, severity, state, at_unix_ms, resolved, \
+                    metric, observed_value, threshold_value, direction \
              FROM alert_history ORDER BY recorded_at DESC LIMIT $1",
         )
         .bind(limit.clamp(1, 1000))
@@ -138,6 +159,10 @@ impl AlertHistoryStore {
                     state: row.try_get("state")?,
                     at_unix_ms: row.try_get("at_unix_ms")?,
                     resolved: row.try_get("resolved")?,
+                    metric: row.try_get("metric")?,
+                    observed_value: row.try_get("observed_value")?,
+                    threshold_value: row.try_get("threshold_value")?,
+                    direction: row.try_get("direction")?,
                 })
             })
             .collect()

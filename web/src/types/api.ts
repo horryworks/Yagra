@@ -244,6 +244,15 @@ export interface AlertHistoryRow {
   state: NodeState;
   at_unix_ms: number;
   resolved: boolean;
+  /** Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel `__liveness__`).
+   *  `null` for rows recorded before this was captured ⇒ render "—". */
+  metric?: string | null;
+  /** Observed sample value that committed the transition (threshold checks only). */
+  observed_value?: number | null;
+  /** The bound crossed for the committed severity (threshold checks only). */
+  threshold_value?: number | null;
+  /** Breach direction (threshold checks only). */
+  direction?: Direction | null;
   /** Read-only ack mirrored from the external tool, keyed by incident (absent ⇒ not acked). */
   acked?: AckView | null;
 }

@@ -265,6 +265,35 @@ export function formatCount(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
+/** The liveness check sentinel (yagra-core `LIVENESS`), shown to humans as "Reachability". */
+export const LIVENESS_METRIC = '__liveness__';
+
+/** What an alert-history row fired on, split into parts so the cell can style the metric (mono)
+ *  apart from the condition. Pure so it's unit-testable without the DOM:
+ *   - `none`     → no metric captured (legacy row) ⇒ render "—"
+ *   - `liveness` → the reachability up/down check ⇒ render "Reachability"
+ *   - `metric`   → a threshold metric, with an optional crossed condition + observed value. */
+export type AlertWhat =
+  | { kind: 'none' }
+  | { kind: 'liveness' }
+  | { kind: 'metric'; metric: string; condition: string | null; observed: string | null };
+
+export function alertWhat(row: {
+  metric?: string | null;
+  direction?: string | null;
+  threshold_value?: number | null;
+  observed_value?: number | null;
+}): AlertWhat {
+  if (!row.metric) return { kind: 'none' };
+  if (row.metric === LIVENESS_METRIC) return { kind: 'liveness' };
+  const condition =
+    row.direction && row.threshold_value != null
+      ? `${row.direction} ${row.threshold_value}`
+      : null;
+  const observed = row.observed_value != null ? `was ${row.observed_value}` : null;
+  return { kind: 'metric', metric: row.metric, condition, observed };
+}
+
 /** Compact, unit-less SI suffix (k/M/G/T) for a plain number — for chart axis ticks so big
  *  values (e.g. 455000) render as "455k" instead of being clipped. */
 export function formatSi(n: number): string {

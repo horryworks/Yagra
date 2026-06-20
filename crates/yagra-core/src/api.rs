@@ -6930,6 +6930,8 @@ mod tests {
             at_unix_ms: 100,
             root_cause: None,
             flapping: false,
+            metric: "__liveness__".to_string(),
+            breach: None,
         };
         let other = Alert {
             node: NodeId::from(Uuid::from_u128(9)),
@@ -6939,6 +6941,8 @@ mod tests {
             at_unix_ms: 50,
             root_cause: None,
             flapping: false,
+            metric: "__liveness__".to_string(),
+            breach: None,
         };
         let mut acks: HashMap<AckKey, AckView> = HashMap::new();
         acks.insert(
@@ -6979,6 +6983,10 @@ mod tests {
             state: "critical".to_owned(),
             at_unix_ms: 10,
             resolved: false,
+            metric: Some("icmp_rtt_ms".to_owned()),
+            observed_value: Some(150.0),
+            threshold_value: Some(100.0),
+            direction: Some("above".to_owned()),
         };
         let clear = AlertHistoryRow {
             node,
@@ -6987,6 +6995,10 @@ mod tests {
             state: "ok".to_owned(),
             at_unix_ms: 20,
             resolved: true,
+            metric: Some("icmp_rtt_ms".to_owned()),
+            observed_value: None,
+            threshold_value: None,
+            direction: None,
         };
         let unrelated = AlertHistoryRow {
             node: Uuid::from_u128(7),
@@ -6995,6 +7007,10 @@ mod tests {
             state: "warning".to_owned(),
             at_unix_ms: 5,
             resolved: false,
+            metric: None,
+            observed_value: None,
+            threshold_value: None,
+            direction: None,
         };
         let mut acks: HashMap<AckKey, AckView> = HashMap::new();
         acks.insert(

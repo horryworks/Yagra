@@ -32,11 +32,13 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_alert::CheckState;
-use yagra_alert::{Alert, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy};
+use yagra_alert::{
+    Alert, Breach, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
+};
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
-    resolve_effective, CheckId, EffectiveThreshold, NodeId, NodeState, ScopeLevel, ScopedThreshold,
-    Severity,
+    resolve_effective, CheckId, Direction, EffectiveThreshold, NodeId, NodeState, ScopeLevel,
+    ScopedThreshold, Severity,
 };
 use yagra_topology::Topology;
 
@@ -133,6 +135,40 @@ impl AlertConfig {
             }
             ScopeLevel::Group => meta.is_some_and(|m| m.groups.contains(&t.scope_id)),
         }
+    }
+}
+
+/// Threshold evaluation context for one sample, used to describe *what* fired (metric, value,
+/// crossed bound, direction) when a transition commits. Only present for threshold checks;
+/// liveness up/down carries no numeric breach.
+#[derive(Debug, Clone, Copy)]
+struct ThresholdEval {
+    /// Observed sample value.
+    value: f64,
+    /// Breach direction of the rule.
+    direction: Direction,
+    /// Effective warning bound, if any.
+    warning: Option<f64>,
+    /// Effective critical bound, if any.
+    critical: Option<f64>,
+}
+
+/// Everything identifying the check being evaluated for one sample: its stable id, the metric
+/// it measures, the dwell, whether it's the liveness check, and (for thresholds) the breach eval.
+/// Bundled so [`AlertManager::process_check`] takes one descriptor instead of a long arg list.
+struct CheckSpec<'a> {
+    check: CheckId,
+    metric: &'a str,
+    dwell: u32,
+    is_liveness: bool,
+    eval: Option<ThresholdEval>,
+}
+
+/// Stable text form of a breach direction for the history log / wire shape.
+fn direction_str(d: Direction) -> &'static str {
+    match d {
+        Direction::Above => "above",
+        Direction::Below => "below",
     }
 }
 
@@ -285,12 +321,16 @@ impl AlertManager {
             }
         };
         actions.extend(self.process_check(
-            check_id(node, LIVENESS),
             node,
             raw,
-            DWELL_SAMPLES,
             result.at_unix_ms,
-            true,
+            CheckSpec {
+                check: check_id(node, LIVENESS),
+                metric: LIVENESS,
+                dwell: DWELL_SAMPLES,
+                is_liveness: true,
+                eval: None,
+            },
         ));
 
         // Threshold checks per sample (only metrics with a resolved threshold alert).
@@ -305,13 +345,23 @@ impl AlertManager {
                 } else {
                     eff.evaluate(sample.value)
                 };
+                let eval = ThresholdEval {
+                    value: sample.value,
+                    direction: eff.direction,
+                    warning: eff.warning,
+                    critical: eff.critical,
+                };
                 actions.extend(self.process_check(
-                    check_id(node, &sample.metric),
                     node,
                     raw,
-                    eff.dwell_samples,
                     result.at_unix_ms,
-                    false,
+                    CheckSpec {
+                        check: check_id(node, &sample.metric),
+                        metric: &sample.metric,
+                        dwell: eff.dwell_samples,
+                        is_liveness: false,
+                        eval: Some(eval),
+                    },
                 ));
             }
         }
@@ -324,13 +374,18 @@ impl AlertManager {
     /// transition.
     fn process_check(
         &self,
-        check: CheckId,
         node: NodeId,
         raw: NodeState,
-        dwell: u32,
         at_unix_ms: i64,
-        is_liveness: bool,
+        spec: CheckSpec<'_>,
     ) -> Vec<NotifyAction> {
+        let CheckSpec {
+            check,
+            metric,
+            dwell,
+            is_liveness,
+            eval,
+        } = spec;
         let (transition, committed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
             let cs = states.entry(check).or_insert_with(|| {
@@ -369,7 +424,22 @@ impl AlertManager {
         };
 
         match t.to_alert(node, check, at_unix_ms, root_cause) {
-            Some(alert) => {
+            Some(mut alert) => {
+                // Tag the alert with what it measured so the history log / notification is
+                // human-readable. The crossed bound depends on the committed severity, now known.
+                alert.metric = metric.to_string();
+                if let Some(ev) = eval {
+                    let threshold = match alert.severity {
+                        Severity::Critical => ev.critical,
+                        Severity::Warning => ev.warning,
+                        Severity::Info => ev.warning.or(ev.critical),
+                    };
+                    alert.breach = Some(Breach {
+                        value: ev.value,
+                        threshold,
+                        direction: direction_str(ev.direction).to_string(),
+                    });
+                }
                 self.active
                     .lock()
                     .expect("alerts mutex poisoned")
@@ -404,6 +474,8 @@ impl AlertManager {
             "at_unix_ms": alert.at_unix_ms,
             "root_cause": alert.root_cause,
             "flapping": alert.flapping,
+            "metric": alert.metric,
+            "breach": alert.breach,
             "resolved": resolved,
         });
         // Fire-and-forget: no subscribers is not an error.
@@ -437,6 +509,8 @@ impl AlertManager {
             "at_unix_ms": alert.at_unix_ms,
             "root_cause": alert.root_cause,
             "flapping": alert.flapping,
+            "metric": alert.metric,
+            "breach": alert.breach,
             "acked": acked,
         });
         let _ = self.tx.send(event.to_string());
@@ -880,6 +954,63 @@ mod tests {
     }
 
     #[test]
+    fn fired_threshold_alert_carries_metric_and_breach() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(AlertConfig::new(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "icmp_rtt_ms".into(),
+                    direction: Direction::Above,
+                    warning: Some(50.0),
+                    critical: Some(100.0),
+                    dwell_samples: 1,
+                },
+            }],
+            meta,
+        ));
+
+        let mut high = result(node, CheckOutcome::Reachable, 0);
+        high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        let action = mgr.observe(&high).into_iter().next().expect("one fire");
+        let NotifyAction::Fire(alert) = action else {
+            panic!("expected a fire");
+        };
+        // History must read *what* fired, not the opaque (node, metric) hash.
+        assert_eq!(alert.metric, "icmp_rtt_ms");
+        let breach = alert.breach.expect("threshold alert carries a breach");
+        assert_eq!(breach.value, 150.0);
+        assert_eq!(breach.threshold, Some(100.0)); // committed severity is critical
+        assert_eq!(breach.direction, "above");
+    }
+
+    #[test]
+    fn fired_liveness_alert_carries_sentinel_metric_and_no_breach() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        // Drive unreachable past the dwell so liveness commits and fires.
+        let mut fired = None;
+        for i in 0..=i64::from(DWELL_SAMPLES) {
+            for action in mgr.observe(&result(node, CheckOutcome::Unreachable, i)) {
+                if let NotifyAction::Fire(a) = action {
+                    fired = Some(a);
+                }
+            }
+        }
+        let alert = fired.expect("liveness fire after dwell");
+        assert_eq!(alert.metric, LIVENESS);
+        assert!(alert.breach.is_none());
+    }
+
+    #[test]
     fn metric_without_threshold_is_ignored() {
         let node = NodeId::new();
         let mgr = AlertManager::new();
@@ -1036,6 +1167,8 @@ mod tests {
             at_unix_ms: 0,
             root_cause: None,
             flapping: false,
+            metric: "icmp_rtt_ms".to_string(),
+            breach: None,
         };
 
         // Whole-node mute matches any check on the node; another node's mute doesn't.
