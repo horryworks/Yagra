@@ -105,7 +105,8 @@ export const NAV: NavSection[] = [
     label: 'Settings',
     path: '/settings/credentials',
     items: [
-      { label: 'Pollers', path: '/settings/pollers', implemented: true, mono: 'Po' },
+      { label: 'System health', path: '/settings/system-health', implemented: true, mono: 'Sh' },
+      { label: 'Pollers', path: '/settings/pollers', implemented: false, mono: 'Po' },
       { label: 'Integrations', path: '/settings/integrations', implemented: false, mono: 'In' },
       {
         label: 'Credentials & secrets',

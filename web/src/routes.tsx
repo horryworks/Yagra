@@ -26,7 +26,7 @@ import { MaintenancePage } from './pages/MaintenancePage';
 import { MutesPage } from './pages/MutesPage';
 import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
-import { PollersPage } from './pages/PollersPage';
+import { SystemHealthPage } from './pages/SystemHealthPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
@@ -78,7 +78,8 @@ export function AppRoutes() {
         <Route path="troubleshoot/findings" element={<ComingSoon />} />
 
         {/* Settings */}
-        <Route path="settings/pollers" element={<PollersPage />} />
+        <Route path="settings/system-health" element={<SystemHealthPage />} />
+        <Route path="settings/pollers" element={<ComingSoon />} />
         <Route path="settings/integrations" element={<ComingSoon />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />
