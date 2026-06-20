@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alertWhat,
   deriveMem,
   formatBps,
   formatBytes,
@@ -37,6 +38,38 @@ describe('format', () => {
   it('ranks severities for sorting', () => {
     expect(severityRank('critical')).toBeGreaterThan(severityRank('warning'));
     expect(severityRank('warning')).toBeGreaterThan(severityRank('info'));
+  });
+
+  it('describes WHAT an alert fired on (alertWhat)', () => {
+    // Legacy row with no captured metric → "—".
+    expect(alertWhat({})).toEqual({ kind: 'none' });
+    expect(alertWhat({ metric: null })).toEqual({ kind: 'none' });
+
+    // Liveness up/down sentinel reads as "Reachability" (never the raw sentinel).
+    expect(alertWhat({ metric: '__liveness__' })).toEqual({ kind: 'liveness' });
+
+    // Threshold breach: metric + crossed condition + observed value.
+    expect(
+      alertWhat({
+        metric: 'icmp_rtt_ms',
+        direction: 'above',
+        threshold_value: 100,
+        observed_value: 450,
+      }),
+    ).toEqual({
+      kind: 'metric',
+      metric: 'icmp_rtt_ms',
+      condition: 'above 100',
+      observed: 'was 450',
+    });
+
+    // A metric with no numeric breach (e.g. partial data) still shows the metric, no condition.
+    expect(alertWhat({ metric: 'http_up' })).toEqual({
+      kind: 'metric',
+      metric: 'http_up',
+      condition: null,
+      observed: null,
+    });
   });
 
   it('capitalizes state labels', () => {

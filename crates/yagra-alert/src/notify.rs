@@ -182,6 +182,8 @@ mod tests {
             at_unix_ms: 0,
             root_cause: None,
             flapping: false,
+            metric: "__liveness__".to_string(),
+            breach: None,
         };
         Notification::for_alert(&alert, "node down", "{}")
     }

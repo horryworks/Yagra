@@ -11,7 +11,7 @@ pub mod flapping;
 pub mod hysteresis;
 pub mod notify;
 
-pub use alert::{Alert, DedupKey, GroupKey};
+pub use alert::{Alert, Breach, DedupKey, GroupKey};
 pub use flapping::FlapDetector;
 pub use hysteresis::DwellTracker;
 pub use notify::{
@@ -51,6 +51,9 @@ impl Transition {
             at_unix_ms,
             root_cause,
             flapping: self.flapping,
+            // Descriptive context is filled in by the engine (it knows the metric/breach).
+            metric: String::new(),
+            breach: None,
         })
     }
 }

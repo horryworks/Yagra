@@ -18,6 +18,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
@@ -238,6 +239,7 @@ export function ThresholdsPage() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
+  const { scopeName } = useEntityNames();
 
   const load = useCallback(() => {
     api
@@ -315,7 +317,7 @@ export function ThresholdsPage() {
                 <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={t.id}>
                   <div className="ytable-cell">
                     <Badge tone="neutral">{t.scope_level}</Badge>
-                    <span className="mono">{t.scope_id}</span>
+                    <EntityName name={scopeName(t.scope_level, t.scope_id)} id={t.scope_id} />
                   </div>
                   <div className="ytable-cell mono">{t.metric}</div>
                   <div className="ytable-cell muted">{t.direction}</div>

@@ -266,6 +266,40 @@
   opacity: 1;
 }
 
+/* Entity name: human name primary, raw UUID only on hover (tooltip + copy). See EntityName.tsx
+   and the "no raw UUIDs in tables" policy (design-system §4.1). */
+.yt-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.yt-entity-name {
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yt-entity-copy {
+  opacity: 0;
+  flex: none;
+}
+
+/* Reveal the copy affordance on row hover (.ytable rows) or on the cell itself (virtualized
+   DataTable rows aren't .ytable-row), and while focused for keyboard users. */
+.ytable-row:hover .yt-entity-copy,
+.yt-entity:hover .yt-entity-copy,
+.yt-entity:focus-within .yt-entity-copy {
+  opacity: 1;
+}
+
+/* Unresolved reference (no human name) — the raw handle, muted. */
+.yt-entity-raw {
+  color: var(--text-secondary);
+}
+
 /* Usage count ("184 nodes" / "Unused"). */
 .yt-usage {
   font-size: var(--font-sm);
