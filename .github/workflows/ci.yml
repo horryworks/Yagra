@@ -16,6 +16,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A release fires two runs at once — the `main` push and the `v*` tag push — and both point at the
+# same commit, so they share `github.sha`. The self-hosted runners share one `~/.cargo` / `~/.rustup`
+# (and one dockerd), so two concurrent cargo builds race on that shared home: registry/target files
+# vanish mid-compile ("No such file or directory", rustc "never executed"). Serialise same-commit
+# runs so the tag run waits for the main run instead of contending. `cancel-in-progress: false`
+# keeps both — neither run is dropped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
 jobs:
   backend:
     name: backend (rust)
