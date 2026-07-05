@@ -36,6 +36,8 @@ const KIND_META: Record<string, { label: string; Icon: ComponentType }> = {
   snmp_v2c: { label: 'SNMP v2c (community)', Icon: HashIcon },
   snmp_v3: { label: 'SNMP v3 (user/password)', Icon: ShieldIcon },
   api_token: { label: 'API token', Icon: KeyIcon },
+  // Meraki keys are created via Settings ▸ Integrations; shown here read-only.
+  meraki_api: { label: 'Cisco Meraki API key', Icon: KeyIcon },
 };
 
 const COLS = '1.7fr 150px 130px 110px 1fr 92px';

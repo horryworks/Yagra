@@ -104,6 +104,8 @@ export interface NodeSummary {
   group_id: string | null;
   /** Manual order within the group (tree sorts members by this, then by name). */
   sort_order: number;
+  /** How this node is monitored, for the tree badge: `"meraki"` or `"device"` (default). */
+  source?: 'device' | 'meraki';
 }
 
 /** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
@@ -486,6 +488,64 @@ export interface NodeDetail {
   group_id: string | null;
   /** URL-monitor config when this node is a URL monitor; `null` otherwise. */
   url_check: UrlCheckConfig | null;
+  /** Cisco Meraki binding when this node is a Meraki device; `null` otherwise. */
+  meraki_device: MerakiDeviceConfig | null;
+}
+
+/** A node's Cisco Meraki binding (1:1; part of `NodeDetail`). */
+export interface MerakiDeviceConfig {
+  org_uuid: string;
+  org_id: string;
+  serial: string;
+  network_id: string;
+  product_type: string;
+  model: string | null;
+}
+
+/** A configured Meraki organization (`GET /api/v1/meraki/orgs`). */
+export interface MerakiOrg {
+  id: string;
+  org_id: string;
+  name: string;
+  base_url: string;
+  enabled: boolean;
+  availability_secs: number;
+  uplink_secs: number;
+  traffic_secs: number;
+  inventory_secs: number;
+  enabled_tiers: string[];
+  target_rps: number;
+  group_id: string | null;
+}
+
+/** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
+export interface MerakiOrgOption {
+  id: string;
+  name: string;
+}
+
+/** A network within an org, with its monitored (watch/skip) flag. */
+export interface MerakiNetwork {
+  network_id: string;
+  name: string;
+  monitored: boolean;
+}
+
+/** An import candidate device (from `POST /api/v1/meraki/orgs/:id/enumerate`). */
+export interface MerakiCandidate {
+  serial: string;
+  name: string;
+  model: string | null;
+  product_type: string;
+  network_id: string;
+  network_name: string;
+  lan_ip: string | null;
+}
+
+/** The enumerate response: the org's networks + import candidates. */
+export interface MerakiEnumeration {
+  networks: MerakiNetwork[];
+  devices: MerakiCandidate[];
 }
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).

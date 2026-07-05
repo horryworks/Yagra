@@ -12,6 +12,7 @@ pub mod address;
 pub mod classification;
 pub mod collection;
 pub mod ids;
+pub mod meraki;
 pub mod metric;
 pub mod node;
 pub mod profile;
@@ -31,6 +32,14 @@ pub use collection::{
     InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED, TEMPLATE_STANDARD_SNMP,
 };
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
+pub use meraki::{
+    api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,
+    uplink_ifindex, uplink_name, uplink_status_value, MerakiDeviceConfig, MerakiTier,
+    METRIC_MERAKI_CLIENT_COUNT, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS,
+    METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_STATUS,
+    METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB, PROFILE_MERAKI_MR_API,
+    PROFILE_MERAKI_MS_API, PROFILE_MERAKI_MX_API,
+};
 pub use metric::{MetricKind, SeriesKey};
 pub use node::Node;
 pub use profile::{Profile, ProfileCategory};

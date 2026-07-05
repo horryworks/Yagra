@@ -75,6 +75,25 @@ impl PollLimiter {
             }
         }
     }
+
+    /// Acquire only the global concurrency permit — **no** per-target single-flight. For jobs whose
+    /// single-flight is enforced elsewhere and which share a sentinel target (Meraki org collectors
+    /// all carry `0.0.0.0`, gated per-org by core), so per-device single-flight would wrongly drop
+    /// concurrent collects for different orgs. Awaits a permit (backpressure); returns `None` only
+    /// on shutdown. The returned guard's sentinel target is never inserted into the inflight set, so
+    /// its drop is a harmless no-op there.
+    pub async fn begin_global(&self) -> Option<PollGuard> {
+        self.global
+            .clone()
+            .acquire_owned()
+            .await
+            .ok()
+            .map(|permit| PollGuard {
+                target: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                inflight: self.inflight.clone(),
+                _permit: permit,
+            })
+    }
 }
 
 #[cfg(test)]

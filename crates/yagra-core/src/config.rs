@@ -13,6 +13,22 @@ pub const DEFAULT_POLL_INTERVAL_SECS: u32 = 30;
 pub const MIN_POLL_INTERVAL_SECS: u32 = 10;
 /// Largest polling interval (seconds) an operator may configure (1 hour).
 pub const MAX_POLL_INTERVAL_SECS: u32 = 3600;
+
+// ── Cisco Meraki cadence bounds (own band, NOT the per-node 1h cap — slow tiers must not be
+// blocked). Mirror the CHECK constraints in migration 0038; the API validates against these. ──
+/// Availability/uplink tier cadence bounds (seconds).
+pub const MERAKI_FAST_MIN_SECS: i32 = 60;
+pub const MERAKI_FAST_MAX_SECS: i32 = 3600;
+/// Traffic tier cadence bounds (seconds).
+pub const MERAKI_TRAFFIC_MIN_SECS: i32 = 300;
+pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;
+/// Inventory tier cadence bounds (seconds).
+pub const MERAKI_INVENTORY_MIN_SECS: i32 = 900;
+pub const MERAKI_INVENTORY_MAX_SECS: i32 = 604_800;
+/// Hard cap on the per-org request-rate budget (requests/sec) — a safeguard so an operator can't
+/// dial polling up to a level that would starve the customer's own Dashboard API usage.
+pub const MERAKI_TARGET_RPS_MAX: f64 = 10.0;
+
 /// Default API bind address.
 const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
 

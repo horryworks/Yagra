@@ -102,6 +102,9 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
       )}
 
       {node.url_check && <UrlHealth nodeId={node.id} url={node.url_check.url} />}
+      {node.meraki_device && (
+        <MerakiHealth nodeId={node.id} device={node.meraki_device} />
+      )}
       <DeviceHealth nodeId={node.id} />
       <SnmpScalars nodeId={node.id} />
     </div>
@@ -219,6 +222,97 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
             </div>
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+/** Human-friendly kilobyte formatter for Meraki windowed usage gauges. */
+function formatKb(kb: number): string {
+  if (kb >= 1_048_576) return `${(kb / 1_048_576).toFixed(1)} GB`;
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
+  return `${Math.round(kb)} KB`;
+}
+
+/** Cisco Meraki device health: availability (`meraki_device_up`), client count, and windowed
+ *  traffic usage — all node-level gauges from the org collector. Shown only for Meraki nodes
+ *  (the caller guards on `node.meraki_device`). Per-uplink loss/latency live on the Interfaces tab. */
+function MerakiHealth({
+  nodeId,
+  device,
+}: {
+  nodeId: string;
+  device: NonNullable<NodeDetail['meraki_device']>;
+}) {
+  const [up, setUp] = useState<number | null>(null);
+  const [clients, setClients] = useState<number | null>(null);
+  const [sent, setSent] = useState<number | null>(null);
+  const [recv, setRecv] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void Promise.allSettled([
+        api.getNodeMetric(nodeId, 'meraki_device_up'),
+        api.getNodeMetric(nodeId, 'meraki_client_count'),
+        api.getNodeMetric(nodeId, 'meraki_usage_sent_kb'),
+        api.getNodeMetric(nodeId, 'meraki_usage_recv_kb'),
+      ]).then(([u, c, s, r]) => {
+        if (cancelled) return;
+        setUp(u.status === 'fulfilled' ? u.value.value : null);
+        setClients(c.status === 'fulfilled' ? c.value.value : null);
+        setSent(s.status === 'fulfilled' ? s.value.value : null);
+        setRecv(r.status === 'fulfilled' ? r.value.value : null);
+      });
+    };
+    load();
+    const id = setInterval(load, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [nodeId]);
+
+  const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
+
+  return (
+    <section>
+      <div className="nd-section-head">
+        <div className="nd-section-t">Cisco Meraki</div>
+      </div>
+      <div className="nd-fact-v mono nd-url-target">
+        {device.product_type} · serial {device.serial}
+      </div>
+      <div className="nd-health-metrics">
+        <div className="nd-health-metric">
+          <div className="nd-health-metric-head">
+            <span className="nd-health-metric-label">Availability</span>
+            <span
+              className="nd-health-metric-value"
+              style={{ color: httpToneVar(availabilityTone) }}
+            >
+              {up == null ? '—' : up === 1 ? 'Online' : 'Offline'}
+            </span>
+          </div>
+        </div>
+        <div className="nd-health-metric">
+          <div className="nd-health-metric-head">
+            <span className="nd-health-metric-label">Clients</span>
+            <span className="nd-health-metric-value">
+              {clients == null ? '—' : Math.round(clients)}
+            </span>
+          </div>
+        </div>
+        <div className="nd-health-metric">
+          <div className="nd-health-metric-head">
+            <span className="nd-health-metric-label">Traffic (sent / recv)</span>
+            <span className="nd-health-metric-value">
+              {sent == null && recv == null
+                ? '—'
+                : `${sent == null ? '—' : formatKb(sent)} / ${recv == null ? '—' : formatKb(recv)}`}
+            </span>
+          </div>
+        </div>
       </div>
     </section>
   );

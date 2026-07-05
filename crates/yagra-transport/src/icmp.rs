@@ -146,6 +146,14 @@ impl Transport for SurgePingTransport {
     ) -> Result<crate::HttpProbe, TransportError> {
         crate::http::probe_http(spec, timeout).await
     }
+
+    async fn collect_meraki(
+        &self,
+        spec: &crate::MerakiCollectSpec,
+        timeout: Duration,
+    ) -> Result<Vec<crate::MerakiObservation>, TransportError> {
+        crate::meraki::collect(spec, timeout).await
+    }
 }
 
 /// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply

@@ -939,6 +939,30 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
         // profile only exists to group these nodes and host their default thresholds. Kept at the
         // array end for seed-id stability (see the note above).
         prof("URL / HTTP endpoint", C::UrlCheck, None, Vec::new()),
+        // Cisco Meraki (Dashboard API) profiles — distinct from the SNMP "Cisco Meraki MX/MS"
+        // profiles above. These devices are polled over the cloud Dashboard API (org-scoped
+        // collector), not SNMP, so they carry NO collection templates; the per-org collector emits
+        // the metrics and the profile only groups these nodes + hosts their default thresholds
+        // (device up / uplink loss/latency, seeded in core). Kept at the array end for seed-id
+        // stability. Roles mirror category_for_product_type(): MX→firewall, MS→switch, MR→AP.
+        prof(
+            crate::meraki::PROFILE_MERAKI_MX_API,
+            C::Firewall,
+            Some("Cisco Meraki"),
+            Vec::new(),
+        ),
+        prof(
+            crate::meraki::PROFILE_MERAKI_MS_API,
+            C::L2Switch,
+            Some("Cisco Meraki"),
+            Vec::new(),
+        ),
+        prof(
+            crate::meraki::PROFILE_MERAKI_MR_API,
+            C::WirelessAp,
+            Some("Cisco Meraki"),
+            Vec::new(),
+        ),
     ]
 }
 
@@ -1138,12 +1162,14 @@ mod tests {
     #[test]
     fn every_profile_has_templates_except_ping_only() {
         for p in builtin_profiles() {
-            // ICMP-only (ping) and URL/HTTP monitors carry no SNMP collection templates — the
-            // probe is driven by the per-node config, not an OID set.
+            // ICMP-only (ping), URL/HTTP monitors, and Cisco Meraki *Dashboard API* profiles carry
+            // no SNMP collection templates — the metrics come from the per-node config / the org
+            // collector, not an OID set. (The SNMP "Cisco Meraki MX/MS" profiles still do.)
             if matches!(
                 p.category,
                 ProfileCategory::PingOnly | ProfileCategory::UrlCheck
-            ) {
+            ) || p.name.ends_with("(API)")
+            {
                 assert!(
                     p.templates.is_empty(),
                     "{} should carry no SNMP templates",

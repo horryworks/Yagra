@@ -77,6 +77,33 @@ impl SnmpV3Secret {
     }
 }
 
+/// Credential kind for a Cisco Meraki Dashboard API key (the secret is a [`MerakiApiSecret`] JSON
+/// doc holding **only** the key). The `org_id` binding lives on the `meraki_orgs` row, not in the
+/// sealed secret, so one credential can back many orgs (an MSP/admin key spanning orgs). Read-only:
+/// the key is inlined into a collect job at dispatch time and never logged.
+pub const KIND_MERAKI_API: &str = "meraki_api";
+
+/// The sealed JSON shape of a `meraki_api` credential: just the API key. Validated at the API edge
+/// on create and parsed again at schedule time; `Err` carries a static description only — never the
+/// key bytes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MerakiApiSecret {
+    pub api_key: String,
+}
+
+impl MerakiApiSecret {
+    /// Parse and structurally validate a Meraki API secret document. `Err` carries a static
+    /// description only — never any field content (the key must never be echoed).
+    pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
+        let secret: Self =
+            serde_json::from_slice(bytes).map_err(|_| "not a valid Meraki API JSON document")?;
+        if secret.api_key.trim().is_empty() {
+            return Err("api_key must not be empty");
+        }
+        Ok(secret)
+    }
+}
+
 /// Load the key-encryption-key provider from `YAGRA_KEK_FILE`, falling back to an ephemeral
 /// dev key (logged loudly — secrets won't survive a restart, dev-only). Shared by every
 /// envelope-encrypted store (credentials, notification channels) so they all use one KEK.
@@ -277,5 +304,16 @@ mod tests {
         assert!(SnmpV3Secret::parse(b"not json").is_err());
         assert!(SnmpV3Secret::parse(br#"{"user":"u","security_level":"max"}"#).is_err());
         assert!(SnmpV3Secret::parse(br#"{"user":"  ","security_level":"noauth"}"#).is_err());
+    }
+
+    #[test]
+    fn meraki_secret_requires_non_empty_key() {
+        let ok = MerakiApiSecret::parse(br#"{"api_key":"0123deadbeef"}"#).expect("valid key");
+        assert_eq!(ok.api_key, "0123deadbeef");
+        // Empty / whitespace-only / missing keys are rejected with a static message.
+        assert!(MerakiApiSecret::parse(br#"{"api_key":""}"#).is_err());
+        assert!(MerakiApiSecret::parse(br#"{"api_key":"   "}"#).is_err());
+        assert!(MerakiApiSecret::parse(br#"{}"#).is_err());
+        assert!(MerakiApiSecret::parse(b"not json").is_err());
     }
 }
