@@ -1,6 +1,6 @@
+# syntax=docker/dockerfile:1
 # Yagra-core — Core/API image.
-# Multi-stage: build the workspace binary, ship a slim runtime. Stub — flesh out
-# the build cache layers (cargo-chef) once the crate has real dependencies.
+# Multi-stage: build the workspace binary, ship a slim runtime.
 
 # Pin the build base to bookworm so the binary's glibc matches the bookworm runtime below.
 # `rust:1.90-slim` is a moving tag that has rolled to Debian trixie (glibc 2.39); building there
@@ -9,7 +9,17 @@
 FROM rust:1.90-slim-bookworm AS build
 WORKDIR /app
 COPY . .
-RUN cargo build --release --bin yagra-core
+# Reuse compiled deps + cargo registry across builds via BuildKit cache mounts. On the persistent
+# self-hosted CI runner these survive between runs, so a one-line source change recompiles only the
+# changed crates instead of every dependency from scratch. The same target/registry mounts carry
+# into the poller image build (identical mount paths, serialised `images` matrix), so shared
+# workspace deps compile once, not once per image. Cache mounts aren't part of the image filesystem,
+# so copy the finished binary out of /app/target before the stage ends.
+RUN --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --bin yagra-core \
+    && cp target/release/yagra-core /app/yagra-core
 
 FROM debian:bookworm-slim AS runtime
 # Report PDF export shells out to `wkhtmltopdf` (Reports → Export → PDF). Install the official
@@ -32,7 +42,7 @@ RUN apt-get update \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -u 10001 yagra
-COPY --from=build /app/target/release/yagra-core /usr/local/bin/yagra-core
+COPY --from=build /app/yagra-core /usr/local/bin/yagra-core
 USER yagra
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/yagra-core"]
