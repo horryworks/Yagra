@@ -86,6 +86,10 @@ pub struct AdminState {
     pub reports: Arc<ReportRunner>,
     /// Per-node URL-monitor configs (HTTP/HTTPS endpoint checks).
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
+    /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
+    pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
+    /// Per-node Cisco Meraki device bindings.
+    pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -133,6 +137,34 @@ pub fn router(state: ApiState) -> Router {
                 .delete(delete_url_check),
         )
         .route("/api/v1/url-monitors", post(create_url_monitor))
+        // Cisco Meraki (read-only Dashboard API monitoring).
+        .route(
+            "/api/v1/meraki/orgs",
+            get(list_meraki_orgs).post(create_meraki_orgs),
+        )
+        .route("/api/v1/meraki/orgs/discover", post(meraki_discover))
+        .route("/api/v1/meraki/orgs/:id", delete(delete_meraki_org))
+        .route(
+            "/api/v1/meraki/orgs/:id/enabled",
+            put(set_meraki_org_enabled),
+        )
+        .route(
+            "/api/v1/meraki/orgs/:id/cadence",
+            put(set_meraki_org_cadence),
+        )
+        .route(
+            "/api/v1/meraki/orgs/:id/networks",
+            get(list_meraki_networks).put(set_meraki_networks_monitored),
+        )
+        .route(
+            "/api/v1/meraki/orgs/:id/enumerate",
+            post(enumerate_meraki_org),
+        )
+        .route("/api/v1/meraki/import", post(import_meraki_devices))
+        .route(
+            "/api/v1/meraki/polling",
+            get(get_meraki_polling).put(set_meraki_polling),
+        )
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
@@ -482,6 +514,9 @@ struct NodeSummary {
     group_id: Option<Uuid>,
     /// Manual order within the group (the tree sorts members by this, then by name).
     sort_order: f64,
+    /// How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
+    /// otherwise `"device"`. (URL monitors can reuse this later.)
+    source: &'static str,
 }
 
 /// The fixed error envelope (ADR-019).
@@ -561,12 +596,24 @@ async fn list_nodes(
             // back to a coarse store probe (a recent RTT ⇒ ok, else unknown).
             let states = st.alerts.node_states();
             // Per-node tree order (admin/live only; skeleton mode has no order → 0 = name order).
-            let orders = match st.admin.as_ref() {
+            let (orders, meraki_ids) = match st.admin.as_ref() {
                 Some(admin) => {
                     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
-                    admin.repo.node_sort_orders(&ids).await.unwrap_or_default()
+                    (
+                        admin.repo.node_sort_orders(&ids).await.unwrap_or_default(),
+                        // Page-scoped (not a full-table scan): only which of this page's nodes
+                        // are Meraki devices, for the tree badge.
+                        admin
+                            .meraki_devices
+                            .filter_meraki(&ids)
+                            .await
+                            .unwrap_or_default(),
+                    )
                 }
-                None => std::collections::HashMap::new(),
+                None => (
+                    std::collections::HashMap::new(),
+                    std::collections::HashSet::new(),
+                ),
             };
             let mut out = Vec::with_capacity(nodes.len());
             for n in nodes {
@@ -575,6 +622,11 @@ async fn list_nodes(
                     None => derive_fallback_state(&st, n.id).await,
                 };
                 let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
+                let source = if meraki_ids.contains(&n.id.as_uuid()) {
+                    "meraki"
+                } else {
+                    "device"
+                };
                 out.push(NodeSummary {
                     id: n.id,
                     name: n.name,
@@ -584,6 +636,7 @@ async fn list_nodes(
                     model: n.model,
                     group_id: n.group.map(|g| g.as_uuid()),
                     sort_order,
+                    source,
                 });
             }
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
@@ -632,6 +685,8 @@ struct NodeDetail {
     group_id: Option<Uuid>,
     /// URL-monitor config when this node is a URL monitor; `null` otherwise.
     url_check: Option<UrlCheckConfig>,
+    /// Cisco Meraki binding when this node is a Meraki device; `null` otherwise.
+    meraki_device: Option<yagra_common::MerakiDeviceConfig>,
 }
 
 async fn get_node(
@@ -647,8 +702,9 @@ async fn get_node(
     };
     match admin.repo.get_node(node_id).await {
         Ok(Some(node)) => {
-            // Best-effort: a URL-check load failure shouldn't fail the whole node detail.
+            // Best-effort: a URL-check / Meraki load failure shouldn't fail the whole node detail.
             let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
+            let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
             Json(NodeDetail {
                 id: node.id,
                 name: node.name,
@@ -660,6 +716,7 @@ async fn get_node(
                 model: node.model,
                 group_id: node.group.map(|g| g.as_uuid()),
                 url_check,
+                meraki_device,
             })
             .into_response()
         }
@@ -3151,6 +3208,706 @@ async fn create_url_monitor(
         Json(serde_json::json!({ "id": node_id })),
     )
         .into_response()
+}
+
+// ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────────────
+
+/// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
+const MERAKI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Default Dashboard API base URL (the global shard).
+const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
+
+/// Validate/normalize an operator-supplied Meraki base URL: it must be an `https` URL whose host is
+/// an allow-listed Meraki API host — enforced before the key is ever sent to it (never affect / leak
+/// to a non-Meraki host). The `Err` carries the error response to short-circuit with.
+#[allow(clippy::result_large_err)]
+fn meraki_base_url(base: Option<String>) -> Result<String, Response> {
+    let url = base
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_MERAKI_BASE_URL.to_owned());
+    let parsed = reqwest::Url::parse(&url).map_err(|_| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_base_url",
+            "base_url is not a valid URL".to_owned(),
+        )
+    })?;
+    let host_ok = parsed
+        .host_str()
+        .is_some_and(yagra_common::is_meraki_api_host);
+    if parsed.scheme() != "https" || !host_ok {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_base_url",
+            "base_url must be an https Meraki API host (api.meraki.com / regional shard)"
+                .to_owned(),
+        ));
+    }
+    Ok(url)
+}
+
+/// Map a Meraki upstream/transport failure to a 502 with a generic message (never leak the key or
+/// raw error internals to the client).
+fn meraki_upstream_error(context: &str, e: &yagra_transport::TransportError) -> Response {
+    tracing::warn!(error = %e, "meraki upstream call failed: {context}");
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        "meraki_upstream_error",
+        format!("Meraki Dashboard API call failed ({context})"),
+    )
+}
+
+#[derive(Deserialize)]
+struct MerakiDiscoverReq {
+    api_key: String,
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MerakiOrgOption {
+    id: String,
+    name: String,
+}
+
+/// List the organizations an API key can access (read-only `GET /organizations`) so the operator can
+/// multi-select which to monitor. Does not persist anything.
+async fn meraki_discover(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<MerakiDiscoverReq>,
+) -> Response {
+    let Some(_admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.api_key.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_api_key",
+            "api_key must not be empty".to_owned(),
+        );
+    }
+    let base = match meraki_base_url(body.base_url) {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    match yagra_transport::list_organizations(&base, &body.api_key, MERAKI_API_TIMEOUT).await {
+        Ok(orgs) => Json(
+            orgs.into_iter()
+                .map(|o| MerakiOrgOption {
+                    id: o.id,
+                    name: o.name,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => meraki_upstream_error("discover organizations", &e),
+    }
+}
+
+#[derive(Serialize)]
+struct MerakiOrgView {
+    id: Uuid,
+    org_id: String,
+    name: String,
+    base_url: String,
+    enabled: bool,
+    availability_secs: u32,
+    uplink_secs: u32,
+    traffic_secs: u32,
+    inventory_secs: u32,
+    enabled_tiers: Vec<String>,
+    target_rps: f64,
+    group_id: Option<Uuid>,
+}
+
+fn meraki_org_view(o: &crate::meraki::MerakiOrg) -> MerakiOrgView {
+    MerakiOrgView {
+        id: o.id,
+        org_id: o.org_id.clone(),
+        name: o.name.clone(),
+        base_url: o.base_url.clone(),
+        enabled: o.enabled,
+        availability_secs: o.availability_secs,
+        uplink_secs: o.uplink_secs,
+        traffic_secs: o.traffic_secs,
+        inventory_secs: o.inventory_secs,
+        enabled_tiers: o.enabled_tiers.clone(),
+        target_rps: o.target_rps,
+        group_id: o.group_id,
+    }
+}
+
+/// List the configured Meraki organizations (Integrations page).
+async fn list_meraki_orgs(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.meraki_orgs.list().await {
+        Ok(orgs) => Json(orgs.iter().map(meraki_org_view).collect::<Vec<_>>()).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list meraki orgs failed");
+            internal("failed to list meraki organizations")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateMerakiOrgsReq {
+    api_key: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    org_ids: Vec<String>,
+}
+
+/// Onboard one or more organizations under a single (read-only) API key: validate the key by
+/// listing orgs, seal it once as a shared `meraki_api` credential, then create an org row per
+/// selected id. Returns how many were created.
+async fn create_meraki_orgs(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateMerakiOrgsReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.api_key.trim().is_empty() || body.org_ids.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "api_key and at least one org_id are required".to_owned(),
+        );
+    }
+    let base = match meraki_base_url(body.base_url) {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    // Validate the key is read-only-usable and get org names.
+    let orgs =
+        match yagra_transport::list_organizations(&base, &body.api_key, MERAKI_API_TIMEOUT).await {
+            Ok(o) => o,
+            Err(e) => return meraki_upstream_error("validate key / list organizations", &e),
+        };
+    // Seal the key ONCE as a shared credential (holds only the key — org id lives on the row).
+    let secret = serde_json::json!({ "api_key": body.api_key }).to_string();
+    let cred_name = format!("Meraki API ({} org)", body.org_ids.len());
+    let cred_id = match admin
+        .creds
+        .create(
+            &cred_name,
+            crate::secrets::KIND_MERAKI_API,
+            secret.as_bytes(),
+        )
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "seal meraki credential failed");
+            return internal("failed to store meraki credential");
+        }
+    };
+    let mut created = 0u32;
+    for oid in &body.org_ids {
+        let name = orgs
+            .iter()
+            .find(|o| &o.id == oid)
+            .map_or(oid.as_str(), |o| o.name.as_str());
+        match admin.meraki_orgs.create(oid, name, &base, cred_id).await {
+            Ok(_) => created += 1,
+            Err(e) => tracing::warn!(org = %oid, error = %e, "create meraki org failed (skipped)"),
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "created": created })),
+    )
+        .into_response()
+}
+
+/// Delete an organization: removes its device nodes, config, and HostTree groups.
+async fn delete_meraki_org(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.meraki_orgs.purge(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("meraki_org_not_found", format!("no meraki org {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete meraki org failed");
+            internal("failed to delete meraki organization")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MerakiEnabledReq {
+    enabled: bool,
+}
+
+/// Enable/disable an org (pause collection without losing config/history).
+async fn set_meraki_org_enabled(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MerakiEnabledReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.meraki_orgs.set_enabled(id, body.enabled).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("meraki_org_not_found", format!("no meraki org {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set meraki org enabled failed");
+            internal("failed to update meraki organization")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MerakiCadenceReq {
+    availability_secs: i32,
+    uplink_secs: i32,
+    traffic_secs: i32,
+    inventory_secs: i32,
+    enabled_tiers: Vec<String>,
+    target_rps: f64,
+}
+
+/// Update an org's per-tier cadence, enabled tiers, and rate budget (validated against the Meraki
+/// cadence bands + the hard rps cap safeguard).
+async fn set_meraki_org_cadence(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MerakiCadenceReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    use crate::config::*;
+    let in_range = |v: i32, lo: i32, hi: i32| v >= lo && v <= hi;
+    if !in_range(
+        body.availability_secs,
+        MERAKI_FAST_MIN_SECS,
+        MERAKI_FAST_MAX_SECS,
+    ) || !in_range(body.uplink_secs, MERAKI_FAST_MIN_SECS, MERAKI_FAST_MAX_SECS)
+        || !in_range(
+            body.traffic_secs,
+            MERAKI_TRAFFIC_MIN_SECS,
+            MERAKI_TRAFFIC_MAX_SECS,
+        )
+        || !in_range(
+            body.inventory_secs,
+            MERAKI_INVENTORY_MIN_SECS,
+            MERAKI_INVENTORY_MAX_SECS,
+        )
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_cadence",
+            "a cadence value is outside its allowed range".to_owned(),
+        );
+    }
+    if !(body.target_rps > 0.0 && body.target_rps <= MERAKI_TARGET_RPS_MAX) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_target_rps",
+            format!("target_rps must be in (0, {MERAKI_TARGET_RPS_MAX}]"),
+        );
+    }
+    if body
+        .enabled_tiers
+        .iter()
+        .any(|t| yagra_common::MerakiTier::from_token(t).is_none())
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_tier",
+            "enabled_tiers contains an unknown tier".to_owned(),
+        );
+    }
+    match admin
+        .meraki_orgs
+        .update_cadence(
+            id,
+            body.availability_secs,
+            body.uplink_secs,
+            body.traffic_secs,
+            body.inventory_secs,
+            &body.enabled_tiers,
+            body.target_rps,
+        )
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("meraki_org_not_found", format!("no meraki org {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set meraki org cadence failed");
+            internal("failed to update meraki organization")
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MerakiNetworkView {
+    network_id: String,
+    name: String,
+    monitored: bool,
+}
+
+/// The org's networks with their monitored (in-scope) flag.
+async fn list_meraki_networks(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.meraki_orgs.list_networks(id).await {
+        Ok(nets) => Json(
+            nets.into_iter()
+                .map(|(network_id, name, monitored)| MerakiNetworkView {
+                    network_id,
+                    name,
+                    monitored,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list meraki networks failed");
+            internal("failed to list meraki networks")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MerakiMonitoredReq {
+    network_ids: Vec<String>,
+    monitored: bool,
+}
+
+/// Set the monitored (watch/skip) flag for a set of the org's networks.
+async fn set_meraki_networks_monitored(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MerakiMonitoredReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin
+        .meraki_orgs
+        .set_networks_monitored(id, &body.network_ids, body.monitored)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "set meraki networks monitored failed");
+            internal("failed to update network scope")
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MerakiCandidate {
+    serial: String,
+    name: String,
+    model: Option<String>,
+    product_type: String,
+    network_id: String,
+    network_name: String,
+    lan_ip: Option<String>,
+}
+
+/// Enumerate an org's networks + devices from the Dashboard API (read-only): upsert the network
+/// scope (preserving monitored flags) and return import candidates (already-imported serials
+/// filtered out). Powers the import wizard.
+async fn enumerate_meraki_org(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let org = match admin.meraki_orgs.get(id).await {
+        Ok(Some(o)) => o,
+        Ok(None) => return not_found("meraki_org_not_found", format!("no meraki org {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "enumerate: load org failed");
+            return internal("failed to load meraki organization");
+        }
+    };
+    let Some(api_key) = crate::meraki::resolve_meraki_key(&admin.creds, org.credential_id).await
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "meraki_credential_unavailable",
+            "the org's API key could not be resolved".to_owned(),
+        );
+    };
+    let networks = match yagra_transport::list_networks(
+        &org.base_url,
+        &api_key,
+        &org.org_id,
+        MERAKI_API_TIMEOUT,
+    )
+    .await
+    {
+        Ok(n) => n,
+        Err(e) => return meraki_upstream_error("list networks", &e),
+    };
+    let devices = match yagra_transport::list_devices(
+        &org.base_url,
+        &api_key,
+        &org.org_id,
+        MERAKI_API_TIMEOUT,
+    )
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => return meraki_upstream_error("list devices", &e),
+    };
+    // Persist the network list (preserving monitored flags) + stamp last sync.
+    let net_pairs: Vec<(String, String)> = networks
+        .iter()
+        .map(|n| (n.id.clone(), n.name.clone()))
+        .collect();
+    if let Err(e) = admin.meraki_orgs.upsert_networks(org.id, &net_pairs).await {
+        tracing::warn!(error = %e, "enumerate: upsert networks failed");
+    }
+    let _ = admin.meraki_orgs.touch_sync(org.id).await;
+
+    let imported = admin
+        .meraki_devices
+        .serials(org.id)
+        .await
+        .unwrap_or_default();
+    let net_name = |nid: &str| {
+        networks
+            .iter()
+            .find(|n| n.id == nid)
+            .map_or_else(|| nid.to_owned(), |n| n.name.clone())
+    };
+    let candidates: Vec<MerakiCandidate> = devices
+        .into_iter()
+        .filter(|d| !imported.contains(&d.serial))
+        .map(|d| MerakiCandidate {
+            network_name: net_name(&d.network_id),
+            serial: d.serial,
+            name: d.name,
+            model: d.model,
+            product_type: d.product_type,
+            network_id: d.network_id,
+            lan_ip: d.lan_ip,
+        })
+        .collect();
+    let networks_view: Vec<MerakiNetworkView> = admin
+        .meraki_orgs
+        .list_networks(org.id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(network_id, name, monitored)| MerakiNetworkView {
+            network_id,
+            name,
+            monitored,
+        })
+        .collect();
+    Json(serde_json::json!({ "networks": networks_view, "devices": candidates })).into_response()
+}
+
+#[derive(Deserialize)]
+struct MerakiImportReq {
+    org_uuid: Uuid,
+    #[serde(default)]
+    monitored_network_ids: Vec<String>,
+    devices: Vec<MerakiImportDeviceReq>,
+}
+
+#[derive(Deserialize)]
+struct MerakiImportDeviceReq {
+    serial: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    model: Option<String>,
+    product_type: String,
+    network_id: String,
+    #[serde(default)]
+    network_name: Option<String>,
+    #[serde(default)]
+    lan_ip: Option<String>,
+}
+
+/// Import selected devices as nodes (atomic): set the chosen networks in scope, then create each
+/// node + its Meraki binding under the org→network group tree. Already-imported serials are skipped.
+async fn import_meraki_devices(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<MerakiImportReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let org = match admin.meraki_orgs.get(body.org_uuid).await {
+        Ok(Some(o)) => o,
+        Ok(None) => {
+            return not_found(
+                "meraki_org_not_found",
+                format!("no meraki org {}", body.org_uuid),
+            )
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "import: load org failed");
+            return internal("failed to load meraki organization");
+        }
+    };
+    // Mark the chosen networks in scope.
+    if !body.monitored_network_ids.is_empty() {
+        let _ = admin
+            .meraki_orgs
+            .set_networks_monitored(org.id, &body.monitored_network_ids, true)
+            .await;
+    }
+    let imported = admin
+        .meraki_devices
+        .serials(org.id)
+        .await
+        .unwrap_or_default();
+
+    let mut to_import = Vec::new();
+    for d in &body.devices {
+        if imported.contains(&d.serial) {
+            continue;
+        }
+        // Resolve the built-in Meraki-API profile for the product type (else a role fallback).
+        let profile_id = match yagra_common::api_profile_name_for_product_type(&d.product_type) {
+            Some(name) => admin.repo.profile_id_for_name(name).await.unwrap_or(None),
+            None => None,
+        };
+        let profile_id = match profile_id {
+            Some(p) => Some(p),
+            None => admin
+                .repo
+                .profile_id_for_category(
+                    yagra_common::category_for_product_type(&d.product_type).as_str(),
+                )
+                .await
+                .unwrap_or(None),
+        };
+        let lan_ip = d
+            .lan_ip
+            .as_deref()
+            .and_then(|s| s.parse::<std::net::IpAddr>().ok());
+        let name = if d.name.trim().is_empty() {
+            d.serial.clone()
+        } else {
+            d.name.clone()
+        };
+        let network_name = d
+            .network_name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| d.network_id.clone());
+        to_import.push(crate::meraki::MerakiImportDevice {
+            serial: d.serial.clone(),
+            name,
+            model: d.model.clone(),
+            product_type: d.product_type.clone(),
+            network_id: d.network_id.clone(),
+            network_name,
+            lan_ip,
+            profile_id,
+        });
+    }
+    match admin.meraki_orgs.import_devices(&org, &to_import).await {
+        Ok(count) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "imported": count })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "meraki import failed");
+            internal("failed to import meraki devices")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MerakiPollingReq {
+    enabled: bool,
+}
+
+/// Read the global Meraki polling kill switch.
+async fn get_meraki_polling(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let enabled = admin.repo.get_meraki_polling_enabled().await;
+    Json(serde_json::json!({ "enabled": enabled })).into_response()
+}
+
+/// Set the global Meraki polling kill switch (safeguard: instantly halt all Meraki polling).
+async fn set_meraki_polling(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<MerakiPollingReq>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.repo.set_meraki_polling_enabled(body.enabled).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "set meraki polling switch failed");
+            internal("failed to update meraki polling switch")
+        }
+    }
 }
 
 /// Trigger an immediate poll of one node (the "poll now" action): dispatches its full configured

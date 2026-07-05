@@ -253,6 +253,8 @@ pub struct PollDispatcher {
     collection: Arc<CollectionRepo>,
     /// Per-node URL-monitor configs (a node with one is a URL monitor → HTTP job, no ICMP/SNMP).
     url_checks: Arc<UrlCheckRepo>,
+    /// Per-node Meraki bindings (a node with one is polled by the org collector → no ICMP/SNMP).
+    meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// v2c community fallback for nodes without a bound credential.
     env_community: Option<String>,
     /// Fallback poll interval (seconds) stamped on on-demand "poll now" jobs. The periodic
@@ -268,6 +270,7 @@ impl PollDispatcher {
         creds: Arc<CredentialStore>,
         collection: Arc<CollectionRepo>,
         url_checks: Arc<UrlCheckRepo>,
+        meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
         env_community: Option<String>,
         interval_secs: u32,
     ) -> Self {
@@ -276,6 +279,7 @@ impl PollDispatcher {
             creds,
             collection,
             url_checks,
+            meraki_devices,
             env_community,
             interval_secs,
         }
@@ -290,6 +294,16 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
     ) -> Vec<(PollJob, &'static str)> {
+        // Meraki short-circuit: a node with a Meraki binding is polled by the org collector, so it
+        // emits no per-node ICMP/SNMP/HTTP job (guards the on-demand "poll now" path; the periodic
+        // scheduler already skips these nodes by preloading their ids).
+        match self.meraki_devices.get(node.id.as_uuid()).await {
+            Ok(Some(_)) => return Vec::new(),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = %e, "meraki-device load failed; treating as non-Meraki node");
+            }
+        }
         // URL monitor short-circuit: a node with a URL check is HTTP-only.
         match self.url_checks.get(node.id.as_uuid()).await {
             Ok(Some(cfg)) => return assemble_node_jobs(node, None, &[], Some(&cfg), interval_secs),

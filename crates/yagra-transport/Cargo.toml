@@ -21,6 +21,8 @@ rand = { workspace = true }
 # URL/HTTP(S) monitoring transport.
 reqwest = { workspace = true }
 x509-parser = { workspace = true }
+# Cisco Meraki Dashboard API (JSON) transport.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

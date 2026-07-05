@@ -680,6 +680,16 @@ impl NodeRepo {
         row.map(|r| Ok(r.try_get("id")?)).transpose()
     }
 
+    /// The id of the profile with the given exact name (for binding imported Meraki devices to their
+    /// specific built-in API profile), if one exists.
+    pub async fn profile_id_for_name(&self, name: &str) -> anyhow::Result<Option<Uuid>> {
+        let row = sqlx::query("SELECT id FROM profiles WHERE name = $1 LIMIT 1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|r| Ok(r.try_get("id")?)).transpose()
+    }
+
     /// Create a profile; returns its id. `poll_interval_secs` is the optional per-profile interval
     /// override (`None` ⇒ inherit the global default).
     pub async fn create_profile(
@@ -766,6 +776,32 @@ impl NodeRepo {
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(i32::try_from(secs).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The global Cisco Meraki polling kill switch (safeguard). Defaults to `true` (enabled) if the
+    /// row is somehow absent or on any read error, so a transient DB blip never silently pauses
+    /// monitoring — the operator's explicit `false` is the only thing that halts polling.
+    pub async fn get_meraki_polling_enabled(&self) -> bool {
+        sqlx::query("SELECT meraki_polling_enabled FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.try_get::<bool, _>("meraki_polling_enabled").ok())
+            .unwrap_or(true)
+    }
+
+    /// Set the global Meraki polling kill switch, upserting the singleton row.
+    pub async fn set_meraki_polling_enabled(&self, enabled: bool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, meraki_polling_enabled, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET meraki_polling_enabled = $1, updated_at = now()",
+        )
+        .bind(enabled)
         .execute(&self.pool)
         .await?;
         Ok(())

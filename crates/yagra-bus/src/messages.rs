@@ -7,10 +7,10 @@
 //! vice versa, during a rolling upgrade.
 
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    ExpectedStatus, HttpMethod, IfIndex, InterfaceField, MetricKind, NodeId, SeriesKey,
+    ExpectedStatus, HttpMethod, IfIndex, InterfaceField, MerakiTier, MetricKind, NodeId, SeriesKey,
 };
 
 /// Current bus message schema version. Bump on a backward-compatible change; a
@@ -159,6 +159,26 @@ impl PollJob {
             probe_identity: false,
         }
     }
+
+    /// A new Meraki org-scoped collector job. Unlike the per-node checks above, one collect job
+    /// pages the org-bulk Dashboard endpoints for a whole organization and fans the result out to
+    /// many nodes (the poller emits one [`PollResult`] per device). `node_id`/`target` are
+    /// therefore sentinels: `node_id` carries the internal org handle (correlation / single-flight
+    /// clear) and `target` is unspecified (the collector resolves `check.base_url`).
+    #[must_use]
+    pub fn meraki_collect(job_id: Uuid, check: MerakiCollectCheck, interval_secs: u32) -> Self {
+        let org_handle = NodeId::from(check.meraki_org_uuid);
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id: org_handle,
+            target: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            check: CheckSpec::MerakiCollect(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+        }
+    }
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
@@ -180,6 +200,10 @@ pub enum CheckSpec {
     /// HTTP/HTTPS URL-endpoint check (status/up + TLS cert expiry). Like the variants above,
     /// an older poller that doesn't know this tag simply skips the job (N-1 compatible).
     Http(HttpCheck),
+    /// Cisco Meraki org-scoped collector: page one tier of Dashboard org-bulk endpoints and fan
+    /// the result out to many nodes. Read-only (GET). Like the variants above, an older poller that
+    /// doesn't know this tag simply skips the job (N-1 compatible).
+    MerakiCollect(MerakiCollectCheck),
 }
 
 /// ICMP echo parameters.
@@ -325,6 +349,66 @@ pub struct SnmpMetaColumn {
     pub field: InterfaceField,
     /// Column base OID, e.g. `1.3.6.1.2.1.31.1.1.1.1` (ifName).
     pub oid: String,
+}
+
+/// Cisco Meraki org-scoped collector parameters. One job pages one [`MerakiTier`] of the org's
+/// Dashboard API and yields per-device samples. Strictly **read-only** (the poller issues GET only).
+///
+/// `api_key` is the resolved credential, inlined by core over the (TLS) bus at send time
+/// (ADR-018/020) — the poller never reads the secret store. It is sent only to hosts matching
+/// [`yagra_common::is_meraki_api_host`] (validated on every request incl. pagination links) so it
+/// cannot be exfiltrated. `devices` is the serial→node_id map (built from `meraki_devices`) the
+/// stateless poller needs to attribute each API row to a node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MerakiCollectCheck {
+    /// The Meraki organizationId (the API path segment).
+    pub org_id: String,
+    /// Internal handle of the owning `meraki_orgs` row (correlation / single-flight clear).
+    pub meraki_org_uuid: Uuid,
+    /// Which tier of endpoints to page this cycle.
+    pub tier: MerakiTier,
+    /// Dashboard API base URL (regional shard); host-allow-listed by the collector.
+    pub base_url: String,
+    /// Resolved read-only API key (decrypted by core; never logged).
+    pub api_key: String,
+    /// serial → node_id map for this org (only in-scope devices; empty ⇒ nothing to attribute).
+    #[serde(default)]
+    pub devices: Vec<MerakiDeviceRef>,
+    /// Meraki networkIds in scope (narrows API calls where supported; empty ⇒ all).
+    #[serde(default)]
+    pub network_ids: Vec<String>,
+    /// Page size cap for paginated endpoints.
+    #[serde(default = "default_meraki_per_page")]
+    pub per_page: u32,
+    /// Conservative request-rate budget (requests/sec) the collector paces itself to — well under
+    /// the org cap so the customer's own tooling keeps headroom (safeguard).
+    #[serde(default = "default_meraki_target_rps")]
+    pub target_rps: f64,
+    /// Overall per-request timeout, in milliseconds.
+    #[serde(default = "default_meraki_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+const fn default_meraki_per_page() -> u32 {
+    1000
+}
+
+fn default_meraki_target_rps() -> f64 {
+    2.0
+}
+
+const fn default_meraki_timeout_ms() -> u32 {
+    30_000
+}
+
+/// One serial → node_id mapping inlined into a [`MerakiCollectCheck`] so the stateless poller can
+/// attribute each org-bulk API row (keyed by serial) to the right node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MerakiDeviceRef {
+    /// Device serial (the join key from the org-bulk endpoints).
+    pub serial: String,
+    /// The Yagra node representing that device.
+    pub node_id: NodeId,
 }
 
 /// The result of executing a [`PollJob`], sent back to core.
@@ -626,6 +710,55 @@ mod tests {
         assert!(json.contains("\"kind\":\"snmp_table\""));
         let back: PollJob = serde_json::from_str(&json).unwrap();
         assert_eq!(job, back);
+    }
+
+    #[test]
+    fn meraki_collect_job_round_trips_with_snake_case_tag() {
+        let job = PollJob::meraki_collect(
+            Uuid::nil(),
+            MerakiCollectCheck {
+                org_id: "123456".into(),
+                meraki_org_uuid: Uuid::nil(),
+                tier: MerakiTier::Uplink,
+                base_url: "https://api.meraki.com".into(),
+                api_key: "REDACTED".into(),
+                devices: vec![MerakiDeviceRef {
+                    serial: "Q2XX-XXXX-XXXX".into(),
+                    node_id: NodeId::from(Uuid::nil()),
+                }],
+                network_ids: vec!["N_1".into()],
+                per_page: 1000,
+                target_rps: 2.0,
+                timeout_ms: 30_000,
+            },
+            300,
+        );
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(json.contains("\"kind\":\"meraki_collect\""));
+        assert!(json.contains("\"tier\":\"uplink\""));
+        let back: PollJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(job, back);
+        // Sentinels: node_id carries the org handle; target is unspecified (the collector uses
+        // check.base_url, not this address).
+        assert_eq!(back.target, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+
+    #[test]
+    fn meraki_collect_check_defaults_are_forward_compatible() {
+        // A producer that omits the newer optional fields still deserializes with safe defaults.
+        let json = r#"{
+            "org_id":"123456",
+            "meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"availability",
+            "base_url":"https://api.meraki.com",
+            "api_key":"x"
+        }"#;
+        let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
+        assert!(c.devices.is_empty());
+        assert!(c.network_ids.is_empty());
+        assert_eq!(c.per_page, 1000);
+        assert_eq!(c.target_rps, 2.0);
+        assert_eq!(c.timeout_ms, 30_000);
     }
 
     #[test]

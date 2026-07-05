@@ -23,6 +23,7 @@ mod discovery;
 mod groups;
 mod history;
 mod maintenance;
+mod meraki;
 mod mib;
 mod notifications;
 mod repo;
@@ -125,6 +126,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Self-monitoring counters for the poll loop, shared by the consumer + scheduler and read by
     // the poller-health endpoint.
     let scheduler_stats = Arc::new(scheduler::SchedulerStats::default());
+    // Cisco Meraki: org/device stores (metadata in Postgres) + the per-org single-flight tracker
+    // (shared by the Meraki scheduler and the result consumer, which clears an org's flight on the
+    // collect's first result). Read-only integration.
+    let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
+    let meraki_devices = Arc::new(meraki::MerakiDeviceRepo::new(repo.pool()));
+    let meraki_inflight = Arc::new(meraki::MerakiInflight::new());
     {
         let store = store.clone();
         let alerts = alerts.clone();
@@ -132,9 +139,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let history = history.clone();
         let repo = repo.clone();
         let stats = scheduler_stats.clone();
+        let meraki_inflight = meraki_inflight.clone();
         let results = Box::pin(bus.subscribe_results().await?);
         tokio::spawn(consume_results(
-            results, store, alerts, notifier, history, repo, stats,
+            results,
+            store,
+            alerts,
+            notifier,
+            history,
+            repo,
+            stats,
+            meraki_inflight,
         ));
     }
 
@@ -167,6 +182,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         creds.clone(),
         collection.clone(),
         url_checks.clone(),
+        meraki_devices.clone(),
         env_community.clone(),
         cfg.poll_interval_secs,
     ));
@@ -176,7 +192,22 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let repo = repo.clone();
         let dispatcher = dispatcher.clone();
         let stats = scheduler_stats.clone();
-        tokio::spawn(run_scheduler(repo, dispatcher, stats));
+        let meraki_devices = meraki_devices.clone();
+        tokio::spawn(run_scheduler(repo, dispatcher, stats, meraki_devices));
+    }
+
+    // Meraki scheduler: one org-scoped collect per due tier, single-flighted per org so the shared
+    // API rate budget is never exceeded. Separate loop so the per-node scheduler is untouched.
+    {
+        let orgs = meraki_orgs.clone();
+        let devices = meraki_devices.clone();
+        let creds = creds.clone();
+        let bus = bus.clone();
+        let inflight = meraki_inflight.clone();
+        let sys = repo.clone();
+        tokio::spawn(run_meraki_scheduler(
+            orgs, devices, creds, bus, inflight, sys,
+        ));
     }
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
@@ -356,6 +387,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         analysis,
         reports,
         url_checks,
+        meraki_orgs,
+        meraki_devices,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -405,6 +438,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
 
 /// Drain poll results off the bus into the metric store and the alert engine. Returns
 /// when the stream ends.
+#[allow(clippy::too_many_arguments)]
 async fn consume_results<S>(
     mut results: S,
     store: Arc<dyn MetricStore>,
@@ -413,6 +447,7 @@ async fn consume_results<S>(
     history: Arc<AlertHistoryStore>,
     repo: Arc<NodeRepo>,
     stats: Arc<scheduler::SchedulerStats>,
+    meraki_inflight: Arc<meraki::MerakiInflight>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
@@ -420,6 +455,9 @@ async fn consume_results<S>(
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
         stats.record_result();
+        // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
+        // results share the job id; a no-op for non-Meraki jobs).
+        meraki_inflight.complete(result.job_id);
         store.write(&result).await;
         // Batch-upsert all interfaces discovered on this poll (table walks) in ONE statement —
         // this is the hottest ingest path, so it must not fan out into a round-trip per
@@ -499,11 +537,17 @@ async fn run_scheduler(
     repo: Arc<NodeRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
+    meraki_devices: Arc<meraki::MerakiDeviceRepo>,
 ) {
     use std::collections::HashSet;
     use std::time::Instant;
     let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
     loop {
+        // Meraki device nodes are polled by the org collector, not per-node — preload their ids
+        // once per round (like the interval overrides) and skip them, so no per-node lookup runs in
+        // the hot loop. A load failure degrades to an empty set (they'd fall through to the
+        // per-node dispatcher, which then short-circuits them anyway).
+        let meraki_node_ids = meraki_devices.node_ids().await.unwrap_or_default();
         // Resolve the round's intervals: the global default (DB-backed) and any per-profile
         // overrides. On a read failure, degrade to the compiled default / no overrides rather than
         // stalling the poll loop.
@@ -542,6 +586,10 @@ async fn run_scheduler(
                 let mut jobs_round: u64 = 0;
                 for (node, secs) in resolved {
                     let id = node.id.as_uuid();
+                    // Skip Meraki device nodes — the org collector polls them (no per-node jobs).
+                    if meraki_node_ids.contains(&id) {
+                        continue;
+                    }
                     present.insert(id);
                     let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
                     if !scheduler::due(elapsed, Duration::from_secs(u64::from(secs))) {
@@ -568,6 +616,106 @@ async fn run_scheduler(
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
         tokio::time::sleep(Duration::from_secs(u64::from(min_interval))).await;
+    }
+}
+
+/// Dispatch Cisco Meraki org-scoped collects, one per due tier, **single-flighted per org** so an
+/// org's shared Dashboard API rate budget is never exceeded (the #1 safeguard). Separate from the
+/// per-node scheduler so that loop is untouched. Each short tick: honour the global kill switch,
+/// then for every enabled org with no outstanding collect, pick its most-overdue due tier and
+/// dispatch one collect (serial→node_id map + monitored networks inlined). Tiers have their own
+/// cadences (free of the per-node 1h cap); the collect result clears the org's flight (a lease is
+/// the backstop). An org with no imported devices is skipped to save budget.
+async fn run_meraki_scheduler(
+    orgs_repo: Arc<meraki::MerakiOrgRepo>,
+    devices: Arc<meraki::MerakiDeviceRepo>,
+    creds: Arc<CredentialStore>,
+    bus: Arc<NatsBus>,
+    inflight: Arc<meraki::MerakiInflight>,
+    settings: Arc<NodeRepo>,
+) {
+    use std::time::Instant;
+    use yagra_bus::{Bus, PollJob};
+    use yagra_common::MerakiTier;
+
+    const TICK: Duration = Duration::from_secs(15);
+    const LEASE: Duration = Duration::from_secs(300);
+    let mut last: HashMap<(Uuid, MerakiTier), Instant> = HashMap::new();
+
+    loop {
+        tokio::time::sleep(TICK).await;
+        // Global kill switch (safeguard): halt all Meraki polling instantly, without touching config.
+        if !settings.get_meraki_polling_enabled().await {
+            continue;
+        }
+        let orgs = match orgs_repo.list_enabled().await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(error = %e, "meraki scheduler: listing orgs failed");
+                continue;
+            }
+        };
+        let now = Instant::now();
+        for org in orgs {
+            if inflight.is_inflight(org.id, now) {
+                continue; // a collect is still outstanding for this org
+            }
+            // Pick the most-overdue due tier (never-dispatched sorts first).
+            let mut best: Option<(MerakiTier, Duration)> = None;
+            for tier in org.active_tiers() {
+                let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
+                let (due, overdue) = match last.get(&(org.id, tier)) {
+                    Some(&t) => {
+                        let e = now.duration_since(t);
+                        (e >= cadence, e)
+                    }
+                    None => (true, Duration::MAX),
+                };
+                if due && best.is_none_or(|(_, bo)| overdue > bo) {
+                    best = Some((tier, overdue));
+                }
+            }
+            let Some((tier, _)) = best else {
+                continue; // nothing due
+            };
+
+            let device_refs = match devices.device_refs(org.id).await {
+                Ok(d) if !d.is_empty() => d,
+                Ok(_) => continue, // no imported devices → nothing to fan out to; save budget
+                Err(e) => {
+                    tracing::warn!(org = %org.org_id, error = %e, "meraki device refs load failed");
+                    continue;
+                }
+            };
+            let Some(api_key) = meraki::resolve_meraki_key(&creds, org.credential_id).await else {
+                tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
+                continue;
+            };
+            let network_ids = orgs_repo
+                .monitored_network_ids(org.id)
+                .await
+                .unwrap_or_default();
+
+            let job_id = Uuid::new_v4();
+            if !inflight.acquire(org.id, job_id, LEASE, now) {
+                continue; // lost an acquire race
+            }
+            let check = meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids);
+            let interval = org.tier_cadence(tier);
+            let job = PollJob::meraki_collect(job_id, check, interval);
+            match bus.publish_job(job).await {
+                Ok(()) => {
+                    last.insert((org.id, tier), now);
+                    metrics::counter!("yagra_meraki_collects_dispatched_total").increment(1);
+                    tracing::debug!(org = %org.org_id, tier = tier.as_str(), "dispatched meraki collect");
+                }
+                Err(e) => {
+                    // Release the flight so the next tick retries rather than waiting out the lease.
+                    inflight.complete(job_id);
+                    tracing::error!(org = %org.org_id, error = %e, "meraki collect publish failed");
+                }
+            }
+        }
     }
 }
 

@@ -438,6 +438,14 @@ mod tests {
                 cert_days_to_expiry: None,
             })
         }
+
+        async fn collect_meraki(
+            &self,
+            _spec: &yagra_transport::MerakiCollectSpec,
+            _timeout: Duration,
+        ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+            Ok(Vec::new())
+        }
     }
 
     fn target() -> IpAddr {
@@ -689,6 +697,14 @@ mod tests {
                     response_time_ms: 0.0,
                     cert_days_to_expiry: None,
                 })
+            }
+
+            async fn collect_meraki(
+                &self,
+                _spec: &yagra_transport::MerakiCollectSpec,
+                _to: Duration,
+            ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+                Ok(Vec::new())
             }
         }
 

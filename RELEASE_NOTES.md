@@ -1,5 +1,31 @@
 # Release Notes
 
+## v0.1.2
+
+Cisco Meraki monitoring over the **read-only** Dashboard API. Meraki devices appear as ordinary
+nodes in the same HostTree as your SNMP/ICMP hosts, but are collected per **organization** (one
+paged, org-wide API call covers many devices) so a large Meraki estate never trips the org's API
+rate limit — and the integration can only ever *read* from Meraki.
+
+### New Features
+- **Cisco Meraki (Dashboard API) monitoring** — add a Meraki organization under **Settings ▸
+  Integrations ▸ Cisco Meraki** with a read-only API key (one key can onboard several organizations
+  at once). An import wizard enumerates the org's networks and devices and lets you choose which to
+  monitor; imported devices become normal nodes, auto-placed under an **Organization → Network**
+  group tree, and carry a **Meraki** badge in the inventory tree. Collected metrics — device
+  availability, WAN uplink loss / latency / status, client count, and traffic usage — surface on a
+  new Cisco Meraki card on the node-detail page. Per-organization controls let you pause/resume
+  collection, tune per-tier polling cadence and the request-rate budget, and edit which networks are
+  in scope.
+
+### Security
+- **Read-only by design, with layered safeguards** — the integration issues HTTP **GET only** to
+  Meraki (no configuration is ever written), and every request is restricted to allow-listed Meraki
+  API hosts so the API key cannot be sent elsewhere. The key is **encrypted at rest** (never
+  returned by the API or written to logs), polling is paced well under the per-organization API cap
+  to leave headroom for your own tooling, and a global **Meraki polling kill switch** on the
+  Integrations page can halt all Meraki collection instantly.
+
 ## v0.1.1
 
 A small follow-up to the first release: a dedicated About page, a self-health page split out of

@@ -1,0 +1,130 @@
+/* Settings ▸ Integrations ▸ Cisco Meraki. Uses the shared theme variables (ui-conventions);
+   no hardcoded colors so light/dark both work. */
+
+.meraki-killswitch-card {
+  margin-bottom: var(--space-4, 16px);
+}
+
+.meraki-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.meraki-switch input {
+  cursor: pointer;
+}
+
+.meraki-killswitch-hint {
+  margin: 6px 0 0;
+}
+
+.meraki-org-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meraki-org {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  flex-wrap: wrap;
+}
+
+.meraki-org-main {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.meraki-org-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.meraki-org-id {
+  color: var(--text-tertiary);
+  font-size: calc(var(--font-size-base, 14px) - 1px);
+}
+
+.meraki-org-state {
+  font-size: calc(var(--font-size-base, 14px) - 2px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.meraki-org-state.on {
+  color: var(--status-ok);
+}
+
+.meraki-org-state.off {
+  color: var(--status-unknown, var(--text-tertiary));
+}
+
+.meraki-org-tiers {
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base, 14px) - 1px);
+}
+
+.meraki-org-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Add-org / cadence modal helpers */
+.meraki-org-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.meraki-check-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.meraki-check-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.meraki-check-name {
+  color: var(--text-primary);
+}
+
+.meraki-check-sub {
+  color: var(--text-tertiary);
+  font-size: calc(var(--font-size-base, 14px) - 2px);
+}
+
+.meraki-tier-row,
+.meraki-import-net-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.meraki-chip-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}

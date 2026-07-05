@@ -472,6 +472,11 @@ export function NodeTree({
         >
           {node.name}
         </button>
+        {node.source === 'meraki' && (
+          <span className="ntree-badge ntree-badge-meraki" title="Cisco Meraki (Dashboard API)">
+            Meraki
+          </span>
+        )}
         {suppressionMarks(
           node.state === 'maintenance' || !!suppression?.maintenanceNodes.has(node.id),
           !!suppression?.muteNodes.has(node.id),

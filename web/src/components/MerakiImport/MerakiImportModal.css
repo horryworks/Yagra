@@ -1,0 +1,63 @@
+/* Meraki import wizard list — grouped by network. Theme variables only (ui-conventions). */
+
+.meraki-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.meraki-import-net {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.meraki-import-net-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.meraki-import-net-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.meraki-import-net-count {
+  color: var(--text-tertiary);
+  font-size: calc(var(--font-size-base, 14px) - 2px);
+}
+
+.meraki-import-dev {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-top: 1px solid var(--border-color);
+}
+
+.meraki-import-dev:hover {
+  background: var(--bg-secondary);
+}
+
+.meraki-import-dev-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meraki-import-dev-meta,
+.meraki-import-dev-ip {
+  color: var(--text-tertiary);
+  font-size: calc(var(--font-size-base, 14px) - 2px);
+}

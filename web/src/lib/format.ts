@@ -252,6 +252,14 @@ export function formatUptimeTicks(ticks: number): string {
 /** Friendly display labels for known scalar SNMP metrics; falls back to the raw metric name. */
 const SCALAR_LABELS: Record<string, string> = {
   snmp_sys_uptime_ticks: 'Uptime',
+  // Cisco Meraki (Dashboard API) metrics.
+  meraki_device_up: 'Availability',
+  meraki_client_count: 'Clients',
+  meraki_usage_sent_kb: 'Traffic sent (KB)',
+  meraki_usage_recv_kb: 'Traffic received (KB)',
+  meraki_uplink_loss_pct: 'Uplink loss %',
+  meraki_uplink_latency_ms: 'Uplink latency (ms)',
+  meraki_uplink_status: 'Uplink status',
 };
 
 /** A known scalar gets a human label + formatted value (and renders in the UI font, not mono);

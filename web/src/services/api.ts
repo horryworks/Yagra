@@ -32,6 +32,11 @@ import type {
   InterfaceSeries,
   MaintenanceScopeLevel,
   MaintenanceWindow,
+  MerakiCandidate,
+  MerakiEnumeration,
+  MerakiNetwork,
+  MerakiOrg,
+  MerakiOrgOption,
   MetricAgg,
   MetricKind,
   MetricRange,
@@ -310,6 +315,76 @@ export const api = {
   /** Remove a node's URL-monitor config (the node itself is untouched). */
   deleteUrlCheck: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/url-check`, { method: 'DELETE' }),
+
+  // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
+  /** List the orgs an API key can access (nothing is persisted). Read-only. */
+  merakiDiscover: (body: { api_key: string; base_url?: string }): Promise<MerakiOrgOption[]> =>
+    request('/meraki/orgs/discover', jsonBody('POST', body)),
+
+  /** The configured Meraki organizations. */
+  listMerakiOrgs: (): Promise<MerakiOrg[]> => request('/meraki/orgs'),
+
+  /** Onboard one or more orgs under a shared read-only key. */
+  createMerakiOrgs: (body: {
+    api_key: string;
+    base_url?: string;
+    org_ids: string[];
+  }): Promise<{ created: number }> => request('/meraki/orgs', jsonBody('POST', body)),
+
+  /** Delete an org (removes its device nodes, config, and groups). */
+  deleteMerakiOrg: (id: string): Promise<void> =>
+    request(`/meraki/orgs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Enable/disable an org (pause collection without losing config). */
+  setMerakiOrgEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/meraki/orgs/${encodeURIComponent(id)}/enabled`, jsonBody('PUT', { enabled })),
+
+  /** Update an org's per-tier cadence, enabled tiers, and rate budget. */
+  setMerakiOrgCadence: (
+    id: string,
+    body: {
+      availability_secs: number;
+      uplink_secs: number;
+      traffic_secs: number;
+      inventory_secs: number;
+      enabled_tiers: string[];
+      target_rps: number;
+    },
+  ): Promise<void> =>
+    request(`/meraki/orgs/${encodeURIComponent(id)}/cadence`, jsonBody('PUT', body)),
+
+  /** The org's networks with their monitored (watch/skip) flag. */
+  listMerakiNetworks: (id: string): Promise<MerakiNetwork[]> =>
+    request(`/meraki/orgs/${encodeURIComponent(id)}/networks`),
+
+  /** Set the monitored flag for a set of the org's networks. */
+  setMerakiNetworksMonitored: (
+    id: string,
+    network_ids: string[],
+    monitored: boolean,
+  ): Promise<void> =>
+    request(
+      `/meraki/orgs/${encodeURIComponent(id)}/networks`,
+      jsonBody('PUT', { network_ids, monitored }),
+    ),
+
+  /** Enumerate an org's networks + device candidates from the Dashboard API (read-only). */
+  enumerateMerakiOrg: (id: string): Promise<MerakiEnumeration> =>
+    request(`/meraki/orgs/${encodeURIComponent(id)}/enumerate`, { method: 'POST' }),
+
+  /** Import selected devices as nodes (atomic), setting the chosen networks in scope. */
+  importMerakiDevices: (body: {
+    org_uuid: string;
+    monitored_network_ids: string[];
+    devices: MerakiCandidate[];
+  }): Promise<{ imported: number }> => request('/meraki/import', jsonBody('POST', body)),
+
+  /** Read the global Meraki polling kill switch. */
+  getMerakiPolling: (): Promise<{ enabled: boolean }> => request('/meraki/polling'),
+
+  /** Set the global Meraki polling kill switch (safeguard: instantly halt all Meraki polling). */
+  setMerakiPolling: (enabled: boolean): Promise<void> =>
+    request('/meraki/polling', jsonBody('PUT', { enabled })),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>

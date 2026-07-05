@@ -6,10 +6,10 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.1.** A functional single-node stack (ICMP / SNMP v2c+v3 /
-> URL monitoring, discovery & classification, alerting, dashboards, and reports) over
-> PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose. Architected to scale out
-> (distributed pollers, HA stores) by configuration, not rewrite.
+> Status: **v0.1.2.** A functional single-node stack (ICMP / SNMP v2c+v3 /
+> URL monitoring / Cisco Meraki via the read-only Dashboard API, discovery & classification,
+> alerting, dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker
+> Compose. Architected to scale out (distributed pollers, HA stores) by configuration, not rewrite.
 
 ## Components
 

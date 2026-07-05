@@ -975,4 +975,97 @@ describe('api client', () => {
 
     setUnauthorizedHandler(null);
   });
+
+  // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
+  it('discovers Meraki orgs with the key + base url in the body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.merakiDiscover({ api_key: 'k', base_url: 'https://api.meraki.com' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/orgs/discover');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ api_key: 'k', base_url: 'https://api.meraki.com' });
+  });
+
+  it('creates Meraki orgs from a shared key + selected org ids', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ created: 2 }) } as Response);
+    globalThis.fetch = spy;
+    await api.createMerakiOrgs({ api_key: 'k', org_ids: ['1', '2'] });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/orgs');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ api_key: 'k', org_ids: ['1', '2'] });
+  });
+
+  it('sets the network scope via PUT with the ids + monitored flag', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setMerakiNetworksMonitored('org-1', ['N_1', 'N_2'], true);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/orgs/org-1/networks');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ network_ids: ['N_1', 'N_2'], monitored: true });
+  });
+
+  it('enumerates an org via POST (no body)', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ networks: [], devices: [] }),
+    } as Response);
+    globalThis.fetch = spy;
+    await api.enumerateMerakiOrg('org-1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/orgs/org-1/enumerate');
+    expect(init.method).toBe('POST');
+  });
+
+  it('imports devices with the org, scope, and selected devices', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ imported: 1 }) } as Response);
+    globalThis.fetch = spy;
+    const devices = [
+      {
+        serial: 'Q2-A',
+        name: 'edge',
+        model: 'MX67',
+        product_type: 'appliance',
+        network_id: 'N_1',
+        network_name: 'HQ',
+        lan_ip: '10.0.0.1',
+      },
+    ];
+    await api.importMerakiDevices({
+      org_uuid: 'org-1',
+      monitored_network_ids: ['N_1'],
+      devices,
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/import');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      org_uuid: 'org-1',
+      monitored_network_ids: ['N_1'],
+      devices,
+    });
+  });
+
+  it('toggles the global Meraki kill switch', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setMerakiPolling(false);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/meraki/polling');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ enabled: false });
+  });
 });

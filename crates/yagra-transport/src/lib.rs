@@ -17,11 +17,16 @@ use thiserror::Error;
 
 mod http;
 mod icmp;
+mod meraki;
 mod snmp;
 mod snmp_v3;
 pub use icmp::{summarize, SurgePingTransport};
+pub use meraki::{
+    list_devices, list_networks, list_organizations, MerakiDeviceInfo, MerakiNetworkInfo,
+    MerakiOrgInfo,
+};
 
-pub use yagra_common::HttpMethod;
+pub use yagra_common::{HttpMethod, MerakiTier};
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +112,62 @@ pub struct HttpProbe {
     /// Days until the TLS server certificate expires (HTTPS only); `None` for plain HTTP or
     /// if the certificate couldn't be read.
     pub cert_days_to_expiry: Option<f64>,
+}
+
+/// What one Cisco Meraki org-scoped collect needs (the non-secret request shape plus the resolved
+/// API key). Strictly **read-only**: the collector issues GET only, and every request host is
+/// checked against [`yagra_common::is_meraki_api_host`] so the `api_key` can never leak off-host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiCollectSpec {
+    /// The Meraki organizationId (the API path segment).
+    pub org_id: String,
+    /// Dashboard API base URL (regional shard) — host-allow-listed before any request.
+    pub base_url: String,
+    /// Resolved read-only API key (decrypted by core; never logged).
+    pub api_key: String,
+    /// Which tier of endpoints to page this cycle.
+    pub tier: MerakiTier,
+    /// Networks in scope (narrows `networkIds[]` where supported; empty ⇒ all).
+    pub network_ids: Vec<String>,
+    /// Page-size cap for paginated endpoints.
+    pub per_page: u32,
+    /// Conservative request-rate budget (requests/sec) the collector paces itself to.
+    pub target_rps: f64,
+}
+
+/// Raw per-device observations from a Meraki collect. The poller maps these to per-node
+/// [`yagra_bus::PollResult`]s (thin-label gauge samples + uplink interface inventory). All Meraki
+/// metrics are gauges (ADR-012 exception: the source pre-aggregates — no raw counters here).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiObservation {
+    /// The device serial (the join key back to a node).
+    pub serial: String,
+    /// Metric samples for this device.
+    pub samples: Vec<MerakiSample>,
+    /// Uplinks seen (WAN1/WAN2/cellular) → the interface inventory (names for the UI).
+    pub uplinks: Vec<MerakiUplink>,
+}
+
+/// One Meraki metric sample: a bounded metric name, an optional synthetic uplink ifindex, and a
+/// gauge value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiSample {
+    /// Stable bounded metric name (e.g. `meraki_device_up`).
+    pub metric: String,
+    /// Synthetic uplink ifindex for per-uplink metrics; `None` for device-level.
+    pub ifindex: Option<u32>,
+    /// Gauge value.
+    pub value: f64,
+}
+
+/// One Meraki uplink discovered on a collect: its synthetic ifindex and display name (WAN1/…).
+/// Stored in the interface inventory so the UI can label per-uplink series (thin-label model).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MerakiUplink {
+    /// Synthetic ifindex (bounded — WAN1→1, WAN2→2, cellular→3).
+    pub ifindex: u32,
+    /// Display name (e.g. `WAN1`).
+    pub name: String,
 }
 
 /// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job). Keys are
@@ -206,6 +267,17 @@ pub trait Transport: Send + Sync {
         spec: &HttpProbeSpec,
         timeout: Duration,
     ) -> Result<HttpProbe, TransportError>;
+
+    /// Run one Cisco Meraki org-scoped collect: page the given tier's Dashboard org-bulk endpoints
+    /// (**GET only**, host-allow-listed, paced to `spec.target_rps`, honouring 429/`Retry-After`)
+    /// and return raw per-device observations. A transient network/5xx failure yields the partial
+    /// results collected so far (best-effort, like the ICMP arm); `Err` is reserved for un-runnable
+    /// configs (bad/blocked base URL) or an auth failure (401/403).
+    async fn collect_meraki(
+        &self,
+        spec: &MerakiCollectSpec,
+        timeout: Duration,
+    ) -> Result<Vec<MerakiObservation>, TransportError>;
 }
 
 /// A canned [`Transport`] for tests and the single-process walking skeleton.
@@ -226,6 +298,8 @@ pub struct FakeTransport {
     pub snmp_v3_strings: Vec<SnmpStringSample>,
     /// The probe every HTTP call returns.
     pub http: HttpProbe,
+    /// The observations every Meraki collect returns.
+    pub meraki: Vec<MerakiObservation>,
 }
 
 impl FakeTransport {
@@ -248,6 +322,7 @@ impl FakeTransport {
                 response_time_ms: rtt_ms,
                 cert_days_to_expiry: None,
             },
+            meraki: Vec::new(),
         }
     }
 
@@ -270,6 +345,7 @@ impl FakeTransport {
                 response_time_ms: 0.0,
                 cert_days_to_expiry: None,
             },
+            meraki: Vec::new(),
         }
     }
 
@@ -305,6 +381,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_http(mut self, probe: HttpProbe) -> Self {
         self.http = probe;
+        self
+    }
+
+    /// Set the canned Meraki observations this fake returns.
+    #[must_use]
+    pub fn with_meraki(mut self, observations: Vec<MerakiObservation>) -> Self {
+        self.meraki = observations;
         self
     }
 }
@@ -392,6 +475,14 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<HttpProbe, TransportError> {
         Ok(self.http.clone())
+    }
+
+    async fn collect_meraki(
+        &self,
+        _spec: &MerakiCollectSpec,
+        _timeout: Duration,
+    ) -> Result<Vec<MerakiObservation>, TransportError> {
+        Ok(self.meraki.clone())
     }
 }
 
