@@ -85,7 +85,7 @@ services:
     pull_policy: always
     depends_on: [core]
     ports:
-      - "${YAGRA_WEB_PORT:-3000}:80"
+      - "${YAGRA_WEB_PORT:-3000}:8080"   # container listens on 8080 (rootless nginx-unprivileged)
     restart: unless-stopped
 
   # ── Stores (persistent data lives here; preserved across upgrades) ──

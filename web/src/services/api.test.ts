@@ -856,6 +856,12 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/discovery/candidates?limit=10');
   });
 
+  it('requests the running core version', async () => {
+    mockFetch(200, { core: '0.1.0' });
+    const info = await api.getVersion();
+    expect(info.core).toBe('0.1.0');
+  });
+
   it('builds the alert aggregation paths', async () => {
     const spy = vi
       .fn()

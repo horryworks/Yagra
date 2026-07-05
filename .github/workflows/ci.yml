@@ -80,15 +80,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Image tags: always :latest + the immutable :<sha>; on a v* git tag, also publish the
-      # version tag (e.g. :v0.1.0) so a release is pullable by its version.
+      # Image tags: always the immutable :<sha>. :latest moves only on a main push (the
+      # test-server channel) — never on a tag, so a beta/rc tag can't hijack :latest. On a
+      # v* git tag, publish the version tag (e.g. :v0.1.0) so a release is pullable by it.
       - name: Compute image tags
         id: tags
         run: |
           {
             echo "list<<EOF"
-            echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:latest"
             echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.sha }}"
+            if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+              echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:latest"
+            fi
             if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
               echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.ref_name }}"
             fi

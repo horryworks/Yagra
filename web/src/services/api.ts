@@ -47,6 +47,7 @@ import type {
   NotificationChannel,
   PollerHealth,
   SystemHealth,
+  VersionInfo,
   ProfileSummary,
   ProfileInput,
   ReportDefinition,
@@ -610,6 +611,9 @@ export const api = {
 
   /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
   getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),
+
+  /** Running core/API version (for Settings ▸ About). Public — no auth required. */
+  getVersion: (): Promise<VersionInfo> => request('/version'),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (

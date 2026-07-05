@@ -569,6 +569,12 @@ export interface SystemHealth {
   bus: DependencyHealth;
 }
 
+/** Running product version (`GET /api/v1/version`). `core` is the live `yagra-core` crate version
+ *  (= the workspace version). Public — no secrets. The WebUI pairs this with its own build version. */
+export interface VersionInfo {
+  core: string;
+}
+
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
 export interface FleetCoverage {
   total: number;

@@ -28,6 +28,7 @@ import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { SystemHealthPage } from './pages/SystemHealthPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
+import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
@@ -88,6 +89,7 @@ export function AppRoutes() {
         <Route path="settings/audit" element={<AuditPage />} />
         <Route path="settings/system" element={<SystemSettingsPage />} />
         <Route path="settings/preferences" element={<PreferencesPage />} />
+        <Route path="settings/about" element={<AboutPage />} />
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
