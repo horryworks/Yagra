@@ -1,5 +1,29 @@
 # Release Notes
 
+## v0.1.1
+
+A small follow-up to the first release: a dedicated About page, a self-health page split out of
+Pollers, and a genuinely rootless WebUI container.
+
+### New Features
+- **Settings ▸ About** — a new page that gathers product identity and running versions in one place:
+  the live Core / API version (via a new public `GET /api/v1/version` endpoint), the WebUI build
+  version, the repository link, and the license. Showing both versions side by side makes a
+  core/web skew during a rolling upgrade obvious at a glance.
+
+### Improvements
+- **System Health is now its own page** — Yagra's self-health (poll-loop counters, backing-service
+  reachability, data coverage) moved out of Settings ▸ Pollers into a dedicated Settings ▸ System
+  Health page. The Pollers entry is reserved as a placeholder for future distributed-poller
+  configuration.
+
+### Security
+- **The WebUI container now runs fully rootless** — the web image is built on `nginx-unprivileged`
+  and serves as a non-root user, so it listens on container port **8080** instead of 80. The
+  bundled Docker Compose files already map this, so standard deployments are unaffected (the WebUI
+  stays on host port 3000 by default); update any custom reverse proxy or orchestration that
+  targeted the web container's port 80.
+
 ## v0.1.0
 
 First release of Yagra — a network monitoring system (NMS) that watches network devices and

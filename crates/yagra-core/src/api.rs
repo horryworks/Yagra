@@ -231,6 +231,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/poller-health", get(poller_health))
         .route("/api/v1/system-health", get(system_health))
+        .route("/api/v1/version", get(version))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
             "/api/v1/notification-channels",
@@ -369,6 +370,17 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 /// Liveness probe for the deploy/orchestrator — no auth, no store access.
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Product/build version for the WebUI's Settings ▸ About page. Public (no secrets) — just the
+/// running `yagra-core` crate version, which inherits the workspace version (the canonical source
+/// of truth). The WebUI shows its own build version alongside this, so a core/web skew during a
+/// rolling upgrade is visible at a glance.
+async fn version() -> Response {
+    Json(serde_json::json!({
+        "core": env!("CARGO_PKG_VERSION"),
+    }))
+    .into_response()
 }
 
 /// Public client bootstrap config (no secrets): tells the WebUI whether read endpoints
@@ -6803,6 +6815,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn version_returns_core_version() {
+        // Public (no auth), returns the running core crate version = the workspace version.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/version")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["core"], env!("CARGO_PKG_VERSION"));
     }
 
     #[tokio::test]

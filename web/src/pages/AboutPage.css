@@ -1,0 +1,33 @@
+.about-tagline {
+  margin: 0 0 20px;
+  max-width: 60ch;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+.about-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.about-row {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+}
+
+.about-label {
+  flex: 0 0 160px;
+  font-size: var(--font-sm);
+}
+
+.about-value {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.about-value.mono {
+  font-size: var(--font-sm);
+}

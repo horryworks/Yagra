@@ -53,7 +53,7 @@ services:
     image: ghcr.io/horryworks/yagra-web:dev
     depends_on: [core]
     ports:
-      - "3000:80"
+      - "3000:8080"   # container listens on 8080 (rootless nginx-unprivileged)
     restart: unless-stopped
 
   # ── Stores ──

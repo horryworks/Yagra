@@ -125,6 +125,7 @@ export const NAV: NavSection[] = [
         mono: 'Sy',
       },
       { label: 'Preferences', path: '/settings/preferences', implemented: true, mono: 'Pf' },
+      { label: 'About', path: '/settings/about', implemented: true, mono: 'Ab' },
     ],
   },
 ];
