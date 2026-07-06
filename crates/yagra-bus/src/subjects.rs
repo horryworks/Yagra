@@ -45,6 +45,57 @@ pub fn discovery_results() -> String {
     format!("{ROOT}.discovery.results")
 }
 
+// ── Distributed poller pool (ADR-009/020) — control plane subjects ──────────────────
+
+/// Subject pollers publish liveness/telemetry heartbeats on; core consumes (ADR-009). A single
+/// shared subject (no queue group) — every heartbeat reaches core's registry.
+#[must_use]
+pub fn heartbeat() -> String {
+    format!("{ROOT}.poller.heartbeat")
+}
+
+/// Subject pollers publish snapshot requests on; core consumes (ADR-020). Plain pub/sub, **not**
+/// request-reply — the reply is several snapshot chunks pushed on the poller's assignment subject.
+#[must_use]
+pub fn sync_request() -> String {
+    format!("{ROOT}.poller.sync_request")
+}
+
+/// Subject core publishes a specific poller's working-set sync on — snapshot chunks and deltas
+/// (ADR-020). One subject **per poller** preserves the ordering that `seq` gap-detection relies on;
+/// it is addressed to a single poller (no queue group). The id is sanitized via [`sanitize_token`]
+/// so an FQDN or arbitrary id is a legal single NATS token, e.g. `yagra.poller.assign.edge-1`.
+#[must_use]
+pub fn assignment_for(poller: &str) -> String {
+    format!("{ROOT}.poller.assign.{}", sanitize_token(poller))
+}
+
+/// Subject core publishes pool-scoped discovery jobs on (the discovery analogue of
+/// [`jobs_for_pool`]), e.g. `yagra.discovery.jobs.tokyo`. Pollers in the pool queue-subscribe.
+#[must_use]
+pub fn discovery_jobs_for_pool(pool: &str) -> String {
+    format!("{ROOT}.discovery.jobs.{pool}")
+}
+
+/// Make `raw` a legal single NATS subject token: keep `[A-Za-z0-9_-]`, replace every other
+/// character (notably the dots in an FQDN — NATS treats `.` as a token separator) with `-`. An
+/// empty input maps to `"unknown"` so the subject never collapses to an empty token.
+#[must_use]
+pub fn sanitize_token(raw: &str) -> String {
+    if raw.is_empty() {
+        return "unknown".to_owned();
+    }
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +121,38 @@ mod tests {
     #[test]
     fn events_subject_is_stable() {
         assert_eq!(events(), "yagra.events");
+    }
+
+    #[test]
+    fn control_plane_subjects_are_stable() {
+        assert_eq!(heartbeat(), "yagra.poller.heartbeat");
+        assert_eq!(sync_request(), "yagra.poller.sync_request");
+        assert_eq!(
+            discovery_jobs_for_pool("tokyo"),
+            "yagra.discovery.jobs.tokyo"
+        );
+    }
+
+    #[test]
+    fn assignment_subject_sanitizes_the_poller_id() {
+        assert_eq!(assignment_for("edge-1"), "yagra.poller.assign.edge-1");
+        // An FQDN's dots would otherwise split into extra NATS tokens — they become dashes.
+        assert_eq!(
+            assignment_for("poller.tokyo.example.com"),
+            "yagra.poller.assign.poller-tokyo-example-com"
+        );
+    }
+
+    #[test]
+    fn sanitize_token_keeps_allowed_chars_and_replaces_the_rest() {
+        // Allowed set passes through untouched.
+        assert_eq!(sanitize_token("Edge_Poller-09"), "Edge_Poller-09");
+        // Dots (FQDN), colons, slashes, spaces → dashes.
+        assert_eq!(sanitize_token("host.name:10/eth0 a"), "host-name-10-eth0-a");
+    }
+
+    #[test]
+    fn sanitize_token_maps_empty_to_unknown() {
+        assert_eq!(sanitize_token(""), "unknown");
     }
 }

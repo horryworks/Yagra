@@ -131,6 +131,17 @@ export function WrenchIcon(props: IconProps) {
   );
 }
 
+/** Warning triangle with an exclamation — a non-color status cue (paired with text for a11y). */
+export function WarningIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3.5 21.5 20H2.5z" />
+      <path d="M12 9.5v4.5" />
+      <path d="M12 17.2v.2" strokeWidth="2.2" />
+    </svg>
+  );
+}
+
 /** Bell with a slash — a node/group is muted (notifications suppressed). */
 export function BellOffIcon(props: IconProps) {
   return (

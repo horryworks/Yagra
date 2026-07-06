@@ -59,6 +59,9 @@ services:
       # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
       YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
       YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}
+      # Optional: route Meraki cloud polling to a specific poller pool (default "default").
+      # Only relevant once you run pool-scoped remote pollers (docker-compose.poller.yml).
+      # YAGRA_MERAKI_POOL: ${YAGRA_MERAKI_POOL:-default}
       # Structured-log level (info so KEK/credential/scheduler events are visible).
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
@@ -118,6 +121,35 @@ services:
     image: nats:2-alpine
     command: ["-js"]   # JetStream for durable job delivery
     restart: unless-stopped
+    # ── OPTIONAL: accept remote-site pollers (TLS + auth) ─────────────────────────────
+    # DEFAULT (above) = plaintext internal bus: core/poller/nats share the Docker network
+    # and nothing is exposed. To let pollers connect from REMOTE sites over the WAN, the
+    # bus must be TLS + authenticated FIRST — job messages carry plaintext device
+    # credentials (ADR-020). To enable, do ALL of the following:
+    #   1. Generate a server cert into ./certs (openssl one-liner is in
+    #      docker/nats/nats-server.conf); the cert SAN must include this host's public
+    #      name/IP that pollers will dial.
+    #   2. Set YAGRA_NATS_CORE_PASSWORD and YAGRA_NATS_POLLER_PASSWORD in `.env`.
+    #   3. Comment out the plaintext `command: ["-js"]` line above and uncomment the
+    #      block below (loads the auth/TLS config, keeps JetStream on).
+    #   4. Switch the INTERNAL clients to TLS too — server-wide TLS leaves no plaintext
+    #      port. On `core` set:
+    #        YAGRA_BUS_URL: tls://core:${YAGRA_NATS_CORE_PASSWORD}@nats:4222
+    #      on `poller` set:
+    #        YAGRA_BUS_URL: tls://poller:${YAGRA_NATS_POLLER_PASSWORD}@nats:4222
+    #      and on BOTH add  YAGRA_BUS_CA_FILE: /etc/nats/certs/server-cert.pem  plus a
+    #        - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro   volume mount.
+    #   5. Hand ./certs/server-cert.pem (public cert only) to each remote poller as its
+    #      YAGRA_BUS_CA_FILE (see docker-compose.poller.yml).
+    # command: ["-js", "-c", "/etc/nats/nats-server.conf"]
+    # environment:
+    #   YAGRA_NATS_CORE_PASSWORD: ${YAGRA_NATS_CORE_PASSWORD:?set a core bus password in .env}
+    #   YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:?set a poller bus password in .env}
+    # volumes:
+    #   - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+    #   - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro
+    # ports:
+    #   - "${YAGRA_NATS_PORT:-4222}:4222"   # bus — expose ONLY with TLS+auth enabled above
 
   victoriametrics:
     image: victoriametrics/victoria-metrics:latest

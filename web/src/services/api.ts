@@ -57,6 +57,7 @@ import type {
   NodeSummary,
   NotificationChannel,
   PollerHealth,
+  PollersResponse,
   SystemHealth,
   VersionInfo,
   ProfileSummary,
@@ -689,6 +690,16 @@ export const api = {
 
   /** Poll-loop self-monitoring (last sweep / jobs per round / results total). */
   getPollerHealth: (): Promise<PollerHealth> => request('/poller-health'),
+
+  /** The registered distributed-poller fleet + per-pool summary (ADR-009/020). View-gated;
+   *  returns the standard 503 (`admin_unavailable`) in skeleton mode. */
+  listPollers: (): Promise<PollersResponse> => request('/pollers'),
+
+  /** Remove a decommissioned poller from the durable inventory. Rejects with a typed `ApiError`:
+   *  409 `poller_online` if it is currently online (stop it first), 404 `poller_not_found` if it is
+   *  unknown. ManageConfig-gated. */
+  deletePoller: (id: string): Promise<void> =>
+    request(`/pollers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
   getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),

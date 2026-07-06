@@ -26,9 +26,12 @@ futures = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 uuid = { workspace = true }
+# Local scheduler stream + working-set jitter + hostname identity default (ADR-009/020).
+tokio-stream = { workspace = true }
+rand = { workspace = true }
+hostname = { workspace = true }
 
 [dev-dependencies]
-tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 # Trap PDU fixtures for the listener tests (vendored patch build).
 snmp2 = { workspace = true }

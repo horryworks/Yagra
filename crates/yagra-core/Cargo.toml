@@ -32,6 +32,7 @@ sha2 = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }
+redis = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }

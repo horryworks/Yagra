@@ -619,6 +619,49 @@ export interface PollerHealth {
   results_total: number;
 }
 
+/** One registered poller in the distributed pool (`GET /api/v1/pollers`, ADR-009/020). A merge of
+ *  the live registry (current status/telemetry) and the durable inventory, so an offline poller
+ *  still lists. `last_seen`/`first_seen`/`version` are null for a live poller not yet persisted. */
+export interface PollerInfo {
+  /** Operator-chosen, subject-safe id (stable across restarts). */
+  id: string;
+  /** Pool it serves (`default` when unassigned). */
+  pool: string;
+  status: 'online' | 'offline';
+  /** Last durably-recorded contact (RFC 3339), or null when not yet persisted. */
+  last_seen: string | null;
+  /** First durably-recorded contact (RFC 3339), or null when not yet persisted. */
+  first_seen: string | null;
+  /** Build version from its latest heartbeat (or the durable row when offline), or null. */
+  version: string | null;
+  /** Working-set node count it last reported (0 when offline / never reported). */
+  working_set_nodes: number;
+  /** Working-set spec count it last reported. */
+  working_set_specs: number;
+  /** Poll results core has consumed from it since core started. */
+  results_total: number;
+}
+
+/** Per-pool summary in the `GET /api/v1/pollers` response: node count vs. live pollers, dispatch
+ *  mode, and a warning when the pool has nodes but no live poller (they would go unmonitored). */
+export interface PoolSummary {
+  pool: string;
+  /** Non-Meraki nodes assigned to this pool. */
+  nodes: number;
+  /** Live (online) pollers serving this pool. */
+  live_pollers: number;
+  /** `working_set` when a live poller serves it, else `legacy` (per-job fallback). */
+  mode: 'working_set' | 'legacy';
+  /** `nodes_without_live_poller` when the pool has nodes but no live poller, else null. */
+  warning: 'nodes_without_live_poller' | null;
+}
+
+/** The `GET /api/v1/pollers` body: the registered poller fleet + the per-pool summary. */
+export interface PollersResponse {
+  pollers: PollerInfo[];
+  pools: PoolSummary[];
+}
+
 /** Reachability of one Yagra backing dependency (no secrets — just a flag + label). */
 export interface DependencyHealth {
   reachable: boolean;

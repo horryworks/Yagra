@@ -958,6 +958,64 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/discovery/candidates?limit=10');
   });
 
+  it('lists the poller fleet and decodes pollers + pools', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        pollers: [
+          {
+            id: 'edge-1',
+            pool: 'tokyo',
+            status: 'online',
+            last_seen: '2026-07-06T01:00:00+00:00',
+            first_seen: '2026-07-06T00:00:00+00:00',
+            version: '0.1.2',
+            working_set_nodes: 5,
+            working_set_specs: 9,
+            results_total: 42,
+          },
+        ],
+        pools: [
+          {
+            pool: 'tokyo',
+            nodes: 10,
+            live_pollers: 1,
+            mode: 'working_set',
+            warning: null,
+          },
+        ],
+      }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.listPollers();
+    expect(spy).toHaveBeenCalledWith('/api/v1/pollers');
+    expect(res.pollers[0].id).toBe('edge-1');
+    expect(res.pollers[0].status).toBe('online');
+    expect(res.pools[0].mode).toBe('working_set');
+  });
+
+  it('deletes a poller via DELETE to its id (url-encoded)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
+    globalThis.fetch = spy;
+    await api.deletePoller('edge/1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/pollers/edge%2F1');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('surfaces the online-poller guard as a typed 409 error', async () => {
+    mockFetch(409, {
+      error: { code: 'poller_online', message: 'poller is currently online; stop it before removing it' },
+    });
+    await expect(api.deletePoller('edge-1')).rejects.toMatchObject({
+      code: 'poller_online',
+      status: 409,
+    });
+  });
+
   it('requests the running core version', async () => {
     mockFetch(200, { core: '0.1.0' });
     const info = await api.getVersion();

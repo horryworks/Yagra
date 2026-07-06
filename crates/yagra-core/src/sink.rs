@@ -54,6 +54,7 @@ mod tests {
             samples: vec![Sample::gauge(metric, value)],
             interfaces: Vec::new(),
             sys_descr: None,
+            poller_id: None,
         }
     }
 

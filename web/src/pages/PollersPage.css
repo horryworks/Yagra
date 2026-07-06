@@ -1,0 +1,136 @@
+/* Pollers (Settings ▸ Pollers). Table chrome comes from styles/table.css; only the pool-summary
+   strip, the online/offline status cue, and the register-poller snippet rows live here. Built on
+   the tokens in tokens.css — no hardcoded color/font here. */
+
+/* ============================================================ pool summary strip */
+.pool-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  margin-bottom: 16px;
+}
+
+.pool-card {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+/* A pool with unmonitored nodes gets a warning-toned left edge (paired with the chip + text). */
+.pool-card.has-warn {
+  box-shadow: inset 2px 0 0 var(--status-warning);
+}
+
+.pool-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pool-card-name {
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.pool-card-stats strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.pool-card-sep {
+  color: var(--text-tertiary);
+}
+
+/* Warning chip: status-warning color PLUS an icon and text, so it never relies on color alone. */
+.pool-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  color: var(--status-warning);
+}
+
+.pool-warn svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* ============================================================ status cell (dot + label) */
+.poller-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.poller-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.poller-status.online {
+  color: var(--status-ok);
+}
+
+.poller-status.online .poller-status-dot {
+  background: var(--status-ok);
+}
+
+.poller-status.offline {
+  color: var(--status-unreachable);
+}
+
+.poller-status.offline .poller-status-dot {
+  background: var(--status-unreachable);
+}
+
+/* ============================================================ register-poller snippet */
+.poller-copyrow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.poller-snippet {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+.poller-snippet-empty {
+  margin: 0;
+  font-size: var(--font-sm);
+}
