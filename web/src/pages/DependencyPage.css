@@ -1,0 +1,23 @@
+/* Topology ▸ Dependency view — the dependency management table. Layout only; status color comes
+   from the state variables (set inline via stateColorVar), never hardcoded here. */
+
+.dep-name {
+  font-weight: 500;
+}
+
+.dep-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dep-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dep-none {
+  color: var(--text-tertiary);
+}

@@ -1012,6 +1012,10 @@ impl EventEngine {
                 metrics::counter!("yagra_event_alerts_resolved_total", "reason" => resolve_reason)
                     .increment(1);
             }
+            // Event alerts are never dependency-suppressed (a device emitting an event is
+            // demonstrably reachable), so the event pipeline never produces a roll-up. Handled
+            // defensively for exhaustiveness; the notifier still forwards it below.
+            NotifyAction::Suppress(_) => {}
         }
         self.notifier.handle(action).await;
     }
@@ -1278,7 +1282,7 @@ mod tests {
             .iter()
             .filter_map(|(a, _)| match a {
                 NotifyAction::Fire(alert) => Some(alert),
-                NotifyAction::Resolve(_) => None,
+                NotifyAction::Resolve(_) | NotifyAction::Suppress(_) => None,
             })
             .collect()
     }
@@ -1448,7 +1452,7 @@ mod tests {
         let p = engine.plan(&syslog_msg("disk full on /var"), None, node, 0);
         let check = match &p.actions[0].0 {
             NotifyAction::Fire(a) => a.check,
-            NotifyAction::Resolve(_) => panic!("expected a fire"),
+            NotifyAction::Resolve(_) | NotifyAction::Suppress(_) => panic!("expected a fire"),
         };
         assert!(engine.close_alert(check).await);
         assert!(engine.alerts.active_alerts().is_empty());

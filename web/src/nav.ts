@@ -66,7 +66,7 @@ export const NAV: NavSection[] = [
     path: '/topology/map',
     items: [
       { label: 'Network map', path: '/topology/map', implemented: true, mono: 'Nm' },
-      { label: 'Dependency view', path: '/topology/dependency', implemented: false, mono: 'Dv' },
+      { label: 'Dependency view', path: '/topology/dependency', implemented: true, mono: 'Dv' },
       { label: 'Geo map', path: '/topology/geo', implemented: false, mono: 'Ge' },
     ],
   },

@@ -609,6 +609,10 @@ async fn consume_results<S>(
             let recorded = match &action {
                 NotifyAction::Fire(alert) => history.record(alert, false).await,
                 NotifyAction::Resolve(alert) => history.record(alert, true).await,
+                // A roll-up (child rolled under a newly-down parent): the node is still down, so
+                // this is not a lifecycle resolve — the notifier just closes its standalone
+                // incident. Nothing to persist; the eventual real recovery records the resolve.
+                NotifyAction::Suppress(_) => Ok(()),
             };
             if let Err(e) = recorded {
                 tracing::warn!(error = %e, "failed to record alert history");

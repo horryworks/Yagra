@@ -447,6 +447,12 @@ export const api = {
   setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/group`, jsonBody('PUT', { group_id: groupId })),
 
+  /** Set (or clear with `null`) a node's dependency parent (upstream) — the alert-suppression
+   *  edge (parent down ⇒ suppress children, ADR-015). Distinct from `setNodeGroup` (the folder
+   *  tree). The server rejects self-dependencies and cycles. */
+  setNodeParent: (id: string, parentId: string | null): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/parent`, jsonBody('PUT', { parent_id: parentId })),
+
   /** Drag-reorder a node: place it in `group_id` (`null` ⇒ ungrouped) next to a sibling node.
    *  `before`/`after` name the sibling (at most one; omit both to append). */
   placeNode: (
