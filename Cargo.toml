@@ -19,6 +19,7 @@
 resolver = "2"
 members = [
     "crates/yagra-common",
+    "crates/yagra-telemetry",
     "crates/yagra-secrets",
     "crates/yagra-transport",
     "crates/yagra-bus",
@@ -31,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -89,7 +90,14 @@ async-trait = "0.1"
 # Observability (self-monitoring: structured logs + tracing + Prometheus)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# OpenTelemetry distributed tracing (yagra-telemetry). The OTLP exporter goes over
+# HTTP/protobuf via the in-tree reqwest+rustls stack (no tonic/gRPC, no native-TLS/NASM);
+# `rt-tokio` runs the batch span processor on the shared runtime. Version-locked triple:
+# opentelemetry 0.27 ↔ opentelemetry_sdk 0.27 ↔ opentelemetry-otlp 0.27 ↔ tracing-opentelemetry 0.28.
 opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
+tracing-opentelemetry = "0.28"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 # Config

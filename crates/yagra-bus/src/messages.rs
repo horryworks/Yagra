@@ -21,6 +21,12 @@ const fn default_version() -> u16 {
     BUS_SCHEMA_VERSION
 }
 
+/// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
+/// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
+/// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
+/// empty (tracing export off, or an N-1 producer), preserving N/N-1 compatibility (ADR-017).
+pub type TraceContext = std::collections::HashMap<String, String>;
+
 /// A unit of polling work core dispatches to a poller.
 ///
 /// Carries everything the poller needs to execute (target, check spec, interval) so
@@ -51,6 +57,13 @@ pub struct PollJob {
     /// and simply never probes identity.
     #[serde(default)]
     pub probe_identity: bool,
+    /// W3C trace context of the core-side dispatch span, so the poller's poll span joins the same
+    /// distributed trace (yagra-telemetry). Empty (and omitted from the wire) when tracing export
+    /// is off — zero steady-state cost; an N-1 poller ignores it (ADR-017). Working-set jobs the
+    /// poller mints locally carry none (that trace is poller-rooted); only core-dispatched jobs
+    /// (legacy per-job / "poll now") set it.
+    #[serde(default, skip_serializing_if = "TraceContext::is_empty")]
+    pub trace_context: TraceContext,
 }
 
 impl PollJob {
@@ -72,6 +85,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 
@@ -93,6 +107,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 
@@ -114,6 +129,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 
@@ -135,6 +151,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 
@@ -157,6 +174,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 
@@ -177,6 +195,7 @@ impl PollJob {
             interval_secs,
             credential_ref: None,
             probe_identity: false,
+            trace_context: TraceContext::new(),
         }
     }
 }
@@ -239,6 +258,9 @@ impl JobSpec {
             interval_secs: self.interval_secs,
             credential_ref: None,
             probe_identity: self.probe_identity,
+            // A locally-minted working-set job is the root of its own trace (no core dispatch span
+            // to inherit) — the result-side context still links it to core's ingest span.
+            trace_context: TraceContext::new(),
         }
     }
 }
@@ -653,6 +675,12 @@ pub struct PollResult {
     /// (ADR-017); core treats `None` as "unknown / central".
     #[serde(default)]
     pub poller_id: Option<String>,
+    /// W3C trace context of the poller's poll span, so core's result-ingest span joins the same
+    /// distributed trace (yagra-telemetry). This is what links a poll end-to-end in **both**
+    /// dispatch modes — including working-set mode, where the trace is poller-rooted. Empty (and
+    /// omitted from the wire) when tracing export is off; an N-1 poller never sends it (ADR-017).
+    #[serde(default, skip_serializing_if = "TraceContext::is_empty")]
+    pub trace_context: TraceContext,
 }
 
 /// An interface discovered during a table walk: its index and the descriptive metadata
@@ -957,6 +985,34 @@ mod tests {
     }
 
     #[test]
+    fn trace_context_round_trips_and_is_omitted_when_empty() {
+        // Tracing off (the default): an empty carrier must not appear on the wire, so there's zero
+        // steady-state cost and an N-1 peer sees exactly the old shape (skip_serializing_if).
+        let job = sample_job();
+        assert!(job.trace_context.is_empty());
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(
+            !json.contains("trace_context"),
+            "empty trace context must be omitted from the wire: {json}"
+        );
+
+        // Tracing on: a populated W3C context round-trips intact so the poller can rebuild the
+        // parent span from it.
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        let mut traced = sample_job();
+        traced
+            .trace_context
+            .insert("traceparent".to_owned(), traceparent.to_owned());
+        let json = serde_json::to_string(&traced).unwrap();
+        assert!(json.contains("traceparent"));
+        let back: PollJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.trace_context.get("traceparent").map(String::as_str),
+            Some(traceparent)
+        );
+    }
+
+    #[test]
     fn unknown_fields_and_missing_version_are_tolerated() {
         // Simulates an older producer (no schema_version) that also a newer one added a
         // field we don't know — ADR-017 forward/backward compatibility.
@@ -1234,6 +1290,8 @@ mod tests {
         let result: PollResult = serde_json::from_str(json).unwrap();
         assert!(result.poller_id.is_none());
         assert!(result.samples.is_empty());
+        // Same N-1 rule for the trace context: an older poller sends none → defaults to empty.
+        assert!(result.trace_context.is_empty());
     }
 
     #[test]
@@ -1248,6 +1306,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             poller_id: Some("edge-poller-1".into()),
+            trace_context: TraceContext::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: PollResult = serde_json::from_str(&json).unwrap();

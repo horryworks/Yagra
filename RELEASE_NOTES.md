@@ -1,5 +1,28 @@
 # Release Notes
 
+## v0.1.5
+
+**Distributed tracing (OpenTelemetry)** — Yagra can now export OpenTelemetry traces so a single
+poll is traceable end to end across the central core and its pollers. It is opt-in and off by
+default (structured logs and Prometheus metrics are unchanged), so there is zero overhead until you
+point it at a collector.
+
+### New Features
+- **OpenTelemetry distributed tracing (self-observability)** — set `YAGRA_OTEL_ENDPOINT` (or the
+  standard `OTEL_EXPORTER_OTLP_ENDPOINT`) to an OTLP/HTTP collector and both core and poller export
+  spans that stitch one poll into a single trace — core's dispatch → the poller's poll → core's
+  result ingest — plus a span per northbound API request. The trace context rides with jobs and
+  results over the bus, so a trace spans distributed pollers and stays compatible with older pollers
+  during a rolling upgrade. For large fleets, sample with `OTEL_TRACES_SAMPLER=parentbased_traceidratio`
+  (+ `OTEL_TRACES_SAMPLER_ARG`) instead of tracing every poll. `docker compose --profile tracing up`
+  starts a bundled Jaeger to view traces locally; leave the endpoint unset and Yagra logs exactly as
+  before with no tracing overhead. See **DEPLOYMENT.md ▸ Distributed tracing (OpenTelemetry)**.
+
+### Security
+- **Patched a transitive advisory** — updated `crossbeam-epoch` to 0.9.20 to clear RUSTSEC-2026-0204
+  (an invalid pointer dereference reachable only by debug-formatting a null pointer inside a metrics
+  dependency; not exercised by Yagra, patched proactively).
+
 ## v0.1.4
 
 **Dependency management** — the dependency graph that drives alert suppression is now editable, not

@@ -430,7 +430,17 @@ async fn resolve_snmp_auth(
 /// Returns success. Uses [`SyncBus::publish_job_for_pool`] so legacy per-job dispatch, "poll now",
 /// and Meraki all stay local to the target pool (ADR-009) while an old wildcard poller still
 /// absorbs them (N/N-1 compatible).
-async fn publish(bus: &NatsBus, pool: &str, job: PollJob, kind: &str, node: NodeId) -> bool {
+async fn publish(bus: &NatsBus, pool: &str, mut job: PollJob, kind: &str, node: NodeId) -> bool {
+    // Seed the job with this dispatch's trace context so the poller's poll span (and core's later
+    // result-ingest span) join one distributed trace (yagra-telemetry). A short-lived dispatch span
+    // is the trace root for legacy/poll-now jobs; injection is a no-op when tracing export is off,
+    // so `trace_context` stays empty and off the wire (N/N-1 safe, ADR-017). Enter/inject/drop the
+    // guard before the await — never hold a span guard across `.await`.
+    {
+        let dispatch = tracing::info_span!("dispatch.poll_job", %kind, node = %node, pool);
+        let _enter = dispatch.enter();
+        job.trace_context = yagra_telemetry::current_trace_context();
+    }
     match bus.publish_job_for_pool(pool, job).await {
         Ok(()) => {
             metrics::counter!("yagra_jobs_published_total").increment(1);

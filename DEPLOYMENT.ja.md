@@ -312,6 +312,8 @@ export RUST_LOG=info
 | `YAGRA_MERAKI_POOL` | `default` | Meraki クラウド収集ジョブを振り分けるポーラプール |
 | `YAGRA_WEBHOOK_URL` | 未設定 ⇒ 無効 | 既定のアラート Webhook チャンネル |
 | `YAGRA_SMTP_HOST` / `_PORT` / `_FROM` / `_TO` / `_USER` / `_PASS` | 未設定 ⇒ メール無効 | 環境変数による SMTP アラートチャンネル（host があれば有効） |
+| `YAGRA_OTEL_ENDPOINT` | 未設定 ⇒ ログのみ | OpenTelemetry トレース送出先の OTLP/HTTP エンドポイント（`OTEL_EXPORTER_OTLP_ENDPOINT` にフォールバック） |
+| `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | トレースサンプラ。大規模時は `parentbased_traceidratio` + 引数（例 `0.01`）を使用 |
 | `RUST_LOG` | `info` | ログレベル（例 `info,yagra_core=debug`） |
 
 ### Yagra-poller
@@ -329,9 +331,21 @@ export RUST_LOG=info
 | `YAGRA_TRAP_COMMUNITY` | 未設定 ⇒ フィルタなし | コミュニティ不一致のトラップを破棄（値はログしない） |
 | `YAGRA_EVENT_RATE_PER_SOURCE` | `50` | 送信元 IP ごとの受動イベントレート制限（件/秒） |
 | `YAGRA_EVENT_RATE_GLOBAL` | `500` | 全送信元合計の受動イベントレート制限（件/秒） |
+| `YAGRA_OTEL_ENDPOINT` | 未設定 ⇒ ログのみ | トレース送出先の OTLP/HTTP エンドポイント（core と同じコレクタ） |
+| `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | トレースサンプラ。大規模時はサンプリング（`parentbased_traceidratio`） |
 | `RUST_LOG` | `info` | ログレベル |
 
 > **compose 専用の変数**（`YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`, `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_NATS_PORT`, `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`）は Docker/NATS が消費するもので、Rust バイナリは読みません — バイナリが見るのは最終的に組み立てられた `YAGRA_BUS_URL` などだけです。`.env.example` を参照。
+
+---
+
+## 分散トレーシング（OpenTelemetry）<a id="分散トレーシング"></a>
+
+各バイナリは構造化ログと Prometheus `/metrics` を標準で出力します。**分散トレーシングはオプトイン**です: `YAGRA_OTEL_ENDPOINT`（または標準の `OTEL_EXPORTER_OTLP_ENDPOINT`）に OTLP/HTTP コレクタを設定すると、core と poller が 1 回のポーリングをエンドツーエンドで繋ぐ span（core の dispatch → poller の poll → core の ingest）＋北向き API リクエストごとの span を送出します。未設定なら**トレーシングのオーバーヘッドはゼロ**（ログのみ）で、単一構成 MVP はコレクタ不要です。
+
+- **ローカルで試す:** `docker compose --profile tracing up` で同梱の Jaeger（UI は http://localhost:16686）が起動します。次に `docker-compose.yml` の `core` と `poller` の**両方**で `YAGRA_OTEL_ENDPOINT: http://jaeger:4318` をコメント解除します。
+- **大規模時はサンプリング。** 数万ノードが間隔ごとにポーリングすると 1 ポーリング＝1 トレースになります。`OTEL_TRACES_SAMPLER=parentbased_traceidratio` と `OTEL_TRACES_SAMPLER_ARG=0.01`（1%）を設定してください。`parentbased_*` は core⇄poller をまたいでトレース全体の判定を一貫させます。トレースコンテキストはバス上の `trace_context` フィールドで運ばれ、**トレーシング無効時は wire に出ず**、N-1 ピアは無視します（N/N-1 安全）。
+- **本番:** エンドポイントは、バックエンド（Tempo, Jaeger, Honeycomb など）へ転送する OpenTelemetry Collector に向けます。リモート拠点のポーラは、NATS バスとは別に、到達可能な独自のコレクタエンドポイントが必要です。
 
 ---
 

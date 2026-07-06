@@ -1090,6 +1090,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             poller_id: None,
+            trace_context: Default::default(),
         };
         MetricStore::write(&store, &result).await;
         assert_eq!(

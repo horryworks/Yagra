@@ -59,6 +59,11 @@ services:
       YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND:-0.0.0.0:1162}
       # Optional trap community filter (mismatches dropped; value never logged).
       YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
+      # ── Distributed tracing (optional) ─────────────────────────────────────────────
+      # Export this remote poller's poll spans to a central OTLP collector (reachable from
+      # the site — its own endpoint/TLS, separate from the NATS bus). Unset = logs only.
+      # At scale, sample: OTEL_TRACES_SAMPLER=parentbased_traceidratio, ..._ARG=0.01.
+      # YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       # CA / server cert for the TLS bus (read-only). Place the cert the central operator
