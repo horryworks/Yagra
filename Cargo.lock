@@ -3736,6 +3736,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tokio-stream",
@@ -3760,6 +3761,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "yagra-ingest"
+version = "0.1.2"
+dependencies = [
+ "snmp2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "yagra-poller"
 version = "0.1.2"
 dependencies = [
@@ -3768,6 +3777,7 @@ dependencies = [
  "futures",
  "metrics",
  "metrics-exporter-prometheus",
+ "snmp2",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3776,6 +3786,7 @@ dependencies = [
  "yagra-bus",
  "yagra-common",
  "yagra-discovery",
+ "yagra-ingest",
  "yagra-transport",
 ]
 

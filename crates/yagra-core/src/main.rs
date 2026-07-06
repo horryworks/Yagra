@@ -20,6 +20,7 @@ mod collection;
 mod config;
 mod dashboard;
 mod discovery;
+mod events;
 mod groups;
 mod history;
 mod maintenance;
@@ -161,6 +162,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tokio::spawn(discovery.clone().run_consumer(results));
     }
 
+    // Passive events (Phase 2): syslog/traps arrive from pollers on `yagra.events`,
+    // webhooks via the ingest endpoint. The engine matches rules and raises alerts
+    // through the same alert/notify/history pipeline as poll results.
+    let events_repo = Arc::new(events::EventRepo::new(repo.pool()));
+    let event_engine = Arc::new(events::EventEngine::new(
+        events_repo.clone(),
+        alerts.clone(),
+        notifier.clone(),
+        history.clone(),
+    ));
+    event_engine.reload(&repo).await;
+    {
+        let stream = Box::pin(bus.subscribe_events().await?);
+        tokio::spawn(events::consume_events(stream, event_engine.clone()));
+    }
+    tokio::spawn(events::run_ttl_sweeper(event_engine.clone()));
+
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
 
@@ -226,6 +244,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let group_repo = group_repo.clone();
         let classifier = classifier.clone();
         let classification = classification.clone();
+        let event_engine = event_engine.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -237,6 +256,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 if let Err(e) = classifier.reload(&classification).await {
                     tracing::warn!(error = %e, "failed to refresh classification rules");
                 }
+                // Event rules + node address map (also reloaded inline after rule edits).
+                event_engine.reload(&repo).await;
             }
         });
     }
@@ -248,6 +269,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let repo = repo.clone();
         let alerts = alerts.clone();
         let history = history.clone();
+        let events_repo = events_repo.clone();
         tokio::spawn(async move {
             const SNAPSHOT_SECS: u64 = 300;
             const RETENTION_SECS: i64 = 90 * 86_400;
@@ -267,6 +289,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 }
                 if let Err(e) = history.prune_old(RETENTION_SECS).await {
                     tracing::warn!(error = %e, "prune alert history failed");
+                }
+                // Passive events: matched rows follow alert-history retention, unmatched
+                // (rule-authoring material) are pruned at 24h — see events.rs constants.
+                if let Err(e) = events_repo.prune_old().await {
+                    tracing::warn!(error = %e, "prune events failed");
                 }
             }
         });
@@ -389,6 +416,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         url_checks,
         meraki_orgs,
         meraki_devices,
+        events: events_repo,
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -401,6 +429,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         sessions,
         history: Some(history),
         ack: Some(acks),
+        events: Some(event_engine),
         public_dashboard: cfg.public_dashboard,
     };
     serve(state, &cfg.api_addr, metrics).await
@@ -429,6 +458,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         sessions: Arc::new(SessionStore::new()),
         history: None,
         ack: None,
+        events: None,
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
         public_dashboard: true,

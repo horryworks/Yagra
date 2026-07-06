@@ -11,7 +11,9 @@ use std::{
     ops, ptr,
 };
 
-pub(crate) struct Buf {
+// Local patch (see PATCH_NOTE.md): widened from pub(crate) alongside `fn build` so
+// Yagra's trap-listener tests can construct PDU fixtures.
+pub struct Buf {
     len: usize,
     #[cfg(not(feature = "heap_buffers"))]
     buf: [u8; BUFFER_SIZE],
@@ -306,9 +308,11 @@ impl Buf {
 }
 
 /// For reply: non_repeaters = error_status, max_repetitions = error_index
+// Local patch (see PATCH_NOTE.md): widened from pub(crate) so Yagra's trap-listener
+// tests can build trap/inform PDU fixtures without hand-rolled ASN.1.
 #[allow(clippy::too_many_arguments, clippy::unnecessary_wraps)]
 #[inline]
-pub(crate) fn build(
+pub fn build(
     version: Version,
     community: &[u8],
     ident: u8,

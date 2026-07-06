@@ -22,6 +22,12 @@ use crate::secrets::load_key_provider;
 pub enum ChannelKind {
     Webhook,
     Email,
+    /// PagerDuty Events API v2 — native fire/resolve lifecycle via `dedup_key`.
+    /// (snake_case would derive `pager_duty`; the wire/DB token is `pagerduty`.)
+    #[serde(rename = "pagerduty")]
+    PagerDuty,
+    /// Jira Service Management Alerts (Opsgenie-compatible) — dedup/close via `alias`.
+    Jsm,
 }
 
 impl ChannelKind {
@@ -29,12 +35,16 @@ impl ChannelKind {
         match self {
             ChannelKind::Webhook => "webhook",
             ChannelKind::Email => "email",
+            ChannelKind::PagerDuty => "pagerduty",
+            ChannelKind::Jsm => "jsm",
         }
     }
     fn parse(s: &str) -> Option<Self> {
         match s {
             "webhook" => Some(ChannelKind::Webhook),
             "email" => Some(ChannelKind::Email),
+            "pagerduty" => Some(ChannelKind::PagerDuty),
+            "jsm" => Some(ChannelKind::Jsm),
             _ => None,
         }
     }
@@ -58,6 +68,22 @@ pub enum ChannelConfig {
         #[serde(default)]
         pass: Option<String>,
     },
+    /// PagerDuty Events API v2. `routing_key` is the integration key (a secret).
+    /// `api_url` overrides the default US endpoint (EU: `https://events.eu.pagerduty.com/v2/enqueue`);
+    /// allowed hosts are pinned at the API edge (`validate_channel_config`).
+    #[serde(rename = "pagerduty")]
+    PagerDuty {
+        routing_key: String,
+        #[serde(default)]
+        api_url: Option<String>,
+    },
+    /// JSM Alerts / Opsgenie-compatible API. `api_url` is the integration base
+    /// (e.g. `https://api.atlassian.com/jsm/ops/integration/v2`); `api_key` is the
+    /// GenieKey (a secret).
+    Jsm {
+        api_url: String,
+        api_key: String,
+    },
 }
 
 impl ChannelConfig {
@@ -67,6 +93,8 @@ impl ChannelConfig {
         match self {
             ChannelConfig::Webhook { .. } => ChannelKind::Webhook,
             ChannelConfig::Email { .. } => ChannelKind::Email,
+            ChannelConfig::PagerDuty { .. } => ChannelKind::PagerDuty,
+            ChannelConfig::Jsm { .. } => ChannelKind::Jsm,
         }
     }
 }
@@ -331,6 +359,44 @@ mod tests {
             }
             _ => panic!("expected email"),
         }
+    }
+
+    #[test]
+    fn channel_config_pagerduty_and_jsm_round_trip() {
+        let pd = ChannelConfig::PagerDuty {
+            routing_key: "rk".to_owned(),
+            api_url: None,
+        };
+        let json = serde_json::to_string(&pd).unwrap();
+        assert!(json.contains("\"kind\":\"pagerduty\""));
+        let back: ChannelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, pd);
+        assert_eq!(back.kind(), ChannelKind::PagerDuty);
+
+        // api_url is optional (defaults at the delivery layer, N-1 tolerant).
+        let json = r#"{"kind":"pagerduty","routing_key":"rk"}"#;
+        let cfg: ChannelConfig = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            cfg,
+            ChannelConfig::PagerDuty { api_url: None, .. }
+        ));
+
+        let jsm = ChannelConfig::Jsm {
+            api_url: "https://api.atlassian.com/jsm/ops/integration/v2".to_owned(),
+            api_key: "key".to_owned(),
+        };
+        let json = serde_json::to_string(&jsm).unwrap();
+        assert!(json.contains("\"kind\":\"jsm\""));
+        let back: ChannelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind(), ChannelKind::Jsm);
+
+        assert_eq!(
+            ChannelKind::parse("pagerduty"),
+            Some(ChannelKind::PagerDuty)
+        );
+        assert_eq!(ChannelKind::parse("jsm"), Some(ChannelKind::Jsm));
+        assert_eq!(ChannelKind::PagerDuty.as_str(), "pagerduty");
+        assert_eq!(ChannelKind::Jsm.as_str(), "jsm");
     }
 
     #[test]

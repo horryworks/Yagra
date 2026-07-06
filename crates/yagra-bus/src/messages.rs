@@ -644,6 +644,80 @@ const fn default_true() -> bool {
     true
 }
 
+// ── Passive events (Phase 2) — edge-received syslog / SNMP traps / webhooks ─────────
+
+/// What kind of passive event a poller (or core, for webhooks) received.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    /// A syslog datagram (RFC 5424 / RFC 3164 / raw fallback).
+    Syslog,
+    /// An SNMP trap or inform (v1/v2c).
+    Trap,
+    /// An inbound webhook received on core's northbound API.
+    Webhook,
+}
+
+impl EventKind {
+    /// Stable string form (matches the serde tag and the `events.kind` DB column).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Syslog => "syslog",
+            Self::Trap => "trap",
+            Self::Webhook => "webhook",
+        }
+    }
+}
+
+/// A passive event received at the edge, published on `yagra.events` for core to match
+/// against event rules. The `message` field is the single normalized text rules bite on
+/// (for traps it is rendered as `"<trap_oid> oid=value; …"`); the structured fields are
+/// preserved for display. All detail fields are `#[serde(default)]` so the message stays
+/// N/N-1 tolerant (ADR-017).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventMsg {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Receiver-generated id (idempotency / tracing).
+    pub event_id: Uuid,
+    /// What kind of event this is.
+    pub kind: EventKind,
+    /// Reception time at the edge, as Unix time in milliseconds (UTC).
+    pub at_unix_ms: i64,
+    /// Datagram source address (`None` for webhooks — they correlate via the source binding).
+    #[serde(default)]
+    pub source_ip: Option<IpAddr>,
+    /// Which poller pool received it, if known.
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// Normalized text the match rules run against (≤ 4096 chars, lossy UTF-8).
+    pub message: String,
+    /// Syslog facility (decoded from PRI), if present.
+    #[serde(default)]
+    pub facility: Option<u8>,
+    /// Syslog severity (decoded from PRI), if present. Named to avoid confusion with
+    /// the alert severity a matching rule assigns.
+    #[serde(default)]
+    pub syslog_severity: Option<u8>,
+    /// Syslog HOSTNAME field, if present.
+    #[serde(default)]
+    pub hostname: Option<String>,
+    /// Syslog APP-NAME / TAG field, if present.
+    #[serde(default)]
+    pub app_name: Option<String>,
+    /// The trap's snmpTrapOID (v1 mapped per RFC 3584), if this is a trap.
+    #[serde(default)]
+    pub trap_oid: Option<String>,
+    /// Trap varbinds as dotted-OID → rendered-value pairs (capped at the receiver).
+    #[serde(default)]
+    pub varbinds: Vec<(String, String)>,
+    /// Whether the original message was clipped to the size cap.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,6 +927,57 @@ mod tests {
         assert!(result.done, "missing done must default to true");
         assert_eq!(result.probed, 0);
         assert_eq!(result.found[0].matched_credential, None);
+    }
+
+    #[test]
+    fn event_msg_round_trips_through_json() {
+        let event = EventMsg {
+            schema_version: BUS_SCHEMA_VERSION,
+            event_id: Uuid::nil(),
+            kind: EventKind::Syslog,
+            at_unix_ms: 1_700_000_000_000,
+            source_ip: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))),
+            pool: Some("default".into()),
+            message: "link down on ge-0/0/1".into(),
+            facility: Some(23),
+            syslog_severity: Some(4),
+            hostname: Some("edge-sw1".into()),
+            app_name: Some("chassisd".into()),
+            trap_oid: None,
+            varbinds: Vec::new(),
+            truncated: false,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"kind\":\"syslog\""));
+        let back: EventMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn minimal_event_msg_defaults_optional_fields() {
+        // N/N-1 (ADR-017): a producer that sends only the required fields (or an older
+        // schema without the detail fields) still deserializes; extras are ignored.
+        let json = r#"{
+            "event_id": "00000000-0000-0000-0000-000000000000",
+            "kind": "trap",
+            "at_unix_ms": 0,
+            "message": "1.3.6.1.6.3.1.1.5.3",
+            "future_field": "ignored"
+        }"#;
+        let event: EventMsg = serde_json::from_str(json).unwrap();
+        assert_eq!(event.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        assert_eq!(event.kind, EventKind::Trap);
+        assert!(event.source_ip.is_none());
+        assert!(event.varbinds.is_empty());
+        assert!(!event.truncated);
+    }
+
+    #[test]
+    fn event_kind_str_matches_serde_tag() {
+        for kind in [EventKind::Syslog, EventKind::Trap, EventKind::Webhook] {
+            let tag = serde_json::to_string(&kind).unwrap();
+            assert_eq!(tag, format!("\"{}\"", kind.as_str()));
+        }
     }
 
     #[test]

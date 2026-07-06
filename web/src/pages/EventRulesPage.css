@@ -1,0 +1,82 @@
+/* Event rules table — the pattern cell stacks the match pattern and (optional) clear
+   pattern, each tagged with a small kind chip. Inherits the shared `.ytable` look. */
+
+.eventrules-match {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.eventrules-sig {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  font-size: var(--font-xs);
+}
+
+.eventrules-sig-kind {
+  justify-self: start;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-2xs, var(--font-xs));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.eventrules-sig-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Multi-field row in the add/edit modal (match kind + severity, or the TTL trio). */
+.modal-field-row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.modal-field-row .modal-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.eventrules-enabled {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  cursor: pointer;
+}
+
+/* Inline pattern tester at the bottom of the modal. */
+.eventrules-tester {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-color);
+}
+
+.eventrules-tester-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.eventrules-tester-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.eventrules-tester-result {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}

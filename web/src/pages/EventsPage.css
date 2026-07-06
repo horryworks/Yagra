@@ -1,0 +1,9 @@
+/* Events log — the message cell truncates with ellipsis (full text on hover). */
+
+.events-msg {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

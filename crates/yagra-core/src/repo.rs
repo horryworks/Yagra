@@ -553,6 +553,24 @@ impl NodeRepo {
             .collect()
     }
 
+    /// Address → node-id map for correlating passive events (syslog/trap source IPs) to
+    /// inventory. Snapshotted by the event engine's periodic reload. If two nodes share an
+    /// address the first row wins.
+    pub async fn address_map(&self) -> anyhow::Result<HashMap<IpAddr, Uuid>> {
+        let rows = sqlx::query("SELECT id, host(address) AS address FROM nodes")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut map = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let addr: String = row.try_get("address")?;
+            if let Ok(addr) = addr.parse::<IpAddr>() {
+                map.entry(addr).or_insert(id);
+            }
+        }
+        Ok(map)
+    }
+
     /// Interface identity (name/alias/speed) for every interface on the given node ids, keyed by
     /// `(node_id, ifindex)`. For joining a fleet interface Top-N (which carries only node UUID +
     /// ifindex from the TSDB, ADR-011) back to human-readable names. Over-fetches all interfaces

@@ -28,7 +28,7 @@ use crate::secrets::CredentialStore;
 use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
 use crate::thresholds::ThresholdStore;
 use axum::{
-    extract::{Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{
@@ -90,6 +90,8 @@ pub struct AdminState {
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// Per-node Cisco Meraki device bindings.
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
+    /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).
+    pub events: Arc<crate::events::EventRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -115,6 +117,9 @@ pub struct ApiState {
     /// Inbound ack reflection from external tools (read-only display, ADR-015); `None` in
     /// skeleton mode.
     pub ack: Option<Arc<AckRepo>>,
+    /// Passive-event engine (webhook ingest + manual close + inline rule reload);
+    /// `None` in skeleton mode.
+    pub events: Option<Arc<crate::events::EventEngine>>,
     /// When true, read-only endpoints skip authentication (public read-only dashboard).
     /// When false (default), they require a valid session with `View` (every role has it).
     pub public_dashboard: bool,
@@ -349,6 +354,35 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/mutes", get(list_mutes).post(create_mute))
         .route("/api/v1/mutes/:id", delete(delete_mute))
+        // Passive events: machine-scoped webhook ingest (per-source bearer token, small
+        // body cap) + sources/rules CRUD + the event log + manual alert close.
+        .route(
+            "/api/v1/ingest/webhook/:source_id",
+            post(ingest_webhook).layer(DefaultBodyLimit::max(WEBHOOK_BODY_LIMIT)),
+        )
+        .route(
+            "/api/v1/event-sources",
+            get(list_event_sources).post(create_event_source),
+        )
+        .route(
+            "/api/v1/event-sources/:id",
+            put(update_event_source).delete(delete_event_source),
+        )
+        .route(
+            "/api/v1/event-sources/:id/rotate-token",
+            post(rotate_event_source_token),
+        )
+        .route(
+            "/api/v1/event-rules",
+            get(list_event_rules).post(create_event_rule),
+        )
+        .route("/api/v1/event-rules/test", post(test_event_rule))
+        .route(
+            "/api/v1/event-rules/:id",
+            put(update_event_rule).delete(delete_event_rule),
+        )
+        .route("/api/v1/events", get(list_events))
+        .route("/api/v1/events/alerts/close", post(close_event_alert))
         .route("/api/v1/audit", get(list_audit))
         .route("/api/v1/dashboard", get(get_dashboard).put(put_dashboard))
         .route(
@@ -379,7 +413,12 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     let mutating = matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH");
-    let audited = mutating && path.starts_with("/api/v1/") && !path.starts_with("/api/v1/auth/");
+    // Ingest is exempt: a per-event audit row would flood the audit log (the events table
+    // is itself the record); config changes to sources/rules stay audited as usual.
+    let audited = mutating
+        && path.starts_with("/api/v1/")
+        && !path.starts_with("/api/v1/auth/")
+        && !path.starts_with("/api/v1/ingest/");
     // Resolve the actor before the handler runs (the request is consumed by it).
     let username = if audited {
         bearer(req.headers())
@@ -4976,8 +5015,56 @@ fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
         {
             Err("email host/from/to required")
         }
+        ChannelConfig::PagerDuty {
+            routing_key,
+            api_url,
+        } => {
+            if routing_key.trim().is_empty() {
+                return Err("PagerDuty routing key required");
+            }
+            match api_url.as_deref() {
+                None => Ok(()),
+                Some(url) => validate_vendor_url(url, PAGERDUTY_HOSTS),
+            }
+        }
+        ChannelConfig::Jsm { api_url, api_key } => {
+            if api_key.trim().is_empty() {
+                return Err("JSM API key required");
+            }
+            validate_vendor_url(api_url, JSM_HOSTS)
+        }
         _ => Ok(()),
     }
+}
+
+/// Exact-host allowlists for the fixed-vendor channels. Exact match, not suffix match —
+/// suffix matching is how allowlist bypasses happen (`evil-events.pagerduty.com.attacker.io`).
+const PAGERDUTY_HOSTS: &[&str] = &["events.pagerduty.com", "events.eu.pagerduty.com"];
+const JSM_HOSTS: &[&str] = &[
+    "api.atlassian.com",
+    "api.opsgenie.com",
+    "api.eu.opsgenie.com",
+];
+
+/// Validate a fixed-vendor API URL: https only, host exactly in the vendor's allowlist.
+/// These are SaaS endpoints, so this is stricter than the generic webhook check — a
+/// `ManageConfig` user can't point the sealed credential at an arbitrary server.
+fn validate_vendor_url(url: &str, allowed_hosts: &[&str]) -> Result<(), &'static str> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("API URL required");
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|_| "API URL is not a valid URL")?;
+    if parsed.scheme() != "https" {
+        return Err("API URL must be https");
+    }
+    let Some(host) = parsed.host_str() else {
+        return Err("API URL must have a host");
+    };
+    if !allowed_hosts.contains(&host) {
+        return Err("API URL host is not an allowed vendor endpoint");
+    }
+    Ok(())
 }
 
 /// Validate a notification-webhook URL at the API edge (SSRF: a `ManageConfig` user could
@@ -5623,6 +5710,588 @@ async fn delete_classification_rule(
 async fn reload_classifier(admin: &AdminState) {
     if let Err(e) = admin.classifier.reload(&admin.classification).await {
         tracing::warn!(error = %e, "failed to reload classifier after rule edit");
+    }
+}
+
+// ── Passive events: webhook ingest + sources/rules CRUD + event log + close ─────────
+
+/// Max accepted webhook ingest body (axum returns 413 beyond it).
+const WEBHOOK_BODY_LIMIT: usize = 64 * 1024;
+/// Normalized event text cap (matches the `events.message` DB CHECK).
+const EVENT_TEXT_MAX_CHARS: usize = 4096;
+
+/// Pull the matchable text out of a webhook body. Zero-config heuristic: a JSON object's
+/// first present `message` | `text` | `summary` string field, else the compact JSON,
+/// else the raw body as lossy UTF-8. (Per-source JSON-path extraction is a follow-up —
+/// this covers the common alertmanager/grafana/custom-script shapes without config.)
+fn extract_webhook_text(body: &[u8]) -> (String, bool) {
+    let text = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => {
+            let field = v.as_object().and_then(|obj| {
+                ["message", "text", "summary"]
+                    .iter()
+                    .find_map(|k| obj.get(*k).and_then(|x| x.as_str()).map(str::to_owned))
+            });
+            field.unwrap_or_else(|| v.to_string())
+        }
+        Err(_) => String::from_utf8_lossy(body).into_owned(),
+    };
+    match text.char_indices().nth(EVENT_TEXT_MAX_CHARS) {
+        Some((idx, _)) => (text[..idx].to_owned(), true),
+        None => (text, false),
+    }
+}
+
+/// `POST /api/v1/ingest/webhook/:source_id` — machine-scoped ingest. Auth is the
+/// per-source bearer token (constant-time hash compare), NOT a session: external
+/// senders hold only their token. Exempt from the audit middleware (the events table
+/// is the record).
+async fn ingest_webhook(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(source_id): Path<Uuid>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(engine) = st.events.as_ref() else {
+        return unavailable();
+    };
+    let Some(token) = bearer(&headers) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "missing_token",
+            "Authorization: Bearer <token> required".to_owned(),
+        );
+    };
+    let node_id = match engine.repo().verify_token(source_id, token).await {
+        Ok(crate::events::TokenVerify::Ok { node_id }) => node_id,
+        Ok(crate::events::TokenVerify::BadToken) => {
+            return error_response(
+                StatusCode::UNAUTHORIZED,
+                "bad_token",
+                "ingest token does not match".to_owned(),
+            );
+        }
+        Ok(crate::events::TokenVerify::UnknownOrDisabled) => {
+            return not_found(
+                "source_not_found",
+                format!("no enabled webhook source {source_id}"),
+            );
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "verify ingest token failed");
+            return internal("failed to verify ingest token");
+        }
+    };
+    if !engine.ingest_allowed(source_id) {
+        return error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "ingest rate limit exceeded for this source".to_owned(),
+        );
+    }
+
+    let (message, truncated) = extract_webhook_text(&body);
+    let event_id = Uuid::new_v4();
+    let at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let msg = yagra_bus::EventMsg {
+        schema_version: yagra_bus::BUS_SCHEMA_VERSION,
+        event_id,
+        kind: yagra_bus::EventKind::Webhook,
+        at_unix_ms,
+        source_ip: None,
+        pool: None,
+        message,
+        facility: None,
+        syslog_severity: None,
+        hostname: None,
+        app_name: None,
+        trap_oid: None,
+        varbinds: Vec::new(),
+        truncated,
+    };
+    engine
+        .handle_event(
+            msg,
+            Some(crate::events::SourceBinding { source_id, node_id }),
+        )
+        .await;
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "event_id": event_id })),
+    )
+        .into_response()
+}
+
+async fn list_event_sources(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.events.list_sources().await {
+        Ok(sources) => Json(sources).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list event sources failed");
+            internal("failed to list event sources")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateEventSource {
+    name: String,
+    #[serde(default)]
+    node_id: Option<Uuid>,
+}
+
+async fn create_event_source(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateEventSource>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 120 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_source",
+            "name must be 1..=120 characters".to_owned(),
+        );
+    }
+    match admin.events.create_source(name, body.node_id).await {
+        // The plaintext token is disclosed exactly once, here — only its hash is stored.
+        Ok((id, token)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": id, "token": token })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "create event source failed");
+            internal("failed to create event source")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateEventSource {
+    name: String,
+    enabled: bool,
+    #[serde(default)]
+    node_id: Option<Uuid>,
+}
+
+async fn update_event_source(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateEventSource>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 120 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_source",
+            "name must be 1..=120 characters".to_owned(),
+        );
+    }
+    match admin
+        .events
+        .update_source(id, name, body.enabled, body.node_id)
+        .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("source_not_found", format!("no event source {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update event source failed");
+            internal("failed to update event source")
+        }
+    }
+}
+
+async fn rotate_event_source_token(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.events.rotate_token(id).await {
+        Ok(Some(token)) => Json(serde_json::json!({ "token": token })).into_response(),
+        Ok(None) => not_found("source_not_found", format!("no event source {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "rotate event source token failed");
+            internal("failed to rotate event source token")
+        }
+    }
+}
+
+async fn delete_event_source(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.events.delete_source(id).await {
+        Ok(true) => {
+            reload_event_engine(&st, admin).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("source_not_found", format!("no event source {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete event source failed");
+            internal("failed to delete event source")
+        }
+    }
+}
+
+async fn list_event_rules(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.events.list_rules().await {
+        Ok(rules) => Json(rules).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list event rules failed");
+            internal("failed to list event rules")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct EventRuleBody {
+    name: String,
+    #[serde(default = "default_event_rule_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    source_kind: Option<String>,
+    #[serde(default)]
+    source_id: Option<Uuid>,
+    #[serde(default)]
+    node_id: Option<Uuid>,
+    match_kind: String,
+    pattern: String,
+    #[serde(default)]
+    clear_pattern: Option<String>,
+    severity: String,
+    #[serde(default)]
+    ttl_secs: Option<i32>,
+    #[serde(default)]
+    min_count: Option<i32>,
+    #[serde(default)]
+    window_secs: Option<i32>,
+}
+
+const fn default_event_rule_enabled() -> bool {
+    true
+}
+
+/// Validate an event-rule body at the API edge (mirrors the DB CHECKs; regexes must
+/// compile so a broken rule never reaches the engine snapshot).
+fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams<'_>, String> {
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 120 {
+        return Err("name must be 1..=120 characters".to_owned());
+    }
+    if !matches!(body.match_kind.as_str(), "substring" | "regex") {
+        return Err("match_kind must be substring or regex".to_owned());
+    }
+    crate::events::compile_matcher(&body.match_kind, &body.pattern)
+        .map_err(|e| format!("pattern: {e}"))?;
+    if let Some(clear) = body.clear_pattern.as_deref() {
+        crate::events::compile_matcher(&body.match_kind, clear)
+            .map_err(|e| format!("clear_pattern: {e}"))?;
+    }
+    if !matches!(body.severity.as_str(), "info" | "warning" | "critical") {
+        return Err("severity must be info, warning, or critical".to_owned());
+    }
+    if let Some(kind) = body.source_kind.as_deref() {
+        if !matches!(kind, "syslog" | "trap" | "webhook") {
+            return Err("source_kind must be syslog, trap, or webhook".to_owned());
+        }
+    }
+    let ttl_secs = body.ttl_secs.unwrap_or(1800);
+    if !(60..=604_800).contains(&ttl_secs) {
+        return Err("ttl_secs must be 60..=604800".to_owned());
+    }
+    let min_count = body.min_count.unwrap_or(1);
+    if !(1..=100).contains(&min_count) {
+        return Err("min_count must be 1..=100".to_owned());
+    }
+    let window_secs = body.window_secs.unwrap_or(60);
+    if !(1..=3600).contains(&window_secs) {
+        return Err("window_secs must be 1..=3600".to_owned());
+    }
+    Ok(crate::events::RuleParams {
+        name,
+        enabled: body.enabled,
+        source_kind: body.source_kind.as_deref(),
+        source_id: body.source_id,
+        node_id: body.node_id,
+        match_kind: &body.match_kind,
+        pattern: &body.pattern,
+        clear_pattern: body.clear_pattern.as_deref(),
+        severity: &body.severity,
+        ttl_secs,
+        min_count,
+        window_secs,
+    })
+}
+
+async fn create_event_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<EventRuleBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let params = match validate_event_rule(&body) {
+        Ok(p) => p,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_rule", msg),
+    };
+    match admin.events.create_rule(&params).await {
+        Ok(id) => {
+            reload_event_engine(&st, admin).await;
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "create event rule failed");
+            internal("failed to create event rule")
+        }
+    }
+}
+
+async fn update_event_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<EventRuleBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let params = match validate_event_rule(&body) {
+        Ok(p) => p,
+        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_rule", msg),
+    };
+    match admin.events.update_rule(id, &params).await {
+        Ok(true) => {
+            reload_event_engine(&st, admin).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("rule_not_found", format!("no event rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "update event rule failed");
+            internal("failed to update event rule")
+        }
+    }
+}
+
+async fn delete_event_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.events.delete_rule(id).await {
+        Ok(true) => {
+            reload_event_engine(&st, admin).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("rule_not_found", format!("no event rule {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete event rule failed");
+            internal("failed to delete event rule")
+        }
+    }
+}
+
+/// Body for the interactive rule tester.
+#[derive(Deserialize)]
+struct EventRuleTest {
+    match_kind: String,
+    pattern: String,
+    #[serde(default)]
+    clear_pattern: Option<String>,
+    sample: String,
+}
+
+/// `POST /api/v1/event-rules/test` — try a pattern against a sample message. Compile
+/// errors come back in-band (`error` field) so the UI tester can show them inline.
+async fn test_event_rule(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<EventRuleTest>,
+) -> Response {
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let matcher = match crate::events::compile_matcher(&body.match_kind, &body.pattern) {
+        Ok(m) => m,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "matched": false, "clear_matched": null, "error": format!("pattern: {e}"),
+            }))
+            .into_response();
+        }
+    };
+    let clear_matched = match body.clear_pattern.as_deref() {
+        Some(clear) => match crate::events::compile_matcher(&body.match_kind, clear) {
+            Ok(m) => Some(m.matches(&body.sample)),
+            Err(e) => {
+                return Json(serde_json::json!({
+                    "matched": false, "clear_matched": null,
+                    "error": format!("clear_pattern: {e}"),
+                }))
+                .into_response();
+            }
+        },
+        None => None,
+    };
+    Json(serde_json::json!({
+        "matched": matcher.matches(&body.sample),
+        "clear_matched": clear_matched,
+        "error": null,
+    }))
+    .into_response()
+}
+
+/// Query params for the event log (keyset paging on `recorded_at`, like alert history).
+#[derive(Deserialize)]
+struct EventsQuery {
+    before: Option<String>,
+    limit: Option<i64>,
+    kind: Option<String>,
+    node_id: Option<Uuid>,
+    matched: Option<bool>,
+}
+
+async fn list_events(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<EventsQuery>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let before = match q.before.as_deref() {
+        None => None,
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(s) {
+            Ok(t) => Some(t.with_timezone(&chrono::Utc)),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "before must be an RFC 3339 timestamp".to_owned(),
+                );
+            }
+        },
+    };
+    if let Some(kind) = q.kind.as_deref() {
+        if !matches!(kind, "syslog" | "trap" | "webhook") {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_filter",
+                "kind must be syslog, trap, or webhook".to_owned(),
+            );
+        }
+    }
+    let filter = crate::events::EventFilter {
+        before,
+        kind: q.kind,
+        node_id: q.node_id,
+        matched: q.matched,
+    };
+    match admin
+        .events
+        .list_events(&filter, q.limit.unwrap_or(100))
+        .await
+    {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "list events failed");
+            internal("failed to list events")
+        }
+    }
+}
+
+/// Body for the manual event-alert close (identity mirrors the alert wire shape).
+#[derive(Deserialize)]
+struct CloseEventAlert {
+    #[allow(dead_code)] // carried for parity with the alert identity; close keys on `check`
+    node: Uuid,
+    check: Uuid,
+}
+
+async fn close_event_alert(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CloseEventAlert>,
+) -> Response {
+    let Some(engine) = st.events.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    if engine
+        .close_alert(yagra_common::CheckId::from(body.check))
+        .await
+    {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        not_found(
+            "alert_not_found",
+            format!("no active event alert for check {}", body.check),
+        )
+    }
+}
+
+/// Reload the event engine's rules/address snapshot after a source/rule edit so the
+/// change applies immediately (the 30s refresh loop is the backstop).
+async fn reload_event_engine(st: &ApiState, admin: &AdminState) {
+    if let Some(engine) = st.events.as_ref() {
+        engine.reload(&admin.repo).await;
     }
 }
 
@@ -6913,6 +7582,7 @@ mod tests {
             sessions: Arc::new(SessionStore::new()),
             history: None,
             ack: None,
+            events: None,
             public_dashboard: true,
         }
     }
@@ -6930,6 +7600,7 @@ mod tests {
             sessions,
             history: None,
             ack: None,
+            events: None,
             public_dashboard: false,
         };
         (state, token)
@@ -6949,6 +7620,7 @@ mod tests {
             sessions,
             history: None,
             ack: None,
+            events: None,
             public_dashboard: false,
         };
         (state, token)
@@ -8037,6 +8709,215 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"node":"00000000-0000-0000-0000-000000000001","check":"00000000-0000-0000-0000-000000000002","severity":"critical","acked":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── Passive events API ──
+
+    #[tokio::test]
+    async fn ingest_webhook_unavailable_without_engine() {
+        // Skeleton mode has no event engine ⇒ ingest is 503 (even with a token).
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ingest/webhook/00000000-0000-0000-0000-000000000001")
+                    .header(AUTHORIZATION, "Bearer some-token")
+                    .body(Body::from(r#"{"message":"disk full"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn event_rule_test_endpoint_matches_and_reports_errors_in_band() {
+        // The tester needs only ManageConfig (no DB): substring hit, regex miss, and a
+        // regex compile error reported in-band for the UI.
+        let (state, token) = state_with_role_token(yagra_common::Role::Admin);
+        let app = router(state);
+
+        let post = |body: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/event-rules/test")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_owned()))
+                .unwrap()
+        };
+
+        let resp = app
+            .clone()
+            .oneshot(post(
+                r#"{"match_kind":"substring","pattern":"link down","clear_pattern":"link up","sample":"chassisd: link down on ge-0/0/1"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["matched"], true);
+        assert_eq!(json["clear_matched"], false);
+        assert!(json["error"].is_null());
+
+        let resp = app
+            .clone()
+            .oneshot(post(
+                r#"{"match_kind":"regex","pattern":"(unclosed","sample":"x"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["matched"], false);
+        assert!(json["error"].as_str().unwrap().starts_with("pattern:"));
+    }
+
+    #[tokio::test]
+    async fn event_rule_test_forbidden_for_viewer() {
+        let (state, token) = state_with_role_token(yagra_common::Role::Viewer);
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/event-rules/test")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"match_kind":"substring","pattern":"x","sample":"x"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn extract_webhook_text_heuristics() {
+        // JSON object: first present message|text|summary string field wins.
+        let (t, trunc) = extract_webhook_text(br#"{"summary":"s","message":"disk full"}"#);
+        assert_eq!(t, "disk full");
+        assert!(!trunc);
+        let (t, _) = extract_webhook_text(br#"{"text":"from text"}"#);
+        assert_eq!(t, "from text");
+        // JSON object without those fields → compact JSON (still matchable).
+        let (t, _) = extract_webhook_text(br#"{"status":"firing"}"#);
+        assert!(t.contains("\"firing\""));
+        // Non-JSON → raw body.
+        let (t, _) = extract_webhook_text(b"plain text alert");
+        assert_eq!(t, "plain text alert");
+        // Oversized → clipped + flagged.
+        let big = format!("{{\"message\":\"{}\"}}", "a".repeat(5000));
+        let (t, trunc) = extract_webhook_text(big.as_bytes());
+        assert_eq!(t.chars().count(), EVENT_TEXT_MAX_CHARS);
+        assert!(trunc);
+    }
+
+    #[test]
+    fn validate_event_rule_bounds_and_patterns() {
+        let body = |json: &str| -> EventRuleBody { serde_json::from_str(json).unwrap() };
+        // Minimal valid rule with defaults.
+        let ok =
+            body(r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"warning"}"#);
+        let p = validate_event_rule(&ok).unwrap();
+        assert!(p.enabled);
+        assert_eq!(p.ttl_secs, 1800);
+        assert_eq!(p.min_count, 1);
+        assert_eq!(p.window_secs, 60);
+
+        for bad in [
+            r#"{"name":"","match_kind":"substring","pattern":"x","severity":"warning"}"#,
+            r#"{"name":"r","match_kind":"glob","pattern":"x","severity":"warning"}"#,
+            r#"{"name":"r","match_kind":"regex","pattern":"(bad","severity":"warning"}"#,
+            r#"{"name":"r","match_kind":"regex","pattern":"ok","clear_pattern":"(bad","severity":"warning"}"#,
+            r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"fatal"}"#,
+            r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"warning","source_kind":"smoke"}"#,
+            r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"warning","ttl_secs":10}"#,
+            r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"warning","min_count":0}"#,
+            r#"{"name":"r","match_kind":"substring","pattern":"x","severity":"warning","window_secs":9999}"#,
+        ] {
+            assert!(
+                validate_event_rule(&body(bad)).is_err(),
+                "must reject: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn vendor_url_allowlist_is_exact_host_https_only() {
+        // PagerDuty: both regions pass; http and lookalike hosts fail.
+        assert!(
+            validate_vendor_url("https://events.pagerduty.com/v2/enqueue", PAGERDUTY_HOSTS).is_ok()
+        );
+        assert!(validate_vendor_url(
+            "https://events.eu.pagerduty.com/v2/enqueue",
+            PAGERDUTY_HOSTS
+        )
+        .is_ok());
+        assert!(
+            validate_vendor_url("http://events.pagerduty.com/v2/enqueue", PAGERDUTY_HOSTS).is_err()
+        );
+        // Suffix tricks must fail (exact host match, not ends_with).
+        assert!(validate_vendor_url(
+            "https://events.pagerduty.com.attacker.io/v2/enqueue",
+            PAGERDUTY_HOSTS
+        )
+        .is_err());
+        assert!(validate_vendor_url("https://evil.example/v2/enqueue", PAGERDUTY_HOSTS).is_err());
+
+        // JSM: Atlassian + Opsgenie hosts pass.
+        assert!(validate_vendor_url(
+            "https://api.atlassian.com/jsm/ops/integration/v2",
+            JSM_HOSTS
+        )
+        .is_ok());
+        assert!(validate_vendor_url("https://api.opsgenie.com/v2", JSM_HOSTS).is_ok());
+        assert!(validate_vendor_url("https://api.eu.opsgenie.com/v2", JSM_HOSTS).is_ok());
+        assert!(validate_vendor_url("https://api.atlassian.com.evil.io/v2", JSM_HOSTS).is_err());
+
+        // PD/JSM channel configs route through validate_channel_config.
+        assert!(validate_channel_config(&ChannelConfig::PagerDuty {
+            routing_key: "rk".into(),
+            api_url: None,
+        })
+        .is_ok());
+        assert!(validate_channel_config(&ChannelConfig::PagerDuty {
+            routing_key: "  ".into(),
+            api_url: None,
+        })
+        .is_err());
+        assert!(validate_channel_config(&ChannelConfig::Jsm {
+            api_url: "https://api.atlassian.com/jsm/ops/integration/v2".into(),
+            api_key: "k".into(),
+        })
+        .is_ok());
+        assert!(validate_channel_config(&ChannelConfig::Jsm {
+            api_url: "https://example.com/".into(),
+            api_key: "k".into(),
+        })
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn close_event_alert_unavailable_without_engine() {
+        let (state, token) = state_with_role_token(yagra_common::Role::Operator);
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/events/alerts/close")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"node":"00000000-0000-0000-0000-000000000001","check":"00000000-0000-0000-0000-000000000002"}"#,
                     ))
                     .unwrap(),
             )

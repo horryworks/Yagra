@@ -22,6 +22,9 @@ import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { RoutingPage } from './pages/RoutingPage';
+import { EventsPage } from './pages/EventsPage';
+import { EventRulesPage } from './pages/EventRulesPage';
+import { EventSourcesPage } from './pages/EventSourcesPage';
 import { MaintenancePage } from './pages/MaintenancePage';
 import { MutesPage } from './pages/MutesPage';
 import { AuditPage } from './pages/AuditPage';
@@ -69,6 +72,9 @@ export function AppRoutes() {
         <Route path="alerts/history" element={<HistoryPage />} />
         <Route path="alerts/rules" element={<ThresholdsPage />} />
         <Route path="alerts/routing" element={<RoutingPage />} />
+        <Route path="alerts/events" element={<EventsPage />} />
+        <Route path="alerts/event-rules" element={<EventRulesPage />} />
+        <Route path="alerts/event-sources" element={<EventSourcesPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
 
