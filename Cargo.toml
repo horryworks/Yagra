@@ -31,7 +31,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -69,6 +69,8 @@ futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 # Polling jitter (anti-stampede, monitoring-conventions)
 rand = "0.8"
+# Machine hostname for poller identity default (ADR-009) — tiny, cross-platform, no unsafe of ours.
+hostname = "0.4"
 # Email notifications (SMTP, async/rustls — no native TLS, no NASM)
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Serialization / types

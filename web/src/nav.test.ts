@@ -40,10 +40,10 @@ describe('nav IA', () => {
     expect(health?.implemented).toBe(true);
   });
 
-  it('Settings ▸ Pollers is reserved (placeholder) for future distributed pollers', () => {
+  it('Settings ▸ Pollers is backed by a real page (distributed poller fleet)', () => {
     const pollers = NAV.find((s) => s.key === 'settings')?.items.find(
       (i) => i.path === '/settings/pollers',
     );
-    expect(pollers?.implemented).toBe(false);
+    expect(pollers?.implemented).toBe(true);
   });
 });

@@ -1,0 +1,66 @@
+# Yagra — remote-site poller (standalone).
+#
+# Run this on a machine AT a remote site to poll that site's devices locally and stream
+# results back to the central Yagra core over the NATS bus. Unlike docker-compose.yml /
+# docker-compose.deploy.yml (which run the whole stack), this file runs ONLY a poller
+# and connects out to a central core's bus.
+#
+# The bus carries PLAINTEXT device credentials (ADR-020), so a remote/WAN bus MUST be
+# TLS + authenticated: the central `nats` has to be started with
+# docker/nats/nats-server.conf (see docker-compose.deploy.yml → "accept remote-site
+# pollers"), and YAGRA_BUS_URL below must be a `tls://user:pass@host:4222` URL.
+#
+# ── Three env vars are REQUIRED (compose errors out if unset) ───────────────────────
+#   YAGRA_BUS_URL     — tls://poller:<password>@<core-host>:4222
+#   YAGRA_POLLER_ID   — stable identity for this poller (e.g. edge-tokyo-1)
+#   YAGRA_POLLER_POOL — pool this poller serves; nodes are assigned to pollers by pool
+#
+# The WebUI ▸ Settings ▸ Pollers ▸ "Register poller" dialog generates a ready-to-use
+# `.env` for this file (id / pool / bus URL). Put that `.env` next to this file, drop
+# the CA cert the central operator gave you into ./certs, then:
+#
+#   docker compose -f docker-compose.poller.yml up -d
+#
+# Pin/rollback the image with YAGRA_IMAGE_TAG (default :latest).
+
+name: yagra-poller
+
+services:
+  poller:
+    image: ghcr.io/horryworks/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    # Host networking (no bridge): passive syslog/trap correlation keys on the datagram
+    # SOURCE IP (bridge NAT would rewrite it), and raw-socket ICMP wants the host's
+    # interfaces directly. Because of this, no `ports:` mapping is used or needed.
+    network_mode: host
+    cap_add:
+      - NET_RAW        # raw-socket ICMP (surge-ping) — granted to this poller only
+    environment:
+      # ── Required ──────────────────────────────────────────────────────────────────
+      # Central bus URL. A remote site crosses a trust boundary ⇒ TLS + auth mandatory:
+      #   tls://poller:<YAGRA_NATS_POLLER_PASSWORD>@<core-host-or-ip>:4222
+      YAGRA_BUS_URL: ${YAGRA_BUS_URL:?set YAGRA_BUS_URL, e.g. tls://poller:PASSWORD@core.example.com:4222}
+      # Stable, human-meaningful identity (shown on the Pollers page, sanitized for the
+      # NATS subject). Keep it UNIQUE per poller so two pollers never share an assignment.
+      YAGRA_POLLER_ID: ${YAGRA_POLLER_ID:?set YAGRA_POLLER_ID, e.g. edge-tokyo-1}
+      # Pool this poller serves — core assigns nodes to pollers by pool (ADR-009).
+      YAGRA_POLLER_POOL: ${YAGRA_POLLER_POOL:?set YAGRA_POLLER_POOL, e.g. tokyo}
+      # ── TLS ───────────────────────────────────────────────────────────────────────
+      # CA (or self-signed server) cert that signs the NATS server cert, mounted from
+      # ./certs below. Required whenever YAGRA_BUS_URL is tls:// with a private CA.
+      YAGRA_BUS_CA_FILE: ${YAGRA_BUS_CA_FILE:-/etc/yagra/certs/server-cert.pem}
+      # ── Passive event listeners (optional; unset either line to disable) ───────────
+      # With host networking the container binds the host port directly. This poller
+      # runs NON-ROOT (file-cap NET_RAW only), so it CANNOT bind :514/:162 (<1024). Use
+      # high ports and redirect on the host firewall (e.g. iptables REDIRECT 514→1514),
+      # or point devices straight at the high ports below.
+      YAGRA_SYSLOG_BIND: ${YAGRA_SYSLOG_BIND:-0.0.0.0:1514}
+      YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND:-0.0.0.0:1162}
+      # Optional trap community filter (mismatches dropped; value never logged).
+      YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      # CA / server cert for the TLS bus (read-only). Place the cert the central operator
+      # handed you here; YAGRA_BUS_CA_FILE points at it inside the container.
+      - ${YAGRA_CERT_DIR:-./certs}:/etc/yagra/certs:ro

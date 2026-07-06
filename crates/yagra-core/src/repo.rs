@@ -336,9 +336,14 @@ impl NodeRepo {
         Ok(nodes.len() as u32)
     }
 
-    /// Set (or clear) a node's profile, bound credential, and vendor/model metadata. Returns
-    /// whether the node exists. All fields are set to the passed value (a `None` clears) — the
+    /// Set (or clear) a node's profile, bound credential, and vendor/model metadata, and optionally
+    /// move it to a different poll-pool (ADR-009). Returns whether the node exists.
+    ///
+    /// `profile`/`credential`/`vendor`/`model` are set to the passed value (a `None` clears) — the
     /// node-edit UI loads the current values and resends them, so an unchanged field is preserved.
+    /// `pool` is three-state so the pool can be *left alone* independently: outer `None` = leave the
+    /// pool unchanged, inner `None` = clear it to NULL (falls back to the `default` pool), inner
+    /// `Some` = set it (the caller has already validated it as a NATS-subject-safe token).
     pub async fn set_node_bindings(
         &self,
         id: Uuid,
@@ -346,9 +351,11 @@ impl NodeRepo {
         credential: Option<Uuid>,
         vendor: Option<&str>,
         model: Option<&str>,
+        pool: Option<Option<&str>>,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE nodes SET profile_id = $2, credential_id = $3, vendor = $4, model = $5, \
+             pool = CASE WHEN $6::boolean THEN $7::text ELSE pool END, \
              updated_at = now() WHERE id = $1",
         )
         .bind(id)
@@ -356,6 +363,9 @@ impl NodeRepo {
         .bind(credential)
         .bind(vendor)
         .bind(model)
+        // `$6` gates whether the pool is touched at all; `$7` is the new value (NULL when clearing).
+        .bind(pool.is_some())
+        .bind(pool.flatten())
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)

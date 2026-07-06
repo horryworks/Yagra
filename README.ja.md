@@ -5,10 +5,12 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 アラートを発出します。Docker で動作し、**数万ノード規模**と**分散ポーリング**を最初から
 見据えたアーキテクチャを採用しています。利用者は WebUI からアクセスします。
 
-> ステータス: **v0.1.2。** ICMP / SNMP v2c+v3 / URL 監視 / Cisco Meraki（読み取り専用 Dashboard
-> API）、探索・分類、アラート、ダッシュボード、レポートを備えた単一ノードスタックが、PostgreSQL /
-> Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。スケールアウト（分散ポーラ、
-> HA ストア）は書き換えではなく設定で対応する設計です。
+> ステータス: **v0.1.3。** ICMP / SNMP v2c+v3 / URL 監視 / Cisco Meraki（読み取り専用 Dashboard
+> API）、受動イベント監視、探索・分類、アラート、ダッシュボード、レポートを備えたスタックが、
+> PostgreSQL / Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。既定は単一
+> ノードですが、**分散ポーラプール**（拠点に配置したリモートポーラをロケーション親和で割り当て、
+> 障害時は自動フェイルオーバー）でスケールアウトできます。HA ストアは書き換えではなく設定で対応
+> する段階に留まります。
 
 ## コンポーネント
 

@@ -14,6 +14,7 @@ use crate::audit::AuditRepo;
 use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
+use crate::coordinator::{Coordinator, PollerView};
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
@@ -21,6 +22,7 @@ use crate::history::{AlertHistoryRow, AlertHistoryStore};
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
+use crate::pollers::{PollerRepo, PollerRow};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{self, ReportRunner, ScheduleInput};
 use crate::scheduler::PollDispatcher;
@@ -43,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{
@@ -92,6 +94,13 @@ pub struct AdminState {
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).
     pub events: Arc<crate::events::EventRepo>,
+    /// Distributed poller pool control plane (ADR-009/020): the live poller registry + working-set
+    /// publisher. Backs the Pollers view's live stats and the pool-routing decisions (discovery
+    /// scans, node pool moves). Live mode only — skeleton mode has no coordinator.
+    pub coordinator: Arc<Coordinator<yagra_bus::NatsBus>>,
+    /// Durable poller inventory (ADR-009): lets the Pollers view surface a poller that is currently
+    /// offline (its live liveness lives only in the coordinator/Redis, which forget it on TTL).
+    pub pollers: Arc<PollerRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -267,6 +276,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
         .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/poller-health", get(poller_health))
+        // Distributed poller pool (ADR-009/020): the fleet of registered pollers + per-pool summary.
+        .route("/api/v1/pollers", get(list_pollers))
+        .route("/api/v1/pollers/:id", delete(delete_poller))
         .route("/api/v1/system-health", get(system_health))
         .route("/api/v1/version", get(version))
         .route("/api/v1/stream/alerts", get(stream_alerts))
@@ -1463,6 +1475,236 @@ async fn poller_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         return unavailable();
     };
     Json(admin.scheduler_stats.snapshot()).into_response()
+}
+
+// ── Distributed poller pool (ADR-009/020): the Pollers view ───────────────────
+
+/// One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current
+/// status/telemetry) and the durable inventory (so an offline poller still lists). No secrets.
+#[derive(Debug, Serialize, PartialEq)]
+struct PollerInfo {
+    /// Sanitized poller id (stable across restarts).
+    id: String,
+    /// Pool it serves (live view wins; else the durable row).
+    pool: String,
+    /// `"online"` when it is beating within the offline window, else `"offline"`.
+    status: &'static str,
+    /// Last durably-recorded contact (RFC 3339); `null` for a live poller not yet persisted (it
+    /// registers within the 60s inventory-upsert throttle window).
+    last_seen: Option<String>,
+    /// First durably-recorded contact (RFC 3339); `null` if not yet persisted.
+    first_seen: Option<String>,
+    /// Build version from its latest heartbeat (or the durable row when it is offline).
+    version: Option<String>,
+    /// Working-set node count it last reported (0 when offline / never reported).
+    working_set_nodes: u32,
+    /// Working-set spec count it last reported.
+    working_set_specs: u32,
+    /// Poll results core has consumed from it since core started.
+    results_total: u64,
+}
+
+/// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
+/// and a warning when it has nodes but no live poller (they would go unmonitored).
+#[derive(Debug, Serialize, PartialEq)]
+struct PoolSummary {
+    /// Pool name (`default` for unassigned nodes).
+    pool: String,
+    /// Non-Meraki nodes assigned to this pool.
+    nodes: usize,
+    /// Live (online) pollers serving this pool.
+    live_pollers: usize,
+    /// `"working_set"` when a live poller serves it, else `"legacy"` (per-job fallback).
+    mode: &'static str,
+    /// `"nodes_without_live_poller"` when the pool has nodes but no live poller, else `null`.
+    warning: Option<&'static str>,
+}
+
+/// The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary.
+#[derive(Debug, Serialize, PartialEq)]
+struct PollersResponse {
+    pollers: Vec<PollerInfo>,
+    pools: Vec<PoolSummary>,
+}
+
+/// Merge the durable poller inventory (`PollerRepo::list`) with the live registry view
+/// (`Coordinator::poller_views`) and the per-pool node counts into the Pollers response. Pure (no
+/// I/O, no clock) so the merge precedence and the pool-summary arithmetic are unit-testable.
+///
+/// Merge rules: a poller may appear in the live view (online or recently-offline), in the durable
+/// inventory, or both. The live view is authoritative for status and telemetry; the durable row
+/// supplies first/last-seen timestamps (and version/pool when the poller is gone from the live
+/// registry entirely). A live poller not yet in the inventory (first 60s) still lists. A pool is
+/// reported when it has nodes or a live poller; `mode`/`warning` follow the scheduler's per-pool
+/// working-set-vs-legacy decision.
+fn build_pollers_response(
+    inventory: Vec<PollerRow>,
+    live: Vec<PollerView>,
+    node_pools: std::collections::HashMap<String, usize>,
+) -> PollersResponse {
+    use std::collections::HashMap;
+
+    let live_by_id: HashMap<&str, &PollerView> = live.iter().map(|v| (v.id.as_str(), v)).collect();
+    let inv_by_id: HashMap<&str, &PollerRow> =
+        inventory.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    // Union of every id we know about (live registry ∪ durable inventory), sorted + deduped so the
+    // list is stable regardless of hash-map iteration order.
+    let mut ids: Vec<String> = live
+        .iter()
+        .map(|v| v.id.clone())
+        .chain(inventory.iter().map(|r| r.id.clone()))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let pollers = ids
+        .iter()
+        .map(|id| {
+            let lv = live_by_id.get(id.as_str()).copied();
+            let inv = inv_by_id.get(id.as_str()).copied();
+            let online = lv.is_some_and(|v| v.online);
+            PollerInfo {
+                id: id.clone(),
+                pool: lv
+                    .map(|v| v.pool.clone())
+                    .or_else(|| inv.map(|r| r.pool.clone()))
+                    .unwrap_or_default(),
+                status: if online { "online" } else { "offline" },
+                last_seen: inv.map(|r| r.last_seen.clone()),
+                first_seen: inv.map(|r| r.first_seen.clone()),
+                // Prefer a non-empty live version (a sync-request-only entry reports none); else the
+                // durable row's last version.
+                version: lv
+                    .map(|v| v.version.clone())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| inv.and_then(|r| r.last_version.clone())),
+                working_set_nodes: lv.map_or(0, |v| v.working_set_nodes),
+                working_set_specs: lv.map_or(0, |v| v.working_set_specs),
+                results_total: lv.map_or(0, |v| v.results_total),
+            }
+        })
+        .collect();
+
+    // Online pollers per pool (an offline poller can't serve work, so it doesn't count).
+    let mut live_per_pool: HashMap<String, usize> = HashMap::new();
+    for v in live.iter().filter(|v| v.online) {
+        *live_per_pool.entry(v.pool.clone()).or_insert(0) += 1;
+    }
+
+    // Report pools that have nodes ∪ pools that have a live poller (so a poller registered but not
+    // yet assigned any work still shows up — with no warning).
+    let mut pool_names: Vec<String> = node_pools
+        .keys()
+        .cloned()
+        .chain(live_per_pool.keys().cloned())
+        .collect();
+    pool_names.sort_unstable();
+    pool_names.dedup();
+
+    let pools = pool_names
+        .iter()
+        .map(|name| {
+            let nodes = node_pools.get(name).copied().unwrap_or(0);
+            let live_pollers = live_per_pool.get(name).copied().unwrap_or(0);
+            PoolSummary {
+                pool: name.clone(),
+                nodes,
+                live_pollers,
+                mode: if live_pollers > 0 {
+                    "working_set"
+                } else {
+                    "legacy"
+                },
+                warning: if nodes > 0 && live_pollers == 0 {
+                    Some("nodes_without_live_poller")
+                } else {
+                    None
+                },
+            }
+        })
+        .collect();
+
+    PollersResponse { pollers, pools }
+}
+
+/// `GET /api/v1/pollers` — the registered poller fleet + per-pool summary (ADR-009/020). Read-only
+/// and secret-free (working-set *counts* only, never spec contents), so it is `View`-gated like the
+/// other fleet views; skeleton mode (no coordinator/DB) returns the standard 503.
+async fn list_pollers(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let now = Instant::now();
+    // In-memory registry is the source of truth for liveness (ADR-009).
+    let live = admin.coordinator.poller_views(now);
+    // Durable inventory is best-effort context (offline pollers + timestamps); degrade to just the
+    // live view on a read error rather than failing the page (ADR-017).
+    let inventory = match admin.pollers.list().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "poller inventory list failed; showing live view only");
+            Vec::new()
+        }
+    };
+    // Node counts per pool. Meraki-managed nodes are excluded — the org collector owns them, not a
+    // pool poller (mirrors the scheduler). Degrade to an empty summary on a read error.
+    let meraki_ids = admin.meraki_devices.node_ids().await.unwrap_or_default();
+    let mut node_pools: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    match admin.repo.list_nodes().await {
+        Ok(nodes) => {
+            for n in nodes {
+                if meraki_ids.contains(&n.id.as_uuid()) {
+                    continue;
+                }
+                let pool = n.pool.unwrap_or_else(|| yagra_bus::DEFAULT_POOL.to_owned());
+                *node_pools.entry(pool).or_insert(0) += 1;
+            }
+        }
+        Err(e) => tracing::error!(error = %e, "list nodes for pool summary failed"),
+    }
+    Json(build_pollers_response(inventory, live, node_pools)).into_response()
+}
+
+/// `DELETE /api/v1/pollers/:id` — remove a decommissioned poller from the durable inventory. A
+/// currently-online poller is refused (409 `poller_online`): it would just re-register on its next
+/// heartbeat. `ManageConfig`-gated (audited by the mutation middleware). Authorize-first ordering
+/// (like the shared-dashboard write) so a forbidden caller can't probe whether the DB is wired and
+/// the RBAC gate is testable without a database.
+async fn delete_poller(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if admin
+        .coordinator
+        .poller_views(Instant::now())
+        .iter()
+        .any(|v| v.id == id && v.online)
+    {
+        return error_response(
+            StatusCode::CONFLICT,
+            "poller_online",
+            "poller is currently online; stop it before removing it".to_owned(),
+        );
+    }
+    match admin.pollers.delete(&id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("poller_not_found", format!("no poller {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "delete poller failed");
+            internal("failed to delete poller")
+        }
+    }
 }
 
 /// Reachability of one backing dependency, for the system-health endpoint. Carries only a
@@ -2979,8 +3221,9 @@ async fn create_node(
     }
 }
 
-/// Set/clear a node's profile + bound credential and its descriptive maker/model. The node-edit
-/// UI loads the current values and resends them, so an unchanged field is preserved.
+/// Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally
+/// move it to a different poll-pool. The node-edit UI loads the current values and resends them, so
+/// an unchanged field is preserved.
 #[derive(Deserialize)]
 struct NodeBindings {
     profile_id: Option<Uuid>,
@@ -2989,6 +3232,49 @@ struct NodeBindings {
     vendor: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    /// Poll-pool assignment (ADR-009). **Absent** = leave the pool unchanged; `""` (or whitespace)
+    /// = clear it to the `default` pool; otherwise move the node to that pool (validated as a
+    /// NATS-subject-safe token). See [`validate_pool_update`].
+    #[serde(default)]
+    pool: Option<String>,
+}
+
+/// Longest accepted pool name (a single NATS subject token — keep it short and human-manageable).
+const MAX_POOL_LEN: usize = 63;
+
+/// Validate an operator-supplied pool name for [`set_node_bindings`], returning the DB update
+/// instruction: outer `None` = the field was absent, leave the node's pool unchanged; inner `None`
+/// = clear it to NULL (the node falls back to the `default` pool); inner `Some` = set it.
+///
+/// A pool name becomes the `yagra.jobs.<pool>` / assignment subject, so it must already be a legal
+/// single NATS token (`[A-Za-z0-9_-]`). We **reject** anything that would sanitize to a different
+/// string (dots, spaces, slashes, …) rather than silently rewriting it, so operator intent stays
+/// explicit. Surrounding whitespace is trimmed first (matching the sibling vendor/model fields), and
+/// a value that trims to empty clears the pool.
+#[allow(clippy::result_large_err)]
+fn validate_pool_update(pool: Option<String>) -> Result<Option<Option<String>>, Response> {
+    let Some(raw) = pool else {
+        return Ok(None); // field absent → leave the pool as-is
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Some(None)); // explicit clear → NULL (default pool)
+    }
+    if trimmed.chars().count() > MAX_POOL_LEN {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_pool",
+            format!("pool name must be at most {MAX_POOL_LEN} characters"),
+        ));
+    }
+    if yagra_bus::subjects::sanitize_token(trimmed) != trimmed {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_pool",
+            "pool name may contain only letters, digits, '_' or '-'".to_owned(),
+        ));
+    }
+    Ok(Some(Some(trimmed.to_owned())))
 }
 
 async fn set_node_bindings(
@@ -3003,6 +3289,10 @@ async fn set_node_bindings(
     if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
         return resp;
     }
+    let pool_update = match validate_pool_update(body.pool) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
     match admin
         .repo
         .set_node_bindings(
@@ -3017,6 +3307,7 @@ async fn set_node_bindings(
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty()),
+            pool_update.as_ref().map(|inner| inner.as_deref()),
         )
         .await
     {
@@ -5236,6 +5527,12 @@ struct StartScan {
     communities: Vec<String>,
     #[serde(default)]
     credential_ids: Vec<String>,
+    /// Poll-pool to run the sweep in (ADR-009/020). Absent/empty = legacy global discovery
+    /// (compat). When it names a pool with a live poller, the sweep is routed to that pool's own
+    /// discovery subject so a remote-site poller scans its own network; otherwise it falls back to
+    /// the global subject (so an operator can't accidentally aim a scan at a pool no poller serves).
+    #[serde(default)]
+    pool: Option<String>,
 }
 
 /// Resolve a scan's stored credential ids into inline candidates for the sweep job.
@@ -5345,9 +5642,21 @@ async fn start_discovery_scan(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    // Route the sweep to a pool's own discovery subject only when that pool has a live poller (one
+    // subscribed to it); otherwise fall back to the legacy global subject for N/N-1 compatibility
+    // (an old wildcard poller still absorbs it, and a typo'd pool name never black-holes the scan).
+    let requested_pool = body
+        .pool
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    let pool_route = match requested_pool {
+        Some(p) if admin.coordinator.live_pools(Instant::now()).contains(p) => Some(p),
+        _ => None,
+    };
     match admin
         .discovery
-        .start(targets, body.communities, credentials)
+        .start(targets, body.communities, credentials, pool_route)
         .await
     {
         Ok(scan_id) => (
@@ -7648,6 +7957,7 @@ mod tests {
             samples: vec![Sample::gauge(metric, value)],
             interfaces: Vec::new(),
             sys_descr: None,
+            poller_id: None,
         });
         Arc::new(sink)
     }
@@ -8951,5 +9261,239 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    // ── Distributed poller pool (ADR-009/020) — Pollers API ───────────────────
+
+    #[test]
+    fn pool_name_validation() {
+        // Absent → leave the node's pool unchanged.
+        assert_eq!(validate_pool_update(None).ok(), Some(None));
+        // Empty / whitespace-only → clear to NULL (the default pool).
+        assert_eq!(
+            validate_pool_update(Some(String::new())).ok(),
+            Some(Some(None))
+        );
+        assert_eq!(
+            validate_pool_update(Some("   ".to_owned())).ok(),
+            Some(Some(None))
+        );
+        // A legal NATS-subject token → set (surrounding whitespace is trimmed).
+        assert_eq!(
+            validate_pool_update(Some("tokyo".to_owned())).ok(),
+            Some(Some(Some("tokyo".to_owned())))
+        );
+        assert_eq!(
+            validate_pool_update(Some("  edge-1_lab  ".to_owned())).ok(),
+            Some(Some(Some("edge-1_lab".to_owned())))
+        );
+        // Rejected: anything that would sanitize to a different subject token (dot / space / slash).
+        assert!(validate_pool_update(Some("tokyo.1".to_owned())).is_err());
+        assert!(validate_pool_update(Some("east dc".to_owned())).is_err());
+        assert!(validate_pool_update(Some("a/b".to_owned())).is_err());
+        // Rejected: over the length bound; the bound itself is accepted.
+        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN + 1))).is_err());
+        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN))).is_ok());
+    }
+
+    /// A live registry view for the merge tests (online → recent, offline → stale).
+    fn live_view(id: &str, pool: &str, online: bool) -> PollerView {
+        PollerView {
+            id: id.to_owned(),
+            pool: pool.to_owned(),
+            online,
+            seconds_since_seen: if online { 3 } else { 120 },
+            version: "0.1.2".to_owned(),
+            incarnation: Uuid::nil(),
+            working_set_nodes: 5,
+            working_set_specs: 9,
+            inflight: 0,
+            results_total: 42,
+        }
+    }
+
+    /// A durable inventory row for the merge tests.
+    fn inv_row(id: &str, pool: &str) -> PollerRow {
+        PollerRow {
+            id: id.to_owned(),
+            pool: pool.to_owned(),
+            first_seen: "2026-07-06T00:00:00+00:00".to_owned(),
+            last_seen: "2026-07-06T01:00:00+00:00".to_owned(),
+            last_version: Some("0.1.1".to_owned()),
+            last_incarnation: None,
+        }
+    }
+
+    #[test]
+    fn build_pollers_response_merges_live_and_inventory() {
+        // p1: online live + durable row → online, live stats/version, PG timestamps.
+        // p2: inventory only (coordinator forgot it on TTL) → offline, durable version, 0 stats.
+        // p3: live only, not yet persisted (inside the 60s upsert throttle) → still listed, null ts.
+        let live = vec![
+            live_view("p1", "default", true),
+            live_view("p3", "lab", true),
+        ];
+        let inventory = vec![inv_row("p1", "default"), inv_row("p2", "default")];
+        let mut node_pools = std::collections::HashMap::new();
+        node_pools.insert("default".to_owned(), 10usize);
+        let resp = build_pollers_response(inventory, live, node_pools);
+
+        assert_eq!(
+            resp.pollers
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["p1", "p2", "p3"],
+            "pollers are sorted by id"
+        );
+        let by_id = |id: &str| resp.pollers.iter().find(|p| p.id == id).unwrap();
+
+        let p1 = by_id("p1");
+        assert_eq!(p1.status, "online");
+        assert_eq!(p1.version.as_deref(), Some("0.1.2"), "live version wins");
+        assert_eq!(p1.last_seen.as_deref(), Some("2026-07-06T01:00:00+00:00"));
+        assert_eq!(p1.working_set_nodes, 5);
+        assert_eq!(p1.results_total, 42);
+
+        let p2 = by_id("p2");
+        assert_eq!(p2.status, "offline");
+        assert_eq!(
+            p2.version.as_deref(),
+            Some("0.1.1"),
+            "offline poller falls back to the durable version"
+        );
+        assert_eq!(p2.working_set_nodes, 0);
+        assert_eq!(p2.results_total, 0);
+
+        let p3 = by_id("p3");
+        assert_eq!(p3.status, "online");
+        assert_eq!(p3.pool, "lab");
+        assert_eq!(
+            p3.last_seen, None,
+            "a not-yet-persisted poller has no timestamp"
+        );
+        assert_eq!(p3.first_seen, None);
+    }
+
+    #[test]
+    fn build_pollers_response_pool_summary_modes_and_warnings() {
+        // default: nodes + a live poller → working_set, no warning.
+        // legacy-pool: nodes but only an OFFLINE poller → legacy + warning (offline doesn't count).
+        // waiting: a live poller but no nodes → working_set, no warning (poller idle).
+        let live = vec![
+            live_view("p1", "default", true),
+            live_view("p-off", "legacy-pool", false),
+            live_view("p-wait", "waiting", true),
+        ];
+        let mut node_pools = std::collections::HashMap::new();
+        node_pools.insert("default".to_owned(), 10usize);
+        node_pools.insert("legacy-pool".to_owned(), 4usize);
+        let resp = build_pollers_response(Vec::new(), live, node_pools);
+
+        assert_eq!(
+            resp.pools
+                .iter()
+                .map(|p| p.pool.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "legacy-pool", "waiting"],
+            "pools are sorted by name"
+        );
+        let pool = |name: &str| resp.pools.iter().find(|p| p.pool == name).unwrap();
+
+        let d = pool("default");
+        assert_eq!(
+            (d.nodes, d.live_pollers, d.mode, d.warning),
+            (10, 1, "working_set", None)
+        );
+        let l = pool("legacy-pool");
+        assert_eq!(
+            (l.nodes, l.live_pollers, l.mode, l.warning),
+            (4, 0, "legacy", Some("nodes_without_live_poller"))
+        );
+        let w = pool("waiting");
+        assert_eq!(
+            (w.nodes, w.live_pollers, w.mode, w.warning),
+            (0, 1, "working_set", None)
+        );
+    }
+
+    #[tokio::test]
+    async fn pollers_list_unavailable_without_admin() {
+        // Public skeleton mode (admin: None): no coordinator/DB → the standard 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pollers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn pollers_list_requires_auth_in_private_mode() {
+        // Private mode: the Pollers view is View-gated like the other fleet reads.
+        let (state, _token) = private_state_with(Arc::new(InMemorySink::default()));
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pollers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_poller_forbidden_for_non_admin() {
+        use yagra_common::Role;
+        // Deleting a poller needs ManageConfig; a Viewer/Operator is rejected before any DB/admin
+        // work (authorize-first ordering), so the RBAC gate is testable without a database.
+        for role in [Role::Viewer, Role::Operator] {
+            let (state, token) = state_with_role_token(role);
+            let resp = router(state)
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri("/api/v1/pollers/edge-1")
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::FORBIDDEN,
+                "role {role:?} must be forbidden"
+            );
+            assert_eq!(body_json(resp).await["error"]["code"], "forbidden");
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_poller_admin_passes_authorization() {
+        // Admin clears the RBAC gate; with no DB wired it then hits the admin/503 fallback — so an
+        // admin sees 503 (auth passed), not 403. Proves ManageConfig admits the Admin role.
+        let (state, token) = state_with_role_token(yagra_common::Role::Admin);
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/pollers/edge-1")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
     }
 }

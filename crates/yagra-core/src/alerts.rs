@@ -1222,6 +1222,7 @@ mod tests {
             samples: Vec::new(),
             interfaces: Vec::new(),
             sys_descr: None,
+            poller_id: None,
         }
     }
 

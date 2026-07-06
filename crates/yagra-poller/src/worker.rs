@@ -9,6 +9,7 @@
 use crate::limiter::PollLimiter;
 use futures::stream::{Stream, StreamExt};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use yagra_bus::{
@@ -277,6 +278,7 @@ pub async fn execute_meraki(
             samples,
             interfaces,
             sys_descr: None,
+            poller_id: None,
         });
     }
     results
@@ -342,6 +344,7 @@ async fn execute_snmp_table(
         samples,
         interfaces,
         sys_descr: None,
+        poller_id: None,
     }
 }
 
@@ -510,6 +513,7 @@ fn result(
         samples,
         interfaces: Vec::new(),
         sys_descr: None,
+        poller_id: None,
     }
 }
 
@@ -556,16 +560,31 @@ fn now_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// Stamp the producing poller's provenance onto a result (ADR-009). `None` leaves it unset (the
+/// single-process skeleton / an unidentified poller); core reads that as "unknown / central".
+fn stamp_poller_id(result: &mut PollResult, poller_id: &Option<Arc<str>>) {
+    if let Some(id) = poller_id {
+        result.poller_id = Some(id.to_string());
+    }
+}
+
 /// Run the poll loop over a stream of jobs. Each job runs concurrently under the
 /// [`PollLimiter`]: a global concurrency cap bounds total load and per-device single-flight
 /// drops a poll whose target is still being probed (backpressure, monitoring-conventions).
 /// Returns when the stream ends. Stream-generic so the same loop drives both the in-memory
 /// bus (tests/skeleton) and the NATS queue subscription (production), ADR-003/009.
+///
+/// `poller_id` (its sanitized id) is stamped onto every published result for provenance; the shared
+/// `results_total` counter is bumped on each successful publish and `inflight` tracks probes in
+/// flight — both feed the poller's heartbeat telemetry (ADR-009).
 pub async fn run_stream<B, S>(
     mut jobs: S,
     bus: Arc<B>,
     transport: Arc<dyn Transport>,
     limiter: Arc<PollLimiter>,
+    poller_id: Option<Arc<str>>,
+    results_total: Arc<AtomicU64>,
+    inflight: Arc<AtomicU64>,
 ) where
     B: Bus + 'static,
     S: Stream<Item = PollJob> + Unpin,
@@ -580,15 +599,23 @@ pub async fn run_stream<B, S>(
             };
             let bus = bus.clone();
             let transport = transport.clone();
+            let poller_id = poller_id.clone();
+            let results_total = results_total.clone();
+            let inflight = inflight.clone();
             tokio::spawn(async move {
                 let _guard = guard;
+                inflight.fetch_add(1, Ordering::Relaxed);
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                 let results = execute_meraki(&job, transport.as_ref(), now_unix_ms()).await;
-                for result in results {
+                for mut result in results {
+                    stamp_poller_id(&mut result, &poller_id);
                     if let Err(err) = bus.publish_result(result).await {
                         tracing::error!(error = %err, "failed to publish meraki poll result");
+                    } else {
+                        results_total.fetch_add(1, Ordering::Relaxed);
                     }
                 }
+                inflight.fetch_sub(1, Ordering::Relaxed);
             });
             continue;
         }
@@ -600,13 +627,21 @@ pub async fn run_stream<B, S>(
         };
         let bus = bus.clone();
         let transport = transport.clone();
+        let poller_id = poller_id.clone();
+        let results_total = results_total.clone();
+        let inflight = inflight.clone();
         tokio::spawn(async move {
             let _guard = guard; // released (and target unmarked) when the probe finishes
+            inflight.fetch_add(1, Ordering::Relaxed);
             metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
-            let result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+            let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+            stamp_poller_id(&mut result, &poller_id);
             if let Err(err) = bus.publish_result(result).await {
                 tracing::error!(error = %err, "failed to publish poll result");
+            } else {
+                results_total.fetch_add(1, Ordering::Relaxed);
             }
+            inflight.fetch_sub(1, Ordering::Relaxed);
         });
     }
 }
@@ -1089,7 +1124,17 @@ mod tests {
         // Adapt the broadcast receiver into the generic job stream the loop consumes.
         let jobs = Box::pin(BroadcastStream::new(jobs_rx).filter_map(|r| async move { r.ok() }));
         let limiter = Arc::new(PollLimiter::new(16));
-        tokio::spawn(run_stream(jobs, bus.clone(), transport, limiter));
+        let results_total = Arc::new(AtomicU64::new(0));
+        let inflight = Arc::new(AtomicU64::new(0));
+        tokio::spawn(run_stream(
+            jobs,
+            bus.clone(),
+            transport,
+            limiter,
+            None, // single-process skeleton: no poller id to stamp
+            results_total,
+            inflight,
+        ));
 
         // Simulate core dispatching a job.
         bus.publish_job(icmp_job()).await.unwrap();
@@ -1098,6 +1143,63 @@ mod tests {
         assert_eq!(result.job_id, Uuid::nil());
         assert_eq!(result.outcome, CheckOutcome::Reachable);
         assert!(!result.samples.is_empty());
+        assert!(result.poller_id.is_none(), "None poller id leaves it unset");
+    }
+
+    /// Distributed-poller walking skeleton (ADR-009/020): a spec lands in a [`WorkingSet`] via a
+    /// single-chunk snapshot, `due()` mints a job, and it flows through the *same* `run_stream` to a
+    /// [`PollResult`] on the bus — stamped with the producing poller's id.
+    #[tokio::test]
+    async fn snapshot_due_job_flows_through_run_stream_with_poller_id() {
+        use crate::working_set::{ApplyOutcome, WorkingSet};
+        use std::time::Instant;
+        use yagra_bus::{NodeJobs, SyncMsg, WorkingSetSnapshot, BUS_SCHEMA_VERSION};
+
+        let bus = Arc::new(InMemoryBus::new(16));
+        let mut results_rx = bus.subscribe_results();
+        let transport: Arc<dyn Transport> = Arc::new(FakeTransport::reachable(5.0));
+
+        // Build a one-node, one-ICMP-spec working set from a single-chunk snapshot.
+        let node = NodeId::from(Uuid::nil());
+        let snap = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            epoch: Uuid::from_u128(1),
+            seq: 1,
+            chunk_index: 0,
+            chunk_total: 1,
+            nodes: vec![NodeJobs {
+                node_id: node,
+                specs: vec![yagra_bus::JobSpec::from_job(&icmp_job())],
+            }],
+            total_nodes: 1,
+        });
+        let mut ws = WorkingSet::new();
+        let now = Instant::now();
+        let mut rng = |_bound: u32| 0u32; // no jitter → due at `now`
+        assert_eq!(ws.apply(snap, now, &mut rng), ApplyOutcome::Applied);
+        let jobs: Vec<PollJob> = ws.due(now);
+        assert_eq!(jobs.len(), 1, "the single spec is due");
+
+        let limiter = Arc::new(PollLimiter::new(16));
+        let results_total = Arc::new(AtomicU64::new(0));
+        let inflight = Arc::new(AtomicU64::new(0));
+        let poller_id: Arc<str> = Arc::from("edge-1");
+        let job_stream = Box::pin(futures::stream::iter(jobs));
+        tokio::spawn(run_stream(
+            job_stream,
+            bus.clone(),
+            transport,
+            limiter,
+            Some(poller_id),
+            results_total.clone(),
+            inflight,
+        ));
+
+        let result = results_rx.recv().await.unwrap();
+        assert_eq!(result.outcome, CheckOutcome::Reachable);
+        assert_eq!(result.poller_id.as_deref(), Some("edge-1"));
+        assert_eq!(result.node_id, node);
     }
 
     #[test]

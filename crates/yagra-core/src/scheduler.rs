@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    Bus, HttpCheck, IcmpCheck, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn,
-    SnmpTableCheck, SnmpV3Check,
+    HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn,
+    SnmpTableCheck, SnmpV3Check, SyncBus, DEFAULT_POOL,
 };
 use yagra_common::{
     builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId, ProfileId,
@@ -42,6 +42,15 @@ pub fn due(elapsed_since_last: Option<Duration>, interval: Duration) -> bool {
         Some(elapsed) => elapsed >= interval,
         None => true,
     }
+}
+
+/// Whether a pool is served in **working-set** mode on a sweep: exactly when it has ≥1 live poller
+/// (`live_pools`, from the coordinator). Legacy per-job mode is the strict complement, so the
+/// scheduler runs each pool in one mode or the other — never both — and a node is never
+/// double-polled (ADR-009). Pure so the per-pool mode decision is unit-testable.
+#[must_use]
+pub fn pool_uses_working_set(pool: &str, live_pools: &std::collections::HashSet<String>) -> bool {
+    live_pools.contains(pool)
 }
 
 /// Per-poll SNMP timeout pushed to the poller (ms). Matches the periodic and on-demand paths.
@@ -327,20 +336,35 @@ impl PollDispatcher {
         assemble_node_jobs(node, auth.as_ref(), &items, None, interval_secs)
     }
 
-    /// Publish one already-built job, bumping the published-jobs counter (used by the periodic
-    /// scheduler after its per-job jitter delay). Returns whether the publish succeeded.
-    pub async fn publish_job(&self, job: PollJob, kind: &str, node: NodeId) -> bool {
-        publish(&self.bus, job, kind, node).await
+    /// The node's poll jobs as reusable working-set [`JobSpec`]s (ADR-020) — the distributed-pool
+    /// analogue of [`Self::build_node_jobs`], reusing its exact auth/collection resolution (zero
+    /// duplication). The per-dispatch `job_id` is dropped here; the poller stamps a fresh one each
+    /// time it schedules the spec locally.
+    pub async fn build_node_specs(&self, node: &Node, interval_secs: u32) -> Vec<JobSpec> {
+        self.build_node_jobs(node, interval_secs)
+            .await
+            .iter()
+            .map(|(job, _kind)| JobSpec::from_job(job))
+            .collect()
+    }
+
+    /// Publish one already-built job to `pool`'s subject, bumping the published-jobs counter (used
+    /// by the periodic scheduler after its per-job jitter delay). Routing per pool keeps a job local
+    /// to the pollers serving that pool (ADR-009). Returns whether the publish succeeded.
+    pub async fn publish_job(&self, job: PollJob, kind: &str, node: NodeId, pool: &str) -> bool {
+        publish(&self.bus, pool, job, kind, node).await
     }
 
     /// Build and immediately publish every poll job for a node (no jitter) — the operator's
-    /// "poll now" action. Returns how many jobs were published. Stamps the dispatcher's default
-    /// interval (the poller ignores the value; cadence is owned by the periodic scheduler).
+    /// "poll now" action. Routes to the node's pool subject (default [`DEFAULT_POOL`]). Returns how
+    /// many jobs were published. Stamps the dispatcher's default interval (the poller ignores the
+    /// value; cadence is owned by the periodic scheduler).
     pub async fn poll_now(&self, node: &Node) -> usize {
+        let pool = node.pool.as_deref().unwrap_or(DEFAULT_POOL);
         let jobs = self.build_node_jobs(node, self.interval_secs).await;
         let mut published = 0u64;
         for (job, kind) in jobs {
-            if publish(&self.bus, job, kind, node.id).await {
+            if publish(&self.bus, pool, job, kind, node.id).await {
                 published += 1;
             }
         }
@@ -402,15 +426,18 @@ async fn resolve_snmp_auth(
     env_community.map(|c| SnmpAuth::V2c(c.to_owned()))
 }
 
-/// Publish a job and bump the published-jobs counter, logging failures. Returns success.
-async fn publish(bus: &NatsBus, job: PollJob, kind: &str, node: NodeId) -> bool {
-    match bus.publish_job(job).await {
+/// Publish a job to `pool`'s subject and bump the published-jobs counter, logging failures.
+/// Returns success. Uses [`SyncBus::publish_job_for_pool`] so legacy per-job dispatch, "poll now",
+/// and Meraki all stay local to the target pool (ADR-009) while an old wildcard poller still
+/// absorbs them (N/N-1 compatible).
+async fn publish(bus: &NatsBus, pool: &str, job: PollJob, kind: &str, node: NodeId) -> bool {
+    match bus.publish_job_for_pool(pool, job).await {
         Ok(()) => {
             metrics::counter!("yagra_jobs_published_total").increment(1);
             true
         }
         Err(e) => {
-            tracing::warn!(error = %e, %kind, node = %node, "failed to publish job");
+            tracing::warn!(error = %e, %kind, node = %node, pool, "failed to publish job");
             false
         }
     }
@@ -424,6 +451,12 @@ pub struct SchedulerStats {
     last_sweep_ms: std::sync::atomic::AtomicI64,
     jobs_last_round: std::sync::atomic::AtomicU64,
     results_total: std::sync::atomic::AtomicU64,
+    // Distributed poller pool (ADR-009/020). Counters bumped by the coordinator as it distributes
+    // working sets; the two `pools_*` are gauge-style (overwritten each sweep by the scheduler).
+    snapshots_published_total: std::sync::atomic::AtomicU64,
+    deltas_published_total: std::sync::atomic::AtomicU64,
+    pools_working_set: std::sync::atomic::AtomicU64,
+    pools_legacy: std::sync::atomic::AtomicU64,
 }
 
 /// A point-in-time view of [`SchedulerStats`] for the API.
@@ -431,10 +464,18 @@ pub struct SchedulerStats {
 pub struct SchedulerStatsSnapshot {
     /// When the last poll round was dispatched (Unix ms), or `None` if none yet.
     pub last_sweep_unix_ms: Option<i64>,
-    /// Jobs published in the most recent round.
+    /// Jobs published in the most recent round (legacy per-job dispatch only).
     pub jobs_last_round: u64,
     /// Total poll results consumed since start.
     pub results_total: u64,
+    /// Working-set snapshots core has published to pollers since start (ADR-020).
+    pub snapshots_published_total: u64,
+    /// Working-set deltas core has published to pollers since start (ADR-020).
+    pub deltas_published_total: u64,
+    /// Pools served in working-set mode in the most recent sweep (a live poller owns them).
+    pub pools_working_set: u64,
+    /// Pools served in legacy per-job mode in the most recent sweep (no live poller).
+    pub pools_legacy: u64,
 }
 
 impl SchedulerStats {
@@ -455,6 +496,25 @@ impl SchedulerStats {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Count one working-set snapshot published (a snapshot, not each of its chunks).
+    pub fn record_snapshot(&self) {
+        self.snapshots_published_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Count one working-set delta published.
+    pub fn record_delta(&self) {
+        self.deltas_published_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Record how many pools ran in each mode this sweep (gauge-style: overwrites).
+    pub fn set_pool_modes(&self, working_set: u64, legacy: u64) {
+        use std::sync::atomic::Ordering;
+        self.pools_working_set.store(working_set, Ordering::Relaxed);
+        self.pools_legacy.store(legacy, Ordering::Relaxed);
+    }
+
     /// Snapshot for the API.
     #[must_use]
     pub fn snapshot(&self) -> SchedulerStatsSnapshot {
@@ -464,6 +524,10 @@ impl SchedulerStats {
             last_sweep_unix_ms: (ms > 0).then_some(ms),
             jobs_last_round: self.jobs_last_round.load(Ordering::Relaxed),
             results_total: self.results_total.load(Ordering::Relaxed),
+            snapshots_published_total: self.snapshots_published_total.load(Ordering::Relaxed),
+            deltas_published_total: self.deltas_published_total.load(Ordering::Relaxed),
+            pools_working_set: self.pools_working_set.load(Ordering::Relaxed),
+            pools_legacy: self.pools_legacy.load(Ordering::Relaxed),
         }
     }
 }
@@ -487,6 +551,21 @@ mod tests {
         assert_eq!(resolve_interval(Some(p2), &overrides, 30), 30);
         // No profile at all → the global default.
         assert_eq!(resolve_interval(None, &overrides, 30), 30);
+    }
+
+    #[test]
+    fn pool_mode_is_working_set_xor_legacy() {
+        use std::collections::HashSet;
+        let live: HashSet<String> = ["tokyo".to_string()].into_iter().collect();
+        // A pool with a live poller runs working-set; one without runs legacy.
+        assert!(pool_uses_working_set("tokyo", &live));
+        assert!(!pool_uses_working_set("osaka", &live));
+        // For every pool the two modes are exclusive (working-set == !legacy) — no double-polling.
+        for pool in ["tokyo", "osaka", "default"] {
+            let working_set = pool_uses_working_set(pool, &live);
+            let legacy = !pool_uses_working_set(pool, &live);
+            assert_ne!(working_set, legacy, "a pool is working-set XOR legacy");
+        }
     }
 
     #[test]

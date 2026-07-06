@@ -27,14 +27,20 @@ mod maintenance;
 mod meraki;
 mod mib;
 mod notifications;
+// Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
+// distribution and consumes the ring / Redis mirror / durable inventory below.
+mod coordinator;
+mod pollers;
 mod repo;
 mod reports;
+mod ring;
 mod scheduler;
 mod secrets;
 mod sink;
 mod store;
 mod thresholds;
 mod url_check;
+mod volatile;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,6 +54,7 @@ use auth::{SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
+use coordinator::Coordinator;
 use dashboard::{DashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
@@ -56,13 +63,15 @@ use maintenance::MaintenanceRepo;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
 use notifications::NotificationRepo;
+use pollers::PollerRepo;
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use thresholds::ThresholdStore;
 use uuid::Uuid;
-use yagra_bus::{NatsBus, PollResult};
+use volatile::VolatileStore;
+use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
 use yagra_topology::Topology;
 
 #[tokio::main]
@@ -133,6 +142,32 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
     let meraki_devices = Arc::new(meraki::MerakiDeviceRepo::new(repo.pool()));
     let meraki_inflight = Arc::new(meraki::MerakiInflight::new());
+
+    // Distributed poller pool (ADR-009/020): the coordinator is core's live poller registry +
+    // working-set publisher. Its Redis mirror (from config, independent of live/skeleton) and
+    // durable PG inventory are best-effort — their loss only degrades observability (ADR-017); the
+    // in-memory registry is the source of truth. Constructed before the result consumer so the
+    // consumer can attribute results to their poller.
+    let volatile = Arc::new(VolatileStore::from_optional_url(cfg.redis_url.as_deref()));
+    let poller_repo = Arc::new(PollerRepo::new(repo.pool()));
+    let coordinator = Arc::new(Coordinator::new(
+        bus.clone(),
+        volatile,
+        Some(poller_repo.clone()),
+        scheduler_stats.clone(),
+    ));
+    // Feed the registry: heartbeats (liveness/telemetry) and snapshot requests. Thin consumer loops
+    // that end when the bus stream closes (shutdown), mirroring the other bus consumers.
+    {
+        let coordinator = coordinator.clone();
+        let stream = Box::pin(bus.subscribe_heartbeats().await?);
+        tokio::spawn(coordinator.run_heartbeat_consumer(stream));
+    }
+    {
+        let coordinator = coordinator.clone();
+        let stream = Box::pin(bus.subscribe_sync_requests().await?);
+        tokio::spawn(coordinator.run_sync_request_consumer(stream));
+    }
     {
         let store = store.clone();
         let alerts = alerts.clone();
@@ -141,6 +176,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let repo = repo.clone();
         let stats = scheduler_stats.clone();
         let meraki_inflight = meraki_inflight.clone();
+        let coordinator = coordinator.clone();
         let results = Box::pin(bus.subscribe_results().await?);
         tokio::spawn(consume_results(
             results,
@@ -151,6 +187,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             repo,
             stats,
             meraki_inflight,
+            coordinator,
         ));
     }
 
@@ -205,17 +242,31 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         cfg.poll_interval_secs,
     ));
 
-    // Scheduler: inventory → jobs on the bus, jittered across the interval.
+    // Scheduler: inventory → working-set syncs (pools with a live poller) or jittered per-job
+    // dispatch (pools without one), decided per pool each sweep via the coordinator's `live_pools`.
     {
         let repo = repo.clone();
         let dispatcher = dispatcher.clone();
         let stats = scheduler_stats.clone();
         let meraki_devices = meraki_devices.clone();
-        tokio::spawn(run_scheduler(repo, dispatcher, stats, meraki_devices));
+        let coordinator = coordinator.clone();
+        tokio::spawn(run_scheduler(
+            repo,
+            dispatcher,
+            stats,
+            meraki_devices,
+            coordinator,
+        ));
     }
 
     // Meraki scheduler: one org-scoped collect per due tier, single-flighted per org so the shared
     // API rate budget is never exceeded. Separate loop so the per-node scheduler is untouched.
+    // Collects route to the configured Meraki pool (env `YAGRA_MERAKI_POOL`, default `default`).
+    let meraki_pool = std::env::var("YAGRA_MERAKI_POOL")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_POOL.to_owned());
     {
         let orgs = meraki_orgs.clone();
         let devices = meraki_devices.clone();
@@ -224,7 +275,13 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let inflight = meraki_inflight.clone();
         let sys = repo.clone();
         tokio::spawn(run_meraki_scheduler(
-            orgs, devices, creds, bus, inflight, sys,
+            orgs,
+            devices,
+            creds,
+            bus,
+            inflight,
+            sys,
+            meraki_pool,
         ));
     }
 
@@ -417,6 +474,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_orgs,
         meraki_devices,
         events: events_repo,
+        coordinator: coordinator.clone(),
+        pollers: poller_repo.clone(),
     }));
     let sessions = Arc::new(SessionStore::new());
 
@@ -449,6 +508,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
         interfaces: Vec::new(),
         sys_descr: None,
+        poller_id: None,
     });
     let state = ApiState {
         store: sink,
@@ -478,6 +538,7 @@ async fn consume_results<S>(
     repo: Arc<NodeRepo>,
     stats: Arc<scheduler::SchedulerStats>,
     meraki_inflight: Arc<meraki::MerakiInflight>,
+    coordinator: Arc<Coordinator<NatsBus>>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
@@ -485,6 +546,11 @@ async fn consume_results<S>(
     while let Some(result) = results.next().await {
         metrics::counter!("yagra_poll_results_total").increment(1);
         stats.record_result();
+        // Attribute the result to its producing poller for the Pollers view (provenance only;
+        // `None` from a legacy/central poller is simply not counted).
+        if let Some(pid) = &result.poller_id {
+            coordinator.record_result(pid);
+        }
         // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
         // results share the job id; a no-op for non-Meraki jobs).
         meraki_inflight.complete(result.job_id);
@@ -553,21 +619,27 @@ async fn consume_results<S>(
     tracing::warn!("result stream ended");
 }
 
-/// Periodically turn the inventory into poll jobs (ICMP + SNMP) on each node's *own* cadence.
+/// Periodically turn the inventory into polling work, choosing per pool (ADR-009/020) between:
 ///
-/// The effective interval per node is `profile override → global default` (both re-read from the
-/// DB each round, so a UI edit applies on the next round without a restart). A node polls only when
-/// its resolved interval has elapsed since its last dispatch (`last_dispatched`, in-memory: on
-/// restart every node is treated as due and re-polls once). The loop wakes at the smallest interval
-/// in play and jitters each publish across that window so N nodes don't poll on the same tick
-/// (anti-stampede). With no overrides this degrades to the old behavior: one global round period,
-/// every node dispatched every round. Job-building is delegated to the shared [`PollDispatcher`] so
-/// the periodic and on-demand paths agree.
+/// - **working-set mode** — a pool with at least one live poller (`coordinator.live_pools`): core
+///   hands the coordinator the pool's *entire* desired spec set (built via
+///   [`scheduler::PollDispatcher::build_node_specs`], **not** gated by `due()` — the working set
+///   always holds every node, and an interval change flows as a spec change), and the coordinator
+///   diffs + distributes it as snapshots/deltas. The poller schedules locally.
+/// - **legacy mode** — a pool with no live poller: exactly the previous behavior (per-node
+///   `due()` + anti-stampede jitter + per-job publish), but routed to the pool's own subject so an
+///   old wildcard poller still absorbs it. This is the zero-poller fallback and N/N-1 safety net.
+///
+/// The mode is decided per pool every sweep, so a pool is served one way or the other but never
+/// both (no double-polling). The effective interval per node is `profile override → global default`
+/// (both re-read each round, so a UI edit applies next round). The loop wakes at the smallest
+/// interval in play; legacy jitter spans that window.
 async fn run_scheduler(
     repo: Arc<NodeRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
+    coordinator: Arc<Coordinator<NatsBus>>,
 ) {
     use std::collections::HashSet;
     use std::time::Instant;
@@ -604,44 +676,86 @@ async fn run_scheduler(
                     min_interval = min_interval.min(*secs);
                 }
                 let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
+                let node_count = resolved.len();
+
+                let now = Instant::now();
+                let live = coordinator.live_pools(now);
+
+                // Group the non-Meraki nodes by pool (default `DEFAULT_POOL`) so each pool's mode is
+                // decided once. Meraki device nodes are dropped here (the org collector owns them).
+                let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
+                for (node, secs) in resolved {
+                    if meraki_node_ids.contains(&node.id.as_uuid()) {
+                        continue;
+                    }
+                    let pool = node
+                        .pool
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_POOL.to_string());
+                    groups.entry(pool).or_default().push((node, secs));
+                }
 
                 tracing::debug!(
-                    count = resolved.len(),
+                    count = node_count,
+                    pools = groups.len(),
                     default_secs,
                     min_interval,
                     "scheduling poll round"
                 );
-                let now = Instant::now();
-                let mut present: HashSet<Uuid> = HashSet::with_capacity(resolved.len());
+
+                // `present` tracks only legacy-dispatched nodes so the retain below can prune
+                // last_dispatched without dropping their cadence; working-set nodes are removed
+                // from it explicitly (so a later legacy fallback re-polls them at once).
+                let mut present: HashSet<Uuid> = HashSet::new();
                 let mut jobs_round: u64 = 0;
-                for (node, secs) in resolved {
-                    let id = node.id.as_uuid();
-                    // Skip Meraki device nodes — the org collector polls them (no per-node jobs).
-                    if meraki_node_ids.contains(&id) {
-                        continue;
-                    }
-                    present.insert(id);
-                    let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
-                    if !scheduler::due(elapsed, Duration::from_secs(u64::from(secs))) {
-                        continue;
-                    }
-                    last_dispatched.insert(id, now);
-                    // Resolve auth + collection and build the node's jobs up front; jitter only the
-                    // publish so polls spread across the window without a stampede.
-                    for (job, kind) in dispatcher.build_node_jobs(&node, secs).await {
-                        jobs_round += 1;
-                        let dispatcher = dispatcher.clone();
-                        let node_id = node.id;
-                        let delay = Duration::from_millis(rand::random::<u64>() % window_ms);
-                        tokio::spawn(async move {
-                            tokio::time::sleep(delay).await;
-                            dispatcher.publish_job(job, kind, node_id).await;
-                        });
+                let mut working_set_pools: u64 = 0;
+                let mut legacy_pools: u64 = 0;
+
+                for (pool, members) in groups {
+                    if scheduler::pool_uses_working_set(&pool, &live) {
+                        // Build the pool's whole desired working set and let the coordinator diff +
+                        // distribute it (snapshots/deltas). Not gated by `due()`.
+                        let mut desired = HashMap::new();
+                        for (node, secs) in &members {
+                            let specs = dispatcher.build_node_specs(node, *secs).await;
+                            last_dispatched.remove(&node.id.as_uuid());
+                            if !specs.is_empty() {
+                                desired.insert(node.id, specs);
+                            }
+                        }
+                        coordinator.reconcile_pool(&pool, desired, now).await;
+                        working_set_pools += 1;
+                    } else {
+                        // Legacy: per-node due-check + jittered per-job publish to the pool subject.
+                        for (node, secs) in &members {
+                            let id = node.id.as_uuid();
+                            present.insert(id);
+                            let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
+                            if !scheduler::due(elapsed, Duration::from_secs(u64::from(*secs))) {
+                                continue;
+                            }
+                            last_dispatched.insert(id, now);
+                            for (job, kind) in dispatcher.build_node_jobs(node, *secs).await {
+                                jobs_round += 1;
+                                let dispatcher = dispatcher.clone();
+                                let node_id = node.id;
+                                let pool = pool.clone();
+                                let delay =
+                                    Duration::from_millis(rand::random::<u64>() % window_ms);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(delay).await;
+                                    dispatcher.publish_job(job, kind, node_id, &pool).await;
+                                });
+                            }
+                        }
+                        legacy_pools += 1;
                     }
                 }
-                // Forget nodes no longer in the inventory so the map can't grow unbounded.
+                // Forget legacy nodes no longer present so the map can't grow unbounded (working-set
+                // nodes were already removed above).
                 last_dispatched.retain(|id, _| present.contains(id));
                 stats.record_sweep(jobs_round);
+                stats.set_pool_modes(working_set_pools, legacy_pools);
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
@@ -663,9 +777,10 @@ async fn run_meraki_scheduler(
     bus: Arc<NatsBus>,
     inflight: Arc<meraki::MerakiInflight>,
     settings: Arc<NodeRepo>,
+    meraki_pool: String,
 ) {
     use std::time::Instant;
-    use yagra_bus::{Bus, PollJob};
+    use yagra_bus::{PollJob, SyncBus};
     use yagra_common::MerakiTier;
 
     const TICK: Duration = Duration::from_secs(15);
@@ -733,7 +848,7 @@ async fn run_meraki_scheduler(
             let check = meraki::build_collect_check(&org, tier, api_key, device_refs, network_ids);
             let interval = org.tier_cadence(tier);
             let job = PollJob::meraki_collect(job_id, check, interval);
-            match bus.publish_job(job).await {
+            match bus.publish_job_for_pool(&meraki_pool, job).await {
                 Ok(()) => {
                     last.insert((org.id, tier), now);
                     metrics::counter!("yagra_meraki_collects_dispatched_total").increment(1);

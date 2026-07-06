@@ -30,6 +30,7 @@ import { MutesPage } from './pages/MutesPage';
 import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { SystemHealthPage } from './pages/SystemHealthPage';
+import { PollersPage } from './pages/PollersPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
 import { AboutPage } from './pages/AboutPage';
@@ -89,7 +90,7 @@ export function AppRoutes() {
 
         {/* Settings */}
         <Route path="settings/system-health" element={<SystemHealthPage />} />
-        <Route path="settings/pollers" element={<ComingSoon />} />
+        <Route path="settings/pollers" element={<PollersPage />} />
         <Route path="settings/integrations" element={<IntegrationsPage />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />

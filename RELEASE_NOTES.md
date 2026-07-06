@@ -1,5 +1,38 @@
 # Release Notes
 
+## v0.1.3
+
+**Distributed poller pools** — Yagra can now spread polling across pollers placed close to the
+monitored devices. Each node carries a **pool** attribute (a site or region); the central server
+tracks poller liveness, assigns each pool's nodes across its live pollers with consistent hashing,
+and pushes each poller its working set over the bus. A remote poller dials out to the central NATS
+bus (NAT/firewall-friendly), so branch-site segments can be monitored without inbound access. This
+release also brings the passive event monitoring, topology map, and per-node event features.
+
+### New Features
+- **Distributed poller pools (location-affinity assignment + failover)** — deploy pollers at remote
+  sites and assign nodes to them by a **pool** attribute (defaults to one pool, `default`). The
+  central coordinator watches poller heartbeats, distributes each pool's work across its live
+  pollers using a consistent-hash ring (so adding or losing a poller reshuffles the minimum), and
+  fails a departed poller's nodes over to the survivors in the same pool automatically. Pollers
+  receive their assignment as a working-set snapshot and then incremental deltas, and reconnect with
+  a full resync — no polling gaps across restarts. A new **Settings ▸ Pollers** page lists every
+  poller with its pool, status, version, working-set size, and last heartbeat, warns when a pool has
+  nodes but no live poller, and includes a **Register poller** dialog that generates the remote
+  poller's configuration. A pool with no live poller falls back to the existing central polling, so
+  upgrades are seamless. Ships with a `docker-compose.poller.yml` for remote sites and a NATS
+  TLS + authentication configuration for exposing the bus across trust boundaries.
+- **Passive event monitoring (syslog / SNMP traps / webhooks)** — besides active polling, Yagra now
+  receives syslog (RFC 5424/3164) and SNMP v1/v2c traps and accepts inbound webhooks, matches them
+  against operator-defined rules (substring / regex) to raise alerts, and can forward the
+  fire/resolve lifecycle to PagerDuty (Events API v2) and Jira Service Management (Alerts API).
+- **Topology Network map** — a new visualization of the dependency graph, so you can see how nodes
+  relate and how a parent outage cascades to its children.
+- **Per-node event view** — the node-detail page gains an **Events** tab, and the Events page can be
+  filtered to a single node (with a node picker and a `?node_id=` deep link). The event log fetching,
+  paging, and columns are shared between the two views.
+- **Free-text search on Alerts ▸ Events** — filter the event log by an arbitrary search string.
+
 ## v0.1.2
 
 Cisco Meraki monitoring over the **read-only** Dashboard API. Meraki devices appear as ordinary

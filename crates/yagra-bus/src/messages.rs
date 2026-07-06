@@ -181,6 +181,215 @@ impl PollJob {
     }
 }
 
+// ── Distributed poller pool (ADR-009/020) — working-set distribution ────────────────
+//
+// Instead of core publishing every individual [`PollJob`] on every tick, core hands each
+// poller a *working set* — the set of polling specs it owns — as a full snapshot plus
+// incremental deltas, and the poller schedules them locally (ADR-020). This cuts steady-state
+// bus traffic and keeps polling running through a WAN blip. The messages below are the wire
+// contract for that; they follow the same conventions as the rest of this file (`schema_version`
+// with `default_version()`, `#[serde(default)]` on optional fields, no `deny_unknown_fields`),
+// so they stay N/N-1 tolerant during a rolling upgrade (ADR-017).
+
+/// One polling work item as it lives in a poller's working set: a [`PollJob`] **without** its
+/// per-dispatch `job_id` (ADR-020). Core distributes reusable specs; the poller stamps a fresh
+/// `job_id` each time it schedules one locally, so the same spec produces correlatable results
+/// poll after poll without core re-sending it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobSpec {
+    /// Node being polled.
+    pub node_id: NodeId,
+    /// Address to poll (IPv4 or IPv6).
+    pub target: IpAddr,
+    /// What to do.
+    pub check: CheckSpec,
+    /// Desired polling interval, in seconds (the poller's local scheduler applies jitter).
+    pub interval_secs: u32,
+    /// Ask the poller to also probe `sysDescr.0` on this poll (mirrors [`PollJob::probe_identity`]).
+    /// Defaulted for N-1 compatibility (ADR-017).
+    #[serde(default)]
+    pub probe_identity: bool,
+}
+
+impl JobSpec {
+    /// Strip a [`PollJob`] down to its reusable working-set spec, dropping the per-dispatch
+    /// identity (`job_id`, `schema_version`, `credential_ref`).
+    #[must_use]
+    pub fn from_job(job: &PollJob) -> Self {
+        Self {
+            node_id: job.node_id,
+            target: job.target,
+            check: job.check.clone(),
+            interval_secs: job.interval_secs,
+            probe_identity: job.probe_identity,
+        }
+    }
+
+    /// Re-hydrate a dispatchable [`PollJob`] from this spec, stamping the given `job_id` and the
+    /// current [`BUS_SCHEMA_VERSION`]. Credentials are resolved/inlined by core separately, so
+    /// `credential_ref` is left `None` here.
+    #[must_use]
+    pub fn to_job(&self, job_id: Uuid) -> PollJob {
+        PollJob {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id: self.node_id,
+            target: self.target,
+            check: self.check.clone(),
+            interval_secs: self.interval_secs,
+            credential_ref: None,
+            probe_identity: self.probe_identity,
+        }
+    }
+}
+
+/// All of one node's working-set specs — the granularity of both snapshot and delta, so core
+/// can add, replace, or drop a node's polling as a unit (ADR-020).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeJobs {
+    /// The node these specs belong to.
+    pub node_id: NodeId,
+    /// Every polling spec core wants this poller to run for the node.
+    pub specs: Vec<JobSpec>,
+}
+
+/// How many nodes core packs into one snapshot chunk. Sized so a chunk of representative
+/// table-walk specs stays well under NATS's 1 MB message cap (ADR-020) — see the chunk-size
+/// bound test.
+pub const SNAPSHOT_CHUNK_NODES: usize = 100;
+
+/// A working-set sync addressed to one poller on its assignment subject
+/// (`yagra.poller.assign.{id}`). Because that single subject preserves order, the poller can use
+/// `seq` to gate deltas and detect gaps (ADR-020). Tagged so a new variant never breaks an older
+/// poller — an unknown tag is skipped by the poller's malformed-message handling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SyncMsg {
+    /// One chunk of a full working-set snapshot; the poller assembles all chunks of a snapshot
+    /// and replaces its whole set with their union.
+    SnapshotChunk(WorkingSetSnapshot),
+    /// An incremental change (upserts/removes) that must apply at `seq = last_seq + 1`.
+    Delta(WorkingSetDelta),
+}
+
+/// One chunk of a full working-set snapshot for a poller. A snapshot is `chunk_total` chunks that
+/// share one `(epoch, seq)`; the poller reassembles them and replaces its whole set. `epoch`
+/// identifies the core process (it bumps on restart) and `seq` is the poller's monotonic stream
+/// counter, so the poller can tell a stale/racing snapshot from the current one (ADR-020).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkingSetSnapshot {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// The poller this snapshot is addressed to (sanitized id).
+    pub poller_id: String,
+    /// Core-process epoch — a change forces the poller to resync.
+    pub epoch: Uuid,
+    /// The monotonic per-poller stream sequence this snapshot establishes.
+    pub seq: u64,
+    /// 0-based index of this chunk within the snapshot.
+    pub chunk_index: u32,
+    /// Total number of chunks in this snapshot.
+    pub chunk_total: u32,
+    /// The nodes (with their specs) carried by this chunk.
+    pub nodes: Vec<NodeJobs>,
+    /// Total nodes across the whole snapshot (all chunks) — a hint for the poller/UI. Defaulted
+    /// for N-1 compatibility (ADR-017).
+    #[serde(default)]
+    pub total_nodes: u32,
+}
+
+/// An incremental working-set change for a poller, applied only when it lands exactly at the next
+/// sequence (`last_seq + 1`); a gap forces a snapshot resync (ADR-020). This is also the failover
+/// mechanism: when a poller dies, the reassignment of its nodes to survivors arrives as ordinary
+/// upsert/remove deltas — no special-case code path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkingSetDelta {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// The poller this delta is addressed to (sanitized id).
+    pub poller_id: String,
+    /// Core-process epoch (must match the poller's current epoch, else it resyncs).
+    pub epoch: Uuid,
+    /// Sequence of this delta; must equal the poller's `last_seq + 1`.
+    pub seq: u64,
+    /// Nodes to add or replace wholesale. Defaulted so a remove-only delta omits it (ADR-017).
+    #[serde(default)]
+    pub upserts: Vec<NodeJobs>,
+    /// Nodes to drop from the working set. Defaulted so an upsert-only delta omits it.
+    #[serde(default)]
+    pub removes: Vec<NodeId>,
+}
+
+/// How often a poller publishes a [`HeartbeatMsg`] (seconds). One shared home for the cadence so
+/// the poller's beat interval (Yagra-poller) and core's liveness judgment (Yagra-core) can't drift
+/// (ADR-009).
+pub const HEARTBEAT_SECS: u64 = 10;
+
+/// Seconds without a heartbeat after which core treats a poller as offline and drops it from its
+/// pool's hash ring — three missed [`HEARTBEAT_SECS`] beats (ADR-009). The offline event flows to
+/// survivors as ordinary working-set deltas (no special failover path).
+pub const OFFLINE_AFTER_SECS: u64 = 30;
+
+/// A poller liveness + telemetry beat, published every ~10s on [`crate::subjects::heartbeat`]
+/// (ADR-009). Core's registry marks a poller offline after ~30s (3 missed beats) and rebalances
+/// its nodes to survivors. The `epoch`/`last_seq` echo lets core notice a poller that is behind or
+/// on a stale epoch and push it a fresh snapshot. Every telemetry field defaults so the beat stays
+/// N/N-1 tolerant (ADR-017).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeartbeatMsg {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Sanitized poller id (stable across restarts).
+    pub poller_id: String,
+    /// Pool this poller serves.
+    pub pool: String,
+    /// Per-process incarnation (a fresh UUID each start → lets core detect a restart).
+    pub incarnation: Uuid,
+    /// Poller build version (`CARGO_PKG_VERSION`).
+    #[serde(default)]
+    pub version: String,
+    /// The epoch the poller currently holds a working set for (`None` before its first snapshot).
+    #[serde(default)]
+    pub epoch: Option<Uuid>,
+    /// The highest sync sequence the poller has applied.
+    #[serde(default)]
+    pub last_seq: u64,
+    /// Number of nodes in the poller's working set.
+    #[serde(default)]
+    pub working_set_nodes: u32,
+    /// Number of specs in the poller's working set.
+    #[serde(default)]
+    pub working_set_specs: u32,
+    /// Polls currently in flight.
+    #[serde(default)]
+    pub inflight: u32,
+    /// Total results this poller has produced since start.
+    #[serde(default)]
+    pub results_total: u64,
+    /// Passive-event listeners the poller has bound (e.g. `syslog:514`, `trap:162`).
+    #[serde(default)]
+    pub listeners: Vec<String>,
+}
+
+/// A poller's request for a fresh full snapshot, published on [`crate::subjects::sync_request`]
+/// (ADR-020). Sent at startup and whenever the poller detects a gap / epoch mismatch. This is
+/// plain pub/sub, **not** request-reply, because the reply is several snapshot chunks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyncRequest {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Sanitized id of the poller requesting the snapshot.
+    pub poller_id: String,
+    /// Pool the poller serves.
+    pub pool: String,
+    /// The poller's current incarnation.
+    pub incarnation: Uuid,
+}
+
 /// What kind of check to run. Tagged so new protocols can be added without breaking
 /// older consumers (they ignore unknown fields; an unknown *tag* is skipped by the
 /// poller's malformed-message handling, so old pollers simply ignore newer check kinds).
@@ -438,6 +647,12 @@ pub struct PollResult {
     /// device text — never a TSDB label. Defaulted so an older poller stays N-1 compatible.
     #[serde(default)]
     pub sys_descr: Option<String>,
+    /// Which poller produced this result (its sanitized id), when the poller stamps one
+    /// (ADR-009). Descriptive provenance for the Pollers view / self-observability — never a
+    /// TSDB label. Defaulted so an older poller that doesn't stamp it stays N-1 compatible
+    /// (ADR-017); core treats `None` as "unknown / central".
+    #[serde(default)]
+    pub poller_id: Option<String>,
 }
 
 /// An interface discovered during a table walk: its index and the descriptive metadata
@@ -995,5 +1210,327 @@ mod tests {
         let key = iface.series_key(node);
         assert!(key.is_interface_scoped());
         assert_eq!(key.ifindex, Some(IfIndex(3)));
+    }
+
+    // ── Distributed poller pool (ADR-009/020) — working-set wire contract ────────────
+
+    fn sample_node_jobs() -> NodeJobs {
+        NodeJobs {
+            node_id: NodeId::from(Uuid::nil()),
+            specs: vec![JobSpec::from_job(&sample_job())],
+        }
+    }
+
+    #[test]
+    fn poll_result_without_poller_id_defaults_none() {
+        // N-1 (ADR-017): a PollResult from a poller that doesn't stamp provenance has no
+        // `poller_id` — new core must default it to None, not fail to deserialize.
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable"
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.poller_id.is_none());
+        assert!(result.samples.is_empty());
+    }
+
+    #[test]
+    fn poll_result_with_poller_id_round_trips() {
+        let result = PollResult {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id: Uuid::nil(),
+            node_id: NodeId::from(Uuid::nil()),
+            at_unix_ms: 42,
+            outcome: CheckOutcome::Reachable,
+            samples: vec![Sample::gauge("icmp_rtt_ms", 5.0)],
+            interfaces: Vec::new(),
+            sys_descr: None,
+            poller_id: Some("edge-poller-1".into()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: PollResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, back);
+        assert_eq!(back.poller_id.as_deref(), Some("edge-poller-1"));
+    }
+
+    #[test]
+    fn job_spec_from_and_to_job_is_inverse_modulo_identity() {
+        let job = PollJob::snmp(
+            Uuid::new_v4(),
+            NodeId::from(Uuid::new_v4()),
+            IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)),
+            SnmpCheck {
+                community: "public".into(),
+                oids: vec!["1.3.6.1.2.1.1.3.0".into()],
+                columns: Vec::new(),
+                timeout_ms: 2000,
+            },
+            45,
+        );
+        let spec = JobSpec::from_job(&job);
+        let new_id = Uuid::new_v4();
+        let rebuilt = spec.to_job(new_id);
+        // Everything but the per-dispatch identity survives the round-trip.
+        assert_eq!(rebuilt.job_id, new_id);
+        assert_eq!(rebuilt.schema_version, BUS_SCHEMA_VERSION);
+        assert_eq!(rebuilt.credential_ref, None);
+        assert_eq!(rebuilt.node_id, job.node_id);
+        assert_eq!(rebuilt.target, job.target);
+        assert_eq!(rebuilt.check, job.check);
+        assert_eq!(rebuilt.interval_secs, job.interval_secs);
+        assert_eq!(rebuilt.probe_identity, job.probe_identity);
+        // …and from_job(to_job(spec)) is the identity on the spec itself.
+        assert_eq!(JobSpec::from_job(&rebuilt), spec);
+    }
+
+    #[test]
+    fn job_spec_round_trips_through_json() {
+        let spec = JobSpec::from_job(&sample_job());
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: JobSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn job_spec_tolerates_missing_and_unknown_fields() {
+        // Old producer: no probe_identity; new producer: an extra field we ignore (ADR-017).
+        let json = r#"{
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "target": "10.0.0.1",
+            "check": { "kind": "icmp", "count": 3, "timeout_ms": 1000 },
+            "interval_secs": 30,
+            "future_field": "ignored"
+        }"#;
+        let spec: JobSpec = serde_json::from_str(json).unwrap();
+        assert!(!spec.probe_identity);
+        assert_eq!(spec.interval_secs, 30);
+    }
+
+    #[test]
+    fn snapshot_chunk_round_trips_and_carries_snake_case_tag() {
+        let msg = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            epoch: Uuid::nil(),
+            seq: 7,
+            chunk_index: 0,
+            chunk_total: 1,
+            nodes: vec![sample_node_jobs()],
+            total_nodes: 1,
+        });
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"snapshot_chunk\""));
+        let back: SyncMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn delta_round_trips_and_carries_snake_case_tag() {
+        let msg = SyncMsg::Delta(WorkingSetDelta {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            epoch: Uuid::nil(),
+            seq: 8,
+            upserts: vec![sample_node_jobs()],
+            removes: vec![NodeId::from(Uuid::nil())],
+        });
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"delta\""));
+        let back: SyncMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn sync_msg_tags_are_stable_and_unknown_tag_errs() {
+        // The literal tag strings are part of the wire contract — pin them.
+        let snap: SyncMsg = serde_json::from_str(
+            r#"{"type":"snapshot_chunk","poller_id":"p","epoch":"00000000-0000-0000-0000-000000000000","seq":1,"chunk_index":0,"chunk_total":1,"nodes":[]}"#,
+        )
+        .unwrap();
+        assert!(matches!(snap, SyncMsg::SnapshotChunk(_)));
+
+        let delta: SyncMsg = serde_json::from_str(
+            r#"{"type":"delta","poller_id":"p","epoch":"00000000-0000-0000-0000-000000000000","seq":2}"#,
+        )
+        .unwrap();
+        assert!(matches!(delta, SyncMsg::Delta(_)));
+
+        // An unknown tag is an error the consumer can skip — it must not panic.
+        let unknown = serde_json::from_str::<SyncMsg>(r#"{"type":"reset","poller_id":"p"}"#);
+        assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn working_set_snapshot_tolerates_missing_and_unknown_fields() {
+        // Old producer: no schema_version / total_nodes; new producer: an extra field (ADR-017).
+        let json = r#"{
+            "poller_id": "edge-1",
+            "epoch": "00000000-0000-0000-0000-000000000000",
+            "seq": 3,
+            "chunk_index": 1,
+            "chunk_total": 4,
+            "nodes": [],
+            "future_field": 99
+        }"#;
+        let snap: WorkingSetSnapshot = serde_json::from_str(json).unwrap();
+        assert_eq!(snap.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        assert_eq!(snap.total_nodes, 0); // defaulted
+        assert_eq!(snap.chunk_total, 4);
+    }
+
+    #[test]
+    fn working_set_delta_tolerates_missing_and_unknown_fields() {
+        // A remove-only delta omits `upserts`; an upsert-only delta omits `removes`; both, plus a
+        // missing schema_version and an unknown field, must deserialize (ADR-017).
+        let json = r#"{
+            "poller_id": "edge-1",
+            "epoch": "00000000-0000-0000-0000-000000000000",
+            "seq": 9,
+            "removes": ["00000000-0000-0000-0000-000000000000"],
+            "future_field": true
+        }"#;
+        let delta: WorkingSetDelta = serde_json::from_str(json).unwrap();
+        assert_eq!(delta.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        assert!(delta.upserts.is_empty()); // defaulted
+        assert_eq!(delta.removes.len(), 1);
+    }
+
+    #[test]
+    fn heartbeat_round_trips_and_tolerates_minimal_form() {
+        let hb = HeartbeatMsg {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: "tokyo".into(),
+            incarnation: Uuid::nil(),
+            version: "0.1.0".into(),
+            epoch: Some(Uuid::nil()),
+            last_seq: 12,
+            working_set_nodes: 3,
+            working_set_specs: 7,
+            inflight: 1,
+            results_total: 100,
+            listeners: vec!["syslog:514".into()],
+        };
+        let json = serde_json::to_string(&hb).unwrap();
+        let back: HeartbeatMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(hb, back);
+
+        // Old producer: only the required identity fields + an unknown extra (ADR-017).
+        let minimal = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "incarnation": "00000000-0000-0000-0000-000000000000",
+            "future_field": "ignored"
+        }"#;
+        let hb: HeartbeatMsg = serde_json::from_str(minimal).unwrap();
+        assert_eq!(hb.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        assert!(hb.version.is_empty());
+        assert!(hb.epoch.is_none());
+        assert_eq!(hb.last_seq, 0);
+        assert!(hb.listeners.is_empty());
+    }
+
+    #[test]
+    fn sync_request_round_trips_and_tolerates_missing_version() {
+        let req = SyncRequest {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: "tokyo".into(),
+            incarnation: Uuid::nil(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: SyncRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+
+        let old = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "incarnation": "00000000-0000-0000-0000-000000000000",
+            "future_field": 1
+        }"#;
+        let req: SyncRequest = serde_json::from_str(old).unwrap();
+        assert_eq!(req.schema_version, BUS_SCHEMA_VERSION); // defaulted
+    }
+
+    #[test]
+    fn full_snapshot_chunk_stays_under_nats_message_cap() {
+        // A worst-case-ish chunk: SNAPSHOT_CHUNK_NODES nodes, each with one interface table-walk
+        // spec (community + several numeric columns + metadata columns). It must serialize to well
+        // under NATS's 1 MB message cap (ADR-020); we assert a conservative 900 KB ceiling.
+        let spec = JobSpec {
+            node_id: NodeId::from(Uuid::new_v4()),
+            target: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+            check: CheckSpec::SnmpTable(SnmpTableCheck {
+                community: "a-representative-community-string".into(),
+                columns: vec![
+                    SnmpColumn {
+                        metric_name: "if_hc_in_octets".into(),
+                        oid: "1.3.6.1.2.1.31.1.1.1.6".into(),
+                        kind: MetricKind::Counter,
+                    },
+                    SnmpColumn {
+                        metric_name: "if_hc_out_octets".into(),
+                        oid: "1.3.6.1.2.1.31.1.1.1.10".into(),
+                        kind: MetricKind::Counter,
+                    },
+                    SnmpColumn {
+                        metric_name: "if_in_errors".into(),
+                        oid: "1.3.6.1.2.1.2.2.1.14".into(),
+                        kind: MetricKind::Counter,
+                    },
+                    SnmpColumn {
+                        metric_name: "if_out_errors".into(),
+                        oid: "1.3.6.1.2.1.2.2.1.20".into(),
+                        kind: MetricKind::Counter,
+                    },
+                    SnmpColumn {
+                        metric_name: "if_oper_status".into(),
+                        oid: "1.3.6.1.2.1.2.2.1.8".into(),
+                        kind: MetricKind::Gauge,
+                    },
+                ],
+                meta_columns: vec![
+                    SnmpMetaColumn {
+                        field: InterfaceField::Name,
+                        oid: "1.3.6.1.2.1.31.1.1.1.1".into(),
+                    },
+                    SnmpMetaColumn {
+                        field: InterfaceField::Alias,
+                        oid: "1.3.6.1.2.1.31.1.1.1.18".into(),
+                    },
+                    SnmpMetaColumn {
+                        field: InterfaceField::Speed,
+                        oid: "1.3.6.1.2.1.31.1.1.1.15".into(),
+                    },
+                ],
+                timeout_ms: 2000,
+            }),
+            interval_secs: 60,
+            probe_identity: false,
+        };
+        let nodes: Vec<NodeJobs> = (0..SNAPSHOT_CHUNK_NODES)
+            .map(|_| NodeJobs {
+                node_id: NodeId::from(Uuid::new_v4()),
+                specs: vec![spec.clone()],
+            })
+            .collect();
+        let snap = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-poller-fully-qualified.example.com".into(),
+            epoch: Uuid::new_v4(),
+            seq: u64::MAX,
+            chunk_index: 0,
+            chunk_total: 1,
+            total_nodes: SNAPSHOT_CHUNK_NODES as u32,
+            nodes,
+        });
+        let bytes = serde_json::to_vec(&snap).unwrap();
+        assert!(
+            bytes.len() < 900_000,
+            "snapshot chunk of {SNAPSHOT_CHUNK_NODES} nodes was {} bytes",
+            bytes.len()
+        );
     }
 }

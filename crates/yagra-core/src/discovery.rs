@@ -165,11 +165,17 @@ impl DiscoveryRunner {
     /// Start a scan: register it and publish the sweep job. `credentials` are the stored
     /// secrets to try (already resolved/decrypted by the caller — ADR-018/020); they are
     /// passed through to the poller and never logged. Returns the scan id to poll.
+    ///
+    /// `pool` routes the sweep (ADR-009/020): `Some(p)` publishes to that pool's own discovery
+    /// subject (the caller has already confirmed a live poller serves it), so a remote-site poller
+    /// runs the scan on its network; `None` publishes to the legacy global discovery subject (the
+    /// compatibility path, absorbed by an old wildcard poller).
     pub async fn start(
         &self,
         targets: Vec<IpAddr>,
         communities: Vec<String>,
         credentials: Vec<DiscoveryCredential>,
+        pool: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let scan_id = Uuid::new_v4();
         {
@@ -184,7 +190,10 @@ impl DiscoveryRunner {
             credentials,
             timeout_ms: SCAN_TIMEOUT_MS,
         };
-        self.bus.publish_discovery_job(job).await?;
+        match pool {
+            Some(p) => self.bus.publish_discovery_job_for_pool(p, job).await?,
+            None => self.bus.publish_discovery_job(job).await?,
+        }
         Ok(scan_id)
     }
 

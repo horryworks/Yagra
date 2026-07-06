@@ -68,6 +68,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -416,6 +425,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "combine"
+version = "4.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1060,6 +1083,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1160,7 +1194,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2",
+ "socket2 0.6.4",
  "tokio",
  "tower-service",
  "tracing",
@@ -1320,6 +1354,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
+name = "itertools"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1375,7 +1418,7 @@ dependencies = [
  "percent-encoding",
  "quoted_printable",
  "rustls",
- "socket2",
+ "socket2 0.6.4",
  "tokio",
  "tokio-rustls",
  "url",
@@ -1926,7 +1969,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1963,7 +2006,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.52.0",
 ]
@@ -2096,6 +2139,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "redis"
+version = "0.27.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09d8f99a4090c89cc489a94833c901ead69bfbf3877b4867d5482e321ee875bc"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "bytes",
+ "combine",
+ "futures-util",
+ "itertools",
+ "itoa",
+ "num-bigint",
+ "percent-encoding",
+ "pin-project-lite",
+ "ryu",
+ "sha1_smol",
+ "socket2 0.5.10",
+ "tokio",
+ "tokio-util",
+ "url",
 ]
 
 [[package]]
@@ -2562,6 +2629,16 @@ dependencies = [
 
 [[package]]
 name = "socket2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "socket2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
@@ -2820,7 +2897,7 @@ dependencies = [
  "parking_lot",
  "pnet_packet",
  "rand 0.9.4",
- "socket2",
+ "socket2 0.6.4",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2984,7 +3061,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2",
+ "socket2 0.6.4",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -3684,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -3696,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -3712,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3721,7 +3798,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3732,6 +3809,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "rand 0.8.6",
+ "redis",
  "regex",
  "reqwest",
  "serde",
@@ -3755,14 +3833,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-ingest"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -3770,13 +3848,15 @@ dependencies = [
 
 [[package]]
 name = "yagra-poller"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "hostname",
  "metrics",
  "metrics-exporter-prometheus",
+ "rand 0.8.6",
  "snmp2",
  "tokio",
  "tokio-stream",
@@ -3792,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3802,14 +3882,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-transport"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "csnmp",

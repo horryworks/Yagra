@@ -49,6 +49,11 @@ pub struct Config {
     /// authentication — a public, read-only dashboard. Default `false`: viewing requires
     /// a valid session (Viewer role), matching the RBAC design.
     pub public_dashboard: bool,
+    /// Redis connection URL for volatile poller liveness/assignment mirroring (ADR-004/009).
+    /// Optional and **independent of the live/skeleton decision**: Redis is rebuildable, so its
+    /// absence only downgrades that mirror to a no-op (ADR-017), it never forces skeleton mode.
+    /// Consumed by `run_live` to build the coordinator's [`crate::volatile::VolatileStore`].
+    pub redis_url: Option<String>,
 }
 
 impl Config {
@@ -65,8 +70,17 @@ impl Config {
             api_addr: std::env::var("YAGRA_API_ADDR")
                 .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
             public_dashboard: parse_bool(std::env::var("YAGRA_PUBLIC_DASHBOARD").ok()),
+            // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
+            // affecting the live/skeleton gating above.
+            redis_url: parse_optional(std::env::var("YAGRA_REDIS_URL").ok()),
         })
     }
+}
+
+/// Normalize an optional string env var: unset, empty, or all-whitespace ⇒ `None`; otherwise the
+/// trimmed value. Keeps a blank `YAGRA_REDIS_URL=` from being treated as a real URL.
+fn parse_optional(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
 /// Parse a boolean flag. Truthy: `1`/`true`/`yes`/`on` (case-insensitive); everything
@@ -138,6 +152,17 @@ mod tests {
         );
         assert_eq!(parse_interval(Some("10".into())), MIN_POLL_INTERVAL_SECS);
         assert_eq!(parse_interval(Some("3600".into())), MAX_POLL_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn optional_is_none_when_absent_or_blank() {
+        assert_eq!(parse_optional(None), None);
+        assert_eq!(parse_optional(Some(String::new())), None);
+        assert_eq!(parse_optional(Some("   ".into())), None);
+        assert_eq!(
+            parse_optional(Some("  redis://cache:6379  ".into())),
+            Some("redis://cache:6379".to_owned())
+        );
     }
 
     #[test]
