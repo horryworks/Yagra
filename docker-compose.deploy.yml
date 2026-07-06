@@ -74,7 +74,18 @@ services:
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      # Passive-event listeners (syslog / SNMP traps, v1/v2c) — unprivileged container
+      # ports, standard host ports mapped below. Set empty in .env to disable.
+      YAGRA_SYSLOG_BIND: ${YAGRA_SYSLOG_BIND-0.0.0.0:1514}
+      YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND-0.0.0.0:1162}
+      # Optional trap community filter (mismatches dropped; value never logged).
+      YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
       RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${YAGRA_SYSLOG_PORT:-514}:1514/udp"   # syslog intake
+      - "${YAGRA_TRAP_PORT:-162}:1162/udp"     # SNMP trap intake
+    # NOTE: event→node correlation keys on the datagram source IP. If Docker's bridge
+    # networking rewrites it on this host, switch the poller to `network_mode: host`.
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     restart: unless-stopped

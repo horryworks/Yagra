@@ -10,7 +10,7 @@
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
 use crate::bus::{Bus, BusError};
-use crate::messages::{DiscoveryJob, DiscoveryResult, PollJob, PollResult};
+use crate::messages::{DiscoveryJob, DiscoveryResult, EventMsg, PollJob, PollResult};
 use crate::subjects;
 use async_nats::Client;
 use async_trait::async_trait;
@@ -83,6 +83,25 @@ impl NatsBus {
                 Ok(result) => Some(result),
                 Err(e) => {
                     tracing::warn!(error = %e, "dropping malformed PollResult from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Subscribe to passive events — core side (single consumer, no queue group, same as
+    /// results). Malformed messages are skipped.
+    pub async fn subscribe_events(&self) -> Result<impl Stream<Item = EventMsg>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::events())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe events: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<EventMsg>(&msg.payload) {
+                Ok(event) => Some(event),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed EventMsg from bus");
                     None
                 }
             }
@@ -169,5 +188,14 @@ impl Bus for NatsBus {
             .publish(subjects::results(), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish result: {e}")))
+    }
+
+    async fn publish_event(&self, event: EventMsg) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&event)
+            .map_err(|e| BusError::Publish(format!("encode event: {e}")))?;
+        self.client
+            .publish(subjects::events(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish event: {e}")))
     }
 }

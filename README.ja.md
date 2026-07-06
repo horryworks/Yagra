@@ -20,6 +20,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 | Yagra-poller | ICMP/SNMP/API の実ポーリング（ステートレス・水平スケール） | `crates/yagra-poller` |
 | Yagra-discovery | デバイス探索・分類 | `crates/yagra-discovery` |
 | Yagra-alert | 状態判定・ヒステリシス・依存抑制 | `crates/yagra-alert` |
+| Yagra-ingest | 受動イベント解析（syslog / SNMPトラップ）+ レート制限 | `crates/yagra-ingest` |
 | Yagra-bus | ジョブ配信・ポーラ分散 | `crates/yagra-bus` |
 | Yagra-transport | ICMP/SNMP/HTTP の抽象化 | `crates/yagra-transport` |
 | Yagra-topology | 依存関係・マップ | `crates/yagra-topology` |
@@ -38,6 +39,27 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 - **バス:** NATS（core⇄poller）。
 - **北向き API:** REST（`/api/v1`）。
 - **デプロイ:** Docker / Docker Compose（MVP）→ Kubernetes（スケールアウト / HA）。
+
+## 受動イベント監視（syslog / SNMPトラップ / Webhook）
+
+能動ポーリングに加えて、Yagra は受信イベントをオペレータ定義のルール（部分一致 / 正規表現）と
+照合してアラートを発報し、PagerDuty（Events API v2）や Jira Service Management（Alerts API）へ
+fire/resolve ライフサイクル連動で転送できます:
+
+- **syslog**（UDP 514）と **SNMPトラップ**（UDP 162、v1/v2c + inform）はポーラが受信し、
+  バス経由で core に転送します。拠点ごとに `YAGRA_SYSLOG_BIND` / `YAGRA_TRAP_BIND` で
+  有効化します（`docker-compose.yml` 参照）。**SNMPv3 トラップは未対応です。**
+- **Webhook** は core API で受信します: `POST /api/v1/ingest/webhook/<source-id>` +
+  ソースごとの Bearer トークン（*Alerts ▸ Event sources* で作成）。
+- ルール（*Alerts ▸ Event rules*）では重大度、自動クローズ TTL、任意のクリアパターン
+  （例: link-up が link-down を解決）、発報しきい値（M 秒間に N 回）を設定できます。
+  受信イベントは *Alerts ▸ Events* で参照できます。
+
+> **デプロイ時の注意:** イベント→ノードの相関はデータグラムの**送信元 IP** を使います。
+> Docker のブリッジネットワークで送信元 IP が書き換わる環境では、ポーラを
+> `network_mode: host` で実行してください。ホストで既に syslog デーモンが 514 番を使って
+> いる場合は公開ポートを変更してください。ポーラ側のレート制限（送信元ごと + 全体）が
+> イベントフラッドを抑えます。
 
 ## はじめに
 

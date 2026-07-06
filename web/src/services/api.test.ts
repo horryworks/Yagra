@@ -711,6 +711,103 @@ describe('api client', () => {
     expect(spy.mock.calls[1][1].method).toBe('DELETE');
   });
 
+  it('creates an event source and returns the once-shown token', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: 'es1', token: 'abc123' }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.createEventSource({ name: 'Grafana' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/event-sources');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ name: 'Grafana' });
+    expect(res.token).toBe('abc123');
+  });
+
+  it('rotates an event source token via its id', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ token: 'new-token' }),
+    } as Response);
+    globalThis.fetch = spy;
+    await api.rotateEventSourceToken('es1');
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/event-sources/es1/rotate-token');
+    expect(spy.mock.calls[0][1].method).toBe('POST');
+  });
+
+  it('creates an event rule as a tagged JSON body', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'er1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createEventRule({
+      name: 'link down',
+      enabled: true,
+      match_kind: 'substring',
+      pattern: 'link down',
+      clear_pattern: 'link up',
+      severity: 'critical',
+      ttl_secs: 1800,
+      min_count: 1,
+      window_secs: 60,
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/event-rules');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({
+      match_kind: 'substring',
+      pattern: 'link down',
+      severity: 'critical',
+    });
+  });
+
+  it('tests an event rule pattern', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ matched: true, clear_matched: false, error: null }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.testEventRule({
+      match_kind: 'substring',
+      pattern: 'link down',
+      sample: 'link down on ge-0/0/1',
+    });
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/event-rules/test');
+    expect(res.matched).toBe(true);
+  });
+
+  it('builds the events path with filters and the before cursor', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listEvents({ limit: 100, kind: 'syslog', matched: true });
+    expect(spy).toHaveBeenCalledWith('/api/v1/events?limit=100&kind=syslog&matched=true');
+    await api.listEvents();
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/events');
+  });
+
+  it('creates a PagerDuty notification channel with a tagged config', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'c1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.createNotificationChannel({
+      name: 'pd',
+      config: { kind: 'pagerduty', routing_key: 'rk' },
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/notification-channels');
+    expect(JSON.parse(init.body)).toMatchObject({
+      name: 'pd',
+      config: { kind: 'pagerduty', routing_key: 'rk' },
+    });
+  });
+
   it('fetches the role/privilege matrix', async () => {
     const spy = vi.fn().mockResolvedValue({
       ok: true,

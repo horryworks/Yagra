@@ -7,6 +7,7 @@
 #   crates/yagra-poller    = Poller worker                  [bin: yagra-poller]
 #   crates/yagra-discovery = Discovery & classification      [lib]
 #   crates/yagra-alert     = Alert engine                    [lib]
+#   crates/yagra-ingest    = Passive-event parsing (syslog/trap) [lib]
 #   crates/yagra-bus       = Task queue / bus                [lib]
 #   crates/yagra-transport = ICMP/SNMP/HTTP abstraction      [lib]
 #   crates/yagra-topology  = Topology & dependency graph     [lib]
@@ -24,6 +25,7 @@ members = [
     "crates/yagra-topology",
     "crates/yagra-discovery",
     "crates/yagra-alert",
+    "crates/yagra-ingest",
     "crates/yagra-poller",
     "crates/yagra-core",
 ]
@@ -92,6 +94,8 @@ metrics-exporter-prometheus = "0.16"
 config = "0.14"
 # Crypto (envelope encryption of monitoring credentials — pure Rust, no NASM)
 aes-gcm = "0.10"
+# Webhook ingest-token hashing (already in the tree via the crypto stack)
+sha2 = "0.10"
 # Password hashing for local auth (Argon2, pure Rust)
 argon2 = "0.5"
 

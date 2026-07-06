@@ -23,6 +23,12 @@ import type {
   Direction,
   DiscoveryCandidate,
   DiscoveryScan,
+  EventKind,
+  EventRow,
+  EventRule,
+  EventRuleInput,
+  EventRuleTestResult,
+  EventSource,
   FleetCoverage,
   GroupType,
   InterfaceHeatmap,
@@ -875,6 +881,76 @@ export const api = {
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
     request(`/routing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ── Passive events (syslog / SNMP traps / webhooks) ──
+
+  /** Webhook ingest sources (the bearer token is never returned after create/rotate). */
+  listEventSources: (): Promise<EventSource[]> => request('/event-sources'),
+
+  /** Create a webhook source; the response `token` is shown once and only its hash is stored. */
+  createEventSource: (body: {
+    name: string;
+    node_id?: string | null;
+  }): Promise<{ id: string; token: string }> => request('/event-sources', jsonBody('POST', body)),
+
+  /** Update a source's name / enabled / node binding. */
+  updateEventSource: (
+    id: string,
+    body: { name: string; enabled: boolean; node_id?: string | null },
+  ): Promise<void> => request(`/event-sources/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Replace a source's token; the new `token` is shown once. */
+  rotateEventSourceToken: (id: string): Promise<{ token: string }> =>
+    request(`/event-sources/${encodeURIComponent(id)}/rotate-token`, { method: 'POST' }),
+
+  /** Delete a webhook source. */
+  deleteEventSource: (id: string): Promise<void> =>
+    request(`/event-sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Event match rules (substring/regex → alert). */
+  listEventRules: (): Promise<EventRule[]> => request('/event-rules'),
+
+  /** Create an event rule. */
+  createEventRule: (body: EventRuleInput): Promise<{ id: string }> =>
+    request('/event-rules', jsonBody('POST', body)),
+
+  /** Update an event rule. */
+  updateEventRule: (id: string, body: EventRuleInput): Promise<void> =>
+    request(`/event-rules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete an event rule. */
+  deleteEventRule: (id: string): Promise<void> =>
+    request(`/event-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Try a pattern against a sample message (compile errors returned in-band). */
+  testEventRule: (body: {
+    match_kind: 'substring' | 'regex';
+    pattern: string;
+    clear_pattern?: string | null;
+    sample: string;
+  }): Promise<EventRuleTestResult> => request('/event-rules/test', jsonBody('POST', body)),
+
+  /** Received events, keyset-paged on `recorded_at` (newest first) with optional filters. */
+  listEvents: (opts?: {
+    limit?: number;
+    before?: string;
+    kind?: EventKind;
+    node_id?: string;
+    matched?: boolean;
+  }): Promise<EventRow[]> => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.before) params.set('before', opts.before);
+    if (opts?.kind) params.set('kind', opts.kind);
+    if (opts?.node_id) params.set('node_id', opts.node_id);
+    if (opts?.matched != null) params.set('matched', String(opts.matched));
+    const qs = params.toString();
+    return request(qs ? `/events?${qs}` : '/events');
+  },
+
+  /** Manually close an active event alert (identity mirrors the alert wire shape). */
+  closeEventAlert: (node: string, check: string): Promise<void> =>
+    request('/events/alerts/close', jsonBody('POST', { node, check })),
 
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),

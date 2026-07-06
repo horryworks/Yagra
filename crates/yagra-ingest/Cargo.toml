@@ -1,0 +1,15 @@
+[package]
+name = "yagra-ingest"
+description = "Yagra-ingest — passive event parsing: syslog (RFC 5424/3164), SNMP traps, rate limiting."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Trap PDU decoding only (the vendored crypto-rust patch build). The UDP listener I/O
+# lives in yagra-poller; this crate stays pure so parsers unit-test against byte fixtures.
+snmp2 = { workspace = true }
+thiserror = { workspace = true }

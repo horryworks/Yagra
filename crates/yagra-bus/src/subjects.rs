@@ -27,6 +27,12 @@ pub fn results() -> String {
     format!("{ROOT}.results")
 }
 
+/// Subject pollers publish passive events (syslog/traps) on, consumed by core.
+#[must_use]
+pub fn events() -> String {
+    format!("{ROOT}.events")
+}
+
 /// Subject core publishes discovery sweep jobs on; pollers subscribe (queue group).
 #[must_use]
 pub fn discovery_jobs() -> String {
@@ -59,5 +65,10 @@ mod tests {
     #[test]
     fn results_subject_is_stable() {
         assert_eq!(results(), "yagra.results");
+    }
+
+    #[test]
+    fn events_subject_is_stable() {
+        assert_eq!(events(), "yagra.events");
     }
 }

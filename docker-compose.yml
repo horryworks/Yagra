@@ -40,6 +40,22 @@ services:
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      # Passive-event listeners (syslog / SNMP traps, v1/v2c). The container binds
+      # unprivileged ports; compose maps the standard host ports below. Unset = disabled.
+      YAGRA_SYSLOG_BIND: 0.0.0.0:1514
+      YAGRA_TRAP_BIND: 0.0.0.0:1162
+      # Optional: drop traps whose community doesn't match (never logged).
+      # YAGRA_TRAP_COMMUNITY: "public"
+      # Rate limits (events/sec): per source IP and across all sources.
+      # YAGRA_EVENT_RATE_PER_SOURCE: "50"
+      # YAGRA_EVENT_RATE_GLOBAL: "500"
+    ports:
+      - "514:1514/udp"   # syslog intake
+      - "162:1162/udp"   # SNMP trap intake
+    # NOTE: with Docker bridge networking, verify device source IPs survive the port
+    # mapping (conntrack DNAT usually preserves them; the userland proxy may not).
+    # Event→node correlation keys on the source IP — if it's rewritten, run the poller
+    # with `network_mode: host` instead of the port mappings above.
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     # deploy: { replicas: 1 }  # scale out here when distributing polling

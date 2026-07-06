@@ -173,8 +173,9 @@ fn direction_str(d: Direction) -> &'static str {
 }
 
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
-/// stable dedup identity across restarts.
-fn check_id(node: NodeId, name: &str) -> CheckId {
+/// stable dedup identity across restarts. Also used by the event pipeline (`events.rs`)
+/// with `event:<rule-id>` names, keeping event alerts in the same identity space.
+pub(crate) fn check_id(node: NodeId, name: &str) -> CheckId {
     CheckId::from(Uuid::new_v5(
         &Uuid::NAMESPACE_OID,
         format!("{node}:{name}").as_bytes(),
@@ -464,6 +465,53 @@ impl AlertManager {
         }
     }
 
+    /// Whether `node` is inside an active maintenance window (per the config snapshot).
+    /// Used by the event pipeline to suppress event alerts the same way poll alerts are.
+    #[must_use]
+    pub fn in_maintenance(&self, node: NodeId) -> bool {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .maintenance
+            .contains(&node)
+    }
+
+    /// Insert an event-rule alert into the active set and broadcast it. Event alerts are
+    /// edge-triggered (no `CheckState`/dwell — the rule's min-count/window gate and TTL do
+    /// the damping upstream in `events.rs`), so this bypasses `process_check` on purpose.
+    /// Dependency suppression is also skipped by design: a device that just emitted an
+    /// event is demonstrably reachable, so `root_cause` stays `None`.
+    ///
+    /// Returns `Fire` only when the check wasn't already active at the same severity
+    /// (a severity change replaces the entry and re-fires).
+    pub fn raise_event_alert(&self, alert: Alert) -> Option<NotifyAction> {
+        {
+            let mut active = self.active.lock().expect("alerts mutex poisoned");
+            if active
+                .get(&alert.check)
+                .is_some_and(|a| a.severity == alert.severity)
+            {
+                return None;
+            }
+            active.insert(alert.check, alert.clone());
+        }
+        self.broadcast(&alert, false);
+        Some(NotifyAction::Fire(alert))
+    }
+
+    /// Remove an event alert from the active set (TTL expiry / clear-pattern / manual
+    /// close), broadcast the resolution, and return the `Resolve` action carrying the
+    /// previously-active alert. `None` if the check wasn't active.
+    pub fn resolve_event_alert(&self, check: CheckId) -> Option<NotifyAction> {
+        let prev = self
+            .active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .remove(&check)?;
+        self.broadcast(&prev, true);
+        Some(NotifyAction::Resolve(prev))
+    }
+
     fn broadcast(&self, alert: &Alert, resolved: bool) {
         // Wire shape the WebUI consumes (Alert fields + a `resolved` flag).
         let event = serde_json::json!({
@@ -599,6 +647,230 @@ impl NotifyChannel for WebhookChannel {
     }
 }
 
+/// The dedup identity string sent to lifecycle-aware vendors: PagerDuty `dedup_key` and
+/// JSM `alias`. Stable across restarts (check ids are UUIDv5), so a resolve always finds
+/// the incident its fire created.
+fn dedup_string(key: &yagra_alert::DedupKey) -> String {
+    format!("yagra:{}:{}:{}", key.node, key.check, key.severity.as_str())
+}
+
+/// The hardened outbound client shared by the vendor channels: bounded timeout, **no
+/// redirect following** (SSRF — same policy as [`WebhookChannel`]).
+fn hardened_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("Yagra-core")
+        .build()
+        .unwrap_or_default()
+}
+
+/// Map a vendor API response to the channel result. 429 waits out `Retry-After` (capped
+/// at 10s) and then returns `Err` so the dispatcher's retry policy counts the attempt.
+/// `also_ok` admits one vendor-specific extra status (e.g. JSM close → 404 = already
+/// closed, which must read as success for idempotency).
+async fn vendor_response(
+    resp: reqwest::Response,
+    also_ok: Option<reqwest::StatusCode>,
+) -> Result<(), NotifyError> {
+    let status = resp.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let wait_secs = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(2);
+        tokio::time::sleep(std::time::Duration::from_secs(wait_secs.min(10))).await;
+        return Err(NotifyError::Delivery("rate limited (429)".to_owned()));
+    }
+    if status.is_success() || also_ok.is_some_and(|s| s == status) {
+        return Ok(());
+    }
+    Err(NotifyError::Delivery(format!("unexpected status {status}")))
+}
+
+/// PagerDuty Events API v2 [`NotifyChannel`]: `trigger` on fire, `resolve` on recovery,
+/// correlated by `dedup_key`. The routing key is a secret — never logged.
+pub struct PagerDutyChannel {
+    http: reqwest::Client,
+    url: String,
+    routing_key: String,
+}
+
+/// Default (US) Events API v2 endpoint; EU tenants override via the channel config.
+const PAGERDUTY_DEFAULT_URL: &str = "https://events.pagerduty.com/v2/enqueue";
+
+impl PagerDutyChannel {
+    #[must_use]
+    pub fn new(routing_key: String, api_url: Option<String>) -> Self {
+        Self {
+            http: hardened_client(),
+            url: api_url.unwrap_or_else(|| PAGERDUTY_DEFAULT_URL.to_owned()),
+            routing_key,
+        }
+    }
+
+    async fn send_event(
+        &self,
+        action: &str,
+        notification: &Notification,
+        with_payload: bool,
+    ) -> Result<(), NotifyError> {
+        if let Ok(url) = reqwest::Url::parse(&self.url) {
+            if webhook_target_blocked(&url).await {
+                return Err(NotifyError::Delivery(
+                    "PagerDuty target address is not allowed (SSRF)".to_owned(),
+                ));
+            }
+        }
+        let body = pagerduty_body(&self.routing_key, action, notification, with_payload);
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+        vendor_response(resp, None).await
+    }
+}
+
+/// The Events API v2 request body (pure — unit-tested against the wire contract).
+fn pagerduty_body(
+    routing_key: &str,
+    action: &str,
+    notification: &Notification,
+    with_payload: bool,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "routing_key": routing_key,
+        "event_action": action,
+        "dedup_key": dedup_string(&notification.dedup_key),
+    });
+    if with_payload {
+        // custom_details carries the full alert JSON (payload is pre-rendered JSON text).
+        let details: serde_json::Value =
+            serde_json::from_str(&notification.payload).unwrap_or(serde_json::Value::Null);
+        body["payload"] = serde_json::json!({
+            "summary": truncate_chars(&notification.summary, 1024),
+            "source": notification.dedup_key.node.to_string(),
+            "severity": notification.severity.as_str(),
+            "custom_details": details,
+        });
+    }
+    body
+}
+
+#[async_trait]
+impl NotifyChannel for PagerDutyChannel {
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        self.send_event("trigger", notification, true).await
+    }
+
+    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+        // Resolve needs only the dedup_key; PD ignores unknown keys (idempotent).
+        self.send_event("resolve", notification, false).await
+    }
+}
+
+/// JSM Alerts (Opsgenie-compatible) [`NotifyChannel`]: create alert on fire (dedup via
+/// `alias`), close-by-alias on recovery. The GenieKey is a secret — never logged.
+pub struct JsmChannel {
+    http: reqwest::Client,
+    api_url: String,
+    api_key: String,
+}
+
+impl JsmChannel {
+    #[must_use]
+    pub fn new(api_url: String, api_key: String) -> Self {
+        Self {
+            http: hardened_client(),
+            api_url: api_url.trim_end_matches('/').to_owned(),
+            api_key,
+        }
+    }
+
+    async fn guard(&self, url: &str) -> Result<(), NotifyError> {
+        if let Ok(url) = reqwest::Url::parse(url) {
+            if webhook_target_blocked(&url).await {
+                return Err(NotifyError::Delivery(
+                    "JSM target address is not allowed (SSRF)".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl NotifyChannel for JsmChannel {
+    async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
+        let url = format!("{}/alerts", self.api_url);
+        self.guard(&url).await?;
+        let resp = self
+            .http
+            .post(&url)
+            .header("authorization", format!("GenieKey {}", self.api_key))
+            .json(&jsm_create_body(notification))
+            .send()
+            .await
+            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+        vendor_response(resp, None).await
+    }
+
+    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+        let url = jsm_close_url(&self.api_url, notification);
+        self.guard(&url).await?;
+        let resp = self
+            .http
+            .post(&url)
+            .header("authorization", format!("GenieKey {}", self.api_key))
+            .json(&serde_json::json!({ "source": "yagra" }))
+            .send()
+            .await
+            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+        // 404 = no open alert with that alias (already closed / never created) — success,
+        // so a resolve is idempotent and never dangles on retry.
+        vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND)).await
+    }
+}
+
+/// The JSM/Opsgenie create-alert body (pure — unit-tested against the wire contract).
+fn jsm_create_body(notification: &Notification) -> serde_json::Value {
+    let priority = match notification.severity {
+        Severity::Critical => "P1",
+        Severity::Warning => "P3",
+        Severity::Info => "P5",
+    };
+    serde_json::json!({
+        "message": truncate_chars(&notification.summary, 130),
+        "alias": dedup_string(&notification.dedup_key),
+        "priority": priority,
+        "description": notification.payload,
+        "source": "yagra",
+    })
+}
+
+/// The JSM/Opsgenie close-by-alias URL (alias chars are UUID hex/dashes/colons — all
+/// valid in a path segment, no encoding needed).
+fn jsm_close_url(api_url: &str, notification: &Notification) -> String {
+    format!(
+        "{}/alerts/{}/close?identifierType=alias",
+        api_url,
+        dedup_string(&notification.dedup_key)
+    )
+}
+
+/// Clip to at most `max` characters on a char boundary (vendor field limits).
+fn truncate_chars(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((idx, _)) => text[..idx].to_owned(),
+        None => text.to_owned(),
+    }
+}
+
 /// An email [`NotifyChannel`] over SMTP (`lettre`, async + rustls).
 pub struct EmailChannel {
     mailer: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
@@ -668,6 +940,17 @@ fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
             pass,
         } => EmailChannel::new(host, *port, from, to, user.as_deref(), pass.as_deref())
             .map(|c| Arc::new(c) as Arc<dyn NotifyChannel>),
+        ChannelConfig::PagerDuty {
+            routing_key,
+            api_url,
+        } => Some(
+            Arc::new(PagerDutyChannel::new(routing_key.clone(), api_url.clone()))
+                as Arc<dyn NotifyChannel>,
+        ),
+        ChannelConfig::Jsm { api_url, api_key } => {
+            Some(Arc::new(JsmChannel::new(api_url.clone(), api_key.clone()))
+                as Arc<dyn NotifyChannel>)
+        }
     }
 }
 
@@ -700,6 +983,15 @@ impl NotifyChannel for MultiChannel {
     async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError> {
         for channel in &self.channels {
             channel.deliver(notification).await?;
+        }
+        Ok(())
+    }
+
+    // Must forward (not inherit the no-op default) or a lifecycle-aware child channel
+    // would never see its resolve.
+    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+        for channel in &self.channels {
+            channel.deliver_resolve(notification).await?;
         }
         Ok(())
     }
@@ -810,7 +1102,14 @@ impl Notifier {
         self.routes.lock().await.mutes = mutes;
     }
 
-    /// Apply one notify action (deliver a fire, or clear a resolved alert's dedup state).
+    /// Apply one notify action (deliver a fire, or resolve/clear a recovered alert).
+    ///
+    /// The `routes` mutex is held across delivery (including PagerDuty/JSM resolve
+    /// requests with retry/backoff). This serializes all delivery — a wedged vendor
+    /// endpoint can delay other notifications for up to the retry budget. This matches
+    /// the pre-existing `Fire` path (which has always dispatched under this lock) and is
+    /// an accepted tradeoff for keeping per-channel dedup state consistent; decoupling
+    /// delivery from the routing snapshot is a future refactor.
     pub async fn handle(&self, action: NotifyAction) {
         let mut routes = self.routes.lock().await;
         match action {
@@ -854,11 +1153,47 @@ impl Notifier {
             }
             NotifyAction::Resolve(alert) => {
                 let key = alert.dedup_key();
-                if let Some(d) = routes.default.as_mut() {
-                    d.mark_resolved(&key);
+                // A root-cause-suppressed alert never delivered its fire, so there is no
+                // remote incident to close — just clear local dedup (mirror of the fire path).
+                if alert.root_cause.is_some() {
+                    if let Some(d) = routes.default.as_mut() {
+                        d.mark_resolved(&key);
+                    }
+                    for d in routes.channels.values_mut() {
+                        d.mark_resolved(&key);
+                    }
+                    return;
                 }
-                for d in routes.channels.values_mut() {
-                    d.mark_resolved(&key);
+                // Deliver the resolve to the same channels the fire was routed to (same
+                // severity match) so lifecycle-aware channels (PagerDuty/JSM) close their
+                // incident; webhook/email keep their no-op default. Deliberately NOT
+                // mute-filtered: a mute placed after the fire must not leave a remote
+                // incident dangling open (vendor resolves are idempotent).
+                let summary = format!("resolved: node {} recovered", alert.node);
+                let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
+                let notification = Notification::for_alert(&alert, summary, payload);
+
+                let matched: BTreeSet<Uuid> = routes
+                    .rules
+                    .iter()
+                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
+                    .flat_map(|r| r.channel_ids.iter().copied())
+                    .collect();
+
+                if let Some(d) = routes.default.as_mut() {
+                    let outcome = d.dispatch_resolve(notification.clone()).await;
+                    tracing::info!(?outcome, node = %alert.node, route = "default", "alert resolve dispatched");
+                }
+                let ids: Vec<Uuid> = routes.channels.keys().copied().collect();
+                for id in ids {
+                    if let Some(d) = routes.channels.get_mut(&id) {
+                        if matched.contains(&id) {
+                            let outcome = d.dispatch_resolve(notification.clone()).await;
+                            tracing::info!(?outcome, node = %alert.node, channel = %id, "alert resolve dispatched");
+                        } else {
+                            d.mark_resolved(&key);
+                        }
+                    }
                 }
             }
         }
@@ -912,6 +1247,128 @@ mod tests {
             url: "http://example.test/hook".to_owned(),
         });
         assert!(ch.is_some());
+    }
+
+    #[test]
+    fn build_channel_makes_pagerduty_and_jsm() {
+        assert!(build_channel(&ChannelConfig::PagerDuty {
+            routing_key: "rk".to_owned(),
+            api_url: None,
+        })
+        .is_some());
+        assert!(build_channel(&ChannelConfig::Jsm {
+            api_url: "https://api.atlassian.com/jsm/ops/integration/v2".to_owned(),
+            api_key: "key".to_owned(),
+        })
+        .is_some());
+    }
+
+    fn vendor_notification(severity: Severity) -> Notification {
+        let alert = Alert {
+            node: NodeId::from(Uuid::nil()),
+            check: yagra_common::CheckId::from(Uuid::nil()),
+            severity,
+            state: NodeState::Critical,
+            at_unix_ms: 1,
+            root_cause: None,
+            flapping: false,
+            metric: "event:test".to_owned(),
+            breach: None,
+        };
+        Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
+    }
+
+    #[test]
+    fn pagerduty_body_matches_events_v2_contract() {
+        let n = vendor_notification(Severity::Critical);
+        let body = pagerduty_body("rk-secret", "trigger", &n, true);
+        assert_eq!(body["routing_key"], "rk-secret");
+        assert_eq!(body["event_action"], "trigger");
+        let dedup = body["dedup_key"].as_str().unwrap();
+        assert!(dedup.starts_with("yagra:"));
+        assert!(dedup.ends_with(":critical"));
+        assert_eq!(body["payload"]["summary"], "node down");
+        assert_eq!(body["payload"]["severity"], "critical");
+        // custom_details is the parsed alert JSON, not a double-encoded string.
+        assert_eq!(body["payload"]["custom_details"]["metric"], "event:test");
+
+        // Resolve carries only the correlation fields (payload omitted).
+        let resolve = pagerduty_body("rk-secret", "resolve", &n, false);
+        assert_eq!(resolve["event_action"], "resolve");
+        assert_eq!(resolve["dedup_key"], body["dedup_key"]);
+        assert!(resolve.get("payload").is_none());
+    }
+
+    #[test]
+    fn jsm_body_and_close_url_match_opsgenie_contract() {
+        let n = vendor_notification(Severity::Warning);
+        let body = jsm_create_body(&n);
+        assert_eq!(body["message"], "node down");
+        assert_eq!(body["priority"], "P3"); // warning → P3 (critical P1, info P5)
+        assert_eq!(body["source"], "yagra");
+        let alias = body["alias"].as_str().unwrap().to_owned();
+        assert!(alias.starts_with("yagra:"));
+
+        let url = jsm_close_url("https://api.atlassian.com/jsm/ops/integration/v2", &n);
+        assert_eq!(
+            url,
+            format!(
+                "https://api.atlassian.com/jsm/ops/integration/v2/alerts/{alias}/close?identifierType=alias"
+            )
+        );
+
+        // Severity → priority mapping extremes.
+        assert_eq!(
+            jsm_create_body(&vendor_notification(Severity::Critical))["priority"],
+            "P1"
+        );
+        assert_eq!(
+            jsm_create_body(&vendor_notification(Severity::Info))["priority"],
+            "P5"
+        );
+
+        // JSM's message field caps at 130 chars.
+        let mut long = vendor_notification(Severity::Warning);
+        long.summary = "x".repeat(500);
+        assert_eq!(
+            jsm_create_body(&long)["message"].as_str().unwrap().len(),
+            130
+        );
+    }
+
+    fn synth_response(status: u16, headers: &[(&str, &str)]) -> reqwest::Response {
+        let mut builder = axum::http::Response::builder().status(status);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        reqwest::Response::from(builder.body("").unwrap())
+    }
+
+    #[tokio::test]
+    async fn vendor_response_handles_success_failure_429_and_extra_ok() {
+        // 202 Accepted (both vendors' success status).
+        assert!(vendor_response(synth_response(202, &[]), None)
+            .await
+            .is_ok());
+        // Hard failure surfaces as a delivery error (dispatcher retries).
+        assert!(vendor_response(synth_response(400, &[]), None)
+            .await
+            .is_err());
+        // 429 waits out Retry-After then errs so the retry policy counts the attempt.
+        let start = std::time::Instant::now();
+        let r = vendor_response(synth_response(429, &[("retry-after", "0")]), None).await;
+        assert!(r.is_err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        // JSM close treats 404 (already closed) as success — resolve stays idempotent.
+        let ok404 = vendor_response(
+            synth_response(404, &[]),
+            Some(reqwest::StatusCode::NOT_FOUND),
+        )
+        .await;
+        assert!(ok404.is_ok());
+        assert!(vendor_response(synth_response(404, &[]), None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

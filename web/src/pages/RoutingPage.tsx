@@ -249,23 +249,47 @@ function AddChannelModal({
   const [host, setHost] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  // PagerDuty: routing key + region (region maps to the api_url override).
+  const [routingKey, setRoutingKey] = useState('');
+  const [pdRegion, setPdRegion] = useState<'us' | 'eu'>('us');
+  // JSM: integration base URL + GenieKey.
+  const [jsmUrl, setJsmUrl] = useState('https://api.atlassian.com/jsm/ops/integration/v2');
+  const [jsmKey, setJsmKey] = useState('');
   const [busy, setBusy] = useState(false);
 
   const canAdd =
     name.trim() !== '' &&
     (kind === 'webhook'
       ? url.trim() !== ''
-      : host.trim() !== '' && from.trim() !== '' && to.trim() !== '');
+      : kind === 'email'
+        ? host.trim() !== '' && from.trim() !== '' && to.trim() !== ''
+        : kind === 'pagerduty'
+          ? routingKey.trim() !== ''
+          : jsmUrl.trim() !== '' && jsmKey.trim() !== '');
+
+  const buildConfig = (): ChannelConfigInput => {
+    switch (kind) {
+      case 'webhook':
+        return { kind: 'webhook', url: url.trim() };
+      case 'email':
+        return { kind: 'email', host: host.trim(), from: from.trim(), to: to.trim() };
+      case 'pagerduty':
+        return {
+          kind: 'pagerduty',
+          routing_key: routingKey.trim(),
+          api_url:
+            pdRegion === 'eu' ? 'https://events.eu.pagerduty.com/v2/enqueue' : undefined,
+        };
+      case 'jsm':
+        return { kind: 'jsm', api_url: jsmUrl.trim(), api_key: jsmKey.trim() };
+    }
+  };
 
   const submit = () => {
     if (!canAdd) return;
     setBusy(true);
-    const config: ChannelConfigInput =
-      kind === 'webhook'
-        ? { kind: 'webhook', url: url.trim() }
-        : { kind: 'email', host: host.trim(), from: from.trim(), to: to.trim() };
     api
-      .createNotificationChannel({ name: name.trim(), config })
+      .createNotificationChannel({ name: name.trim(), config: buildConfig() })
       .then(onDone)
       .catch((e: unknown) => {
         onError(errMsg(e, 'failed to add channel'));
@@ -297,9 +321,11 @@ function AddChannelModal({
         <Select value={kind} onChange={(e) => setKind(e.target.value as ChannelKind)}>
           <option value="webhook">webhook</option>
           <option value="email">email</option>
+          <option value="pagerduty">PagerDuty</option>
+          <option value="jsm">Jira Service Management</option>
         </Select>
       </div>
-      {kind === 'webhook' ? (
+      {kind === 'webhook' && (
         <div className="modal-field">
           <label className="modal-field-label">Webhook URL</label>
           <TextInput
@@ -310,7 +336,8 @@ function AddChannelModal({
           />
           <span className="modal-hint">The URL is sealed server-side and never returned.</span>
         </div>
-      ) : (
+      )}
+      {kind === 'email' && (
         <>
           <div className="modal-field">
             <label className="modal-field-label">SMTP host</label>
@@ -323,6 +350,54 @@ function AddChannelModal({
           <div className="modal-field">
             <label className="modal-field-label">To</label>
             <TextInput value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </>
+      )}
+      {kind === 'pagerduty' && (
+        <>
+          <div className="modal-field">
+            <label className="modal-field-label">Integration routing key</label>
+            <TextInput
+              className="mono"
+              placeholder="R0XXXXXXXXXXXXXXXXXXXXXXXXX"
+              value={routingKey}
+              onChange={(e) => setRoutingKey(e.target.value)}
+            />
+            <span className="modal-hint">
+              Events API v2 key — sealed server-side and never returned. Fires trigger/resolve
+              correlated by a stable dedup key.
+            </span>
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">Region</label>
+            <Select value={pdRegion} onChange={(e) => setPdRegion(e.target.value as 'us' | 'eu')}>
+              <option value="us">US (events.pagerduty.com)</option>
+              <option value="eu">EU (events.eu.pagerduty.com)</option>
+            </Select>
+          </div>
+        </>
+      )}
+      {kind === 'jsm' && (
+        <>
+          <div className="modal-field">
+            <label className="modal-field-label">API URL</label>
+            <TextInput
+              className="mono"
+              value={jsmUrl}
+              onChange={(e) => setJsmUrl(e.target.value)}
+            />
+            <span className="modal-hint">
+              JSM Alerts / Opsgenie integration base (api.atlassian.com or api.opsgenie.com).
+            </span>
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">API key (GenieKey)</label>
+            <TextInput
+              className="mono"
+              value={jsmKey}
+              onChange={(e) => setJsmKey(e.target.value)}
+            />
+            <span className="modal-hint">Sealed server-side and never returned.</span>
           </div>
         </>
       )}

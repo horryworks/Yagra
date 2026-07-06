@@ -287,7 +287,7 @@ export interface AlertTransition {
 }
 
 /** A notification channel kind (yagra-core `ChannelKind`). */
-export type ChannelKind = 'webhook' | 'email';
+export type ChannelKind = 'webhook' | 'email' | 'pagerduty' | 'jsm';
 
 /** Notification channel metadata (`GET /api/v1/notification-channels`) — the secret
  *  connection config is sealed server-side and never returned. */
@@ -309,7 +309,12 @@ export type ChannelConfigInput =
       to: string;
       user?: string;
       pass?: string;
-    };
+    }
+  // PagerDuty Events API v2 — routing_key is the integration key; api_url overrides the
+  // default US endpoint (EU: https://events.eu.pagerduty.com/v2/enqueue).
+  | { kind: 'pagerduty'; routing_key: string; api_url?: string }
+  // JSM Alerts (Opsgenie-compatible) — api_url is the integration base, api_key the GenieKey.
+  | { kind: 'jsm'; api_url: string; api_key: string };
 
 /** A routing rule (`GET /api/v1/routing-rules`): alerts of `severity` (null = any) fan out
  *  to `channel_ids`. */
@@ -836,4 +841,84 @@ export interface ReportRun {
 export interface ReportRunDetail extends ReportRun {
   result_json: unknown | null;
   result_html: string | null;
+}
+
+// ── Passive events (syslog / SNMP traps / webhooks) ──
+
+/** What kind of passive event a source produces (yagra-bus `EventKind`). */
+export type EventKind = 'syslog' | 'trap' | 'webhook';
+
+/** A webhook ingest source (`GET /api/v1/event-sources`) — the bearer token is shown
+ *  once on create/rotate and stored only as a hash. */
+export interface EventSource {
+  id: string;
+  name: string;
+  kind: EventKind;
+  enabled: boolean;
+  node_id: string | null;
+  created_at: string;
+}
+
+/** An event match rule (`GET /api/v1/event-rules`). severity 'info' records the match but
+ *  raises no alert. `ttl_secs` auto-closes; `clear_pattern` resolves early; `min_count`
+ *  matches inside `window_secs` gate the fire. */
+export interface EventRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  source_kind: EventKind | null;
+  source_id: string | null;
+  node_id: string | null;
+  match_kind: 'substring' | 'regex';
+  pattern: string;
+  clear_pattern: string | null;
+  severity: Severity;
+  ttl_secs: number;
+  min_count: number;
+  window_secs: number;
+  created_at: string;
+}
+
+/** Create/update body for an event rule (`POST/PUT /api/v1/event-rules`). */
+export interface EventRuleInput {
+  name: string;
+  enabled: boolean;
+  source_kind?: EventKind | null;
+  source_id?: string | null;
+  node_id?: string | null;
+  match_kind: 'substring' | 'regex';
+  pattern: string;
+  clear_pattern?: string | null;
+  severity: Severity;
+  ttl_secs?: number;
+  min_count?: number;
+  window_secs?: number;
+}
+
+/** Result of the interactive rule tester (`POST /api/v1/event-rules/test`). */
+export interface EventRuleTestResult {
+  matched: boolean;
+  clear_matched: boolean | null;
+  error: string | null;
+}
+
+/** One received event (`GET /api/v1/events`). */
+export interface EventRow {
+  id: string;
+  kind: EventKind;
+  at_unix_ms: number;
+  recorded_at: string; // keyset cursor (pass as `before`)
+  source_ip: string | null;
+  node_id: string | null;
+  source_id: string | null;
+  pool: string | null;
+  facility: number | null;
+  syslog_severity: number | null;
+  hostname: string | null;
+  app_name: string | null;
+  trap_oid: string | null;
+  varbinds: Array<[string, string]> | null;
+  message: string;
+  matched_rule_id: string | null;
+  action: 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
 }

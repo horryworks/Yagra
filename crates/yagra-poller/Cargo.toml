@@ -17,6 +17,7 @@ yagra-common = { path = "../yagra-common" }
 yagra-transport = { path = "../yagra-transport" }
 yagra-bus = { path = "../yagra-bus", features = ["nats"] }
 yagra-discovery = { path = "../yagra-discovery" }
+yagra-ingest = { path = "../yagra-ingest" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -29,3 +30,5 @@ uuid = { workspace = true }
 [dev-dependencies]
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
+# Trap PDU fixtures for the listener tests (vendored patch build).
+snmp2 = { workspace = true }
