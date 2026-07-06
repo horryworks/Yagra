@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Yagra-poller — poller worker image.
 # Needs CAP_NET_RAW for raw-socket ICMP. The container runs as a non-root user
 # (least privilege, security.md), so `cap_add: NET_RAW` in compose is not enough on
@@ -11,14 +12,21 @@
 FROM rust:1.90-slim-bookworm AS build
 WORKDIR /app
 COPY . .
-RUN cargo build --release --bin yagra-poller
+# Shares the same BuildKit cache mounts as the core image build (see docker/yagra-core.Dockerfile):
+# compiled workspace deps + cargo registry persist across CI runs and across both image builds, so a
+# one-line change is an incremental recompile. Copy the binary out of the cache-mounted target dir.
+RUN --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --bin yagra-poller \
+    && cp target/release/yagra-poller /app/yagra-poller
 
 FROM debian:bookworm-slim AS runtime
 RUN useradd -r -u 10002 yagra \
  && apt-get update \
  && apt-get install -y --no-install-recommends libcap2-bin \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /app/target/release/yagra-poller /usr/local/bin/yagra-poller
+COPY --from=build /app/yagra-poller /usr/local/bin/yagra-poller
 # File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
 RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller
 USER yagra
