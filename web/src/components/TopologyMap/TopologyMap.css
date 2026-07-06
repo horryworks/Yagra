@@ -1,0 +1,92 @@
+/* Dependency map surface. Fills its parent (the page gives it a bounded, scroll-free box); the
+   SVG's own pan/zoom moves the diagram, so the container never scrolls. */
+.topomap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+}
+
+.topomap-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.topomap-svg:active {
+  cursor: grabbing;
+}
+
+/* ---- controls (top-right) ---- */
+.topomap-controls {
+  position: absolute;
+  top: var(--gap);
+  right: var(--gap);
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+.topomap-ctl {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.topomap-ctl:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+/* ---- edges ---- */
+.topomap-edge {
+  stroke: var(--border-color);
+  stroke-width: 1.5;
+  fill: none;
+}
+.topomap-edge.suppressed {
+  stroke: var(--status-unreachable);
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+}
+
+/* ---- nodes ---- */
+.topomap-node {
+  cursor: pointer;
+}
+.topomap-node:focus {
+  outline: none;
+}
+.topomap-box {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: var(--border-width);
+  transition: stroke var(--transition);
+}
+.topomap-node:hover .topomap-box,
+.topomap-node:focus .topomap-box {
+  stroke: var(--accent-color);
+}
+/* .topomap-accent fill is set inline from the node's status color (left accent bar). */
+.topomap-label {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  fill: var(--text-primary);
+  pointer-events: none;
+}
+.topomap-node.suppressed .topomap-box {
+  fill: var(--bg-tertiary);
+}
+.topomap-node.suppressed .topomap-label {
+  fill: var(--text-secondary);
+}
