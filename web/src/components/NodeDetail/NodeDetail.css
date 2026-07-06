@@ -208,6 +208,33 @@
   padding: 16px 20px;
 }
 
+/* Events tab: a bounded flex column so the virtualized DataTable sizes + scrolls inside .nd-body. */
+.nd-ev {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 16px 20px;
+  gap: 10px;
+}
+
+.nd-ev-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nd-ev-open {
+  color: var(--accent-color);
+  font-size: var(--font-sm);
+  text-decoration: none;
+}
+
+.nd-ev-open:hover {
+  color: var(--accent-hover);
+}
+
 .nd-section-t {
   font-size: var(--font-xs);
   text-transform: uppercase;

@@ -1,0 +1,10 @@
+/* Event-log message cell: truncate with ellipsis (full text on hover via title). Shared by the
+   Events page and the NodeDetail Events tab through the eventColumns factory. */
+
+.events-msg {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

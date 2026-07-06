@@ -51,7 +51,7 @@ const GROUP_TYPES: { value: GroupType; label: string }[] = [
 
 const PROBLEM_STATES = new Set<NodeSummary['state']>(['warning', 'critical', 'unreachable']);
 
-const TABS = ['overview', 'interfaces', 'collection'];
+const TABS = ['overview', 'interfaces', 'collection', 'events'];
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;

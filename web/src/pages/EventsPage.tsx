@@ -1,131 +1,46 @@
-// Events (Alerts ▸ Events). Append-only log of received passive events (syslog / SNMP
-// traps / webhooks), keyset-paged newest-first. The rule-authoring surface: browse what
-// devices actually send, then write rules against it. Empty in skeleton mode.
+// Events (Alerts ▸ Events). Append-only log of received passive events (syslog / SNMP traps /
+// webhooks), keyset-paged newest-first. The rule-authoring surface: browse what devices actually
+// send, then write rules against it. The node filter lives in the URL (?node_id=) so a deep-link
+// from a node (NodeDetail ▸ Events "Open in Events →") lands here pre-filtered; kind/matched stay
+// local. Fetch/paging + columns are shared with the NodeDetail Events tab via components/EventLog.
+// Empty in skeleton mode.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatTimestamp } from '../lib/format';
-import { api } from '../services/api';
-import type { EventKind, EventRow } from '../types/api';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import type { EventKind } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Badge } from '../components/ui/Badge';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
-import { DataTable, type Column } from '../components/ui/DataTable';
+import { useEntityNames } from '../components/ui/EntityName';
+import { DataTable } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { Select } from '../components/ui/Field';
-import './EventsPage.css';
-
-const PAGE_SIZE = 100;
-
-const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'neutral' | 'info'> = {
-  fired: 'critical',
-  refreshed: 'warning',
-  cleared: 'up',
-  suppressed: 'neutral',
-  info: 'info',
-  none: 'neutral',
-};
+import { NodePicker } from '../components/NodePicker/NodePicker';
+import { useEventLog } from '../components/EventLog/useEventLog';
+import { eventColumns } from '../components/EventLog/eventColumns';
+import { readNodeIdParam, writeNodeIdParam } from '../components/EventLog/eventFilters';
 
 type KindFilter = '' | EventKind;
 type MatchedFilter = '' | 'matched' | 'unmatched';
 
 export function EventsPage() {
-  const [rows, setRows] = useState<EventRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [exhausted, setExhausted] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const nodeId = readNodeIdParam(searchParams);
+  const { nodeName } = useEntityNames();
   const [kind, setKind] = useState<KindFilter>('');
   const [matched, setMatched] = useState<MatchedFilter>('');
-  const loadingMore = useRef(false);
-  const { nodeName } = useEntityNames();
 
-  const filterOpts = useCallback(
-    (before?: string) => ({
-      limit: PAGE_SIZE,
-      ...(before ? { before } : {}),
-      ...(kind ? { kind } : {}),
-      ...(matched ? { matched: matched === 'matched' } : {}),
-    }),
-    [kind, matched],
-  );
+  const { rows, loading, exhausted, loadMore } = useEventLog({
+    kind: kind || undefined,
+    node_id: nodeId ?? undefined,
+    matched: matched === '' ? undefined : matched === 'matched',
+  });
 
-  // Reload from the top whenever a filter changes.
-  useEffect(() => {
-    setLoading(true);
-    api
-      .listEvents(filterOpts())
-      .then((page) => {
-        setRows(page);
-        setExhausted(page.length < PAGE_SIZE);
-      })
-      .catch(() => undefined)
-      .finally(() => setLoading(false));
-  }, [filterOpts]);
+  const columns = useMemo(() => eventColumns(nodeName), [nodeName]);
 
-  const loadMore = useCallback(() => {
-    if (loadingMore.current || exhausted) return;
-    const last = rows[rows.length - 1];
-    if (!last) return;
-    loadingMore.current = true;
-    api
-      .listEvents(filterOpts(last.recorded_at))
-      .then((page) => {
-        setRows((cur) => [...cur, ...page]);
-        setExhausted(page.length < PAGE_SIZE);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        loadingMore.current = false;
-      });
-  }, [rows, exhausted, filterOpts]);
-
-  const columns = useMemo<Column<EventRow>[]>(
-    () => [
-      {
-        key: 'kind',
-        header: 'Kind',
-        width: '90px',
-        render: (r) => <Badge tone="neutral">{r.kind}</Badge>,
-      },
-      {
-        key: 'source',
-        header: 'Source',
-        width: '160px',
-        render: (r) =>
-          r.node_id ? (
-            <EntityName name={nodeName(r.node_id)} id={r.node_id} />
-          ) : (
-            <span className="mono muted">{r.source_ip ?? '—'}</span>
-          ),
-      },
-      {
-        key: 'message',
-        header: 'Message',
-        width: '2fr',
-        render: (r) => (
-          <span className="mono events-msg" title={r.message}>
-            {r.message}
-          </span>
-        ),
-      },
-      {
-        key: 'action',
-        header: 'Result',
-        width: '110px',
-        render: (r) =>
-          r.action === 'none' ? (
-            <span className="muted">—</span>
-          ) : (
-            <Badge tone={ACTION_TONE[r.action]}>{r.action}</Badge>
-          ),
-      },
-      {
-        key: 'at',
-        header: 'When',
-        width: '1fr',
-        render: (r) => <span className="muted">{formatTimestamp(r.at_unix_ms)}</span>,
-      },
-    ],
-    [nodeName],
-  );
+  const setNode = (node: { id: string; name: string } | null) => {
+    const params = new URLSearchParams(searchParams);
+    writeNodeIdParam(params, node?.id ?? null);
+    setSearchParams(params, { replace: true });
+  };
 
   return (
     <div className="page-fill">
@@ -146,6 +61,12 @@ export function EventsPage() {
           <option value="matched">Matched a rule</option>
           <option value="unmatched">Unmatched</option>
         </Select>
+        <NodePicker
+          value={nodeId}
+          valueLabel={nodeId ? nodeName(nodeId) : undefined}
+          onChange={setNode}
+          placeholder="All nodes"
+        />
         <TableSpacer />
         <ResultCount shown={rows.length} noun={exhausted ? 'events' : 'events loaded'} />
       </TableToolbar>
