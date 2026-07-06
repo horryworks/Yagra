@@ -225,6 +225,7 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             poller_id: None,
+            trace_context: Default::default(),
         };
         bus.publish_result(result.clone()).await.unwrap();
 

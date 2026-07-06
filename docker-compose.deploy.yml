@@ -62,6 +62,12 @@ services:
       # Optional: route Meraki cloud polling to a specific poller pool (default "default").
       # Only relevant once you run pool-scoped remote pollers (docker-compose.poller.yml).
       # YAGRA_MERAKI_POOL: ${YAGRA_MERAKI_POOL:-default}
+      # Optional: OpenTelemetry OTLP/HTTP endpoint for distributed tracing (unset = logs only).
+      # Point at your collector; set OTEL_TRACES_SAMPLER=parentbased_traceidratio +
+      # OTEL_TRACES_SAMPLER_ARG at scale. Both core and poller should use the same collector.
+      YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       # Structured-log level (info so KEK/credential/scheduler events are visible).
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
@@ -83,6 +89,10 @@ services:
       YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND-0.0.0.0:1162}
       # Optional trap community filter (mismatches dropped; value never logged).
       YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
+      # Optional: OpenTelemetry OTLP/HTTP endpoint (unset = logs only). Same collector as core.
+      YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "${YAGRA_SYSLOG_PORT:-514}:1514/udp"   # syslog intake

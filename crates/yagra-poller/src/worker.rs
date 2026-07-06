@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::Instrument as _;
 use yagra_bus::{
     Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
     SnmpMetaColumn, SnmpTableCheck, BUS_SCHEMA_VERSION,
@@ -279,6 +280,7 @@ pub async fn execute_meraki(
             interfaces,
             sys_descr: None,
             poller_id: None,
+            trace_context: Default::default(),
         });
     }
     results
@@ -345,6 +347,8 @@ async fn execute_snmp_table(
         interfaces,
         sys_descr: None,
         poller_id: None,
+        // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
+        trace_context: Default::default(),
     }
 }
 
@@ -514,6 +518,8 @@ fn result(
         interfaces: Vec::new(),
         sys_descr: None,
         poller_id: None,
+        // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
+        trace_context: Default::default(),
     }
 }
 
@@ -602,21 +608,36 @@ pub async fn run_stream<B, S>(
             let poller_id = poller_id.clone();
             let results_total = results_total.clone();
             let inflight = inflight.clone();
-            tokio::spawn(async move {
-                let _guard = guard;
-                inflight.fetch_add(1, Ordering::Relaxed);
-                metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
-                let results = execute_meraki(&job, transport.as_ref(), now_unix_ms()).await;
-                for mut result in results {
-                    stamp_poller_id(&mut result, &poller_id);
-                    if let Err(err) = bus.publish_result(result).await {
-                        tracing::error!(error = %err, "failed to publish meraki poll result");
-                    } else {
-                        results_total.fetch_add(1, Ordering::Relaxed);
+            // Poll span: child of core's dispatch span when the job carried one (legacy/poll-now),
+            // else a fresh root (working-set). Secret-free fields only (no community/API key).
+            let span = tracing::info_span!(
+                "poll.meraki_collect",
+                job_id = %job.job_id,
+                node_id = %job.node_id,
+            );
+            yagra_telemetry::set_span_parent(&span, &job.trace_context);
+            tokio::spawn(
+                async move {
+                    let _guard = guard;
+                    inflight.fetch_add(1, Ordering::Relaxed);
+                    metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
+                    // Snapshot the poll span's context once; every fanned-out result carries it so
+                    // core's ingest spans all join this trace.
+                    let ctx = yagra_telemetry::current_trace_context();
+                    let results = execute_meraki(&job, transport.as_ref(), now_unix_ms()).await;
+                    for mut result in results {
+                        stamp_poller_id(&mut result, &poller_id);
+                        result.trace_context = ctx.clone();
+                        if let Err(err) = bus.publish_result(result).await {
+                            tracing::error!(error = %err, "failed to publish meraki poll result");
+                        } else {
+                            results_total.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
+                    inflight.fetch_sub(1, Ordering::Relaxed);
                 }
-                inflight.fetch_sub(1, Ordering::Relaxed);
-            });
+                .instrument(span),
+            );
             continue;
         }
 
@@ -630,19 +651,33 @@ pub async fn run_stream<B, S>(
         let poller_id = poller_id.clone();
         let results_total = results_total.clone();
         let inflight = inflight.clone();
-        tokio::spawn(async move {
-            let _guard = guard; // released (and target unmarked) when the probe finishes
-            inflight.fetch_add(1, Ordering::Relaxed);
-            metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
-            let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
-            stamp_poller_id(&mut result, &poller_id);
-            if let Err(err) = bus.publish_result(result).await {
-                tracing::error!(error = %err, "failed to publish poll result");
-            } else {
-                results_total.fetch_add(1, Ordering::Relaxed);
+        // Poll span: child of core's dispatch span when the job carried one (legacy/poll-now), else
+        // a fresh root (working-set). Secret-free fields only (no community/creds — security.md).
+        let span = tracing::info_span!(
+            "poll.execute",
+            job_id = %job.job_id,
+            node_id = %job.node_id,
+            target = %job.target,
+        );
+        yagra_telemetry::set_span_parent(&span, &job.trace_context);
+        tokio::spawn(
+            async move {
+                let _guard = guard; // released (and target unmarked) when the probe finishes
+                inflight.fetch_add(1, Ordering::Relaxed);
+                metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
+                let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+                stamp_poller_id(&mut result, &poller_id);
+                // Carry the poll span's context so core's result-ingest span joins this trace.
+                result.trace_context = yagra_telemetry::current_trace_context();
+                if let Err(err) = bus.publish_result(result).await {
+                    tracing::error!(error = %err, "failed to publish poll result");
+                } else {
+                    results_total.fetch_add(1, Ordering::Relaxed);
+                }
+                inflight.fetch_sub(1, Ordering::Relaxed);
             }
-            inflight.fetch_sub(1, Ordering::Relaxed);
-        });
+            .instrument(span),
+        );
     }
 }
 

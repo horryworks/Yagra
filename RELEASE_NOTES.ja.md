@@ -1,5 +1,29 @@
 # リリースノート
 
+## v0.1.5
+
+**分散トレーシング（OpenTelemetry）** — Yagra が OpenTelemetry トレースを送出できるようになり、
+1 回のポーリングを中央 core とポーラをまたいでエンドツーエンドで追跡できます。オプトインで既定は
+無効（構造化ログと Prometheus メトリクスは従来どおり）なので、コレクタに向けるまでオーバーヘッドは
+ゼロです。
+
+### 新機能
+- **OpenTelemetry 分散トレーシング（自己監視）** — `YAGRA_OTEL_ENDPOINT`（または標準の
+  `OTEL_EXPORTER_OTLP_ENDPOINT`）に OTLP/HTTP コレクタを設定すると、core とポーラが 1 回の
+  ポーリングを 1 本のトレースに繋ぐ span（core の dispatch → ポーラの poll → core の ingest）と、
+  北向き API リクエストごとの span を送出します。トレースコンテキストはジョブと結果に載ってバスを
+  流れるため、1 本のトレースが分散ポーラをまたぎ、ローリングアップグレード中の古いポーラとも互換
+  です。大規模時は毎回トレースする代わりに `OTEL_TRACES_SAMPLER=parentbased_traceidratio`
+  （+ `OTEL_TRACES_SAMPLER_ARG`）でサンプリングします。`docker compose --profile tracing up` で
+  同梱の Jaeger が起動し、ローカルでトレースを閲覧できます。エンドポイント未設定なら Yagra は従来
+  どおりログのみで、トレーシングのオーバーヘッドはありません。**DEPLOYMENT.ja.md ▸ 分散トレーシング
+  （OpenTelemetry）** を参照。
+
+### セキュリティ
+- **推移的アドバイザリの修正** — `crossbeam-epoch` を 0.9.20 に更新し RUSTSEC-2026-0204 を解消
+  （メトリクス依存内で null ポインタを debug 整形した時のみ到達する無効ポインタ参照。Yagra では
+  発生しませんが予防的に適用）。
+
 ## v0.1.4
 
 **依存関係マネジメント** — アラート抑制を駆動する依存グラフを、閲覧するだけでなく編集できるように

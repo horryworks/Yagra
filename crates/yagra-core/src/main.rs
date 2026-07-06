@@ -76,7 +76,9 @@ use yagra_topology::Topology;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
+    // spans at shutdown, so keep it alive for the whole process (`main` awaits the run loop below).
+    let _telemetry = yagra_telemetry::init("yagra-core");
 
     // Self-observability (ADR / monitoring-conventions): install the Prometheus recorder
     // up front so `metrics::counter!` calls anywhere are captured; `/metrics` renders it.
@@ -509,6 +511,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         interfaces: Vec::new(),
         sys_descr: None,
         poller_id: None,
+        trace_context: Default::default(),
     });
     let state = ApiState {
         store: sink,
@@ -542,85 +545,126 @@ async fn consume_results<S>(
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
-    use crate::alerts::NotifyAction;
+    use tracing::Instrument as _;
     while let Some(result) = results.next().await {
-        metrics::counter!("yagra_poll_results_total").increment(1);
-        stats.record_result();
-        // Attribute the result to its producing poller for the Pollers view (provenance only;
-        // `None` from a legacy/central poller is simply not counted).
-        if let Some(pid) = &result.poller_id {
-            coordinator.record_result(pid);
+        // Result-ingest span: child of the poller's poll span (via the result's carried trace
+        // context), completing the poll's end-to-end distributed trace. Secret-free fields only.
+        let ingest_span = tracing::info_span!(
+            "poll.ingest",
+            node_id = %result.node_id,
+            job_id = %result.job_id,
+        );
+        yagra_telemetry::set_span_parent(&ingest_span, &result.trace_context);
+        ingest_result(
+            &result,
+            &store,
+            &alerts,
+            &notifier,
+            &history,
+            &repo,
+            &stats,
+            &meraki_inflight,
+            &coordinator,
+        )
+        .instrument(ingest_span)
+        .await;
+    }
+    tracing::warn!("result stream ended");
+}
+
+/// Ingest one poll result: count it, attribute provenance, write metrics, upsert discovered
+/// interfaces, classify identity from `sysDescr`, then evaluate alerts and notify. Split out of
+/// [`consume_results`] so the per-result work is a single `.instrument`-able unit (the result-ingest
+/// span) that reads at one indentation level. Every step is best-effort — a failure in one must not
+/// drop the others.
+#[allow(clippy::too_many_arguments)]
+async fn ingest_result(
+    result: &PollResult,
+    store: &Arc<dyn MetricStore>,
+    alerts: &Arc<AlertManager>,
+    notifier: &Arc<Notifier>,
+    history: &Arc<AlertHistoryStore>,
+    repo: &Arc<NodeRepo>,
+    stats: &Arc<scheduler::SchedulerStats>,
+    meraki_inflight: &Arc<meraki::MerakiInflight>,
+    coordinator: &Arc<Coordinator<NatsBus>>,
+) {
+    use crate::alerts::NotifyAction;
+    metrics::counter!("yagra_poll_results_total").increment(1);
+    stats.record_result();
+    // Attribute the result to its producing poller for the Pollers view (provenance only;
+    // `None` from a legacy/central poller is simply not counted).
+    if let Some(pid) = &result.poller_id {
+        coordinator.record_result(pid);
+    }
+    // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
+    // results share the job id; a no-op for non-Meraki jobs).
+    meraki_inflight.complete(result.job_id);
+    store.write(result).await;
+    // Batch-upsert all interfaces discovered on this poll (table walks) in ONE statement —
+    // this is the hottest ingest path, so it must not fan out into a round-trip per
+    // interface. Metadata only — names/aliases live in PostgreSQL, joined to metrics at
+    // query time (ADR-011). Best-effort: a failure must not drop the metric write or alerting.
+    if !result.interfaces.is_empty() {
+        let rows: Vec<_> = result
+            .interfaces
+            .iter()
+            .map(|iface| {
+                (
+                    i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
+                    iface.if_name.as_deref(),
+                    iface.if_alias.as_deref(),
+                    iface.if_speed,
+                )
+            })
+            .collect();
+        if let Err(e) = repo
+            .upsert_interfaces(result.node_id.as_uuid(), &rows)
+            .await
+        {
+            tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interfaces");
         }
-        // Clear this org's Meraki single-flight on the collect's first returning result (all fan-out
-        // results share the job id; a no-op for non-Meraki jobs).
-        meraki_inflight.complete(result.job_id);
-        store.write(&result).await;
-        // Batch-upsert all interfaces discovered on this poll (table walks) in ONE statement —
-        // this is the hottest ingest path, so it must not fan out into a round-trip per
-        // interface. Metadata only — names/aliases live in PostgreSQL, joined to metrics at
-        // query time (ADR-011). Best-effort: a failure must not drop the metric write or alerting.
-        if !result.interfaces.is_empty() {
-            let rows: Vec<_> = result
-                .interfaces
-                .iter()
-                .map(|iface| {
-                    (
-                        i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
-                        iface.if_name.as_deref(),
-                        iface.if_alias.as_deref(),
-                        iface.if_speed,
-                    )
-                })
-                .collect();
-            if let Err(e) = repo
-                .upsert_interfaces(result.node_id.as_uuid(), &rows)
+    }
+    // Identity probe: if the poll fetched sysDescr, classify it and fill the node's blank
+    // vendor/model. `fill_node_identity` uses COALESCE so a manually-set value is never
+    // clobbered; we only classify when something useful was extracted. Best-effort.
+    if let Some(descr) = result.sys_descr.as_deref() {
+        let id = yagra_discovery::identify(descr);
+        if id.vendor.is_some() || id.model.is_some() {
+            match repo
+                .fill_node_identity(
+                    result.node_id.as_uuid(),
+                    id.vendor.as_deref(),
+                    id.model.as_deref(),
+                )
                 .await
             {
-                tracing::warn!(node = %result.node_id, error = %e, "failed to upsert interfaces");
-            }
-        }
-        // Identity probe: if the poll fetched sysDescr, classify it and fill the node's blank
-        // vendor/model. `fill_node_identity` uses COALESCE so a manually-set value is never
-        // clobbered; we only classify when something useful was extracted. Best-effort.
-        if let Some(descr) = result.sys_descr.as_deref() {
-            let id = yagra_discovery::identify(descr);
-            if id.vendor.is_some() || id.model.is_some() {
-                match repo
-                    .fill_node_identity(
-                        result.node_id.as_uuid(),
-                        id.vendor.as_deref(),
-                        id.model.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(true) => tracing::info!(
-                        node = %result.node_id, vendor = ?id.vendor, model = ?id.model,
-                        "classified node maker/model from sysDescr"
-                    ),
-                    Ok(false) => {}
-                    Err(e) => {
-                        tracing::warn!(node = %result.node_id, error = %e, "failed to fill node identity");
-                    }
+                Ok(true) => tracing::info!(
+                    node = %result.node_id, vendor = ?id.vendor, model = ?id.model,
+                    "classified node maker/model from sysDescr"
+                ),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(node = %result.node_id, error = %e, "failed to fill node identity");
                 }
             }
         }
-        for action in alerts.observe(&result) {
-            // Persist the lifecycle transition (best-effort).
-            let recorded = match &action {
-                NotifyAction::Fire(alert) => history.record(alert, false).await,
-                NotifyAction::Resolve(alert) => history.record(alert, true).await,
-                // A roll-up (child rolled under a newly-down parent): the node is still down, so
-                // this is not a lifecycle resolve — the notifier just closes its standalone
-                // incident. Nothing to persist; the eventual real recovery records the resolve.
-                NotifyAction::Suppress(_) => Ok(()),
-            };
-            if let Err(e) = recorded {
-                tracing::warn!(error = %e, "failed to record alert history");
-            }
-            notifier.handle(action).await;
-        }
     }
-    tracing::warn!("result stream ended");
+    for action in alerts.observe(result) {
+        // Persist the lifecycle transition (best-effort).
+        let recorded = match &action {
+            NotifyAction::Fire(alert) => history.record(alert, false).await,
+            NotifyAction::Resolve(alert) => history.record(alert, true).await,
+            // A roll-up (child rolled under a newly-down parent): the node is still down, so
+            // this is not a lifecycle resolve — the notifier just closes its standalone
+            // incident. Nothing to persist; the eventual real recovery records the resolve.
+            NotifyAction::Suppress(_) => Ok(()),
+        };
+        if let Err(e) = recorded {
+            tracing::warn!(error = %e, "failed to record alert history");
+        }
+        notifier.handle(action).await;
+    }
 }
 
 /// Periodically turn the inventory into polling work, choosing per pool (ADR-009/020) between:
@@ -923,13 +967,22 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
 
 /// Bind and serve the northbound API plus the Prometheus `/metrics` endpoint.
 async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow::Result<()> {
-    let app = api::router(state).route(
-        "/metrics",
-        get(move || {
-            let handle = metrics.clone();
-            async move { handle.render() }
-        }),
-    );
+    let app = api::router(state)
+        .route(
+            "/metrics",
+            get(move || {
+                let handle = metrics.clone();
+                async move { handle.render() }
+            }),
+        )
+        // HTTP request tracing (self-observability): one span per request, exported over OTLP when
+        // configured. INFO so it survives the default `info` filter; the northbound API is the
+        // entry point of a request-driven trace (e.g. a "poll now" that fans out to the bus).
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO),
+            ),
+        );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "Yagra-core API listening on /api/v1 (+ /metrics)");
     axum::serve(listener, app).await?;

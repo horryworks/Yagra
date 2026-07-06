@@ -85,7 +85,9 @@ fn machine_hostname() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
+    // spans at shutdown, so keep it alive for the whole process (`main` blocks on the worker loop).
+    let _telemetry = yagra_telemetry::init("yagra-poller");
 
     // Self-observability: expose Prometheus metrics on :9100/metrics (monitoring-conventions).
     if let Err(e) = PrometheusBuilder::new()

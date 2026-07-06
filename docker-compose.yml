@@ -26,6 +26,10 @@ services:
       # YAGRA_ADMIN_PASSWORD: "choose-a-strong-password"
       # Viewing requires login by default. Uncomment to open reads:
       # YAGRA_PUBLIC_DASHBOARD: "true"
+      # Distributed tracing (OpenTelemetry): unset = logs only (zero overhead). Uncomment to
+      # export spans over OTLP/HTTP to the `jaeger` service below (run it with
+      # `docker compose --profile tracing up`). At scale, also sample — see the poller note.
+      # YAGRA_OTEL_ENDPOINT: "http://jaeger:4318"
     ports:
       - "8080:8080"   # northbound API
     # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does
@@ -49,6 +53,10 @@ services:
       # Rate limits (events/sec): per source IP and across all sources.
       # YAGRA_EVENT_RATE_PER_SOURCE: "50"
       # YAGRA_EVENT_RATE_GLOBAL: "500"
+      # Distributed tracing (OpenTelemetry): match core's setting to trace a poll end to end
+      # (core dispatch → poller poll → core ingest). At scale sample instead of tracing every
+      # poll: OTEL_TRACES_SAMPLER=parentbased_traceidratio + OTEL_TRACES_SAMPLER_ARG=0.01.
+      # YAGRA_OTEL_ENDPOINT: "http://jaeger:4318"
     ports:
       - "514:1514/udp"   # syslog intake
       - "162:1162/udp"   # SNMP trap intake
@@ -101,6 +109,21 @@ services:
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
+    restart: unless-stopped
+
+  # ── OpenTelemetry trace collector (optional; self-observability) ──
+  # Off by default: only starts with `docker compose --profile tracing up`. Jaeger all-in-one
+  # receives OTLP (HTTP :4318) from core/poller and renders traces at http://localhost:16686.
+  # To use it, also uncomment `YAGRA_OTEL_ENDPOINT: http://jaeger:4318` on core AND poller above.
+  # Swap for an otel-collector → your backend (Tempo, Honeycomb, …) in a real deployment.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["tracing"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP/HTTP receiver (what YAGRA_OTEL_ENDPOINT points at)
     restart: unless-stopped
 
 volumes:

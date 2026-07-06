@@ -312,6 +312,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_MERAKI_POOL` | `default` | Poller pool that Meraki cloud-collect jobs route to |
 | `YAGRA_WEBHOOK_URL` | unset ⇒ off | Default alert webhook channel |
 | `YAGRA_SMTP_HOST` / `_PORT` / `_FROM` / `_TO` / `_USER` / `_PASS` | unset ⇒ email off | Env-configured SMTP alert channel (host present enables it) |
+| `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for OpenTelemetry trace export (falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`) |
+| `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; use `parentbased_traceidratio` + arg (e.g. `0.01`) at scale |
 | `RUST_LOG` | `info` | Log level (e.g. `info,yagra_core=debug`) |
 
 ### Yagra-poller
@@ -329,9 +331,21 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_TRAP_COMMUNITY` | unset ⇒ no filter | Drop traps whose community doesn't match (never logged) |
 | `YAGRA_EVENT_RATE_PER_SOURCE` | `50` | Passive-event rate limit per source IP (events/sec) |
 | `YAGRA_EVENT_RATE_GLOBAL` | `500` | Passive-event rate limit across all sources (events/sec) |
+| `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for trace export (same collector as core) |
+| `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; sample (`parentbased_traceidratio`) at scale |
 | `RUST_LOG` | `info` | Log level |
 
 > **Compose-only vars** (`YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`, `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_NATS_PORT`, `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`) are consumed by Docker/NATS, not by the Rust binaries — the binaries only ever see the final assembled `YAGRA_BUS_URL` etc. See `.env.example`.
+
+---
+
+## Distributed tracing (OpenTelemetry)<a id="tracing"></a>
+
+Every binary emits structured logs and a Prometheus `/metrics` endpoint out of the box. **Distributed tracing is opt-in:** set `YAGRA_OTEL_ENDPOINT` (or the standard `OTEL_EXPORTER_OTLP_ENDPOINT`) to an OTLP/HTTP collector and core + poller export spans that stitch a single poll end to end — core's dispatch span → the poller's poll span → core's result-ingest span — plus a span per northbound API request. Unset, there is **zero tracing overhead** (logs only), so the single-node MVP needs no collector.
+
+- **Try it locally:** `docker compose --profile tracing up` starts a bundled Jaeger (UI at http://localhost:16686), then uncomment `YAGRA_OTEL_ENDPOINT: http://jaeger:4318` on **both** `core` and `poller` in `docker-compose.yml`.
+- **At scale, sample.** Tens of thousands of nodes polling on an interval would otherwise emit a trace per poll. Set `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG=0.01` (1%); `parentbased_*` keeps a whole trace's decision consistent across the core⇄poller hop. The trace context rides the bus in a `trace_context` field that is **omitted from the wire when tracing is off** and ignored by an N-1 peer (so it stays N/N-1 safe).
+- **Production:** point the endpoint at an OpenTelemetry Collector that forwards to your backend (Tempo, Jaeger, Honeycomb, …). A remote-site poller needs its own reachable collector endpoint, separate from the NATS bus.
 
 ---
 
