@@ -789,6 +789,11 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/events?limit=100&kind=syslog&matched=true');
     await api.listEvents();
     expect(spy).toHaveBeenLastCalledWith('/api/v1/events');
+    // Free-text search rides along as `q`; an empty string is omitted.
+    await api.listEvents({ q: 'link down' });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/events?q=link+down');
+    await api.listEvents({ q: '' });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/events');
   });
 
   it('creates a PagerDuty notification channel with a tagged config', async () => {

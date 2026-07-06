@@ -14,6 +14,8 @@ export interface EventLogFilter {
   node_id?: string;
   /** Already resolved to a boolean (the UI string ↔ boolean mapping stays at the call site). */
   matched?: boolean;
+  /** Free-text substring matched server-side against source (node name / IP) or message. */
+  search?: string;
 }
 
 export interface EventLog {
@@ -25,7 +27,7 @@ export interface EventLog {
   reload: () => void;
 }
 
-export function useEventLog({ kind, node_id, matched }: EventLogFilter): EventLog {
+export function useEventLog({ kind, node_id, matched, search }: EventLogFilter): EventLog {
   const [rows, setRows] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
@@ -39,8 +41,9 @@ export function useEventLog({ kind, node_id, matched }: EventLogFilter): EventLo
       ...(kind ? { kind } : {}),
       ...(node_id ? { node_id } : {}),
       ...(matched != null ? { matched } : {}),
+      ...(search ? { q: search } : {}),
     }),
-    [kind, node_id, matched],
+    [kind, node_id, matched, search],
   );
 
   // Reload from the top whenever a filter changes (or reload() bumps the nonce).

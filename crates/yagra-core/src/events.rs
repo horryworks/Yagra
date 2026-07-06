@@ -151,6 +151,8 @@ pub struct EventFilter {
     pub kind: Option<String>,
     pub node_id: Option<Uuid>,
     pub matched: Option<bool>,
+    /// Case-insensitive substring matched against source (node name / IP) or message.
+    pub search: Option<String>,
 }
 
 fn generate_token() -> String {
@@ -444,20 +446,25 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
         let rows = sqlx::query(
-            "SELECT id, kind, at_unix_ms, recorded_at, host(source_ip) AS source_ip, node_id, \
-                    source_id, pool, facility, syslog_severity, hostname, app_name, trap_oid, \
-                    varbinds, message, matched_rule_id, action \
-             FROM events \
-             WHERE ($1::timestamptz IS NULL OR recorded_at < $1) \
-               AND ($2::text IS NULL OR kind = $2) \
-               AND ($3::uuid IS NULL OR node_id = $3) \
-               AND ($4::boolean IS NULL OR (matched_rule_id IS NOT NULL) = $4) \
-             ORDER BY recorded_at DESC LIMIT $5",
+            "SELECT e.id, e.kind, e.at_unix_ms, e.recorded_at, host(e.source_ip) AS source_ip, \
+                    e.node_id, e.source_id, e.pool, e.facility, e.syslog_severity, e.hostname, \
+                    e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
+             FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+             WHERE ($1::timestamptz IS NULL OR e.recorded_at < $1) \
+               AND ($2::text IS NULL OR e.kind = $2) \
+               AND ($3::uuid IS NULL OR e.node_id = $3) \
+               AND ($4::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $4) \
+               AND ($5::text IS NULL \
+                    OR e.message ILIKE '%' || $5 || '%' \
+                    OR host(e.source_ip) ILIKE '%' || $5 || '%' \
+                    OR n.name ILIKE '%' || $5 || '%') \
+             ORDER BY e.recorded_at DESC LIMIT $6",
         )
         .bind(filter.before)
         .bind(filter.kind.as_deref())
         .bind(filter.node_id)
         .bind(filter.matched)
+        .bind(filter.search.as_deref())
         .bind(limit.clamp(1, 500))
         .fetch_all(&self.pool)
         .await?;

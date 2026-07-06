@@ -937,6 +937,8 @@ export const api = {
     kind?: EventKind;
     node_id?: string;
     matched?: boolean;
+    /** Free-text substring matched against source (node name / IP) or message. */
+    q?: string;
   }): Promise<EventRow[]> => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set('limit', String(opts.limit));
@@ -944,6 +946,7 @@ export const api = {
     if (opts?.kind) params.set('kind', opts.kind);
     if (opts?.node_id) params.set('node_id', opts.node_id);
     if (opts?.matched != null) params.set('matched', String(opts.matched));
+    if (opts?.q) params.set('q', opts.q);
     const qs = params.toString();
     return request(qs ? `/events?${qs}` : '/events');
   },
