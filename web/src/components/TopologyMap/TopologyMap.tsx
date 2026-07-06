@@ -1,0 +1,202 @@
+// The dependency map itself: an SVG render of the tidy-tree layout with wheel-zoom + drag-pan.
+// Status color is the canonical palette (stateColorVar) — a node's color here is identical to its
+// dot in the table and its threshold line in a chart. Clicking (or Enter/Space on a focused) node
+// drills into that node's detail page. Device-supplied names render as React <text> children, so
+// they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { stateColorVar, stateLabel } from '../../lib/format';
+import type { PlacedNode, TopologyLayout } from './layout';
+import { NODE_H, NODE_W } from './layout';
+import './TopologyMap.css';
+
+interface View {
+  /** Pan offset in screen px. */
+  tx: number;
+  ty: number;
+  scale: number;
+}
+
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 2.5;
+
+/** Fit the diagram into the viewport with a little margin, centered. Pure so it's predictable. */
+function fitView(layout: TopologyLayout, vw: number, vh: number): View {
+  if (layout.width === 0 || layout.height === 0 || vw === 0 || vh === 0) {
+    return { tx: 0, ty: 0, scale: 1 };
+  }
+  const margin = 0.92;
+  const scale = Math.min(
+    MAX_SCALE,
+    Math.max(MIN_SCALE, Math.min((vw / layout.width) * margin, (vh / layout.height) * margin)),
+  );
+  const tx = (vw - layout.width * scale) / 2;
+  const ty = (vh - layout.height * scale) / 2;
+  return { tx, ty, scale };
+}
+
+function NodeBox({
+  node,
+  onOpen,
+  nameById,
+}: {
+  node: PlacedNode;
+  onOpen: (id: string) => void;
+  nameById: Map<string, string>;
+}) {
+  const cause = node.rootCause ? nameById.get(node.rootCause) ?? null : null;
+  const title = cause
+    ? `${node.name} — ${stateLabel(node.state)} · suppressed, root cause: ${cause}`
+    : `${node.name} — ${stateLabel(node.state)}`;
+  const cls = ['topomap-node', node.suppressed ? 'suppressed' : ''].filter(Boolean).join(' ');
+  return (
+    <g
+      className={cls}
+      transform={`translate(${node.cx - NODE_W / 2}, ${node.cy - NODE_H / 2})`}
+      role="button"
+      tabIndex={0}
+      aria-label={title}
+      onClick={() => onOpen(node.id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(node.id);
+        }
+      }}
+    >
+      <title>{title}</title>
+      {/* Status is carried by the left accent bar + dot, never color-alone: the name text and the
+          <title> label read the same state for color-blind/AT users. */}
+      <rect className="topomap-box" width={NODE_W} height={NODE_H} rx={6} />
+      <rect
+        className="topomap-accent"
+        width={4}
+        height={NODE_H}
+        rx={2}
+        style={{ fill: stateColorVar(node.state) }}
+      />
+      <circle cx={20} cy={NODE_H / 2} r={5} style={{ fill: stateColorVar(node.state) }} />
+      <text className="topomap-label" x={34} y={NODE_H / 2 + 4}>
+        {node.name}
+      </text>
+    </g>
+  );
+}
+
+export function TopologyMap({ layout }: { layout: TopologyLayout }) {
+  const navigate = useNavigate();
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [view, setView] = useState<View | null>(null);
+  const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+
+  const nameById = useMemo(
+    () => new Map(layout.nodes.map((n) => [n.id, n.name])),
+    [layout.nodes],
+  );
+
+  // Manual "Fit to view" (also the initial fit). Re-measures the current container each call.
+  const fit = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    setView(fitView(layout, el.clientWidth, el.clientHeight));
+  }, [layout]);
+
+  // Fit once, on the first render that has both a measured container and a laid-out diagram.
+  // A poll refresh re-creates `layout` every 15s, but the `view === null` guard keeps it from
+  // stomping the operator's current pan/zoom — only the very first paint auto-fits.
+  useEffect(() => {
+    if (view === null && wrapRef.current && layout.width > 0) {
+      setView(fitView(layout, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
+    }
+  }, [view, layout]);
+
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    setView((v) => {
+      if (!v) return v;
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale * factor));
+      const k = scale / v.scale;
+      // Keep the point under the cursor fixed while zooming.
+      return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+    });
+  }, []);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (!view) return;
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+    },
+    [view],
+  );
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    setView((v) => (v ? { ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) } : v));
+  }, []);
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    drag.current = null;
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
+  }, []);
+
+  const v = view ?? { tx: 0, ty: 0, scale: 1 };
+
+  return (
+    <div className="topomap" ref={wrapRef}>
+      <div className="topomap-controls">
+        <button className="topomap-ctl" onClick={fit} title="Fit to view" aria-label="Fit to view">
+          Fit
+        </button>
+        <button
+          className="topomap-ctl"
+          onClick={() => setView((s) => (s ? { ...s, scale: Math.min(MAX_SCALE, s.scale * 1.2) } : s))}
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          className="topomap-ctl"
+          onClick={() => setView((s) => (s ? { ...s, scale: Math.max(MIN_SCALE, s.scale / 1.2) } : s))}
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+      </div>
+      <svg
+        className="topomap-svg"
+        width="100%"
+        height="100%"
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+      >
+        <g transform={`translate(${v.tx}, ${v.ty}) scale(${v.scale})`}>
+          {layout.edges.map((e) => (
+            <line
+              key={e.id}
+              className={`topomap-edge${e.suppressed ? ' suppressed' : ''}`}
+              x1={e.x1}
+              y1={e.y1}
+              x2={e.x2}
+              y2={e.y2}
+            />
+          ))}
+          {layout.nodes.map((n) => (
+            <NodeBox key={n.id} node={n} onOpen={(id) => navigate(`/nodes/${id}`)} nameById={nameById} />
+          ))}
+        </g>
+      </svg>
+    </div>
+  );
+}

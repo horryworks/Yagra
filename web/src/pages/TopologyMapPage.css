@@ -1,0 +1,38 @@
+.topomap-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Bounded, scroll-free box for the map. The shell content scrolls if the page overflows, but the
+   map manages its own pan/zoom inside this fixed viewport-relative height. */
+.topomap-page-canvas {
+  display: flex;
+  height: 65vh;
+  min-height: 420px;
+}
+
+.topomap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin: 0 0 var(--gap);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.topomap-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.topomap-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.topomap-legend-line {
+  width: 18px;
+  border-top: 2px dashed var(--status-unreachable);
+}
