@@ -12,7 +12,7 @@ import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 
-const TABS = ['overview', 'interfaces', 'collection'];
+const TABS = ['overview', 'interfaces', 'collection', 'events'];
 
 export function NodeDetailPage() {
   const { nodeId = '' } = useParams();

@@ -26,6 +26,7 @@ import { BoxIcon } from '../ui/icons';
 import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
 import { CollectionTab } from './CollectionTab';
+import { EventsTab } from './EventsTab';
 import './NodeDetail.css';
 
 const METRIC = 'icmp_rtt_ms';
@@ -34,7 +35,7 @@ const RTT_WINDOW_SECS = 30 * 60;
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
-const TABS = ['overview', 'interfaces', 'collection'];
+const TABS = ['overview', 'interfaces', 'collection', 'events'];
 
 interface Props {
   nodeId: string;
@@ -245,6 +246,7 @@ export function NodeDetail({
           { key: 'overview', label: 'Overview' as const },
           { key: 'interfaces', label: 'Interfaces' as const, n: interfaces.length || null, warn: ifWarn },
           { key: 'collection', label: 'Collection' as const, n: collCount, warn: collWarn },
+          { key: 'events', label: 'Events' as const },
         ].map((t) => (
           <button
             key={t.key}
@@ -276,6 +278,7 @@ export function NodeDetail({
           <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
         )}
         {activeTab === 'collection' && <CollectionTab node={node} canEdit={canEdit} />}
+        {activeTab === 'events' && <EventsTab node={node} />}
       </div>
 
       {editingBindings && (

@@ -1,0 +1,135 @@
+/* Node-only typeahead filter: a field-styled trigger + popover with a scale-aware node search.
+   Mirrors the ScopePicker / CredentialPicker popover look; theme variables only (no hardcoded
+   colours). */
+
+.nodepick {
+  position: relative;
+}
+
+.nodepick-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.nodepick-control.on {
+  border-color: var(--accent-color);
+}
+
+.nodepick-trigger {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.nodepick-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodepick-caret {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.nodepick-clear {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.nodepick-clear:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.nodepick-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 70;
+  box-shadow: 0 8px 24px var(--overlay);
+}
+
+.nodepick-search {
+  margin-bottom: 6px;
+}
+
+.nodepick-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.nodepick-option {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.nodepick-option:hover,
+.nodepick-option.active {
+  background: var(--bg-tertiary);
+}
+
+.nodepick-option.selected {
+  color: var(--accent-color);
+}
+
+.nodepick-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodepick-opt-addr {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  flex: none;
+}
+
+.nodepick-empty {
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
