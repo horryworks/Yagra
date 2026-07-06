@@ -6,6 +6,7 @@
 // tree, so we lay it out ourselves (no graph-lib dependency) — see components/TopologyMap.
 
 import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { TopologyMap } from '../components/TopologyMap/TopologyMap';
@@ -54,8 +55,9 @@ export function TopologyMapPage() {
       return (
         <Card>
           <p className="muted">
-            No dependency links defined yet. Set a node&apos;s parent (Node detail ▸ dependencies)
-            to build the map. {layout.isolatedCount} node
+            No dependency links defined yet. Set a node&apos;s upstream on the{' '}
+            <Link to="/topology/dependency">Dependency view</Link> (or a node&apos;s
+            &ldquo;Dependency…&rdquo; action) to build the map. {layout.isolatedCount} node
             {layout.isolatedCount === 1 ? '' : 's'} in the inventory.
           </p>
         </Card>

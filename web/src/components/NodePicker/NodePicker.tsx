@@ -22,9 +22,20 @@ interface Props {
   placeholder?: string;
   id?: string;
   className?: string;
+  /** Node ids to hide from the results (e.g. self + descendants when picking a dependency
+   *  upstream, to avoid offering a cycle-forming choice). */
+  exclude?: ReadonlySet<string>;
 }
 
-export function NodePicker({ value, valueLabel, onChange, placeholder = 'All nodes', id, className }: Props) {
+export function NodePicker({
+  value,
+  valueLabel,
+  onChange,
+  placeholder = 'All nodes',
+  id,
+  className,
+  exclude,
+}: Props) {
   const { nodes, nodesLoaded, loadNodes } = useScopeData();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -54,7 +65,10 @@ export function NodePicker({ value, valueLabel, onChange, placeholder = 'All nod
     if (open) boxRef.current?.querySelector('input')?.focus();
   }, [open]);
 
-  const filtered = useMemo(() => filterNodes(nodes, query), [nodes, query]);
+  const filtered = useMemo(() => {
+    const base = filterNodes(nodes, query);
+    return exclude && exclude.size ? base.filter((node) => !exclude.has(node.id)) : base;
+  }, [nodes, query, exclude]);
   const shown = filtered.slice(0, MAX_RESULTS);
 
   const openPopover = () => {

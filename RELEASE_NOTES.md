@@ -1,5 +1,28 @@
 # Release Notes
 
+## v0.1.4
+
+**Dependency management** — the dependency graph that drives alert suppression is now editable, not
+just viewable. Set a node's upstream from the WebUI, and dependency suppression now reacts to
+parent-down events so a child that failed first is rolled up under its parent instead of paging on
+its own.
+
+### New Features
+- **Manage node dependencies from the WebUI** — a node's upstream (the edge that drives parent-down
+  alert suppression and root-cause roll-up) can now be set, changed, or cleared after the node is
+  created. The node-detail header gains a **Dependency…** action, and a new **Topology ▸ Dependency
+  view** page lists every node with its upstream, live status, and current root-cause attribution,
+  and lets you edit each edge inline. Self-dependencies and cycles are rejected. The Network map
+  already visualized these edges; now you can define them.
+
+### Bug Fixes
+- **Dependency suppression no longer misses out-of-order outages** — root-cause attribution is now
+  event-driven. Previously a child's alert was attributed to its parent only at the moment the child
+  first went down, so a child that failed *before* its parent was never rolled up and kept paging on
+  its own. Now, when a parent goes down, already-active downstream alerts are re-evaluated and rolled
+  up under the parent's incident (their standalone page is closed); symmetrically, a child left
+  suppressed after its parent recovers while still down re-pages on its own.
+
 ## v0.1.3
 
 **Distributed poller pools** — Yagra can now spread polling across pollers placed close to the

@@ -37,6 +37,7 @@ import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { TopologyMapPage } from './pages/TopologyMapPage';
+import { DependencyPage } from './pages/DependencyPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
 import { RunsPage } from './troubleshoot/RunsPage';
 import { AnomalyReportPage } from './troubleshoot/AnomalyReportPage';
@@ -64,10 +65,10 @@ export function AppRoutes() {
         <Route path="nodes/mib" element={<MibRepositoryPage />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
-        {/* Topology — the network map renders the dependency graph (GET /api/v1/topology);
-            dependency view + geo map are still backend-pending. */}
+        {/* Topology — the network map visualizes the dependency graph (GET /api/v1/topology) and
+            the dependency view manages its edges; geo map is still backend-pending. */}
         <Route path="topology/map" element={<TopologyMapPage />} />
-        <Route path="topology/dependency" element={<ComingSoon />} />
+        <Route path="topology/dependency" element={<DependencyPage />} />
         <Route path="topology/geo" element={<ComingSoon />} />
 
         {/* Alerts */}

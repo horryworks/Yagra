@@ -27,6 +27,7 @@ import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
+import { SetParentModal } from '../SetParentModal/SetParentModal';
 import './NodeDetail.css';
 
 const METRIC = 'icmp_rtt_ms';
@@ -82,6 +83,7 @@ export function NodeDetail({
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [editingBindings, setEditingBindings] = useState(false);
+  const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump).
@@ -202,6 +204,11 @@ export function NodeDetail({
                 {polling ? 'Polling…' : 'Poll now'}
               </Button>
             )}
+            {canEdit && (
+              <Button variant="outline" onClick={() => setEditingParent(true)}>
+                Dependency…
+              </Button>
+            )}
             {variant === 'inline' && canEdit && onMove && (
               <Button variant="outline" onClick={onMove}>
                 Move…
@@ -287,6 +294,18 @@ export function NodeDetail({
           onClose={() => setEditingBindings(false)}
           onDone={() => {
             setEditingBindings(false);
+            setRefreshNonce((v) => v + 1);
+          }}
+        />
+      )}
+      {editingParent && (
+        <SetParentModal
+          nodeId={nodeId}
+          nodeName={node.name}
+          currentParentId={node.parent_id}
+          onClose={() => setEditingParent(false)}
+          onSaved={() => {
+            setEditingParent(false);
             setRefreshNonce((v) => v + 1);
           }}
         />

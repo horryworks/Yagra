@@ -389,6 +389,20 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) a node's **dependency parent** (upstream) — the `parent_id`
+    /// edge that feeds parent-down alert suppression and root-cause roll-up (ADR-015). Distinct
+    /// from [`Self::set_node_group`], which moves a node in the inventory *folder* tree. Returns
+    /// whether the node exists. The caller validates that `parent` exists and that the new edge
+    /// introduces no cycle ([`crate::groups::would_create_cycle`]) before calling this.
+    pub async fn set_node_parent(&self, id: Uuid, parent: Option<Uuid>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE nodes SET parent_id = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(parent)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// The `(id, sort_order)` of the nodes in `group` (NULL ⇒ ungrouped), ordered. Feeds
     /// [`crate::groups::placement_order`] when a drag drops a node before/after a sibling.
     pub async fn ordered_nodes_in_group(

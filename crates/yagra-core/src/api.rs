@@ -180,6 +180,7 @@ pub fn router(state: ApiState) -> Router {
             get(get_meraki_polling).put(set_meraki_polling),
         )
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
+        .route("/api/v1/nodes/:node_id/parent", put(set_node_parent))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
             "/api/v1/node-groups",
@@ -4297,6 +4298,73 @@ async fn set_node_group(
         Err(e) => {
             tracing::error!(error = %e, "set node group failed");
             internal("failed to move node")
+        }
+    }
+}
+
+/// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
+/// dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
+/// distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
+#[derive(Deserialize)]
+struct NodeParentAssignment {
+    parent_id: Option<Uuid>,
+}
+
+async fn set_node_parent(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NodeParentAssignment>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    // Validate the requested edge before persisting: no self-dependency, the parent must exist,
+    // and the new edge must not close a cycle (the dependency graph is a single-parent forest).
+    if let Some(parent) = body.parent_id {
+        if parent == id {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_dependency",
+                "a node cannot depend on itself".to_owned(),
+            );
+        }
+        let nodes = match admin.repo.list_nodes().await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!(error = %e, "load nodes for dependency check failed");
+                return internal("failed to set dependency");
+            }
+        };
+        if !nodes.iter().any(|n| n.id.as_uuid() == parent) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "parent_not_found",
+                format!("no node {parent}"),
+            );
+        }
+        // Reuse the folder-tree cycle guard: the dependency edges have the same (id, parent) shape.
+        let edges: Vec<(Uuid, Option<Uuid>)> = nodes
+            .iter()
+            .map(|n| (n.id.as_uuid(), n.parent.map(|p| p.as_uuid())))
+            .collect();
+        if would_create_cycle(&edges, id, Some(parent)) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_dependency",
+                "that dependency would create a cycle".to_owned(),
+            );
+        }
+    }
+    match admin.repo.set_node_parent(id, body.parent_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set node parent failed");
+            internal("failed to set dependency")
         }
     }
 }

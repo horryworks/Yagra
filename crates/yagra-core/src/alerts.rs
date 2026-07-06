@@ -65,6 +65,11 @@ pub enum NotifyAction {
     /// An alert recovered (carries the previously-active alert so it can be logged and its
     /// dedup state cleared).
     Resolve(Alert),
+    /// A still-active downstream alert was rolled up under a newly-down upstream (event-driven
+    /// dependency suppression). It had been paging standalone, so its remote incident must be
+    /// **closed** — but unlike [`Self::Resolve`] the node has *not* recovered; it stays live in
+    /// the UI, now grouped under its root cause. Carries the alert with its new `root_cause` set.
+    Suppress(Alert),
 }
 
 /// Per-node metadata used to resolve threshold scope (profile + groups).
@@ -398,13 +403,20 @@ impl AlertManager {
 
         // Keep the per-node committed liveness current even when nothing transitioned (a
         // node's first reachable poll commits `ok` with no transition, but the inventory
-        // still needs to read it as `ok`).
-        if is_liveness {
-            self.live
+        // still needs to read it as `ok`). Capture whether this node's *down-set membership*
+        // flipped (entered or left `Unreachable`) — that's exactly when downstream dependency
+        // suppression must be re-evaluated (a parent going down/up changes its children's roll-up).
+        let down_set_changed = if is_liveness {
+            let previous = self
+                .live
                 .lock()
                 .expect("live mutex poisoned")
                 .insert(node, committed);
-        }
+            matches!(previous, Some(NodeState::Unreachable))
+                != matches!(committed, NodeState::Unreachable)
+        } else {
+            false
+        };
 
         let Some(t) = transition else {
             return Vec::new();
@@ -424,7 +436,7 @@ impl AlertManager {
             None
         };
 
-        match t.to_alert(node, check, at_unix_ms, root_cause) {
+        let mut actions = match t.to_alert(node, check, at_unix_ms, root_cause) {
             Some(mut alert) => {
                 // Tag the alert with what it measured so the history log / notification is
                 // human-readable. The crossed bound depends on the committed severity, now known.
@@ -462,7 +474,70 @@ impl AlertManager {
                     None => Vec::new(),
                 }
             }
+        };
+
+        // Event-driven dependency roll-up: this node just entered or left the down-set, so
+        // reconcile suppression for every *other* node's active liveness alert. Closes the
+        // ordering gap where a child that fired before its parent went down never got rolled up
+        // (and, symmetrically, re-pages a child left suppressed after its parent recovered).
+        if down_set_changed {
+            actions.extend(self.resweep_suppression(node));
         }
+        actions
+    }
+
+    /// Re-evaluate dependency suppression for active liveness alerts after `changed`'s down-set
+    /// membership flipped. For each *other* node's active liveness alert whose root-cause
+    /// attribution changed, update the active alert (and notify subscribers), then:
+    ///
+    /// - **newly suppressed** (`None → Some`): it had been paging standalone → emit
+    ///   [`NotifyAction::Suppress`] to close its remote incident (rolled up under the parent).
+    /// - **no longer suppressed but still down** (`Some → None`): emit [`NotifyAction::Fire`] so
+    ///   it pages on its own now that its upstream is back.
+    /// - **re-attributed** (`Some → Some`): never paged; just refresh the attribution.
+    ///
+    /// Liveness only (threshold alerts are never dependency-suppressed). Bounded by the current
+    /// active-alert count; runs only when a node actually entered/left `Unreachable`.
+    fn resweep_suppression(&self, changed: NodeId) -> Vec<NotifyAction> {
+        let down = self.down_set();
+        // Snapshot the liveness alerts to reconsider, then release the lock before the
+        // per-alert topology read / broadcast (keeps lock ordering flat, no nesting).
+        let candidates: Vec<Alert> = {
+            let active = self.active.lock().expect("alerts mutex poisoned");
+            active
+                .values()
+                .filter(|a| a.node != changed && a.metric == LIVENESS)
+                .cloned()
+                .collect()
+        };
+        let mut actions = Vec::new();
+        for alert in candidates {
+            let new_rc = self
+                .config
+                .read()
+                .expect("config rwlock poisoned")
+                .topology
+                .root_cause(alert.node, &down);
+            if new_rc == alert.root_cause {
+                continue; // attribution unchanged
+            }
+            // Persist the new attribution on the still-active alert, then refresh subscribers.
+            let updated = {
+                let mut active = self.active.lock().expect("alerts mutex poisoned");
+                let Some(cur) = active.get_mut(&alert.check) else {
+                    continue; // resolved concurrently — nothing to reconcile
+                };
+                cur.root_cause = new_rc;
+                cur.clone()
+            };
+            self.broadcast(&updated, false);
+            match (alert.root_cause, new_rc) {
+                (None, Some(_)) => actions.push(NotifyAction::Suppress(updated)),
+                (Some(_), None) => actions.push(NotifyAction::Fire(updated)),
+                _ => {}
+            }
+        }
+        actions
     }
 
     /// Whether `node` is inside an active maintenance window (per the config snapshot).
@@ -1196,6 +1271,40 @@ impl Notifier {
                     }
                 }
             }
+            NotifyAction::Suppress(alert) => {
+                // A downstream alert that had been paging standalone is now rolled up under its
+                // upstream root cause: close its remote incident so on-call isn't left with a
+                // separate open page. Mirrors the (non-root-cause) resolve close path — the alert
+                // itself stays live in the UI grouped under the root cause. Vendor resolves are
+                // idempotent, so a repeat close is harmless.
+                let key = alert.dedup_key();
+                let summary = format!("rolled up: node {} suppressed under upstream", alert.node);
+                let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
+                let notification = Notification::for_alert(&alert, summary, payload);
+
+                let matched: BTreeSet<Uuid> = routes
+                    .rules
+                    .iter()
+                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
+                    .flat_map(|r| r.channel_ids.iter().copied())
+                    .collect();
+
+                if let Some(d) = routes.default.as_mut() {
+                    let outcome = d.dispatch_resolve(notification.clone()).await;
+                    tracing::info!(?outcome, node = %alert.node, route = "default", "downstream alert rolled up (incident closed)");
+                }
+                let ids: Vec<Uuid> = routes.channels.keys().copied().collect();
+                for id in ids {
+                    if let Some(d) = routes.channels.get_mut(&id) {
+                        if matched.contains(&id) {
+                            let outcome = d.dispatch_resolve(notification.clone()).await;
+                            tracing::info!(?outcome, node = %alert.node, channel = %id, "downstream alert rolled up (incident closed)");
+                        } else {
+                            d.mark_resolved(&key);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1752,6 +1861,113 @@ mod tests {
         let states = mgr.node_states();
         assert_eq!(states.get(&parent), Some(&NodeState::Unreachable));
         assert_eq!(states.get(&child), Some(&NodeState::Unreachable));
+    }
+
+    #[test]
+    fn child_down_before_parent_rolls_up_when_parent_falls() {
+        // The ordering gap: a child that goes down *before* its parent fires standalone, then must
+        // be rolled up (its standalone incident closed) once the parent falls — event-driven.
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut topo = Topology::new();
+        topo.add_dependency(child, parent);
+
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::default().with_topology(topo));
+
+        // Collect every action produced while driving `node` to `outcome` across the dwell window.
+        let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
+            let mut out = Vec::new();
+            for i in 0..DWELL_SAMPLES {
+                out.extend(mgr.observe(&result(node, outcome, base + i64::from(i))));
+            }
+            out
+        };
+
+        // Child falls first, while its parent is still up ⇒ it pages standalone (no root cause).
+        let child_actions = drive(child, CheckOutcome::Unreachable, 0);
+        let child_fire = child_actions
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Fire(al) if al.node == child => Some(al.clone()),
+                _ => None,
+            })
+            .expect("child fires standalone");
+        assert_eq!(child_fire.root_cause, None);
+
+        // Parent now falls: the re-sweep rolls the child up and emits a Suppress to close the
+        // child's standalone incident (parent itself pages as the root cause).
+        let parent_actions = drive(parent, CheckOutcome::Unreachable, 100);
+        assert!(
+            parent_actions.iter().any(|a| matches!(
+                a,
+                NotifyAction::Fire(al) if al.node == parent && al.root_cause.is_none()
+            )),
+            "parent fires as the root cause"
+        );
+        let suppressed = parent_actions
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Suppress(al) if al.node == child => Some(al.clone()),
+                _ => None,
+            })
+            .expect("child rolled up under the parent");
+        assert_eq!(suppressed.root_cause, Some(parent));
+
+        // The child stays active (still down) but is now attributed to the parent.
+        let child_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == child)
+            .expect("child still active");
+        assert_eq!(child_active.root_cause, Some(parent));
+    }
+
+    #[test]
+    fn parent_recovery_re_pages_still_down_child() {
+        // Symmetric case: a child suppressed under a down parent must page on its own again once
+        // the parent recovers while the child is still down.
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut topo = Topology::new();
+        topo.add_dependency(child, parent);
+
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::default().with_topology(topo));
+
+        let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
+            let mut out = Vec::new();
+            for i in 0..DWELL_SAMPLES {
+                out.extend(mgr.observe(&result(node, outcome, base + i64::from(i))));
+            }
+            out
+        };
+
+        // Parent down first, then child ⇒ the child is suppressed under the parent from the start.
+        drive(parent, CheckOutcome::Unreachable, 0);
+        drive(child, CheckOutcome::Unreachable, 100);
+        let child_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == child)
+            .expect("child active");
+        assert_eq!(child_active.root_cause, Some(parent));
+
+        // Parent recovers while the child is still down ⇒ the child must now page standalone.
+        let recovery = drive(parent, CheckOutcome::Reachable, 200);
+        assert!(
+            recovery.iter().any(|a| matches!(
+                a,
+                NotifyAction::Fire(al) if al.node == child && al.root_cause.is_none()
+            )),
+            "child re-pages standalone once its upstream is back"
+        );
+        let child_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == child)
+            .expect("child still active");
+        assert_eq!(child_active.root_cause, None);
     }
 
     #[tokio::test]

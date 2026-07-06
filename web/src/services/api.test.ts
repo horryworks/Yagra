@@ -858,6 +858,20 @@ describe('api client', () => {
     expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ group_id: null });
   });
 
+  it("sets a node's dependency upstream (and can clear it with null)", async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setNodeParent('n1', 'n2');
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/parent');
+    expect(spy.mock.calls[0][1].method).toBe('PUT');
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ parent_id: 'n2' });
+
+    await api.setNodeParent('n1', null);
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ parent_id: null });
+  });
+
   it('drag-reorders a node before a sibling (placement)', async () => {
     const spy = vi
       .fn()
