@@ -63,18 +63,27 @@ API v2) and Jira Service Management (Alerts API) with native fire/resolve lifecy
 > `network_mode: host`. If the host already runs a syslog daemon on port 514, remap the
 > published port. Poller-side rate limits (per-source and global) bound event floods.
 
-## Getting Started
+## Deployment
+
+Bring up a full single-node stack in one command:
 
 ```bash
-# Backend (Rust workspace)
-cargo build
-cargo test
+docker compose up --build   # core + poller + web + PostgreSQL/Redis/NATS/VictoriaMetrics
+```
 
-# Frontend (web/)
-cd web && npm install && npm run dev
+WebUI on **http://localhost:3000**, API on **http://localhost:8080**. On first start core prints a
+one-time `admin` password in its logs (`docker compose logs core`).
 
-# Full stack (single-node Docker Compose)
-docker compose up --build
+For everything else — production images, running **natively** without Docker, and **distributed
+pollers** across remote sites — see **[DEPLOYMENT.md](DEPLOYMENT.md)** (日本語:
+[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)). It covers all four combinations: single-node / distributed ×
+Docker / native, plus the full environment-variable reference and upgrade/backup guidance.
+
+Local development:
+
+```bash
+cargo build && cargo test              # backend (Rust workspace)
+cd web && npm install && npm run dev   # frontend (Vite dev server)
 ```
 
 ## License

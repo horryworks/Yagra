@@ -63,18 +63,27 @@ fire/resolve ライフサイクル連動で転送できます:
 > いる場合は公開ポートを変更してください。ポーラ側のレート制限（送信元ごと + 全体）が
 > イベントフラッドを抑えます。
 
-## はじめに
+## デプロイ
+
+単一ノードのフルスタックを 1 コマンドで起動:
 
 ```bash
-# バックエンド（Rust ワークスペース）
-cargo build
-cargo test
+docker compose up --build   # core + poller + web + PostgreSQL/Redis/NATS/VictoriaMetrics
+```
 
-# フロントエンド（web/）
-cd web && npm install && npm run dev
+WebUI は **http://localhost:3000**、API は **http://localhost:8080**。初回起動時、core は一度限りの
+`admin` パスワードをログに出力します（`docker compose logs core`）。
 
-# フルスタック（単一ノードの Docker Compose）
-docker compose up --build
+それ以外 — 本番イメージ、Docker を使わない**ネイティブ**実行、リモート拠点への**分散ポーラ** — は
+**[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)**（English: [DEPLOYMENT.md](DEPLOYMENT.md)）を参照してください。
+単一ノード / 分散 × Docker / ネイティブの 4 通りすべてに加え、環境変数の完全リファレンスと
+アップグレード/バックアップ手順を扱います。
+
+ローカル開発:
+
+```bash
+cargo build && cargo test              # バックエンド（Rust ワークスペース）
+cd web && npm install && npm run dev   # フロントエンド（Vite 開発サーバ）
 ```
 
 ## ライセンス
