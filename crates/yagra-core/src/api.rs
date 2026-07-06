@@ -6201,6 +6201,16 @@ struct EventsQuery {
     kind: Option<String>,
     node_id: Option<Uuid>,
     matched: Option<bool>,
+    /// Free-text substring matched against source (node name / IP) or message.
+    q: Option<String>,
+}
+
+/// Normalize the free-text event filter at the API edge (input-validation rule):
+/// trim, drop-if-empty, and cap length so a pathological input can't bloat the query.
+fn normalize_event_search(q: Option<&str>) -> Option<String> {
+    q.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(200).collect())
 }
 
 async fn list_events(
@@ -6241,6 +6251,7 @@ async fn list_events(
         kind: q.kind,
         node_id: q.node_id,
         matched: q.matched,
+        search: normalize_event_search(q.q.as_deref()),
     };
     match admin
         .events
@@ -8798,6 +8809,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn event_search_normalization() {
+        // Absent / empty / whitespace-only ⇒ no filter (a blank box is a no-op).
+        assert_eq!(normalize_event_search(None), None);
+        assert_eq!(normalize_event_search(Some("")), None);
+        assert_eq!(normalize_event_search(Some("   ")), None);
+        // Surrounding whitespace is trimmed.
+        assert_eq!(
+            normalize_event_search(Some("  link down  ")).as_deref(),
+            Some("link down")
+        );
+        // Length is capped (chars, not bytes) so a pathological input can't bloat the query.
+        let capped = normalize_event_search(Some(&"あ".repeat(500))).unwrap();
+        assert_eq!(capped.chars().count(), 200);
     }
 
     #[test]

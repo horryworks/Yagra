@@ -5,13 +5,13 @@
 // local. Fetch/paging + columns are shared with the NodeDetail Events tab via components/EventLog.
 // Empty in skeleton mode.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { EventKind } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { Select } from '../components/ui/Field';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { useEventLog } from '../components/EventLog/useEventLog';
@@ -27,11 +27,20 @@ export function EventsPage() {
   const { nodeName } = useEntityNames();
   const [kind, setKind] = useState<KindFilter>('');
   const [matched, setMatched] = useState<MatchedFilter>('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  // Debounce the text box so we don't refetch on every keystroke (matches the MIB search).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 200);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const { rows, loading, exhausted, loadMore } = useEventLog({
     kind: kind || undefined,
     node_id: nodeId ?? undefined,
     matched: matched === '' ? undefined : matched === 'matched',
+    search: debouncedSearch || undefined,
   });
 
   const columns = useMemo(() => eventColumns(nodeName), [nodeName]);
@@ -66,6 +75,12 @@ export function EventsPage() {
           valueLabel={nodeId ? nodeName(nodeId) : undefined}
           onChange={setNode}
           placeholder="All nodes"
+        />
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search source or message…"
+          ariaLabel="Search events"
         />
         <TableSpacer />
         <ResultCount shown={rows.length} noun={exhausted ? 'events' : 'events loaded'} />
