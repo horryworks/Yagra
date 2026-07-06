@@ -81,7 +81,14 @@ jobs:
           - { name: web, context: ./web, dockerfile: docker/web.Dockerfile }
     steps:
       - uses: actions/checkout@v6
+      # Use the host dockerd's built-in BuildKit (`driver: docker`), not an ephemeral
+      # docker-container builder. The container builder is torn down after each run, discarding its
+      # `RUN --mount=type=cache` storage (the compiled cargo `target/` + registry) — so every image
+      # build started cold. The host BuildKit persists on the self-hosted runner, so those cache
+      # mounts survive between runs and dependency compilation is reused across builds.
       - uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
       # Publish to GHCR on main and on a v* release tag; PRs build without pushing.
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
