@@ -17,9 +17,9 @@ pub use messages::{
     CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface, DiscoveryCredential,
     DiscoveryJob, DiscoveryResult, DiscoveryV3, EventKind, EventMsg, HeartbeatMsg, HttpCheck,
     IcmpCheck, JobSpec, MerakiCollectCheck, MerakiDeviceRef, NodeJobs, PollJob, PollResult, Sample,
-    SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SyncMsg, SyncRequest,
-    TraceContext, WorkingSetDelta, WorkingSetSnapshot, BUS_SCHEMA_VERSION, HEARTBEAT_SECS,
-    OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncMsg,
+    SyncRequest, TraceContext, WorkingSetDelta, WorkingSetSnapshot, BUS_SCHEMA_VERSION,
+    HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};

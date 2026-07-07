@@ -155,6 +155,29 @@ impl PollJob {
         }
     }
 
+    /// A new SNMP v3 (USM) table-walk poll job for `node` at `target` — the v3 analogue of
+    /// [`PollJob::snmp_table`].
+    #[must_use]
+    pub fn snmp_v3_table(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3TableCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Table(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
     /// A new HTTP/HTTPS URL-monitor poll job for `node`. The real request target is the
     /// `check.url`; `target` carries the node's management IP (display / optional ICMP).
     #[must_use]
@@ -428,6 +451,10 @@ pub enum CheckSpec {
     /// A new variant: older pollers that don't know this tag simply skip the job
     /// (the poller's malformed-message handling), preserving N-1 compatibility.
     SnmpTable(SnmpTableCheck),
+    /// SNMP v3 (USM) GETBULK walk of table columns — the v3 analogue of [`CheckSpec::SnmpTable`].
+    /// Like the variants around it, an older poller that doesn't know this tag simply skips the
+    /// job (N-1 compatible): a v3 node just keeps getting scalars + ICMP until the poller upgrades.
+    SnmpV3Table(SnmpV3TableCheck),
     /// HTTP/HTTPS URL-endpoint check (status/up + TLS cert expiry). Like the variants above,
     /// an older poller that doesn't know this tag simply skips the job (N-1 compatible).
     Http(HttpCheck),
@@ -545,6 +572,39 @@ pub struct SnmpV3Check {
 pub struct SnmpTableCheck {
     /// SNMP v2c community string (resolved/decrypted by core).
     pub community: String,
+    /// Numeric table columns → per-interface TSDB samples.
+    pub columns: Vec<SnmpColumn>,
+    /// Interface-metadata columns (ifName/ifAlias/ifSpeed) → interface inventory, not TSDB.
+    #[serde(default)]
+    pub meta_columns: Vec<SnmpMetaColumn>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) table-walk parameters — the v3 analogue of [`SnmpTableCheck`]. Carries the same
+/// USM fields as [`SnmpV3Check`] plus the numeric/metadata table columns. Auth/priv keys are
+/// resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the secret
+/// store. All fields are `#[serde(default)]` so an N-1 poller that gains this variant reads a
+/// forward-compatible message (ADR-017).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3TableCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
     /// Numeric table columns → per-interface TSDB samples.
     pub columns: Vec<SnmpColumn>,
     /// Interface-metadata columns (ifName/ifAlias/ifSpeed) → interface inventory, not TSDB.
@@ -1055,6 +1115,62 @@ mod tests {
         assert!(json.contains("\"kind\":\"snmp_table\""));
         let back: PollJob = serde_json::from_str(&json).unwrap();
         assert_eq!(job, back);
+    }
+
+    #[test]
+    fn snmp_v3_table_job_round_trips_with_snake_case_tag() {
+        let job = PollJob::snmp_v3_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            SnmpV3TableCheck {
+                user: "monitor".into(),
+                security_level: "authpriv".into(),
+                auth_protocol: Some("sha256".into()),
+                auth_key: Some("auth-pass".into()),
+                priv_protocol: Some("aes256".into()),
+                priv_key: Some("priv-pass".into()),
+                columns: vec![SnmpColumn {
+                    metric_name: "if_hc_in_octets".into(),
+                    oid: "1.3.6.1.2.1.31.1.1.1.6".into(),
+                    kind: MetricKind::Counter,
+                }],
+                meta_columns: vec![SnmpMetaColumn {
+                    field: InterfaceField::Name,
+                    oid: "1.3.6.1.2.1.31.1.1.1.1".into(),
+                }],
+                timeout_ms: 2000,
+            },
+            60,
+        );
+        let json = serde_json::to_string(&job).unwrap();
+        assert!(json.contains("\"kind\":\"snmp_v3_table\""));
+        let back: PollJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(job, back);
+    }
+
+    #[test]
+    fn snmp_v3_table_check_defaults_are_forward_compatible() {
+        // An N-1 producer that omits every newer optional field (auth/priv, meta_columns,
+        // timeout) still deserializes with safe defaults (ADR-017).
+        let json = r#"{
+            "kind": "snmp_v3_table",
+            "user": "monitor",
+            "security_level": "noauth",
+            "columns": [
+                { "metric_name": "if_hc_in_octets", "oid": "1.3.6.1.2.1.31.1.1.1.6" }
+            ]
+        }"#;
+        let check: CheckSpec = serde_json::from_str(json).unwrap();
+        let CheckSpec::SnmpV3Table(t) = check else {
+            panic!("expected snmp_v3_table variant");
+        };
+        assert_eq!(t.user, "monitor");
+        assert!(t.auth_protocol.is_none());
+        assert!(t.priv_key.is_none());
+        assert!(t.meta_columns.is_empty());
+        assert_eq!(t.timeout_ms, default_snmp_timeout_ms());
+        assert_eq!(t.columns[0].kind, MetricKind::Gauge); // column kind defaults to gauge
     }
 
     #[test]

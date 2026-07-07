@@ -258,6 +258,29 @@ pub trait Transport: Send + Sync {
         timeout: Duration,
     ) -> Result<Vec<SnmpTableString>, TransportError>;
 
+    /// Walk numeric table *column base* OIDs via SNMP v3 (USM) GETBULK — the v3 analogue of
+    /// [`Transport::snmp_walk`], returning one numeric row per instance tagged with its ifIndex.
+    /// A per-column walk failure is logged and skipped. Counters are raw (ADR-012); auth/priv
+    /// come resolved from core (ADR-018/020) and are never logged.
+    async fn snmp_v3_walk(
+        &self,
+        target: IpAddr,
+        params: &SnmpV3Params,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableSample>, TransportError>;
+
+    /// Walk string-valued table *column base* OIDs (e.g. `ifName`, `ifAlias`) via SNMP v3 (USM)
+    /// GETBULK — the v3 analogue of [`Transport::snmp_walk_strings`]. For interface metadata
+    /// (PostgreSQL), never TSDB labels (ADR-011).
+    async fn snmp_v3_walk_strings(
+        &self,
+        target: IpAddr,
+        params: &SnmpV3Params,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableString>, TransportError>;
+
     /// Probe an HTTP/HTTPS URL endpoint: reachability + status code + response time, and (for
     /// HTTPS) the server certificate's days-to-expiry. A network failure is reported as
     /// `reachable = false` (an outage), not an `Err`; `Err` is for un-runnable configs only
@@ -292,7 +315,7 @@ pub struct FakeTransport {
     pub snmp: Vec<SnmpSample>,
     /// The numeric rows every SNMP table walk returns.
     pub snmp_table: Vec<SnmpTableSample>,
-    /// The string rows every SNMP string-table walk returns.
+    /// The string rows every SNMP string-table walk returns (v2c and v3 share this canned set).
     pub snmp_table_strings: Vec<SnmpTableString>,
     /// The string scalars every SNMP v3 string GET returns.
     pub snmp_v3_strings: Vec<SnmpStringSample>,
@@ -469,6 +492,37 @@ impl Transport for FakeTransport {
             .collect())
     }
 
+    async fn snmp_v3_walk(
+        &self,
+        _target: IpAddr,
+        _params: &SnmpV3Params,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpTableSample>, TransportError> {
+        // Same canned rows as the v2c walk — the fake is protocol-agnostic.
+        Ok(self
+            .snmp_table
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
+    }
+
+    async fn snmp_v3_walk_strings(
+        &self,
+        _target: IpAddr,
+        _params: &SnmpV3Params,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpTableString>, TransportError> {
+        Ok(self
+            .snmp_table_strings
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
+    }
+
     async fn probe_http(
         &self,
         _spec: &HttpProbeSpec,
@@ -484,6 +538,37 @@ impl Transport for FakeTransport {
     ) -> Result<Vec<MerakiObservation>, TransportError> {
         Ok(self.meraki.clone())
     }
+}
+
+/// Row key for a table instance from its **tail** — the sub-identifiers past the column base. A
+/// single trailing sub-id is the row key directly (the common case: ifIndex, entPhysicalIndex, …).
+/// A multi-part tail (a multi-index table such as HUAWEI-MEMORY-MIB `hwMemoryDevTable` or BGP4-MIB
+/// peers) folds to a stable synthetic key so the row is still collected (node-level health
+/// aggregates over rows, so the key only needs to be distinct, not meaningful). An empty tail (the
+/// column base itself, no instance) yields `None`.
+///
+/// Shared by the v2c (`snmp`) and v3 (`snmp_v3`) walkers so their keying can never diverge — a
+/// node is only ever polled over one protocol, but keeping one implementation prevents a future
+/// drift that would remap synthetic ifindexes (and break TSDB series continuity).
+pub(crate) fn ifindex_from_tail(tail: &[u32]) -> Option<u32> {
+    match tail {
+        [] => None,
+        [ifindex] => Some(*ifindex),
+        multi => Some(fold_subids(multi)),
+    }
+}
+
+/// Fold a multi-part instance index into a stable `u32` row key (FNV-1a over the sub-ids). Used
+/// only for multi-index tables, where the key just needs to be deterministic and collision-rare.
+pub(crate) fn fold_subids(subids: &[u32]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &n in subids {
+        for b in n.to_be_bytes() {
+            h ^= u32::from(b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+    }
+    h
 }
 
 #[cfg(test)]
@@ -521,5 +606,18 @@ mod tests {
         assert!(!p.reachable);
         assert_eq!(p.rtt_ms, None);
         assert_eq!(p.loss_pct, 100.0);
+    }
+
+    #[test]
+    fn ifindex_from_tail_keys_single_and_folds_multi() {
+        // The shared row-keying contract used by both the v2c and v3 table walkers.
+        assert_eq!(ifindex_from_tail(&[]), None); // the column base itself: no instance
+        assert_eq!(ifindex_from_tail(&[7]), Some(7)); // single trailing sub-id used directly
+                                                      // Multi-part tails fold to a stable, distinct, deterministic key.
+        let a = ifindex_from_tail(&[1, 0, 0]);
+        let b = ifindex_from_tail(&[2, 0, 0]);
+        assert!(a.is_some() && b.is_some());
+        assert_ne!(a, b);
+        assert_eq!(ifindex_from_tail(&[1, 0, 0]), a, "folding is deterministic");
     }
 }

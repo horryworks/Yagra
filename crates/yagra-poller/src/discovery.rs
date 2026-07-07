@@ -426,6 +426,26 @@ mod tests {
             }
         }
 
+        async fn snmp_v3_walk(
+            &self,
+            _target: IpAddr,
+            _params: &SnmpV3Params,
+            _column_oids: &[String],
+            _timeout: Duration,
+        ) -> Result<Vec<SnmpTableSample>, TransportError> {
+            Ok(Vec::new())
+        }
+
+        async fn snmp_v3_walk_strings(
+            &self,
+            _target: IpAddr,
+            _params: &SnmpV3Params,
+            _column_oids: &[String],
+            _timeout: Duration,
+        ) -> Result<Vec<SnmpTableString>, TransportError> {
+            Ok(Vec::new())
+        }
+
         async fn probe_http(
             &self,
             _spec: &HttpProbeSpec,
@@ -685,6 +705,24 @@ mod tests {
             ) -> Result<Vec<SnmpTableString>, TransportError> {
                 self.attempts.fetch_add(1, Ordering::SeqCst);
                 Ok(Vec::new()) // empty ⇒ this candidate "failed"
+            }
+            async fn snmp_v3_walk(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_v3_walk_strings(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<SnmpTableString>, TransportError> {
+                Ok(Vec::new())
             }
             async fn probe_http(
                 &self,

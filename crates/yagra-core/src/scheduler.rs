@@ -14,7 +14,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
     HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn,
-    SnmpTableCheck, SnmpV3Check, SyncBus, DEFAULT_POOL,
+    SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus, DEFAULT_POOL,
 };
 use yagra_common::{
     builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId, ProfileId,
@@ -90,6 +90,17 @@ pub fn build_snmp_v3_job(
     PollJob::snmp_v3(job_id, node.id, node.address, check, interval_secs)
 }
 
+/// Build an SNMP v3 (USM) table-walk poll job targeting a node's management address.
+#[must_use]
+pub fn build_snmp_v3_table_job(
+    node: &Node,
+    check: SnmpV3TableCheck,
+    interval_secs: u32,
+    job_id: Uuid,
+) -> PollJob {
+    PollJob::snmp_v3_table(job_id, node.id, node.address, check, interval_secs)
+}
+
 /// Map a stored [`UrlCheckConfig`] into the bus [`HttpCheck`]. Auth is not inlined yet (MVP probe
 /// is unauthenticated); when it lands, core resolves/decrypts `cfg.credential` here (ADR-018/020).
 #[must_use]
@@ -112,8 +123,8 @@ pub fn build_http_job(node: &Node, check: HttpCheck, interval_secs: u32, job_id:
 }
 
 /// Build the SNMP v3 scalar check for a node from its resolved collection set and v3
-/// credential. `None` when the set has no scalar items. Table items are **not** polled
-/// over v3 yet (the v3 GETBULK walk is a follow-up) — the caller logs what was skipped.
+/// credential. `None` when the set has no scalar items. (Table items become a separate
+/// [`build_snmp_v3_table_check`] job — the v3 analogue of the v2c scalar/table split.)
 #[must_use]
 pub fn build_snmp_v3_check(
     secret: &SnmpV3Secret,
@@ -138,6 +149,45 @@ pub fn build_snmp_v3_check(
         priv_key: secret.priv_key.clone(),
         oids: Vec::new(),
         columns: scalar,
+        timeout_ms,
+    })
+}
+
+/// Build the SNMP v3 (USM) table-walk check for a node from its resolved collection set and v3
+/// credential — the v3 analogue of the table half of [`build_snmp_checks`]. `None` when the set
+/// has no table items. Table columns become walk columns, plus the standard interface-metadata
+/// columns (ifName/ifAlias/ifSpeed) so discovered interfaces get names (PostgreSQL metadata, never
+/// TSDB labels — ADR-011).
+#[must_use]
+pub fn build_snmp_v3_table_check(
+    secret: &SnmpV3Secret,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Option<SnmpV3TableCheck> {
+    let table: Vec<SnmpColumn> = items
+        .iter()
+        .filter(|i| i.kind == CollectionKind::Table)
+        .map(|i| SnmpColumn {
+            metric_name: i.metric_name.clone(),
+            oid: i.oid.clone(),
+            kind: i.metric_kind,
+        })
+        .collect();
+    (!table.is_empty()).then(|| SnmpV3TableCheck {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        columns: table,
+        meta_columns: builtin_interface_meta_columns()
+            .into_iter()
+            .map(|(field, oid)| SnmpMetaColumn {
+                field,
+                oid: oid.to_owned(),
+            })
+            .collect(),
         timeout_ms,
     })
 }
@@ -236,11 +286,14 @@ pub fn assemble_node_jobs(
             }
         }
         Some(SnmpAuth::V3(secret)) => {
-            // v3 polls the scalar set; table walks over v3 are a follow-up (the GETBULK walk).
             if let Some(check) = build_snmp_v3_check(secret, items, SNMP_TIMEOUT_MS) {
                 let mut job = build_snmp_v3_job(node, check, interval_secs, Uuid::new_v4());
                 job.probe_identity = probe_identity;
                 jobs.push((job, "snmp_v3"));
+            }
+            if let Some(check) = build_snmp_v3_table_check(secret, items, SNMP_TIMEOUT_MS) {
+                let job = build_snmp_v3_table_job(node, check, interval_secs, Uuid::new_v4());
+                jobs.push((job, "snmp_v3_table"));
             }
         }
         None => {}
@@ -328,11 +381,6 @@ impl PollDispatcher {
         } else {
             Vec::new()
         };
-        if matches!(auth, Some(SnmpAuth::V3(_)))
-            && items.iter().any(|i| i.kind == CollectionKind::Table)
-        {
-            tracing::debug!(node = %node.id, "v3 table items skipped (v3 walk not yet supported)");
-        }
         assemble_node_jobs(node, auth.as_ref(), &items, None, interval_secs)
     }
 
@@ -705,7 +753,7 @@ mod tests {
         assert_eq!(check.user, "monitor");
         assert_eq!(check.security_level, "authpriv");
         assert_eq!(check.auth_protocol.as_deref(), Some("sha256"));
-        // Only the scalar item travels; tables are a v3 follow-up.
+        // Only the scalar item lands in the scalar check; the table item goes to the table check.
         assert_eq!(check.columns.len(), 1);
         assert_eq!(check.columns[0].metric_name, "snmp_sys_uptime_ticks");
         assert!(check.oids.is_empty());
@@ -719,6 +767,43 @@ mod tests {
             CollectionKind::Table,
         )];
         assert!(build_snmp_v3_check(&v3_secret(), &items, 2000).is_none());
+    }
+
+    #[test]
+    fn build_snmp_v3_table_check_carries_usm_params_table_columns_and_meta() {
+        let items = [
+            item(
+                "snmp_sys_uptime_ticks",
+                "1.3.6.1.2.1.1.3.0",
+                CollectionKind::Scalar,
+            ),
+            item(
+                "if_hc_in_octets",
+                "1.3.6.1.2.1.31.1.1.1.6",
+                CollectionKind::Table,
+            ),
+        ];
+        let check = build_snmp_v3_table_check(&v3_secret(), &items, 2000).expect("table check");
+        assert_eq!(check.user, "monitor");
+        assert_eq!(check.priv_protocol.as_deref(), Some("aes128"));
+        // Only the table item becomes a walk column; the scalar stays in the scalar check.
+        assert_eq!(check.columns.len(), 1);
+        assert_eq!(check.columns[0].oid, "1.3.6.1.2.1.31.1.1.1.6");
+        // Interface-metadata columns are attached so discovered interfaces get names (ADR-011).
+        assert!(
+            !check.meta_columns.is_empty(),
+            "v3 table walk carries the ifName/ifAlias/ifSpeed metadata columns"
+        );
+    }
+
+    #[test]
+    fn build_snmp_v3_table_check_without_tables_yields_none() {
+        let items = [item(
+            "snmp_sys_uptime_ticks",
+            "1.3.6.1.2.1.1.3.0",
+            CollectionKind::Scalar,
+        )];
+        assert!(build_snmp_v3_table_check(&v3_secret(), &items, 2000).is_none());
     }
 
     #[test]
@@ -803,8 +888,9 @@ mod tests {
     }
 
     #[test]
-    fn assemble_v3_builds_scalar_and_icmp_only() {
-        // v3 polls the scalar set; the table item is not walked over v3 yet.
+    fn assemble_v3_builds_scalar_table_and_icmp() {
+        // v3 now walks the table set too (the GETBULK v3 walk): a v3 node with both a scalar and a
+        // table item produces the scalar job, the table-walk job, and the always-on ICMP.
         let items = [
             item(
                 "snmp_sys_uptime_ticks",
@@ -812,17 +898,38 @@ mod tests {
                 CollectionKind::Scalar,
             ),
             item(
-                "if_oper_status",
-                "1.3.6.1.2.1.2.2.1.8",
+                "if_hc_in_octets",
+                "1.3.6.1.2.1.31.1.1.1.6",
                 CollectionKind::Table,
             ),
         ];
         let auth = SnmpAuth::V3(v3_secret());
         let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
-        assert_eq!(kinds(&jobs), vec!["snmp_v3", "icmp"]);
+        assert_eq!(kinds(&jobs), vec!["snmp_v3", "snmp_v3_table", "icmp"]);
         assert!(matches!(
             jobs.iter().find(|(_, k)| *k == "snmp_v3").unwrap().0.check,
             CheckSpec::SnmpV3(_)
         ));
+        assert!(matches!(
+            jobs.iter()
+                .find(|(_, k)| *k == "snmp_v3_table")
+                .unwrap()
+                .0
+                .check,
+            CheckSpec::SnmpV3Table(_)
+        ));
+    }
+
+    #[test]
+    fn assemble_v3_scalar_only_omits_table_job() {
+        // A v3 node with no table items produces just the scalar + ICMP jobs (no empty walk job).
+        let items = [item(
+            "snmp_sys_uptime_ticks",
+            "1.3.6.1.2.1.1.3.0",
+            CollectionKind::Scalar,
+        )];
+        let auth = SnmpAuth::V3(v3_secret());
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
+        assert_eq!(kinds(&jobs), vec!["snmp_v3", "icmp"]);
     }
 }

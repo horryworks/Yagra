@@ -9,19 +9,23 @@
 use crate::limiter::PollLimiter;
 use futures::stream::{Stream, StreamExt};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::Instrument as _;
 use yagra_bus::{
     Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
-    SnmpMetaColumn, SnmpTableCheck, BUS_SCHEMA_VERSION,
+    SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck, BUS_SCHEMA_VERSION,
 };
 use yagra_common::{
     IfIndex, InterfaceField, MetricKind, NodeId, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP,
     METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
 };
-use yagra_transport::{HttpProbeSpec, MerakiCollectSpec, Transport};
+use yagra_transport::{
+    HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params, Transport,
+    TransportError,
+};
 
 /// sysDescr.0 — system description scalar (the v3 GET form).
 const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
@@ -156,6 +160,10 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             let timeout = Duration::from_millis(u64::from(table.timeout_ms));
             execute_snmp_table(job, transport, at_unix_ms, table, timeout).await
         }
+        CheckSpec::SnmpV3Table(table) => {
+            let timeout = Duration::from_millis(u64::from(table.timeout_ms));
+            execute_snmp_v3_table(job, transport, at_unix_ms, table, timeout).await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -286,24 +294,80 @@ pub async fn execute_meraki(
     results
 }
 
-/// Execute an SNMP table-walk check: numeric columns become per-interface samples (keyed
-/// by ifIndex, using the column's explicit metric name and kind — no OID-name guessing),
-/// and metadata columns become [`DiscoveredInterface`] records (PostgreSQL inventory, never
-/// TSDB labels — ADR-011). Split out of [`execute`] for readability and direct testing.
-async fn execute_snmp_table(
+/// The credential half of a table walk that differs between v2c and v3 (community vs USM params).
+/// Capturing it here lets the column-walk + interface-metadata logic below be shared across both
+/// protocols instead of duplicated — a v3 walk keys rows and folds interface metadata identically.
+enum SnmpWalker {
+    V2c(String),
+    V3(SnmpV3Params),
+}
+
+impl SnmpWalker {
+    /// Walk numeric table columns via the appropriate protocol.
+    async fn walk(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        columns: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableSample>, TransportError> {
+        match self {
+            SnmpWalker::V2c(community) => {
+                transport
+                    .snmp_walk(target, community, columns, timeout)
+                    .await
+            }
+            SnmpWalker::V3(params) => {
+                transport
+                    .snmp_v3_walk(target, params, columns, timeout)
+                    .await
+            }
+        }
+    }
+
+    /// Walk string-valued table columns (interface metadata) via the appropriate protocol.
+    async fn walk_strings(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        columns: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpTableString>, TransportError> {
+        match self {
+            SnmpWalker::V2c(community) => {
+                transport
+                    .snmp_walk_strings(target, community, columns, timeout)
+                    .await
+            }
+            SnmpWalker::V3(params) => {
+                transport
+                    .snmp_v3_walk_strings(target, params, columns, timeout)
+                    .await
+            }
+        }
+    }
+}
+
+/// Execute an SNMP table-walk check (v2c or v3, selected by `walker`): numeric columns become
+/// per-interface samples (keyed by ifIndex, using the column's explicit metric name and kind — no
+/// OID-name guessing), and metadata columns become [`DiscoveredInterface`] records (PostgreSQL
+/// inventory, never TSDB labels — ADR-011). Shared by [`execute_snmp_table`] (v2c) and
+/// [`execute_snmp_v3_table`] (v3).
+async fn execute_table_walk(
     job: &PollJob,
     transport: &dyn Transport,
     at_unix_ms: i64,
-    table: &SnmpTableCheck,
+    columns: &[SnmpColumn],
+    meta_columns: &[SnmpMetaColumn],
     timeout: Duration,
+    walker: &SnmpWalker,
 ) -> PollResult {
-    let column_oids: Vec<String> = table.columns.iter().map(|c| c.oid.clone()).collect();
-    let by_base: HashMap<&str, &SnmpColumn> =
-        table.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+    let column_oids: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+    let by_base: HashMap<&str, &SnmpColumn> = columns.iter().map(|c| (c.oid.as_str(), c)).collect();
 
     let mut samples = Vec::new();
-    match transport
-        .snmp_walk(job.target, &table.community, &column_oids, timeout)
+    match walker
+        .walk(transport, job.target, &column_oids, timeout)
         .await
     {
         Ok(rows) => {
@@ -321,14 +385,7 @@ async fn execute_snmp_table(
         Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
     }
 
-    let interfaces = walk_interface_metadata(
-        job,
-        transport,
-        &table.community,
-        &table.meta_columns,
-        timeout,
-    )
-    .await;
+    let interfaces = walk_interface_metadata(job, transport, walker, meta_columns, timeout).await;
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
     let outcome = if samples.is_empty() {
@@ -352,12 +409,63 @@ async fn execute_snmp_table(
     }
 }
 
+/// Execute an SNMP v2c table-walk check — a thin wrapper over [`execute_table_walk`].
+async fn execute_snmp_table(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    table: &SnmpTableCheck,
+    timeout: Duration,
+) -> PollResult {
+    let walker = SnmpWalker::V2c(table.community.clone());
+    execute_table_walk(
+        job,
+        transport,
+        at_unix_ms,
+        &table.columns,
+        &table.meta_columns,
+        timeout,
+        &walker,
+    )
+    .await
+}
+
+/// Execute an SNMP v3 (USM) table-walk check — the v3 analogue of [`execute_snmp_table`]. Maps the
+/// USM params exactly as the scalar v3 arm does, then shares the walk/mapping logic.
+async fn execute_snmp_v3_table(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    table: &SnmpV3TableCheck,
+    timeout: Duration,
+) -> PollResult {
+    let params = SnmpV3Params {
+        user: table.user.clone(),
+        security_level: table.security_level.clone(),
+        auth_protocol: table.auth_protocol.clone(),
+        auth_key: table.auth_key.clone(),
+        priv_protocol: table.priv_protocol.clone(),
+        priv_key: table.priv_key.clone(),
+    };
+    let walker = SnmpWalker::V3(params);
+    execute_table_walk(
+        job,
+        transport,
+        at_unix_ms,
+        &table.columns,
+        &table.meta_columns,
+        timeout,
+        &walker,
+    )
+    .await
+}
+
 /// Walk interface-metadata columns and fold them per ifIndex into [`DiscoveredInterface`]s.
 /// `ifName`/`ifAlias` are string columns; `ifSpeed` is numeric — each walked appropriately.
 async fn walk_interface_metadata(
     job: &PollJob,
     transport: &dyn Transport,
-    community: &str,
+    walker: &SnmpWalker,
     meta_columns: &[SnmpMetaColumn],
     timeout: Duration,
 ) -> Vec<DiscoveredInterface> {
@@ -385,8 +493,8 @@ async fn walk_interface_metadata(
     };
 
     if !string_oids.is_empty() {
-        match transport
-            .snmp_walk_strings(job.target, community, &string_oids, timeout)
+        match walker
+            .walk_strings(transport, job.target, &string_oids, timeout)
             .await
         {
             Ok(rows) => {
@@ -413,14 +521,14 @@ async fn walk_interface_metadata(
         // resolve the effective bandwidth so links above the ~4.29 Gbps `ifSpeed` cap report
         // their true rate. ifHighSpeed is walked poller-side rather than as a bus column to keep
         // the job contract N/N-1 compatible (no new wire field).
-        let raw_speed = walk_numeric_by_ifindex(job, transport, community, &speed_oids, timeout)
+        let raw_speed = walk_numeric_by_ifindex(job, transport, walker, &speed_oids, timeout)
             .await
             .unwrap_or_else(|err| {
                 tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifSpeed walk failed");
                 HashMap::new()
             });
         let high_oids = [OID_IF_HIGH_SPEED.to_owned()];
-        let raw_high = walk_numeric_by_ifindex(job, transport, community, &high_oids, timeout)
+        let raw_high = walk_numeric_by_ifindex(job, transport, walker, &high_oids, timeout)
             .await
             .unwrap_or_else(|err| {
                 tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifHighSpeed walk failed");
@@ -457,13 +565,11 @@ async fn walk_interface_metadata(
 async fn walk_numeric_by_ifindex(
     job: &PollJob,
     transport: &dyn Transport,
-    community: &str,
+    walker: &SnmpWalker,
     oids: &[String],
     timeout: Duration,
-) -> Result<HashMap<u32, f64>, yagra_transport::TransportError> {
-    let rows = transport
-        .snmp_walk(job.target, community, oids, timeout)
-        .await?;
+) -> Result<HashMap<u32, f64>, TransportError> {
+    let rows = walker.walk(transport, job.target, oids, timeout).await?;
     Ok(rows.into_iter().map(|r| (r.ifindex, r.value)).collect())
 }
 
@@ -1018,6 +1124,68 @@ mod tests {
         assert_eq!(iface.if_speed, Some(1_000_000_000));
         // ifSpeed must NOT have leaked into the TSDB samples (it's metadata, not a metric).
         assert!(!r.samples.iter().any(|s| s.metric == "1.3.6.1.2.1.2.2.1.5"));
+    }
+
+    fn snmp_v3_table_job() -> PollJob {
+        use yagra_bus::{SnmpColumn, SnmpMetaColumn, SnmpV3TableCheck};
+        use yagra_common::{InterfaceField, MetricKind};
+        PollJob::snmp_v3_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            SnmpV3TableCheck {
+                user: "monitor".to_owned(),
+                security_level: "authpriv".to_owned(),
+                auth_protocol: Some("sha256".to_owned()),
+                auth_key: Some("auth-pass".to_owned()),
+                priv_protocol: Some("aes256".to_owned()),
+                priv_key: Some("priv-pass".to_owned()),
+                columns: vec![SnmpColumn {
+                    metric_name: "if_hc_in_octets".to_owned(),
+                    oid: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                    kind: MetricKind::Counter,
+                }],
+                meta_columns: vec![SnmpMetaColumn {
+                    field: InterfaceField::Name,
+                    oid: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                }],
+                timeout_ms: 2000,
+            },
+            60,
+        )
+    }
+
+    #[tokio::test]
+    async fn snmp_v3_table_walks_columns_and_metadata_like_v2c() {
+        use yagra_common::MetricKind;
+        use yagra_transport::{SnmpTableSample, SnmpTableString};
+        // The v3 table path drives the same walk/fold logic as v2c (shared `execute_table_walk`);
+        // the fake returns its canned rows for the v3 walk too. This proves a v3 node now collects
+        // per-interface metrics + interface metadata instead of being silently limited to scalars.
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 7,
+                value: 4242.0,
+            }])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                ifindex: 7,
+                value: "Gi0/7".to_owned(),
+            }]);
+        let r = execute(&snmp_v3_table_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        let octets = r
+            .samples
+            .iter()
+            .find(|s| s.metric == "if_hc_in_octets" && s.ifindex == Some(IfIndex(7)))
+            .expect("v3 table produced the per-interface counter");
+        assert_eq!(octets.value, 4242.0);
+        assert_eq!(octets.kind, MetricKind::Counter);
+        // Interface metadata is folded from the v3 string walk (PostgreSQL inventory, ADR-011).
+        assert_eq!(r.interfaces.len(), 1);
+        assert_eq!(r.interfaces[0].ifindex, IfIndex(7));
+        assert_eq!(r.interfaces[0].if_name.as_deref(), Some("Gi0/7"));
     }
 
     #[tokio::test]
