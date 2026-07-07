@@ -135,32 +135,12 @@ async fn connect(
         .map_err(|e| TransportError::Io(format!("snmp connect {addr}: {e}")))
 }
 
-/// Row key for an instance OID relative to its column `base`. A single trailing sub-identifier
-/// (the common case — ifIndex, entPhysicalIndex, …) is used directly. A **multi-part** instance
-/// — a multi-index table such as HUAWEI-MEMORY-MIB `hwMemoryDevTable` (`.frame.slot.cpu`) or
-/// BGP4-MIB peers (`.a.b.c.d`) — is folded into a stable synthetic key so the row is still
-/// collected (node-level health aggregates over rows, so the key only needs to be distinct, not
-/// meaningful). Returns `None` when the OID isn't under `base`, or is `base` itself (no instance).
+/// Row key for an instance OID relative to its column `base` — the numeric identity of a row,
+/// delegated to the shared [`crate::ifindex_from_tail`] so the v2c and v3 walkers key rows
+/// identically. Returns `None` when the OID isn't under `base`, or is `base` itself (no instance).
 fn ifindex_of(oid: &ObjectIdentifier, base: &ObjectIdentifier) -> Option<u32> {
     let tail = oid.relative_to(base)?;
-    match tail.as_slice() {
-        [] => None,
-        [ifindex] => Some(*ifindex),
-        multi => Some(fold_subids(multi)),
-    }
-}
-
-/// Fold a multi-part instance index into a stable `u32` row key (FNV-1a over the sub-ids). Used
-/// only for multi-index tables, where the key just needs to be deterministic and collision-rare.
-fn fold_subids(subids: &[u32]) -> u32 {
-    let mut h: u32 = 0x811c_9dc5;
-    for &n in subids {
-        for b in n.to_be_bytes() {
-            h ^= u32::from(b);
-            h = h.wrapping_mul(0x0100_0193);
-        }
-    }
-    h
+    crate::ifindex_from_tail(tail.as_slice())
 }
 
 /// Map an SNMP string-ish value to a Rust `String`: `OCTET STRING` (lossy UTF-8) or

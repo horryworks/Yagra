@@ -7,13 +7,23 @@
 //! (counters included) — rates are derived at query time (ADR-012). Live-only (needs a
 //! device + UDP); the parameter mapping is unit-tested.
 
-use crate::{SnmpSample, SnmpStringSample, SnmpV3Params, TransportError};
+use crate::{
+    SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params, TransportError,
+};
 use snmp2::{v3, AsyncSession, Oid, Value};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 /// Standard SNMP agent port.
 const SNMP_PORT: u16 = 161;
+
+/// GETBULK max-repetitions per request — bounds one response PDU's size so a large table is paged,
+/// not pulled in one oversized PDU. Mirrors the v2c walker's cap.
+const WALK_MAX_REPETITIONS: u32 = 20;
+
+/// Safety cap on GETBULK requests per column: a broken or looping agent can't spin the walk
+/// forever (`WALK_MAX_REPETITIONS` × this bounds the rows collected per column).
+const MAX_WALK_REQUESTS: usize = 1000;
 
 /// Open a v3 session against `target` and run engine discovery (id/boots/time) — required
 /// before authenticated requests.
@@ -98,6 +108,150 @@ pub async fn snmp_get_v3_strings(
         }
     }
     Ok(samples)
+}
+
+/// Walk numeric table columns from `target` via SNMP v3 (USM) GETBULK — the v3 analogue of
+/// `snmp_walk_v2c`. Each column base yields one numeric row per instance, keyed by ifIndex (a
+/// single trailing sub-id) or a folded synthetic key (multi-index tables). A per-column walk
+/// failure is logged and skipped. Counters are returned **raw** (rates derived at query time,
+/// ADR-012).
+pub async fn snmp_walk_v3(
+    target: IpAddr,
+    params: &SnmpV3Params,
+    column_oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpTableSample>, TransportError> {
+    let mut session = open_session(target, params, timeout).await?;
+    let mut rows = Vec::new();
+    for base_str in column_oids {
+        walk_column_v3(
+            &mut session,
+            base_str,
+            timeout,
+            |ifindex, value| {
+                numeric(value).map(|v| SnmpTableSample {
+                    oid_base: base_str.clone(),
+                    ifindex,
+                    value: v,
+                })
+            },
+            &mut rows,
+        )
+        .await;
+    }
+    Ok(rows)
+}
+
+/// Walk string-valued table columns (e.g. `ifName`, `ifAlias`) from `target` via SNMP v3 (USM)
+/// GETBULK — the v3 analogue of `snmp_walk_strings_v2c`, for interface metadata (PostgreSQL, never
+/// TSDB labels — ADR-011). Same per-column skip-on-error behaviour; non-string values are skipped.
+pub async fn snmp_walk_strings_v3(
+    target: IpAddr,
+    params: &SnmpV3Params,
+    column_oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpTableString>, TransportError> {
+    let mut session = open_session(target, params, timeout).await?;
+    let mut rows = Vec::new();
+    for base_str in column_oids {
+        walk_column_v3(
+            &mut session,
+            base_str,
+            timeout,
+            |ifindex, value| {
+                string_value(value).map(|s| SnmpTableString {
+                    oid_base: base_str.clone(),
+                    ifindex,
+                    value: s,
+                })
+            },
+            &mut rows,
+        )
+        .await;
+    }
+    Ok(rows)
+}
+
+/// Walk one column subtree via repeated GETBULK, mapping each in-subtree varbind to an `R` row
+/// (via `map`) and pushing it onto `out`. Pages until the walk leaves the column's subtree, the
+/// agent signals end-of-MIB, a request fails/times out, the agent stops advancing, or the
+/// per-column request cap ([`MAX_WALK_REQUESTS`]) is hit. Errors are logged and end this column
+/// only (one bad column doesn't fail the whole poll).
+async fn walk_column_v3<R>(
+    session: &mut AsyncSession,
+    base_str: &str,
+    timeout: Duration,
+    map: impl Fn(u32, &Value) -> Option<R>,
+    out: &mut Vec<R>,
+) {
+    if parse_oid(base_str).is_none() {
+        tracing::warn!(%base_str, "skipping malformed table column OID");
+        return;
+    }
+    let mut cursor_str = base_str.to_owned();
+    for _ in 0..MAX_WALK_REQUESTS {
+        let Some(cursor) = parse_oid(&cursor_str) else {
+            return;
+        };
+        let pdu = match tokio::time::timeout(
+            timeout,
+            session.getbulk(&[&cursor], 0, WALK_MAX_REPETITIONS),
+        )
+        .await
+        {
+            Ok(Ok(pdu)) => pdu,
+            Ok(Err(e)) => {
+                tracing::debug!(%base_str, error = %e, "snmp v3 table walk failed");
+                return;
+            }
+            Err(_) => {
+                tracing::debug!(%base_str, "snmp v3 table walk timed out");
+                return;
+            }
+        };
+        // Scan this page: collect in-subtree rows and note the last OID reached so the next
+        // GETBULK can continue after it. Stop the moment the walk leaves the column subtree or
+        // the agent reports it has no more.
+        let mut last_in_subtree: Option<String> = None;
+        let mut stop = false;
+        for (oid, value) in pdu.varbinds {
+            if matches!(
+                value,
+                Value::EndOfMibView | Value::NoSuchObject | Value::NoSuchInstance
+            ) {
+                stop = true;
+                break;
+            }
+            let oid_str = oid.to_id_string();
+            let Some(tail) = tail_subids(&oid_str, base_str) else {
+                stop = true; // walked past this column's subtree — done
+                break;
+            };
+            if let Some(ifindex) = crate::ifindex_from_tail(&tail) {
+                if let Some(row) = map(ifindex, &value) {
+                    out.push(row);
+                }
+            }
+            last_in_subtree = Some(oid_str);
+        }
+        match last_in_subtree {
+            // More in-subtree rows may follow — advance past the last one, unless the agent
+            // failed to advance (defensive: GETBULK returns strictly-greater OIDs).
+            Some(next) if !stop && next != cursor_str => cursor_str = next,
+            _ => return,
+        }
+    }
+}
+
+/// Sub-identifiers of `oid_str` past the column `base_str`, or `None` when `oid_str` is not a
+/// strict descendant of `base_str` (a different subtree, or the base itself — no instance).
+/// Compared on the dotted-decimal form so this doesn't depend on the client's relative-OID API;
+/// requires a `.` boundary after the base so `…2` is not read as a prefix of `…20`.
+fn tail_subids(oid_str: &str, base_str: &str) -> Option<Vec<u32>> {
+    let rest = oid_str
+        .strip_prefix(base_str)
+        .and_then(|r| r.strip_prefix('.'))?;
+    rest.split('.').map(|p| p.parse::<u32>().ok()).collect()
 }
 
 /// Map job-level v3 params onto the `snmp2` USM security config. Key material flows
@@ -262,6 +416,40 @@ mod tests {
         assert!(parse_oid("1.3.6.1.2.1.1.3.0").is_some());
         assert!(parse_oid("1.3.x.1").is_none());
         assert!(parse_oid("").is_none());
+    }
+
+    #[test]
+    fn tail_subids_extracts_instance_and_rejects_non_descendants() {
+        let base = "1.3.6.1.2.1.31.1.1.1.6";
+        // A single-instance row (ifIndex 7).
+        assert_eq!(tail_subids("1.3.6.1.2.1.31.1.1.1.6.7", base), Some(vec![7]));
+        // A multi-part instance (multi-index table) returns every sub-id.
+        assert_eq!(
+            tail_subids("1.3.6.1.2.1.31.1.1.1.6.1.0.0", base),
+            Some(vec![1, 0, 0])
+        );
+        // The column base itself has no instance.
+        assert_eq!(tail_subids(base, base), None);
+        // A different subtree is not a descendant.
+        assert_eq!(tail_subids("1.3.6.1.2.1.2.2.1.8.7", base), None);
+        // A string prefix that is NOT an OID-boundary descendant must be rejected: `…1.6` must not
+        // capture `…1.60.1` (the `.` boundary guards this).
+        assert_eq!(tail_subids("1.3.6.1.2.1.31.1.1.1.60.1", base), None);
+    }
+
+    #[test]
+    fn tail_subids_feeds_shared_ifindex_keying() {
+        // A single trailing sub-id keys directly; a multi-part tail folds to a stable, distinct key
+        // — the exact same [`crate::ifindex_from_tail`] the v2c walker uses (no divergence).
+        let base = "1.3.6.1.2.1.31.1.1.1.6";
+        let single = tail_subids("1.3.6.1.2.1.31.1.1.1.6.7", base).unwrap();
+        assert_eq!(crate::ifindex_from_tail(&single), Some(7));
+        let a = tail_subids("1.3.6.1.2.1.31.1.1.1.6.1.0.0", base).unwrap();
+        let b = tail_subids("1.3.6.1.2.1.31.1.1.1.6.2.0.0", base).unwrap();
+        let ka = crate::ifindex_from_tail(&a);
+        let kb = crate::ifindex_from_tail(&b);
+        assert!(ka.is_some() && kb.is_some());
+        assert_ne!(ka, kb);
     }
 
     #[test]
