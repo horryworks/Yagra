@@ -1,4 +1,4 @@
-// Topology ▸ Dependency view. The management surface for the dependency graph: every node, its
+// Topology ▸ Dependencies. The management surface for the dependency graph: every node, its
 // upstream (parent), live status, and — when suppressed — the root cause it's rolled up under.
 // Set/change/clear a node's upstream inline (the shared SetParentModal). Read: GET /api/v1/topology
 // (the same payload the Network map renders), polled on the dashboard cadence; the map stays the
@@ -119,8 +119,8 @@ export function DependencyPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title="Dependency view"
-        trail={[{ label: 'Topology' }, { label: 'Dependency view' }]}
+        title="Dependencies"
+        trail={[{ label: 'Topology' }, { label: 'Dependencies' }]}
         note="Manage the dependency graph: each node's upstream drives parent-down alert suppression and root-cause roll-up. The Network map visualizes the same edges."
       />
 

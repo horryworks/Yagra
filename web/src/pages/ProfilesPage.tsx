@@ -1,8 +1,8 @@
 // Device profiles (Nodes ▸ Device profiles). Profiles are device-class buckets split by
-// functional role (category) × vendor-NOS family; they bundle collection sets by *attaching
-// Collection templates* (profiles hold no raw OIDs themselves — edit a template once and every
-// profile using it updates). CRUD against /profiles; template links via /profiles/:id/templates.
-// ManageConfig-gated; 503 in skeleton surfaced.
+// functional role (category) × vendor-NOS family; they bundle metrics by *attaching Metric sets*
+// (profiles hold no raw OIDs themselves — edit a set once and every profile using it updates).
+// CRUD against /profiles; set links via /profiles/:id/templates (the API path keeps the legacy
+// "templates" wording). ManageConfig-gated; 503 in skeleton surfaced.
 //
 // Data-table standard v2: a toolbar (search + count + "+ Add profile") over the shared `.ytable`.
 // Rows are grouped under role headers (the category); each row shows its vendor and expands to a
@@ -95,7 +95,7 @@ export function ProfilesPage() {
       <PageHeader
         title="Device profiles"
         trail={[{ label: 'Nodes' }, { label: 'Device profiles' }]}
-        note="Device-class buckets (role × vendor). Attach Collection templates here; nodes inherit them via their profile."
+        note="Device-class buckets (role × vendor). Attach Metric sets here; nodes inherit them via their profile."
       />
 
       {unavailable ? (
@@ -127,7 +127,7 @@ export function ProfilesPage() {
               <div className="ytable-h">Name</div>
               <div className="ytable-h">Vendor</div>
               <div className="ytable-h">Poll interval</div>
-              <div className="ytable-h">Templates</div>
+              <div className="ytable-h">Metric sets</div>
               <div className="ytable-h right">Actions</div>
             </div>
 
@@ -176,7 +176,7 @@ export function ProfilesPage() {
                                 setOpenTemplates((cur) => (cur === p.id ? null : p.id))
                               }
                             >
-                              {open ? 'Hide templates' : 'Templates'}
+                              {open ? 'Hide sets' : 'Metric sets'}
                             </Button>
                           </div>
                           <div className="ytable-cell right">
@@ -448,7 +448,7 @@ function ProfileTemplates({
   };
 
   if (templates.length === 0) {
-    return <p className="muted">No collection templates exist yet. Create some first.</p>;
+    return <p className="muted">No metric sets exist yet. Create some first.</p>;
   }
   return (
     <div className="profile-templates">

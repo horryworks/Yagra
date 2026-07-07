@@ -1,4 +1,4 @@
-/* Rules & thresholds — data-table standard v2. The chrome (toolbar, sticky header, hover
+/* Alert rules — data-table standard v2. The chrome (toolbar, sticky header, hover
    actions, empty state) comes from styles/table.css; only the page-local bits live here: the
    blue-left-border explainer card, the compact number inputs in the add modal, and the W/C
    badge pairing used by both the modal and the Bounds cell. */

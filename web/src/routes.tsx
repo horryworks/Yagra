@@ -31,7 +31,8 @@ import { AuditPage } from './pages/AuditPage';
 import { PreferencesPage } from './pages/PreferencesPage';
 import { SystemHealthPage } from './pages/SystemHealthPage';
 import { PollersPage } from './pages/PollersPage';
-import { IntegrationsPage } from './pages/IntegrationsPage';
+import { IntegrationsCatalogPage } from './pages/integrations/IntegrationsCatalogPage';
+import { MerakiIntegrationPage } from './pages/integrations/MerakiIntegrationPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
 import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
@@ -58,7 +59,12 @@ export function AppRoutes() {
         {/* Nodes — static paths rank above the :nodeId dynamic segment in v6. */}
         <Route path="nodes" element={<NodesPage />} />
         <Route path="nodes/discovery" element={<DiscoveryPage />} />
-        <Route path="nodes/dependencies" element={<ComingSoon />} />
+        {/* Dependencies live under Topology now; keep this path as a redirect so old links/bookmarks
+            resolve (and don't get captured by the nodes/:nodeId dynamic segment below). */}
+        <Route
+          path="nodes/dependencies"
+          element={<Navigate to="/topology/dependency" replace />}
+        />
         <Route path="nodes/profiles" element={<ProfilesPage />} />
         <Route path="nodes/classification-rules" element={<ClassificationRulesPage />} />
         <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />
@@ -89,10 +95,12 @@ export function AppRoutes() {
         <Route path="troubleshoot/scheduled" element={<ComingSoon />} />
         <Route path="troubleshoot/findings" element={<ComingSoon />} />
 
-        {/* Settings */}
+        {/* Settings — the tab lands on System health (the first sidebar item). */}
+        <Route path="settings" element={<Navigate to="/settings/system-health" replace />} />
         <Route path="settings/system-health" element={<SystemHealthPage />} />
         <Route path="settings/pollers" element={<PollersPage />} />
-        <Route path="settings/integrations" element={<IntegrationsPage />} />
+        <Route path="settings/integrations" element={<IntegrationsCatalogPage />} />
+        <Route path="settings/integrations/meraki" element={<MerakiIntegrationPage />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />
         <Route path="settings/roles" element={<RolesPage />} />

@@ -1,21 +1,22 @@
-// Settings ▸ Integrations ▸ Cisco Meraki. Onboard Meraki organizations (read-only Dashboard API),
-// manage per-org enable/cadence/scope, launch the import wizard, and toggle the global kill switch.
+// Settings ▸ Integrations ▸ Cisco Meraki. The detail page for the Meraki integration (reached from
+// the Integrations catalog). Onboard Meraki organizations (read-only Dashboard API), manage per-org
+// enable/cadence/scope, launch the import wizard, and toggle the global kill switch.
 //
 // The API key is entered inline (it belongs to one org set, unlike a shared SNMP community); the
 // backend seals it into the credentials store as a `meraki_api` credential. Everything here is
 // read-only toward Meraki — nothing this page does can change a customer's Meraki configuration.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
-import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
-import { MerakiImportModal } from '../components/MerakiImport/MerakiImportModal';
-import './IntegrationsPage.css';
+import { api, ApiError } from '../../services/api';
+import { useAuthStore } from '../../store';
+import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Card } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
+import { TextInput, Select } from '../../components/ui/Field';
+import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
+import './MerakiIntegrationPage.css';
 
 const REGIONS: { label: string; base_url: string }[] = [
   { label: 'Global (api.meraki.com)', base_url: 'https://api.meraki.com' },
@@ -348,7 +349,7 @@ function CadenceModal({
   );
 }
 
-export function IntegrationsPage() {
+export function MerakiIntegrationPage() {
   const authed = useAuthStore((s) => s.authed);
   const [orgs, setOrgs] = useState<MerakiOrg[]>([]);
   const [loading, setLoading] = useState(true);
@@ -478,9 +479,13 @@ export function IntegrationsPage() {
   return (
     <div>
       <PageHeader
-        title="Integrations"
-        trail={[{ label: 'Settings' }, { label: 'Integrations' }]}
-        note="Cisco Meraki — read-only Dashboard API monitoring."
+        title="Cisco Meraki"
+        trail={[
+          { label: 'Settings' },
+          { label: 'Integrations', to: '/settings/integrations' },
+          { label: 'Cisco Meraki' },
+        ]}
+        note="Read-only Dashboard API monitoring."
       />
       {content}
 

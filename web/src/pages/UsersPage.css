@@ -1,4 +1,4 @@
-/* Users & roles — the "identity list" (variant B). The list chrome, monogram, role select,
+/* Users — the "identity list" (variant B). The list chrome, monogram, role select,
    status/you pills, and segmented filter all come from the table standard (styles/table.css);
    only the error spacing is page-local. The modal form fields use the shared `.modal-*` classes
    defined on the Modal component. */

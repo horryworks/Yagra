@@ -128,7 +128,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
 
       {data && data.sets.length > 0 && (
         <section>
-          <div className="nd-section-t">Collection sets</div>
+          <div className="nd-section-t">Metric sets</div>
           <div className="nd-coll-sets">
             {data.sets.map((s) => (
               <div className="nd-coll-set" key={s.id}>
@@ -166,7 +166,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
       )}
 
       <section>
-        <div className="nd-section-t">Collection set — this node</div>
+        <div className="nd-section-t">Node metrics</div>
         <p className="nd-muted nd-coll-editnote">
           SNMP metrics polled from this node. Node-level entries override the device profile; with
           none set, the profile / built-in defaults apply.

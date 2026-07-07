@@ -1,4 +1,4 @@
-/* Topology ▸ Dependency view — the dependency management table. Layout only; status color comes
+/* Topology ▸ Dependencies — the dependency management table. Layout only; status color comes
    from the state variables (set inline via stateColorVar), never hardcoded here. */
 
 .dep-name {

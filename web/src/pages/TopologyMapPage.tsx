@@ -56,7 +56,7 @@ export function TopologyMapPage() {
         <Card>
           <p className="muted">
             No dependency links defined yet. Set a node&apos;s upstream on the{' '}
-            <Link to="/topology/dependency">Dependency view</Link> (or a node&apos;s
+            <Link to="/topology/dependency">Dependencies</Link> page (or a node&apos;s
             &ldquo;Dependency…&rdquo; action) to build the map. {layout.isolatedCount} node
             {layout.isolatedCount === 1 ? '' : 's'} in the inventory.
           </p>

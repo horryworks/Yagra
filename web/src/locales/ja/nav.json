@@ -15,22 +15,21 @@
   "nodes": {
     "all": "すべてのノード",
     "discovery": "ディスカバリ",
-    "dependencies": "依存関係",
     "profiles": "デバイスプロファイル",
     "classificationRules": "分類ルール",
-    "collectionTemplates": "収集テンプレート",
+    "metricSets": "メトリクスセット",
     "mib": "MIB リポジトリ"
   },
   "topology": {
     "map": "ネットワークマップ",
-    "dependency": "依存関係ビュー",
-    "geo": "地理マップ"
+    "dependency": "依存関係",
+    "geo": "ジオマップ"
   },
   "alerts": {
     "active": "アクティブアラート",
     "history": "履歴",
-    "rules": "ルールとしきい値",
-    "routing": "通知",
+    "rules": "アラートルール",
+    "routing": "通知ルーティング",
     "events": "イベント",
     "eventRules": "イベントルール",
     "eventSources": "イベントソース",
@@ -38,23 +37,49 @@
     "mutes": "ミュート"
   },
   "troubleshoot": {
-    "all": "すべてのツール",
-    "runs": "分析実行",
-    "scheduled": "スケジュール済み",
-    "findings": "保存済みの検出結果"
+    "all": "診断ツール",
+    "runs": "分析ジョブ",
+    "scheduled": "定期実行",
+    "findings": "保存済み分析結果"
   },
   "settings": {
     "systemHealth": "システムヘルス",
     "pollers": "ポーラー",
     "integrations": "連携",
     "credentials": "認証情報とシークレット",
-    "users": "ユーザーとロール",
+    "users": "ユーザー",
     "roles": "ロールと権限",
     "auth": "認証",
     "audit": "監査ログ",
     "system": "システム設定",
     "preferences": "環境設定",
     "about": "バージョン情報"
+  },
+  "groups": {
+    "inventory": "インベントリ",
+    "monitoringConfig": "監視設定",
+    "monitor": "モニタリング",
+    "configure": "設定",
+    "system": "システム",
+    "access": "アクセス",
+    "personal": "個人設定",
+    "comingSoon": "近日公開"
+  },
+  "descriptions": {
+    "nodesProfiles": "ノードが収集する内容をデバイスクラス単位で束ねる設定",
+    "nodesClassificationRules": "検出ノードへプロファイルとフォルダを自動割当するルール",
+    "nodesMetricSets": "デバイスプロファイルが参照する名前付きメトリクス定義セット",
+    "nodesMib": "MIB ファイルを取り込み OID を名前解決",
+    "alertsRules": "検知ルールと階層的なしきい値オーバーライド",
+    "alertsRouting": "アラート通知のチャネルと配信ルール",
+    "alertsEventRules": "一致した syslog / トラップをアラート化するルール",
+    "alertsEventSources": "Syslog・SNMP トラップの受信設定",
+    "alertsMaintenance": "計画作業 — maintenance 状態になり SLA から除外",
+    "alertsMutes": "通知のみ停止 — 状態・SLA は不変",
+    "topologyDependency": "親子の依存リンクを管理",
+    "troubleshootRuns": "バックグラウンド分析ジョブとレポート",
+    "settingsCredentials": "SNMP・API 認証情報（暗号化して保存）",
+    "settingsPollers": "分散ポーラーの状態"
   },
   "shell": {
     "home": "ホーム",

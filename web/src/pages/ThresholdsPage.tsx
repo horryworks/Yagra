@@ -1,4 +1,4 @@
-// Rules & thresholds (Alerts ▸ Rules & thresholds). Thresholds resolve by hierarchical
+// Alert rules (Alerts ▸ Alert rules). Thresholds resolve by hierarchical
 // override — profile → group → node, most-specific wins (§3.3) — so each rule carries a
 // scope level + id. CRUD against /thresholds. Rules are evaluated live: the alert engine
 // snapshots them (refreshed every ~30s) and checks each matching poll sample through the
@@ -261,8 +261,8 @@ export function ThresholdsPage() {
   return (
     <div>
       <PageHeader
-        title="Rules & thresholds"
-        trail={[{ label: 'Alerts' }, { label: 'Rules & thresholds' }]}
+        title="Alert rules"
+        trail={[{ label: 'Alerts' }, { label: 'Alert rules' }]}
         note="Hierarchical overrides: profile → group → node. The most specific scope wins."
       />
 

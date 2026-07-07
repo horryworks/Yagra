@@ -186,8 +186,8 @@ export function CollectionEditor({
           {loading
             ? 'Loading…'
             : scope === 'template'
-              ? 'No metrics in this template yet.'
-              : 'No node-level metrics. The profile templates / built-in defaults still apply.'}
+              ? 'No metrics in this set yet.'
+              : "No node-level metrics. The profile's metric sets / built-in defaults still apply."}
         </p>
       ) : (
         <div className="ytable ce-table">
