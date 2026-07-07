@@ -3,6 +3,7 @@
 // bell, user menu. 朱 (accent) appears only on the active tab / focus (§1.1).
 
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { NAV, sectionForPath } from '../../nav';
 import { useAlertStore } from '../../store';
 import { Logo } from './Logo';
@@ -10,6 +11,7 @@ import { UserMenu } from './UserMenu';
 import './TopBar.css';
 
 export function TopBar() {
+  const { t } = useTranslation('nav');
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const active = sectionForPath(pathname);
@@ -17,9 +19,13 @@ export function TopBar() {
 
   return (
     <header className="topbar">
-      <button className="topbar-home" onClick={() => navigate('/dashboard')} title="Home">
+      <button
+        className="topbar-home"
+        onClick={() => navigate('/dashboard')}
+        title={t('shell.home')}
+      >
         <Logo />
-        <span className="topbar-wordmark">Yagra</span>
+        <span className="topbar-wordmark">{t('shell.wordmark')}</span>
       </button>
 
       <nav className="topbar-tabs">
@@ -29,7 +35,7 @@ export function TopBar() {
             to={s.path}
             className={s.key === active.key ? 'topbar-tab active' : 'topbar-tab'}
           >
-            {s.label}
+            {t(s.labelKey)}
           </NavLink>
         ))}
       </nav>
@@ -40,12 +46,16 @@ export function TopBar() {
         <input
           className="topbar-search"
           type="search"
-          placeholder="Search…"
+          placeholder={t('shell.search')}
           disabled
-          title="Search is not available yet"
-          aria-label="Global search"
+          title={t('shell.searchUnavailable')}
+          aria-label={t('shell.globalSearch')}
         />
-        <button className="topbar-bell" title={`${alertCount} active alerts`} aria-label="Alerts">
+        <button
+          className="topbar-bell"
+          title={t('shell.activeAlerts', { count: alertCount })}
+          aria-label={t('shell.alerts')}
+        >
           <span className="topbar-bell-glyph" aria-hidden>
             ◔
           </span>

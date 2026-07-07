@@ -3,6 +3,7 @@
 // slots it needs; styles live with the table standard (styles/table.css).
 
 import type { ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { SearchIcon } from './icons';
 
 /** The toolbar row. Lay children left → right; drop a <TableSpacer/> before the count/action. */
@@ -20,13 +21,14 @@ export function SearchInput({
   value,
   onChange,
   placeholder,
-  ariaLabel = 'Search',
+  ariaLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   ariaLabel?: string;
 }) {
+  const { t } = useTranslation('common');
   return (
     <div className="table-search">
       <SearchIcon />
@@ -35,13 +37,15 @@ export function SearchInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        aria-label={ariaLabel}
+        aria-label={ariaLabel ?? t('actions.search')}
       />
     </div>
   );
 }
 
-/** Result count: "<strong>N</strong> of M <noun>" (omit `total` for "<strong>N</strong> <noun>"). */
+/** Result count: "N of M <noun>" (omit `total` for "N <noun>"), with `shown` emphasized. The
+ *  word order comes from the translation key so a language like Japanese can reorder it; callers
+ *  pass `noun` already localized for their context. */
 export function ResultCount({
   shown,
   total,
@@ -51,10 +55,15 @@ export function ResultCount({
   total?: number;
   noun: string;
 }) {
+  const { t } = useTranslation('common');
   return (
     <span className="table-count">
-      <strong>{shown}</strong>
-      {total != null ? ` of ${total}` : ''} {noun}
+      <Trans
+        t={t}
+        i18nKey={total != null ? 'resultCount' : 'resultCountNoTotal'}
+        values={{ shown, total, noun }}
+        components={{ b: <strong /> }}
+      />
     </span>
   );
 }

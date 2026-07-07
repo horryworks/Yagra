@@ -1,6 +1,12 @@
-// Pure presentation helpers. Colors resolve to theme CSS variables (ui-conventions) — no
-// hardcoded hex here, so the theme stays the single source of truth.
+// Presentation helpers. Colors resolve to theme CSS variables (ui-conventions) — no hardcoded hex
+// here, so the theme stays the single source of truth. User-facing words (state/http/relative-time
+// labels, units of time) resolve through the global i18next instance so they follow the active
+// language without every call site needing a hook; importing i18n here also guarantees it is
+// initialized (English is bundled synchronously) before any helper runs, including in tests.
+// Reactivity on a language switch comes from the App-level `useTranslation` re-render cascade.
 
+import i18n from '../i18n';
+import { intlLocale } from './locale';
 import type { MetricPoint, NodeState, Severity } from '../types/api';
 
 /** Split time-series points into the parallel `[timestamps, values]` uPlot wants. */
@@ -56,9 +62,9 @@ export function stateColorValue(state: NodeState, fallback = '#8a93a3'): string 
   return v || fallback;
 }
 
-/** Human label for a state. */
+/** Localized human label for a node state. */
 export function stateLabel(state: NodeState): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+  return i18n.t(`format:state.${state}`);
 }
 
 /** Rank a severity for sorting (higher = worse). */
@@ -66,9 +72,10 @@ export function severityRank(severity: Severity): number {
   return { info: 0, warning: 1, critical: 2 }[severity];
 }
 
-/** Format a Unix-ms timestamp as a local time string. */
-export function formatTimestamp(unixMs: number): string {
-  return new Date(unixMs).toLocaleString();
+/** Format a Unix-ms timestamp as a local date-time string in the active interface language's
+ *  locale (pass `locale` to override). Zone is always the browser's local zone. */
+export function formatTimestamp(unixMs: number, locale: string = intlLocale(i18n.language)): string {
+  return new Date(unixMs).toLocaleString(locale);
 }
 
 /** Exact timestamp as a stable, locale-independent `YYYY-MM-DD HH:MM:SS` in the browser's
@@ -86,13 +93,13 @@ export function dateOnly(iso: string): string {
 /** Compact relative time ("just now" / "5m ago" / "3h ago" / "Yesterday" / "12d ago"), or
  *  "Never" for a null timestamp. `now` is injectable so callers/tests are deterministic. */
 export function relativeTime(iso: string | null, now: number = Date.now()): string {
-  if (!iso) return 'Never';
+  if (!iso) return i18n.t('format:relative.never');
   const mins = Math.floor((now - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-  if (mins < 2880) return 'Yesterday';
-  return `${Math.floor(mins / 1440)}d ago`;
+  if (mins < 1) return i18n.t('format:relative.justNow');
+  if (mins < 60) return i18n.t('format:relative.min', { count: mins });
+  if (mins < 1440) return i18n.t('format:relative.hour', { count: Math.floor(mins / 60) });
+  if (mins < 2880) return i18n.t('format:relative.yesterday');
+  return i18n.t('format:relative.day', { count: Math.floor(mins / 1440) });
 }
 
 /** Tone for an HTTP status code, on the status palette only (2xx up / 4xx warning / 5xx
@@ -105,20 +112,19 @@ export function httpStatusTone(status: number): 'up' | 'warning' | 'critical' {
 
 /** Short human label for an HTTP status (paired with the code + dot so it's not color-alone). */
 export function httpStatusLabel(status: number): string {
-  if (status < 300) return 'OK';
-  if (status === 401 || status === 403) return 'Denied';
-  if (status === 409) return 'Conflict';
-  if (status < 500) return 'Client error';
-  return 'Server error';
+  if (status < 300) return i18n.t('format:http.ok');
+  if (status === 401 || status === 403) return i18n.t('format:http.denied');
+  if (status === 409) return i18n.t('format:http.conflict');
+  if (status < 500) return i18n.t('format:http.clientError');
+  return i18n.t('format:http.serverError');
 }
 
-/** Human label for a TLS certificate's days-to-expiry. Negative ⇒ already expired. */
+/** Localized label for a TLS certificate's days-to-expiry. Negative ⇒ already expired. */
 export function formatDaysToExpiry(days: number): string {
   const d = Math.round(days);
-  if (d < 0) return `expired ${Math.abs(d)}d ago`;
-  if (d === 0) return 'expires today';
-  if (d === 1) return '1 day left';
-  return `${d} days left`;
+  if (d < 0) return i18n.t('format:expiry.expired', { count: Math.abs(d) });
+  if (d === 0) return i18n.t('format:expiry.today');
+  return i18n.t('format:expiry.left', { count: d });
 }
 
 /** Up to two initials for a monogram avatar. Splits on `.`/`-`/`_`; `unknown`/empty ⇒ "?". */
@@ -134,9 +140,9 @@ export function initials(name: string): string {
  *  generic phrase if the runtime can't resolve a zone. */
 export function localTimeZone(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'your local time';
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || i18n.t('format:localTimeZoneFallback');
   } catch {
-    return 'your local time';
+    return i18n.t('format:localTimeZoneFallback');
   }
 }
 
@@ -249,39 +255,39 @@ export function formatUptimeTicks(ticks: number): string {
   return parts.length ? `${parts.join(' ')} ${hm}` : hm;
 }
 
-/** Friendly display labels for known scalar SNMP metrics; falls back to the raw metric name. */
-const SCALAR_LABELS: Record<string, string> = {
-  snmp_sys_uptime_ticks: 'Uptime',
+/** Metric names that have a friendly display label under `format:scalar.*`. Kept as a registry
+ *  (the labels themselves are localized) — an unknown metric falls back to its raw name. */
+const KNOWN_SCALARS = new Set<string>([
+  'snmp_sys_uptime_ticks',
   // Cisco Meraki (Dashboard API) metrics.
-  meraki_device_up: 'Availability',
-  meraki_client_count: 'Clients',
-  meraki_usage_sent_kb: 'Traffic sent (KB)',
-  meraki_usage_recv_kb: 'Traffic received (KB)',
-  meraki_uplink_loss_pct: 'Uplink loss %',
-  meraki_uplink_latency_ms: 'Uplink latency (ms)',
-  meraki_uplink_status: 'Uplink status',
-};
+  'meraki_device_up',
+  'meraki_client_count',
+  'meraki_usage_sent_kb',
+  'meraki_usage_recv_kb',
+  'meraki_uplink_loss_pct',
+  'meraki_uplink_latency_ms',
+  'meraki_uplink_status',
+]);
 
-/** A known scalar gets a human label + formatted value (and renders in the UI font, not mono);
+/** A known scalar gets a localized label + formatted value (and renders in the UI font, not mono);
  *  an unknown one keeps its raw OID-ish metric name + numeric value (mono). */
 export function scalarDisplay(metric: string, value: number): {
   label: string;
   value: string;
   known: boolean;
 } {
-  if (metric === 'snmp_sys_uptime_ticks') {
-    return { label: SCALAR_LABELS[metric], value: formatUptimeTicks(value), known: true };
-  }
-  const known = metric in SCALAR_LABELS;
-  return { label: SCALAR_LABELS[metric] ?? metric, value: String(value), known };
+  const known = KNOWN_SCALARS.has(metric);
+  const label = known ? i18n.t(`format:scalar.${metric}`) : metric;
+  const display = metric === 'snmp_sys_uptime_ticks' ? formatUptimeTicks(value) : String(value);
+  return { label, value: display, known };
 }
 
 /** Whole-number count with locale thousands separators (e.g. 12840 → "12,840"), or `—` for a
  *  non-finite value. For session/connection counts shown as a headline or chart-hover readout
  *  (where the axis uses the compact `formatSi`). Rounds to the nearest integer. */
-export function formatCount(n: number): string {
+export function formatCount(n: number, locale: string = intlLocale(i18n.language)): string {
   if (!Number.isFinite(n)) return '—';
-  return Math.round(n).toLocaleString();
+  return Math.round(n).toLocaleString(locale);
 }
 
 /** The liveness check sentinel (yagra-core `LIVENESS`), shown to humans as "Reachability". */
@@ -309,7 +315,10 @@ export function alertWhat(row: {
     row.direction && row.threshold_value != null
       ? `${row.direction} ${row.threshold_value}`
       : null;
-  const observed = row.observed_value != null ? `was ${row.observed_value}` : null;
+  const observed =
+    row.observed_value != null
+      ? i18n.t('format:alertObservedWas', { value: row.observed_value })
+      : null;
   return { kind: 'metric', metric: row.metric, condition, observed };
 }
 

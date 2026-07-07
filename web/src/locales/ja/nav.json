@@ -1,0 +1,77 @@
+{
+  "sections": {
+    "dashboard": "ダッシュボード",
+    "nodes": "ノード",
+    "topology": "トポロジ",
+    "alerts": "アラート",
+    "troubleshoot": "トラブルシュート",
+    "settings": "設定"
+  },
+  "dashboard": {
+    "shared": "共有ダッシュボード",
+    "my": "マイダッシュボード",
+    "reports": "レポート"
+  },
+  "nodes": {
+    "all": "すべてのノード",
+    "discovery": "ディスカバリ",
+    "dependencies": "依存関係",
+    "profiles": "デバイスプロファイル",
+    "classificationRules": "分類ルール",
+    "collectionTemplates": "収集テンプレート",
+    "mib": "MIB リポジトリ"
+  },
+  "topology": {
+    "map": "ネットワークマップ",
+    "dependency": "依存関係ビュー",
+    "geo": "地理マップ"
+  },
+  "alerts": {
+    "active": "アクティブアラート",
+    "history": "履歴",
+    "rules": "ルールとしきい値",
+    "routing": "通知",
+    "events": "イベント",
+    "eventRules": "イベントルール",
+    "eventSources": "イベントソース",
+    "maintenance": "メンテナンスウィンドウ",
+    "mutes": "ミュート"
+  },
+  "troubleshoot": {
+    "all": "すべてのツール",
+    "runs": "分析実行",
+    "scheduled": "スケジュール済み",
+    "findings": "保存済みの検出結果"
+  },
+  "settings": {
+    "systemHealth": "システムヘルス",
+    "pollers": "ポーラー",
+    "integrations": "連携",
+    "credentials": "認証情報とシークレット",
+    "users": "ユーザーとロール",
+    "roles": "ロールと権限",
+    "auth": "認証",
+    "audit": "監査ログ",
+    "system": "システム設定",
+    "preferences": "環境設定",
+    "about": "バージョン情報"
+  },
+  "shell": {
+    "home": "ホーム",
+    "wordmark": "Yagra",
+    "expand": "展開",
+    "collapse": "折りたたむ",
+    "expandSidebar": "サイドバーを展開",
+    "collapseSidebar": "サイドバーを折りたたむ",
+    "notImplemented": "未実装",
+    "search": "検索…",
+    "searchUnavailable": "検索は現在利用できません",
+    "globalSearch": "全体検索",
+    "alerts": "アラート",
+    "activeAlerts_other": "アクティブアラート {{count}} 件",
+    "breadcrumb": "パンくずリスト",
+    "comingSoonBadge": "近日公開",
+    "comingSoonThisScreen": "この画面",
+    "comingSoonText": "{{label}} は計画中の情報アーキテクチャの一部です。バックエンド API が実装されると、この画面が表示されます。ナビゲーション項目は構造を安定させるために残されています。今後のリリースをお待ちください。"
+  }
+}

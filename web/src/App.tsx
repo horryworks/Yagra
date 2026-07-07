@@ -7,15 +7,19 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
 import { AppRoutes } from './routes';
+import { useTranslation } from 'react-i18next';
 import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
-import { applyTheme, usePrefsStore } from './prefs';
+import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
+import i18n from './i18n';
 import { useAuthStore } from './store';
 
 export function App() {
+  const { t } = useTranslation();
   const authed = useAuthStore((s) => s.authed);
   const role = useAuthStore((s) => s.role);
   const setRole = useAuthStore((s) => s.setRole);
   const theme = usePrefsStore((s) => s.theme);
+  const language = usePrefsStore((s) => s.language);
   const [config, setConfig] = useState<ClientConfig | null>(null);
 
   // Resolve the current principal's role once we're authenticated but don't yet know it (e.g. after
@@ -41,6 +45,13 @@ export function App() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Reflect the persisted language into i18next + <html lang> (immediate switch, no reload). A
+  // non-English language lazy-loads its chunks here; the EN fallback shows until they arrive.
+  useEffect(() => {
+    applyLanguage(language);
+    void i18n.changeLanguage(language);
+  }, [language]);
 
   // A stale/expired token (e.g. after a core restart wiped in-memory sessions) makes writes
   // 401 even though localStorage still has a token. Drop auth state on that signal so the UI
@@ -68,7 +79,7 @@ export function App() {
   return (
     <BrowserRouter>
       {config == null ? (
-        <div className="app-loading muted">Loading…</div>
+        <div className="app-loading muted">{t('loading')}</div>
       ) : gated ? (
         <LoginPage />
       ) : (

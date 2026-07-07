@@ -14,6 +14,9 @@ const localStore = (): StateStorage =>
 
 export type Theme = 'light' | 'dark';
 
+/** Interface language. English is the default; others are lazy-loaded (see `i18n.ts`). */
+export type Language = 'en' | 'ja';
+
 /** How the interface Throughput chart's Y-axis treats the configured-bandwidth reference line.
  *  `fit` auto-fits the axis to traffic (line pinned to the top edge until traffic nears it);
  *  `capacity` pins the axis top to the bandwidth so headroom is shown as a proportion. A single
@@ -22,6 +25,8 @@ export type ThroughputScale = 'fit' | 'capacity';
 
 interface PrefsStore {
   theme: Theme;
+  /** Active interface language (default English). Applied app-wide via i18next; see App.tsx. */
+  language: Language;
   sidebarCollapsed: boolean;
   /** Inventory-tree groups the user has explicitly collapsed, keyed by group id. The tree
    *  defaults to fully expanded, so we persist the *collapsed* set (empty ⇒ all open) — this
@@ -31,6 +36,7 @@ interface PrefsStore {
   throughputScale: ThroughputScale;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  setLanguage: (language: Language) => void;
   toggleSidebar: () => void;
   /** Flip one inventory-tree group between expanded and collapsed, persisting the choice. */
   toggleNodeTreeGroup: (id: string) => void;
@@ -43,11 +49,13 @@ export const usePrefsStore = create<PrefsStore>()(
   persist(
     (set) => ({
       theme: 'dark',
+      language: 'en',
       sidebarCollapsed: false,
       nodeTreeCollapsed: {},
       throughputScale: 'fit',
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      setLanguage: (language) => set({ language }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleNodeTreeGroup: (id) =>
         set((s) => {
@@ -68,5 +76,13 @@ export const usePrefsStore = create<PrefsStore>()(
 export function applyTheme(theme: Theme): void {
   if (typeof document !== 'undefined') {
     document.documentElement.setAttribute('data-theme', theme);
+  }
+}
+
+/** Reflect the active language onto <html lang> (accessibility / hyphenation / font selection).
+ *  The actual string swap is driven by i18next's `changeLanguage`; this just keeps the DOM honest. */
+export function applyLanguage(language: Language): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('lang', language);
   }
 }

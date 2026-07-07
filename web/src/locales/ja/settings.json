@@ -1,0 +1,24 @@
+{
+  "prefs": {
+    "title": "環境設定",
+    "appearance": "外観",
+    "theme": "テーマ",
+    "themeHelp": "ライトとダークはどちらも Yagra のトークンパレットを使用します。",
+    "themes": {
+      "light": "ライト",
+      "dark": "ダーク"
+    },
+    "language": "言語",
+    "languageHelp": "インターフェースの言語を選択します。変更は即座に反映されます。"
+  },
+  "about": {
+    "title": "バージョン情報",
+    "note": "製品情報と稼働中のバージョン。",
+    "tagline": "ネットワーク監視システム — ICMP / SNMP / URL 監視、ディスカバリ、アラート、ダッシュボードを備え、数万ノード規模まで拡張できるよう設計されています。",
+    "coreVersion": "コア / API バージョン",
+    "webuiVersion": "WebUI バージョン",
+    "repository": "リポジトリ",
+    "license": "ライセンス",
+    "unavailable": "利用不可"
+  }
+}

@@ -3905,7 +3905,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "serde",
@@ -3917,7 +3917,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -3933,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -3942,7 +3942,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3978,14 +3978,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-ingest"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -3993,7 +3993,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-poller"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4017,7 +4017,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -4027,7 +4027,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-telemetry"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -4039,14 +4039,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-transport"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "csnmp",

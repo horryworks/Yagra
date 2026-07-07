@@ -5,6 +5,7 @@
 
 import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import './Modal.css';
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function Modal({ title, onClose, footer, children }: Props) {
+  const { t } = useTranslation('common');
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -58,7 +60,7 @@ export function Modal({ title, onClose, footer, children }: Props) {
           <h2 className="modal-title" id={titleId}>
             {title}
           </h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
+          <button className="modal-close" onClick={onClose} aria-label={t('actions.close')}>
             ×
           </button>
         </div>

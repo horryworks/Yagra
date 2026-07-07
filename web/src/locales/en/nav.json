@@ -1,0 +1,78 @@
+{
+  "sections": {
+    "dashboard": "Dashboard",
+    "nodes": "Nodes",
+    "topology": "Topology",
+    "alerts": "Alerts",
+    "troubleshoot": "Troubleshoot",
+    "settings": "Settings"
+  },
+  "dashboard": {
+    "shared": "Shared dashboard",
+    "my": "My dashboard",
+    "reports": "Reports"
+  },
+  "nodes": {
+    "all": "All nodes",
+    "discovery": "Discovery",
+    "dependencies": "Dependencies",
+    "profiles": "Device profiles",
+    "classificationRules": "Classification rules",
+    "collectionTemplates": "Collection templates",
+    "mib": "MIB repository"
+  },
+  "topology": {
+    "map": "Network map",
+    "dependency": "Dependency view",
+    "geo": "Geo map"
+  },
+  "alerts": {
+    "active": "Active alerts",
+    "history": "History",
+    "rules": "Rules & thresholds",
+    "routing": "Notifications",
+    "events": "Events",
+    "eventRules": "Event rules",
+    "eventSources": "Event sources",
+    "maintenance": "Maintenance windows",
+    "mutes": "Mutes"
+  },
+  "troubleshoot": {
+    "all": "All tools",
+    "runs": "Analysis runs",
+    "scheduled": "Scheduled",
+    "findings": "Saved findings"
+  },
+  "settings": {
+    "systemHealth": "System health",
+    "pollers": "Pollers",
+    "integrations": "Integrations",
+    "credentials": "Credentials & secrets",
+    "users": "Users & roles",
+    "roles": "Roles & privileges",
+    "auth": "Authentication",
+    "audit": "Audit log",
+    "system": "System settings",
+    "preferences": "Preferences",
+    "about": "About"
+  },
+  "shell": {
+    "home": "Home",
+    "wordmark": "Yagra",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar",
+    "notImplemented": "Not implemented yet",
+    "search": "Search…",
+    "searchUnavailable": "Search is not available yet",
+    "globalSearch": "Global search",
+    "alerts": "Alerts",
+    "activeAlerts_one": "{{count}} active alert",
+    "activeAlerts_other": "{{count}} active alerts",
+    "breadcrumb": "Breadcrumb",
+    "comingSoonBadge": "Coming soon",
+    "comingSoonThisScreen": "This screen",
+    "comingSoonText": "{{label}} is part of the planned information architecture. Its screen will appear here once the backing API lands — the navigation entry is kept so the structure stays stable. Check back in a future release."
+  }
+}

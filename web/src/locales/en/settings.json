@@ -1,0 +1,24 @@
+{
+  "prefs": {
+    "title": "Preferences",
+    "appearance": "Appearance",
+    "theme": "Theme",
+    "themeHelp": "Light and dark both use the Yagra token palette.",
+    "themes": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "language": "Language",
+    "languageHelp": "Choose the interface language. Changes apply immediately."
+  },
+  "about": {
+    "title": "About",
+    "note": "Product identity and running versions.",
+    "tagline": "Network monitoring system — ICMP / SNMP / URL monitoring, discovery, alerting and dashboards, built to scale to tens of thousands of nodes.",
+    "coreVersion": "Core / API version",
+    "webuiVersion": "WebUI version",
+    "repository": "Repository",
+    "license": "License",
+    "unavailable": "unavailable"
+  }
+}

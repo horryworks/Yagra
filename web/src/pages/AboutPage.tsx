@@ -4,6 +4,7 @@
 // skew during a rolling upgrade visible. Read-only, no auth needed to render.
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { api } from '../services/api';
@@ -22,6 +23,7 @@ function InfoRow({ label, children, mono }: { label: string; children: ReactNode
 }
 
 export function AboutPage() {
+  const { t } = useTranslation('settings');
   const [coreVersion, setCoreVersion] = useState<string | null>(null);
   const [coreError, setCoreError] = useState(false);
 
@@ -40,33 +42,30 @@ export function AboutPage() {
     };
   }, []);
 
-  const core = coreError ? 'unavailable' : (coreVersion ?? '…');
+  const core = coreError ? t('about.unavailable') : (coreVersion ?? '…');
 
   return (
     <div>
       <PageHeader
-        title="About"
-        trail={[{ label: 'Settings' }, { label: 'About' }]}
-        note="Product identity and running versions."
+        title={t('about.title')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('about.title') }]}
+        note={t('about.note')}
       />
-      <Card title="Yagra">
-        <p className="about-tagline muted">
-          Network monitoring system — ICMP / SNMP / URL monitoring, discovery, alerting and
-          dashboards, built to scale to tens of thousands of nodes.
-        </p>
+      <Card title={t('nav:shell.wordmark')}>
+        <p className="about-tagline muted">{t('about.tagline')}</p>
         <div className="about-grid">
-          <InfoRow label="Core / API version" mono>
+          <InfoRow label={t('about.coreVersion')} mono>
             {core}
           </InfoRow>
-          <InfoRow label="WebUI version" mono>
+          <InfoRow label={t('about.webuiVersion')} mono>
             {__APP_VERSION__}
           </InfoRow>
-          <InfoRow label="Repository">
+          <InfoRow label={t('about.repository')}>
             <a href={REPOSITORY} target="_blank" rel="noreferrer">
               {REPOSITORY}
             </a>
           </InfoRow>
-          <InfoRow label="License">MIT</InfoRow>
+          <InfoRow label={t('about.license')}>MIT</InfoRow>
         </div>
       </Card>
     </div>
