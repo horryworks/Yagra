@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.1.6
+
+**Multi-language WebUI + per-interface metrics on SNMPv3 nodes** — the interface can now be switched
+between English and Japanese instantly from Settings ▸ Preferences, and SNMPv3-monitored devices now
+collect the same per-interface metrics that v2c devices already did.
+
+### New Features
+- **Interface language switching (English / 日本語)** — a new **Settings ▸ Preferences ▸ Language**
+  control switches the whole UI language on the fly, with no reload. English is the default and the
+  choice is remembered per browser. The application framework — top navigation, sidebar, breadcrumbs,
+  sign-in, and the Preferences and About screens — and all shared value formatting (dates and times,
+  relative times like "5m ago", node-status and HTTP-status labels, certificate-expiry text) are
+  localized, with the Japanese resources loaded on demand only when you switch (zero cost on the
+  default English path). Remaining screens are being localized progressively; any not-yet-translated
+  text falls back to English, so nothing is ever blank.
+- **Per-interface metrics on SNMPv3 nodes** — SNMPv3 (USM) nodes now walk interface tables with
+  GETBULK the same way v2c nodes do, so per-interface counters are collected on devices that only
+  permit v3. Previously v3 nodes were limited to scalar metrics.
+
 ## v0.1.5
 
 **Distributed tracing (OpenTelemetry)** — Yagra can now export OpenTelemetry traces so a single

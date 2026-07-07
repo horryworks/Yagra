@@ -1,0 +1,48 @@
+{
+  "state": {
+    "ok": "Ok",
+    "warning": "Warning",
+    "critical": "Critical",
+    "unreachable": "Unreachable",
+    "unknown": "Unknown",
+    "maintenance": "Maintenance"
+  },
+  "relative": {
+    "never": "Never",
+    "justNow": "just now",
+    "yesterday": "Yesterday",
+    "min_one": "{{count}}m ago",
+    "min_other": "{{count}}m ago",
+    "hour_one": "{{count}}h ago",
+    "hour_other": "{{count}}h ago",
+    "day_one": "{{count}}d ago",
+    "day_other": "{{count}}d ago"
+  },
+  "http": {
+    "ok": "OK",
+    "denied": "Denied",
+    "conflict": "Conflict",
+    "clientError": "Client error",
+    "serverError": "Server error"
+  },
+  "expiry": {
+    "expired_one": "expired {{count}}d ago",
+    "expired_other": "expired {{count}}d ago",
+    "today": "expires today",
+    "left_one": "{{count}} day left",
+    "left_other": "{{count}} days left"
+  },
+  "localTimeZoneFallback": "your local time",
+  "liveness": "Reachability",
+  "alertObservedWas": "was {{value}}",
+  "scalar": {
+    "snmp_sys_uptime_ticks": "Uptime",
+    "meraki_device_up": "Availability",
+    "meraki_client_count": "Clients",
+    "meraki_usage_sent_kb": "Traffic sent (KB)",
+    "meraki_usage_recv_kb": "Traffic received (KB)",
+    "meraki_uplink_loss_pct": "Uplink loss %",
+    "meraki_uplink_latency_ms": "Uplink latency (ms)",
+    "meraki_uplink_status": "Uplink status"
+  }
+}

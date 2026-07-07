@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import { Logo } from '../components/shell/Logo';
@@ -17,6 +18,7 @@ import './LoginPage.css';
 type ErrTone = 'danger' | 'warning';
 
 export function LoginPage({ embedded = false }: { embedded?: boolean }) {
+  const { t } = useTranslation('auth');
   const setAuthed = useAuthStore((s) => s.setAuthed);
   const setRole = useAuthStore((s) => s.setRole);
   const navigate = useNavigate();
@@ -46,7 +48,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
           x instanceof ApiError && (x.code === 'locked_out' || x.code === 'expired');
         setError({
           tone: recoverable ? 'warning' : 'danger',
-          message: x instanceof ApiError ? x.message : 'Sign-in failed',
+          message: x instanceof ApiError ? x.message : t('signInFailed'),
         });
       })
       .finally(() => setBusy(false));
@@ -57,28 +59,28 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
       <div className="login-card">
         <aside className="login-brand">
           <Logo size={56} variant="mark" />
-          <div className="login-brand-name">Yagra</div>
-          <div className="login-brand-tag">Network monitoring</div>
+          <div className="login-brand-name">{t('nav:shell.wordmark')}</div>
+          <div className="login-brand-tag">{t('brandTag')}</div>
         </aside>
         <div className="login-form-side">
-          <h1 className="login-title">Sign in</h1>
+          <h1 className="login-title">{t('signIn')}</h1>
 
-          <button className="login-sso" disabled title="SSO is not configured yet">
-            Continue with SSO
-            <span className="login-sso-note">Not configured</span>
+          <button className="login-sso" disabled title={t('ssoDisabledTitle')}>
+            {t('continueWithSso')}
+            <span className="login-sso-note">{t('ssoNotConfigured')}</span>
           </button>
 
           <div className="login-divider">
-            <span>or sign in locally</span>
+            <span>{t('orSignInLocally')}</span>
           </div>
 
           <form className="login-form" onSubmit={submit}>
             <label className="login-label">
-              Username
+              {t('username')}
               <TextInput value={username} onChange={text(setUsername)} autoComplete="username" />
             </label>
             <label className="login-label">
-              Password
+              {t('password')}
               <TextInput
                 type="password"
                 value={password}
@@ -87,7 +89,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
               />
             </label>
             <Button variant="primary" type="submit" disabled={busy}>
-              {busy ? 'Signing in…' : 'Sign in'}
+              {busy ? t('signingIn') : t('signIn')}
             </Button>
           </form>
 

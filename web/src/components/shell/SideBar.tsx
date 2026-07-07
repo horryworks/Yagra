@@ -4,12 +4,14 @@
 // a small dot so the operator knows it's a placeholder.
 
 import { NavLink, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { sectionForPath } from '../../nav';
 import { usePrefsStore } from '../../prefs';
 import { runningCount, useTroubleshootStore } from '../../troubleshoot/store';
 import './SideBar.css';
 
 export function SideBar() {
+  const { t } = useTranslation('nav');
   const { pathname } = useLocation();
   const section = sectionForPath(pathname);
   const collapsed = usePrefsStore((s) => s.sidebarCollapsed);
@@ -21,12 +23,12 @@ export function SideBar() {
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'}>
       <div className="sidebar-head">
-        {!collapsed && <span className="sidebar-title">{section.label}</span>}
+        {!collapsed && <span className="sidebar-title">{t(section.labelKey)}</span>}
         <button
           className="sidebar-toggle"
           onClick={toggle}
-          title={collapsed ? 'Expand' : 'Collapse'}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? t('shell.expand') : t('shell.collapse')}
+          aria-label={collapsed ? t('shell.expandSidebar') : t('shell.collapseSidebar')}
         >
           {collapsed ? '»' : '«'}
         </button>
@@ -39,17 +41,19 @@ export function SideBar() {
             // `end` so the section-root item (e.g. /nodes) isn't kept active on children.
             end={item.path === section.path || item.path.split('/').length <= 2}
             className={({ isActive }) => (isActive ? 'sidebar-item active' : 'sidebar-item')}
-            title={item.label}
+            title={t(item.labelKey)}
           >
             {collapsed ? (
               <span className="sidebar-mono">{item.mono}</span>
             ) : (
               <>
-                <span className="sidebar-label">{item.label}</span>
+                <span className="sidebar-label">{t(item.labelKey)}</span>
                 {item.liveBadge === 'troubleshoot-runs' && runningRuns > 0 && (
                   <span className="sidebar-count">{runningRuns}</span>
                 )}
-                {!item.implemented && <span className="sidebar-soon" title="Not implemented yet" />}
+                {!item.implemented && (
+                  <span className="sidebar-soon" title={t('shell.notImplemented')} />
+                )}
               </>
             )}
           </NavLink>

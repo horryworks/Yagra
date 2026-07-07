@@ -1,0 +1,36 @@
+{
+  "loading": "読み込み中…",
+  "actions": {
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "add": "追加",
+    "edit": "編集",
+    "remove": "削除",
+    "close": "閉じる",
+    "search": "検索",
+    "apply": "適用",
+    "reset": "リセット",
+    "confirm": "確認",
+    "retry": "再試行",
+    "refresh": "更新"
+  },
+  "resultCount": "全 {{total}} {{noun}}中 <b>{{shown}}</b> 件",
+  "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",
+  "noun": {
+    "node_other": "ノード",
+    "alert_other": "アラート",
+    "event_other": "イベント",
+    "rule_other": "ルール",
+    "user_other": "ユーザー",
+    "role_other": "ロール",
+    "profile_other": "プロファイル",
+    "template_other": "テンプレート",
+    "credential_other": "認証情報",
+    "poller_other": "ポーラー",
+    "window_other": "ウィンドウ",
+    "mute_other": "ミュート",
+    "result_other": "件",
+    "item_other": "項目"
+  }
+}

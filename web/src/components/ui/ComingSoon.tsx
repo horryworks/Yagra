@@ -4,23 +4,28 @@
 // never mistaken for a broken page. Resolves its own title from the nav by current path.
 
 import { useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { NAV } from '../../nav';
 import { PageHeader } from './PageHeader';
 import { Card } from './Card';
 import './ComingSoon.css';
 
-function labelForPath(pathname: string): { section: string; label: string } {
+/** Resolve the current path to its nav label keys (or nulls when off-nav). */
+function labelKeysForPath(pathname: string): { sectionKey: string | null; labelKey: string | null } {
   for (const s of NAV) {
     for (const item of s.items) {
-      if (item.path === pathname) return { section: s.label, label: item.label };
+      if (item.path === pathname) return { sectionKey: s.labelKey, labelKey: item.labelKey };
     }
   }
-  return { section: '', label: 'This screen' };
+  return { sectionKey: null, labelKey: null };
 }
 
 export function ComingSoon() {
+  const { t } = useTranslation('nav');
   const { pathname } = useLocation();
-  const { section, label } = labelForPath(pathname);
+  const { sectionKey, labelKey } = labelKeysForPath(pathname);
+  const label = labelKey ? t(labelKey) : t('shell.comingSoonThisScreen');
+  const section = sectionKey ? t(sectionKey) : '';
   const trail = section ? [{ label: section }, { label }] : [{ label }];
 
   return (
@@ -28,12 +33,8 @@ export function ComingSoon() {
       <PageHeader title={label} trail={trail} />
       <Card>
         <div className="comingsoon">
-          <div className="comingsoon-badge">Coming soon</div>
-          <p className="comingsoon-text">
-            {label} is part of the planned information architecture. Its screen will appear here
-            once the backing API lands — the navigation entry is kept so the structure stays
-            stable. Check back in a future release.
-          </p>
+          <div className="comingsoon-badge">{t('shell.comingSoonBadge')}</div>
+          <p className="comingsoon-text">{t('shell.comingSoonText', { label })}</p>
         </div>
       </Card>
     </div>

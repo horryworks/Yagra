@@ -102,13 +102,13 @@ describe('format', () => {
     expect(formatBps(1_000_000_000)).toBe('1.0 Gbps');
   });
 
-  it('formats a count: rounds to whole, groups via the locale, dash when non-finite', () => {
-    // Grouping is delegated to the platform locale (i18n-ready) — assert against the same call
-    // rather than a hardcoded separator so the test is locale-independent.
+  it('formats a count: rounds to whole, groups via the active-language locale, dash when non-finite', () => {
+    // Grouping follows the interface language's locale (en → en-US here). Assert against the same
+    // explicit locale rather than a hardcoded separator so the test is host-locale-independent.
     expect(formatCount(0)).toBe('0');
-    expect(formatCount(12_840)).toBe((12_840).toLocaleString());
-    expect(formatCount(1_234_567)).toBe((1_234_567).toLocaleString());
-    expect(formatCount(199.6)).toBe((200).toLocaleString()); // rounds to whole
+    expect(formatCount(12_840)).toBe((12_840).toLocaleString('en-US'));
+    expect(formatCount(1_234_567)).toBe((1_234_567).toLocaleString('en-US'));
+    expect(formatCount(199.6)).toBe((200).toLocaleString('en-US')); // rounds to whole
     expect(formatCount(Number.NaN)).toBe('—');
     expect(formatCount(Number.POSITIVE_INFINITY)).toBe('—');
   });

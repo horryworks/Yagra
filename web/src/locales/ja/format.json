@@ -1,0 +1,43 @@
+{
+  "state": {
+    "ok": "正常",
+    "warning": "警告",
+    "critical": "重大",
+    "unreachable": "到達不能",
+    "unknown": "不明",
+    "maintenance": "メンテナンス"
+  },
+  "relative": {
+    "never": "なし",
+    "justNow": "たった今",
+    "yesterday": "昨日",
+    "min_other": "{{count}} 分前",
+    "hour_other": "{{count}} 時間前",
+    "day_other": "{{count}} 日前"
+  },
+  "http": {
+    "ok": "OK",
+    "denied": "拒否",
+    "conflict": "競合",
+    "clientError": "クライアントエラー",
+    "serverError": "サーバーエラー"
+  },
+  "expiry": {
+    "expired_other": "{{count}} 日前に期限切れ",
+    "today": "本日期限切れ",
+    "left_other": "残り {{count}} 日"
+  },
+  "localTimeZoneFallback": "ローカル時刻",
+  "liveness": "到達性",
+  "alertObservedWas": "実測 {{value}}",
+  "scalar": {
+    "snmp_sys_uptime_ticks": "稼働時間",
+    "meraki_device_up": "可用性",
+    "meraki_client_count": "クライアント数",
+    "meraki_usage_sent_kb": "送信トラフィック (KB)",
+    "meraki_usage_recv_kb": "受信トラフィック (KB)",
+    "meraki_uplink_loss_pct": "アップリンク損失 %",
+    "meraki_uplink_latency_ms": "アップリンク遅延 (ms)",
+    "meraki_uplink_status": "アップリンクステータス"
+  }
+}

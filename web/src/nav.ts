@@ -3,9 +3,13 @@
 // selected section's ITEMS. `implemented: false` items route to the ComingSoon placeholder
 // (their backend endpoints don't exist yet) but still appear so the information architecture
 // stays whole and screens can be slotted in later without renumbering the nav.
+//
+// Labels are i18n keys into the `nav` namespace (see locales/<lng>/nav.json), resolved with `t()`
+// at render time — never store the display string here, or a language switch wouldn't re-render.
 
 export interface NavItem {
-  label: string;
+  /** i18n key into the `nav` namespace (e.g. 'nodes.all'). Resolved via `t()` at render. */
+  labelKey: string;
   /** Absolute route path. */
   path: string;
   /** Has a real backend today. false ⇒ ComingSoon placeholder. */
@@ -19,7 +23,8 @@ export interface NavItem {
 
 export interface NavSection {
   key: string;
-  label: string;
+  /** i18n key into the `nav` namespace (e.g. 'sections.nodes'). Resolved via `t()` at render. */
+  labelKey: string;
   /** Where the top-bar tab navigates (its first/landing child). */
   path: string;
   items: NavItem[];
@@ -28,107 +33,147 @@ export interface NavSection {
 export const NAV: NavSection[] = [
   {
     key: 'dashboard',
-    label: 'Dashboard',
+    labelKey: 'sections.dashboard',
     path: '/dashboard',
     items: [
-      { label: 'Shared dashboard', path: '/dashboard', implemented: true, mono: 'Sh' },
-      { label: 'My dashboard', path: '/dashboard/my', implemented: true, mono: 'My' },
-      { label: 'Reports', path: '/dashboard/reports', implemented: true, mono: 'Rp' },
+      { labelKey: 'dashboard.shared', path: '/dashboard', implemented: true, mono: 'Sh' },
+      { labelKey: 'dashboard.my', path: '/dashboard/my', implemented: true, mono: 'My' },
+      { labelKey: 'dashboard.reports', path: '/dashboard/reports', implemented: true, mono: 'Rp' },
     ],
   },
   {
     key: 'nodes',
-    label: 'Nodes',
+    labelKey: 'sections.nodes',
     path: '/nodes',
     items: [
-      { label: 'All nodes', path: '/nodes', implemented: true, mono: 'Al' },
-      { label: 'Discovery', path: '/nodes/discovery', implemented: true, mono: 'Di' },
-      { label: 'Dependencies', path: '/nodes/dependencies', implemented: false, mono: 'Dp' },
-      { label: 'Device profiles', path: '/nodes/profiles', implemented: true, mono: 'Pr' },
+      { labelKey: 'nodes.all', path: '/nodes', implemented: true, mono: 'Al' },
+      { labelKey: 'nodes.discovery', path: '/nodes/discovery', implemented: true, mono: 'Di' },
       {
-        label: 'Classification rules',
+        labelKey: 'nodes.dependencies',
+        path: '/nodes/dependencies',
+        implemented: false,
+        mono: 'Dp',
+      },
+      { labelKey: 'nodes.profiles', path: '/nodes/profiles', implemented: true, mono: 'Pr' },
+      {
+        labelKey: 'nodes.classificationRules',
         path: '/nodes/classification-rules',
         implemented: true,
         mono: 'Cl',
       },
       {
-        label: 'Collection templates',
+        labelKey: 'nodes.collectionTemplates',
         path: '/nodes/collection-templates',
         implemented: true,
         mono: 'Ct',
       },
-      { label: 'MIB repository', path: '/nodes/mib', implemented: true, mono: 'Mb' },
+      { labelKey: 'nodes.mib', path: '/nodes/mib', implemented: true, mono: 'Mb' },
     ],
   },
   {
     key: 'topology',
-    label: 'Topology',
+    labelKey: 'sections.topology',
     path: '/topology/map',
     items: [
-      { label: 'Network map', path: '/topology/map', implemented: true, mono: 'Nm' },
-      { label: 'Dependency view', path: '/topology/dependency', implemented: true, mono: 'Dv' },
-      { label: 'Geo map', path: '/topology/geo', implemented: false, mono: 'Ge' },
+      { labelKey: 'topology.map', path: '/topology/map', implemented: true, mono: 'Nm' },
+      {
+        labelKey: 'topology.dependency',
+        path: '/topology/dependency',
+        implemented: true,
+        mono: 'Dv',
+      },
+      { labelKey: 'topology.geo', path: '/topology/geo', implemented: false, mono: 'Ge' },
     ],
   },
   {
     key: 'alerts',
-    label: 'Alerts',
+    labelKey: 'sections.alerts',
     path: '/alerts',
     items: [
-      { label: 'Active alerts', path: '/alerts', implemented: true, mono: 'Ac' },
-      { label: 'History', path: '/alerts/history', implemented: true, mono: 'Hi' },
-      { label: 'Rules & thresholds', path: '/alerts/rules', implemented: true, mono: 'Ru' },
-      { label: 'Notifications', path: '/alerts/routing', implemented: true, mono: 'Nt' },
-      { label: 'Events', path: '/alerts/events', implemented: true, mono: 'Ev' },
-      { label: 'Event rules', path: '/alerts/event-rules', implemented: true, mono: 'Er' },
-      { label: 'Event sources', path: '/alerts/event-sources', implemented: true, mono: 'Es' },
-      { label: 'Maintenance windows', path: '/alerts/maintenance', implemented: true, mono: 'Mw' },
-      { label: 'Mutes', path: '/alerts/mutes', implemented: true, mono: 'Mu' },
+      { labelKey: 'alerts.active', path: '/alerts', implemented: true, mono: 'Ac' },
+      { labelKey: 'alerts.history', path: '/alerts/history', implemented: true, mono: 'Hi' },
+      { labelKey: 'alerts.rules', path: '/alerts/rules', implemented: true, mono: 'Ru' },
+      { labelKey: 'alerts.routing', path: '/alerts/routing', implemented: true, mono: 'Nt' },
+      { labelKey: 'alerts.events', path: '/alerts/events', implemented: true, mono: 'Ev' },
+      { labelKey: 'alerts.eventRules', path: '/alerts/event-rules', implemented: true, mono: 'Er' },
+      {
+        labelKey: 'alerts.eventSources',
+        path: '/alerts/event-sources',
+        implemented: true,
+        mono: 'Es',
+      },
+      {
+        labelKey: 'alerts.maintenance',
+        path: '/alerts/maintenance',
+        implemented: true,
+        mono: 'Mw',
+      },
+      { labelKey: 'alerts.mutes', path: '/alerts/mutes', implemented: true, mono: 'Mu' },
     ],
   },
   {
     key: 'troubleshoot',
-    label: 'Troubleshoot',
+    labelKey: 'sections.troubleshoot',
     path: '/troubleshoot',
     items: [
-      { label: 'All tools', path: '/troubleshoot', implemented: true, mono: 'At' },
+      { labelKey: 'troubleshoot.all', path: '/troubleshoot', implemented: true, mono: 'At' },
       {
-        label: 'Analysis runs',
+        labelKey: 'troubleshoot.runs',
         path: '/troubleshoot/runs',
         implemented: true,
         mono: 'Ar',
         liveBadge: 'troubleshoot-runs',
       },
-      { label: 'Scheduled', path: '/troubleshoot/scheduled', implemented: false, mono: 'Sc' },
-      { label: 'Saved findings', path: '/troubleshoot/findings', implemented: false, mono: 'Sf' },
+      {
+        labelKey: 'troubleshoot.scheduled',
+        path: '/troubleshoot/scheduled',
+        implemented: false,
+        mono: 'Sc',
+      },
+      {
+        labelKey: 'troubleshoot.findings',
+        path: '/troubleshoot/findings',
+        implemented: false,
+        mono: 'Sf',
+      },
     ],
   },
   {
     key: 'settings',
-    label: 'Settings',
+    labelKey: 'sections.settings',
     path: '/settings/credentials',
     items: [
-      { label: 'System health', path: '/settings/system-health', implemented: true, mono: 'Sh' },
-      { label: 'Pollers', path: '/settings/pollers', implemented: true, mono: 'Po' },
-      { label: 'Integrations', path: '/settings/integrations', implemented: true, mono: 'In' },
       {
-        label: 'Credentials & secrets',
+        labelKey: 'settings.systemHealth',
+        path: '/settings/system-health',
+        implemented: true,
+        mono: 'Sh',
+      },
+      { labelKey: 'settings.pollers', path: '/settings/pollers', implemented: true, mono: 'Po' },
+      {
+        labelKey: 'settings.integrations',
+        path: '/settings/integrations',
+        implemented: true,
+        mono: 'In',
+      },
+      {
+        labelKey: 'settings.credentials',
         path: '/settings/credentials',
         implemented: true,
         mono: 'Cr',
       },
-      { label: 'Users & roles', path: '/settings/users', implemented: true, mono: 'Us' },
-      { label: 'Roles & privileges', path: '/settings/roles', implemented: true, mono: 'Rl' },
-      { label: 'Authentication', path: '/settings/auth', implemented: false, mono: 'Au' },
-      { label: 'Audit log', path: '/settings/audit', implemented: true, mono: 'Ad' },
+      { labelKey: 'settings.users', path: '/settings/users', implemented: true, mono: 'Us' },
+      { labelKey: 'settings.roles', path: '/settings/roles', implemented: true, mono: 'Rl' },
+      { labelKey: 'settings.auth', path: '/settings/auth', implemented: false, mono: 'Au' },
+      { labelKey: 'settings.audit', path: '/settings/audit', implemented: true, mono: 'Ad' },
+      { labelKey: 'settings.system', path: '/settings/system', implemented: true, mono: 'Sy' },
       {
-        label: 'System settings',
-        path: '/settings/system',
+        labelKey: 'settings.preferences',
+        path: '/settings/preferences',
         implemented: true,
-        mono: 'Sy',
+        mono: 'Pf',
       },
-      { label: 'Preferences', path: '/settings/preferences', implemented: true, mono: 'Pf' },
-      { label: 'About', path: '/settings/about', implemented: true, mono: 'Ab' },
+      { labelKey: 'settings.about', path: '/settings/about', implemented: true, mono: 'Ab' },
     ],
   },
 ];
