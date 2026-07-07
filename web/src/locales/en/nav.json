@@ -15,22 +15,21 @@
   "nodes": {
     "all": "All nodes",
     "discovery": "Discovery",
-    "dependencies": "Dependencies",
     "profiles": "Device profiles",
     "classificationRules": "Classification rules",
-    "collectionTemplates": "Collection templates",
+    "metricSets": "Metric sets",
     "mib": "MIB repository"
   },
   "topology": {
     "map": "Network map",
-    "dependency": "Dependency view",
+    "dependency": "Dependencies",
     "geo": "Geo map"
   },
   "alerts": {
     "active": "Active alerts",
     "history": "History",
-    "rules": "Rules & thresholds",
-    "routing": "Notifications",
+    "rules": "Alert rules",
+    "routing": "Notification routing",
     "events": "Events",
     "eventRules": "Event rules",
     "eventSources": "Event sources",
@@ -38,7 +37,7 @@
     "mutes": "Mutes"
   },
   "troubleshoot": {
-    "all": "All tools",
+    "all": "Tools",
     "runs": "Analysis runs",
     "scheduled": "Scheduled",
     "findings": "Saved findings"
@@ -48,13 +47,39 @@
     "pollers": "Pollers",
     "integrations": "Integrations",
     "credentials": "Credentials & secrets",
-    "users": "Users & roles",
+    "users": "Users",
     "roles": "Roles & privileges",
     "auth": "Authentication",
     "audit": "Audit log",
     "system": "System settings",
     "preferences": "Preferences",
     "about": "About"
+  },
+  "groups": {
+    "inventory": "Inventory",
+    "monitoringConfig": "Monitoring config",
+    "monitor": "Monitor",
+    "configure": "Configure",
+    "system": "System",
+    "access": "Access",
+    "personal": "Personal",
+    "comingSoon": "Coming soon"
+  },
+  "descriptions": {
+    "nodesProfiles": "Device-class bundles that decide what each node collects",
+    "nodesClassificationRules": "Auto-assign profiles and folders to discovered nodes",
+    "nodesMetricSets": "Named metric bundles (OID → metric) that device profiles attach",
+    "nodesMib": "Upload MIB files to resolve OIDs into named metrics",
+    "alertsRules": "Detection rules and hierarchical threshold overrides",
+    "alertsRouting": "Channels and rules that deliver alert notifications",
+    "alertsEventRules": "Turn matching syslog and trap events into alerts",
+    "alertsEventSources": "Syslog and SNMP trap listeners",
+    "alertsMaintenance": "Planned work — node enters maintenance, excluded from SLA",
+    "alertsMutes": "Silence notifications only — state and SLA unaffected",
+    "topologyDependency": "Manage parent → child dependency links",
+    "troubleshootRuns": "Background analysis jobs and their reports",
+    "settingsCredentials": "SNMP and API credentials, encrypted at rest",
+    "settingsPollers": "Distributed poller fleet status"
   },
   "shell": {
     "home": "Home",

@@ -48,7 +48,39 @@
   display: flex;
   flex-direction: column;
   padding: 6px 0;
+}
+
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
   gap: 1px;
+}
+
+/* Space groups apart; the working groups read as distinct clusters. */
+.sidebar-group + .sidebar-group {
+  margin-top: 10px;
+}
+
+/* Group header — same eyebrow treatment as the pane titles (INVENTORY etc.). Accent stays
+   active-only, so headers use the tertiary text color, never brand orange. */
+.sidebar-group-head {
+  padding: 6px 14px 4px;
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+/* Coming-soon group: dim the whole cluster so placeholders read as secondary. */
+.sidebar-group.soon .sidebar-item {
+  color: var(--text-tertiary);
+}
+
+/* Collapsed rail: headers are hidden (label is empty), so separate groups with a thin rule. */
+.sidebar.collapsed .sidebar-group + .sidebar-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: var(--border-width) solid var(--border-color);
 }
 
 .sidebar-item {

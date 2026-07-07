@@ -1,4 +1,4 @@
-// Users & roles (Settings ▸ Users & roles). Admin-only CRUD over local auth accounts, rendered
+// Users (Settings ▸ Users). Admin-only CRUD over local auth accounts, rendered
 // as the "identity list" (data-table standard v2, variant B): a roomy row per account with a
 // role-colored monogram, inline instant role change, account status, and hover row-actions
 // (change password / enable-disable / delete). The server enforces ManageUsers (admin) and guards
@@ -100,8 +100,8 @@ export function UsersPage() {
   return (
     <div>
       <PageHeader
-        title="Users & roles"
-        trail={[{ label: 'Settings' }, { label: 'Users & roles' }]}
+        title="Users"
+        trail={[{ label: 'Settings' }, { label: 'Users' }]}
         note="Local accounts for the northbound API. Roles: viewer (read-only), operator (ack/maintenance), admin (full control)."
       />
 

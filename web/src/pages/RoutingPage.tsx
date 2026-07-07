@@ -1,4 +1,4 @@
-// Notifications (Alerts ▸ Notifications). Two things: notification
+// Notification routing (Alerts ▸ Notification routing). Two things: notification
 // CHANNELS (where alerts can go — webhook/email; the connection config is a secret, sealed
 // server-side and never returned) and routing RULES (which alerts, by severity, fan out to
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;
@@ -81,8 +81,8 @@ export function RoutingPage() {
     return (
       <div>
         <PageHeader
-          title="Notifications"
-          trail={[{ label: 'Alerts' }, { label: 'Notifications' }]}
+          title="Notification routing"
+          trail={[{ label: 'Alerts' }, { label: 'Notification routing' }]}
         />
         <Card>
           <p className="muted">Notification routing is unavailable in skeleton mode.</p>
@@ -94,8 +94,8 @@ export function RoutingPage() {
   return (
     <div>
       <PageHeader
-        title="Notifications"
-        trail={[{ label: 'Alerts' }, { label: 'Notifications' }]}
+        title="Notification routing"
+        trail={[{ label: 'Alerts' }, { label: 'Notification routing' }]}
         note="Channels are where alerts go; rules pick which alerts (by severity) reach which channels."
       />
       {error && <p className="form-error routing-error">{error}</p>}

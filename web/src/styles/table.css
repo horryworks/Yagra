@@ -642,7 +642,7 @@
   box-shadow: inset 0 -2px 0 var(--accent-color);
 }
 
-/* ============================================================ identity list (Users & roles) */
+/* ============================================================ identity list (Users) */
 .identity-list {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);

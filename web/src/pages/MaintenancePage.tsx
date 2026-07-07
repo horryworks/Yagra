@@ -7,6 +7,7 @@
 // Add and delete both go through modals; enable/disable is an immediate row action.
 
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { MaintenanceWindow, NodeGroup, NodeSummary, ProfileSummary } from '../types/api';
@@ -153,7 +154,13 @@ export function MaintenancePage() {
       <PageHeader
         title="Maintenance windows"
         trail={[{ label: 'Alerts' }, { label: 'Maintenance windows' }]}
-        note="Planned work: covered nodes show maintenance and raise no alerts for the window."
+        note={
+          <>
+            Planned work: covered nodes enter the maintenance state, raise no alerts, and are
+            excluded from SLA. To silence notifications only (state and SLA unchanged), use{' '}
+            <Link to="/alerts/mutes">Mutes</Link>.
+          </>
+        }
       />
 
       {unavailable ? (

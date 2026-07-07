@@ -1,10 +1,11 @@
-// Collection templates (Nodes ▸ Collection templates). Reusable, named metric bundles that
-// device profiles attach (the design's middle layer: MIB → Collection templates → profile).
-// Edit a template's metrics once and every profile that references it updates. CRUD against
-// /collection-templates; ManageConfig-gated, 503 in skeleton mode surfaced.
+// Metric sets (Nodes ▸ Metric sets). Reusable, named metric bundles that device profiles attach
+// (the design's middle layer: MIB → Metric sets → profile). Edit a set's metrics once and every
+// profile that references it updates. CRUD against /collection-templates (the API/type names keep
+// the "template" wording; the UI label is "Metric set"); ManageConfig-gated, 503 in skeleton mode
+// surfaced.
 //
-// Data-table standard v2: a toolbar (count + "+ Add template") over the shared `.ytable`; add via
-// modal, delete via confirm modal. Each row expands to its Collection-set editor.
+// Data-table standard v2: a toolbar (count + "+ Add metric set") over the shared `.ytable`; add via
+// modal, delete via confirm modal. Each row expands to its metric editor.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../services/api';
@@ -64,15 +65,15 @@ export function CollectionTemplatesPage() {
   return (
     <div>
       <PageHeader
-        title="Collection templates"
-        trail={[{ label: 'Nodes' }, { label: 'Collection templates' }]}
+        title="Metric sets"
+        trail={[{ label: 'Nodes' }, { label: 'Metric sets' }]}
         note="Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it."
       />
 
       {unavailable ? (
         <Card>
           <p className="muted">
-            Collection templates are unavailable in skeleton mode (no metadata store).
+            Metric sets are unavailable in skeleton mode (no metadata store).
           </p>
         </Card>
       ) : (
@@ -82,13 +83,13 @@ export function CollectionTemplatesPage() {
               value={query}
               onChange={setQuery}
               placeholder="Search name or description…"
-              ariaLabel="Search collection templates"
+              ariaLabel="Search metric sets"
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="templates" />
+            <ResultCount shown={filtered.length} total={rows.length} noun="sets" />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add template
+                + Add metric set
               </Button>
             )}
           </TableToolbar>
@@ -107,8 +108,8 @@ export function CollectionTemplatesPage() {
                   {loading
                     ? 'Loading…'
                     : rows.length === 0
-                      ? 'No collection templates yet'
-                      : 'No templates match'}
+                      ? 'No metric sets yet'
+                      : 'No metric sets match'}
                 </p>
                 {!loading && (
                   <p className="yt-empty-sub">
@@ -153,7 +154,7 @@ export function CollectionTemplatesPage() {
                       <div className="ytable-cell right">
                         {authed && (
                           <span className="ytable-actions">
-                            <IconButton title="Delete template" danger onClick={() => setDeleting(t)}>
+                            <IconButton title="Delete metric set" danger onClick={() => setDeleting(t)}>
                               <TrashIcon />
                             </IconButton>
                           </span>
@@ -218,7 +219,7 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
 
   return (
     <Modal
-      title="Add collection template"
+      title="Add metric set"
       onClose={onClose}
       footer={
         <>
@@ -226,7 +227,7 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
             Cancel
           </Button>
           <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            Add template
+            Add set
           </Button>
         </>
       }
@@ -282,7 +283,7 @@ function DeleteTemplateModal({
 
   return (
     <Modal
-      title="Delete template"
+      title="Delete metric set"
       onClose={onClose}
       footer={
         <>
@@ -296,8 +297,8 @@ function DeleteTemplateModal({
       }
     >
       <p className="modal-confirm-text">
-        Delete template <strong>{template.name}</strong>? Profiles that attach it lose this bundle's
-        metrics.
+        Delete metric set <strong>{template.name}</strong>? Profiles that attach it lose this
+        bundle's metrics.
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

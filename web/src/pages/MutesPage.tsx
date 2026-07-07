@@ -7,6 +7,7 @@
 // expiry; lifting is a destructive-consent confirm.
 
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Mute, NodeGroup, NodeSummary } from '../types/api';
@@ -134,7 +135,13 @@ export function MutesPage() {
       <PageHeader
         title="Mutes"
         trail={[{ label: 'Alerts' }, { label: 'Mutes' }]}
-        note="Silence notifications for a node (or one check) until a time — alerts stay visible."
+        note={
+          <>
+            Silence notifications for a node (or one check) until a time — the alert still fires and
+            node state / SLA are unaffected. For planned work, use{' '}
+            <Link to="/alerts/maintenance">Maintenance windows</Link>.
+          </>
+        }
       />
 
       {unavailable ? (

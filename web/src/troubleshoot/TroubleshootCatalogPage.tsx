@@ -45,7 +45,7 @@ export function TroubleshootCatalogPage() {
     <div>
       <PageHeader
         title="Troubleshoot"
-        trail={[{ label: 'Troubleshoot', to: '/troubleshoot' }, { label: 'All tools' }]}
+        trail={[{ label: 'Troubleshoot', to: '/troubleshoot' }, { label: 'Tools' }]}
         note="Deep diagnostics for problems normal metrics and thresholds can’t see. These analyses fetch long histories and run heavier models, so they run as background jobs — start one, keep working, review the report when it lands."
       />
 
