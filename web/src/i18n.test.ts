@@ -20,6 +20,26 @@ import enAuth from './locales/en/auth.json';
 import jaAuth from './locales/ja/auth.json';
 import enAlerts from './locales/en/alerts.json';
 import jaAlerts from './locales/ja/alerts.json';
+import enNodes from './locales/en/nodes.json';
+import jaNodes from './locales/ja/nodes.json';
+import enMonitoring from './locales/en/monitoring.json';
+import jaMonitoring from './locales/ja/monitoring.json';
+import enDashboard from './locales/en/dashboard.json';
+import jaDashboard from './locales/ja/dashboard.json';
+import enAlertsConfig from './locales/en/alertsConfig.json';
+import jaAlertsConfig from './locales/ja/alertsConfig.json';
+import enSuppression from './locales/en/suppression.json';
+import jaSuppression from './locales/ja/suppression.json';
+import enTopology from './locales/en/topology.json';
+import jaTopology from './locales/ja/topology.json';
+import enReports from './locales/en/reports.json';
+import jaReports from './locales/ja/reports.json';
+import enTroubleshoot from './locales/en/troubleshoot.json';
+import jaTroubleshoot from './locales/ja/troubleshoot.json';
+import enAccess from './locales/en/access.json';
+import jaAccess from './locales/ja/access.json';
+import enSystem from './locales/en/system.json';
+import jaSystem from './locales/ja/system.json';
 
 type Json = Record<string, unknown>;
 
@@ -39,6 +59,16 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   settings: { en: enSettings, ja: jaSettings },
   auth: { en: enAuth, ja: jaAuth },
   alerts: { en: enAlerts, ja: jaAlerts },
+  nodes: { en: enNodes, ja: jaNodes },
+  monitoring: { en: enMonitoring, ja: jaMonitoring },
+  dashboard: { en: enDashboard, ja: jaDashboard },
+  alertsConfig: { en: enAlertsConfig, ja: jaAlertsConfig },
+  suppression: { en: enSuppression, ja: jaSuppression },
+  topology: { en: enTopology, ja: jaTopology },
+  reports: { en: enReports, ja: jaReports },
+  troubleshoot: { en: enTroubleshoot, ja: jaTroubleshoot },
+  access: { en: enAccess, ja: jaAccess },
+  system: { en: enSystem, ja: jaSystem },
 };
 
 describe('i18n mechanism', () => {

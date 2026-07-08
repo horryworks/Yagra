@@ -16,6 +16,22 @@
     "loading": "ノードを読み込み中…",
     "empty": "ノードはまだありません。"
   },
+  "nodePicker": {
+    "clear": "ノードフィルタをクリア",
+    "searchPlaceholder": "名前またはアドレスでノードを検索…",
+    "searchAria": "ノードを検索",
+    "loading": "ノードを読み込み中…",
+    "noMatch": "一致するノードがありません。",
+    "listAria": "ノード",
+    "more": "他 {{count}} 件 — 入力して絞り込み"
+  },
+  "range": {
+    "timeRange": "期間",
+    "custom": "カスタム期間",
+    "quick": "クイック選択",
+    "from": "開始",
+    "to": "終了"
+  },
   "credPicker": {
     "placeholder": "保存済み認証情報を選択…",
     "remove": "{{name}} を削除",
