@@ -640,6 +640,12 @@ export interface PollerInfo {
   working_set_specs: number;
   /** Poll results core has consumed from it since core started. */
   results_total: number;
+  /** Current host CPU % (0–100) from its latest heartbeat; null when offline / on an N-1 build. */
+  cpu_pct: number | null;
+  /** Current host memory-used % (0–100); null when unavailable. */
+  mem_used_pct: number | null;
+  /** Highest watched-filesystem used % (0–100); null when unavailable. */
+  disk_used_pct: number | null;
 }
 
 /** Per-pool summary in the `GET /api/v1/pollers` response: node count vs. live pollers, dispatch
@@ -681,6 +687,60 @@ export interface SystemHealth {
  *  (= the workspace version). Public — no secrets. The WebUI pairs this with its own build version. */
 export interface VersionInfo {
   core: string;
+}
+
+// ── Host self-observability (Yagra monitoring its own core + pollers) ──────────
+
+/** Usage of one watched filesystem (or a store-size proxy). `size_bytes === 0` ⇒ capacity unknown
+ *  (a bare growing size, e.g. the PostgreSQL `database` proxy) — show used bytes, not a %. */
+export interface DiskUsage {
+  mount: string;
+  used_bytes: number;
+  size_bytes: number;
+}
+
+/** Current host resources for one self-monitored instance (`GET /api/v1/system/hosts`): core
+ *  (`role: 'core'`) or a poller (`role: 'poller'`). Metrics are null until the first sample. */
+export interface HostInfo {
+  /** `core` or the poller id. */
+  instance: string;
+  role: 'core' | 'poller';
+  /** Pool a poller serves; null for core. */
+  pool: string | null;
+  online: boolean;
+  cpu_pct: number | null;
+  load1: number | null;
+  mem_used_bytes: number | null;
+  mem_total_bytes: number | null;
+  mem_used_pct: number | null;
+  disk_used_pct: number | null;
+  disks: DiskUsage[];
+}
+
+/** The `GET /api/v1/system/hosts` body: core plus every poller reporting host telemetry. */
+export interface SystemHostsResponse {
+  hosts: HostInfo[];
+}
+
+/** A per-mount filesystem trend within a `HostMetricRange`. Derive % from `used_bytes`/`size_bytes`
+ *  aligned on timestamps, or show a bare-bytes trend when `size_bytes` is empty/zero. */
+export interface HostDiskRange {
+  mount: string;
+  used_bytes: MetricPoint[];
+  size_bytes: MetricPoint[];
+}
+
+/** Host CPU/load/mem/disk trends for one instance over a window
+ *  (`GET /api/v1/system/hosts/:instance/metrics/range`). One round trip per instance/range. */
+export interface HostMetricRange {
+  instance: string;
+  cpu_pct: MetricPoint[];
+  load1: MetricPoint[];
+  load5: MetricPoint[];
+  load15: MetricPoint[];
+  mem_used_bytes: MetricPoint[];
+  mem_total_bytes: MetricPoint[];
+  disks: HostDiskRange[];
 }
 
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */

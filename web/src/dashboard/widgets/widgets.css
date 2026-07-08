@@ -56,6 +56,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Allow the name to shrink below its text width so it ellipsizes instead of pushing the
+     badge/sub out of the row (which would clip the badge on the right). */
+  min-width: 0;
 }
 
 .dwl-sub {

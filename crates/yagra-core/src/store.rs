@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_bus::PollResult;
-use yagra_common::SeriesKey;
+use yagra_common::{HostSample, SeriesKey};
 
 use crate::sink::InMemorySink;
 
@@ -158,6 +158,49 @@ pub trait MetricStore: Send + Sync {
     /// Troubleshoot analyses to discover what to scan). Empty if the store can't enumerate
     /// (the in-memory sink). Names are deduplicated; order is unspecified.
     async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String>;
+
+    /// Persist a host self-metrics sample as low-cardinality `yagra_host_*{instance,role[,pool]
+    /// [,mount]}` series (self-observability). Core is the single writer for **every** instance —
+    /// its own host (`role="core"`) and each poller (`role="poller"`, whose samples arrive over
+    /// the heartbeat, so remote pollers behind NAT/FW are covered). Default: no-op (the in-memory
+    /// sink keeps no history, so the skeleton renders empty host trends).
+    async fn write_host_sample(
+        &self,
+        _instance: &str,
+        _role: &str,
+        _pool: Option<&str>,
+        _sample: &HostSample,
+        _at_unix_ms: i64,
+    ) {
+    }
+
+    /// Range of a scalar host self-metric (bare suffix, e.g. `cpu_pct`, `load1`, `mem_used_bytes`)
+    /// for one instance, `[from_s, to_s]` at `step_s` (oldest first). The metric suffix is an
+    /// internal constant (never user input); the `instance` label is escaped. Default: empty.
+    async fn host_metric_range(
+        &self,
+        _instance: &str,
+        _metric: &str,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
+        Vec::new()
+    }
+
+    /// Range of a per-mount host filesystem metric (`fs_used_bytes` / `fs_size_bytes`) for one
+    /// instance + `mount`, `[from_s, to_s]` at `step_s` (oldest first). Default: empty.
+    async fn host_disk_range(
+        &self,
+        _instance: &str,
+        _metric: &str,
+        _mount: &str,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+    ) -> Vec<MetricPoint> {
+        Vec::new()
+    }
 }
 
 #[async_trait]
@@ -349,6 +392,82 @@ fn selector(key: &SeriesKey) -> String {
         ),
         None => format!("{}{{node=\"{}\"}}", key.metric, key.node),
     }
+}
+
+/// Escape a PromQL / exposition **label value** (`\` then `"`). Host self-series labels
+/// (`instance` = poller id or `core`, `mount` = a configured alias) are already sanitized and
+/// low-cardinality, but escape defensively so a stray quote can't break the selector or a line.
+fn promql_label_escape(v: &str) -> String {
+    v.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Coerce a non-finite reading to `0` — VictoriaMetrics rejects `NaN`/`Inf` in an exposition line.
+/// These host gauges are always finite in practice; this is a belt-and-braces guard.
+fn finite(v: f64) -> f64 {
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
+}
+
+/// Build the Prometheus exposition body for one host self-sample: the scalar gauges (cpu/load/mem/
+/// swap) plus a `fs_used_bytes`/`fs_size_bytes` pair per watched filesystem, all tagged
+/// `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond timestamp. The label set here
+/// is exactly what the `host_metric_range`/`host_disk_range` read selectors match on.
+fn host_prometheus_lines(
+    instance: &str,
+    role: &str,
+    pool: Option<&str>,
+    s: &HostSample,
+    at_unix_ms: i64,
+) -> String {
+    let base = match pool {
+        Some(p) => format!(
+            "instance=\"{}\",role=\"{}\",pool=\"{}\"",
+            promql_label_escape(instance),
+            promql_label_escape(role),
+            promql_label_escape(p),
+        ),
+        None => format!(
+            "instance=\"{}\",role=\"{}\"",
+            promql_label_escape(instance),
+            promql_label_escape(role),
+        ),
+    };
+    let mut body = String::new();
+    for (metric, value) in [
+        ("cpu_pct", finite(s.cpu_pct)),
+        ("load1", finite(s.load1)),
+        ("load5", finite(s.load5)),
+        ("load15", finite(s.load15)),
+    ] {
+        body.push_str(&format!(
+            "yagra_host_{metric}{{{base}}} {value} {at_unix_ms}\n"
+        ));
+    }
+    for (metric, value) in [
+        ("mem_used_bytes", s.mem_used_bytes),
+        ("mem_total_bytes", s.mem_total_bytes),
+        ("swap_used_bytes", s.swap_used_bytes),
+        ("swap_total_bytes", s.swap_total_bytes),
+    ] {
+        body.push_str(&format!(
+            "yagra_host_{metric}{{{base}}} {value} {at_unix_ms}\n"
+        ));
+    }
+    for d in &s.disks {
+        let mount = promql_label_escape(&d.mount);
+        body.push_str(&format!(
+            "yagra_host_fs_used_bytes{{{base},mount=\"{mount}\"}} {} {at_unix_ms}\n",
+            d.used_bytes,
+        ));
+        body.push_str(&format!(
+            "yagra_host_fs_size_bytes{{{base},mount=\"{mount}\"}} {} {at_unix_ms}\n",
+            d.size_bytes,
+        ));
+    }
+    body
 }
 
 /// PromQL `rate()` query over the selector for a trailing window, e.g.
@@ -586,6 +705,59 @@ impl MetricStore for VmStore {
             Err(e) => tracing::warn!(error = %e, "VictoriaMetrics import request failed"),
             Ok(_) => {}
         }
+    }
+
+    async fn write_host_sample(
+        &self,
+        instance: &str,
+        role: &str,
+        pool: Option<&str>,
+        sample: &HostSample,
+        at_unix_ms: i64,
+    ) {
+        let body = host_prometheus_lines(instance, role, pool, sample, at_unix_ms);
+        let url = format!("{}/api/v1/import/prometheus", self.base);
+        match self.http.post(&url).body(body).send().await {
+            Ok(resp) if !resp.status().is_success() => {
+                tracing::warn!(status = %resp.status(), "VictoriaMetrics host import non-2xx");
+            }
+            Err(e) => tracing::warn!(error = %e, "VictoriaMetrics host import request failed"),
+            Ok(_) => {}
+        }
+    }
+
+    async fn host_metric_range(
+        &self,
+        instance: &str,
+        metric: &str,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        let query = format!(
+            "yagra_host_{}{{instance=\"{}\"}}",
+            metric,
+            promql_label_escape(instance)
+        );
+        self.query_range_points(query, from_s, to_s, step_s).await
+    }
+
+    async fn host_disk_range(
+        &self,
+        instance: &str,
+        metric: &str,
+        mount: &str,
+        from_s: i64,
+        to_s: i64,
+        step_s: u64,
+    ) -> Vec<MetricPoint> {
+        let query = format!(
+            "yagra_host_{}{{instance=\"{}\",mount=\"{}\"}}",
+            metric,
+            promql_label_escape(instance),
+            promql_label_escape(mount)
+        );
+        self.query_range_points(query, from_s, to_s, step_s).await
     }
 
     async fn latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -912,6 +1084,50 @@ mod tests {
             aggregate_latest_query(&key),
             "max(last_over_time(huawei_cpu_usage{node=\"00000000-0000-0000-0000-000000000000\"}[1800s]))"
         );
+    }
+
+    #[test]
+    fn host_lines_carry_pool_and_a_pair_per_disk() {
+        let sample = HostSample {
+            cpu_pct: 12.5,
+            load1: 0.4,
+            mem_used_bytes: 2048,
+            mem_total_bytes: 8192,
+            disks: vec![
+                yagra_common::DiskUsage {
+                    mount: "root".into(),
+                    used_bytes: 10,
+                    size_bytes: 100,
+                },
+                yagra_common::DiskUsage {
+                    mount: "database".into(),
+                    used_bytes: 5,
+                    size_bytes: 0,
+                },
+            ],
+            ..Default::default()
+        };
+        let body = host_prometheus_lines("edge-1", "poller", Some("tokyo"), &sample, 1_000);
+        assert!(body.contains(
+            "yagra_host_cpu_pct{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\"} 12.5 1000"
+        ));
+        assert!(body.contains("yagra_host_mem_used_bytes{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\"} 2048 1000"));
+        // One used/size pair per watched filesystem (2 disks → 4 fs lines).
+        assert_eq!(body.matches("yagra_host_fs_used_bytes").count(), 2);
+        assert_eq!(body.matches("yagra_host_fs_size_bytes").count(), 2);
+        assert!(body.contains("yagra_host_fs_size_bytes{instance=\"edge-1\",role=\"poller\",pool=\"tokyo\",mount=\"database\"} 0 1000"));
+    }
+
+    #[test]
+    fn core_host_lines_omit_pool() {
+        let body = host_prometheus_lines("core", "core", None, &HostSample::default(), 42);
+        assert!(body.contains("yagra_host_cpu_pct{instance=\"core\",role=\"core\"} 0 42"));
+        assert!(!body.contains("pool="));
+    }
+
+    #[test]
+    fn label_values_are_escaped() {
+        assert_eq!(promql_label_escape("a\"b\\c"), "a\\\"b\\\\c");
     }
 
     #[test]

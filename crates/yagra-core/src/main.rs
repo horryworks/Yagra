@@ -157,6 +157,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         volatile,
         Some(poller_repo.clone()),
         scheduler_stats.clone(),
+        Some(store.clone()),
     ));
     // Feed the registry: heartbeats (liveness/telemetry) and snapshot requests. Thin consumer loops
     // that end when the bus stream closes (shutdown), mirroring the other bus consumers.
@@ -170,6 +171,18 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let stream = Box::pin(bus.subscribe_sync_requests().await?);
         tokio::spawn(coordinator.run_sync_request_consumer(stream));
     }
+
+    // Core self-observability (monitoring-conventions): sample core's own host every
+    // HOST_SAMPLE_SECS, cache the latest for the System Health page, and persist the `yagra_host_*`
+    // series to the TSDB (core is the single writer for its own host + every poller's).
+    let core_host: api::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
+    {
+        let store = store.clone();
+        let cache = core_host.clone();
+        let pool = repo.pool().clone();
+        tokio::spawn(run_host_collector(store, cache, pool));
+    }
+
     {
         let store = store.clone();
         let alerts = alerts.clone();
@@ -484,6 +497,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
+        host_sample: core_host,
         nodes,
         alerts,
         admin,
@@ -515,6 +529,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     });
     let state = ApiState {
         store: sink,
+        host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
         admin: None,
@@ -527,6 +542,48 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         public_dashboard: true,
     };
     serve(state, "0.0.0.0:8080", metrics).await
+}
+
+/// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
+const HOST_SAMPLE_SECS: u64 = 15;
+
+/// Sample core's own host every [`HOST_SAMPLE_SECS`]: refresh the shared latest-sample cache (read
+/// by `GET /api/v1/system/hosts`) and persist the `yagra_host_*` series to the TSDB. Also records
+/// PostgreSQL growth as a `mount="database"` used-only proxy — core can't `statvfs` the 0700 PG data
+/// dir, so its size comes from `pg_database_size`. Runs for the process lifetime.
+async fn run_host_collector(
+    store: Arc<dyn MetricStore>,
+    cache: api::CoreHostSample,
+    pool: sqlx::PgPool,
+) {
+    let collector = yagra_hoststats::HostCollector::from_env();
+    let mut tick = tokio::time::interval(Duration::from_secs(HOST_SAMPLE_SECS));
+    loop {
+        tick.tick().await;
+        let mut sample = collector.sample();
+        // Database growth trend: used-only proxy (capacity unknown ⇒ size_bytes = 0).
+        match sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())")
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(bytes) => sample.disks.push(yagra_common::DiskUsage {
+                mount: "database".to_owned(),
+                used_bytes: u64::try_from(bytes).unwrap_or(0),
+                size_bytes: 0,
+            }),
+            Err(e) => tracing::debug!(error = %e, "pg_database_size query failed"),
+        }
+        let at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        store
+            .write_host_sample("core", "core", None, &sample, at_unix_ms)
+            .await;
+        if let Ok(mut g) = cache.lock() {
+            *g = Some(sample);
+        }
+    }
 }
 
 /// Drain poll results off the bus into the metric store and the alert engine. Returns

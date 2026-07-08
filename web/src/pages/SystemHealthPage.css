@@ -17,15 +17,100 @@
 .dep-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
+  /* Narrow cards (the grid drops to ~300px per column) must not push the reachability
+     badge past the card edge — let the row wrap the badge onto its own line instead. */
+  flex-wrap: wrap;
 }
 
 .dep-name {
   font-weight: var(--weight-medium);
-  min-width: 180px;
+  /* Basis keeps the names aligned at comfortable widths (fits the longest, "VictoriaMetrics
+     (TSDB)"), but it can shrink/wrap when the card gets tight. */
+  flex: 0 1 170px;
+  min-width: 0;
 }
 
 .dep-detail {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: var(--font-sm);
+}
+
+/* ── Host resources (core + poller CPU/load/mem/disk trends) ── */
+.host-resources-card {
+  margin-top: 16px;
+}
+
+.host-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.host-title {
+  font-weight: var(--weight-medium);
+  font-size: var(--font-lg);
+}
+
+.host-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.host-select {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.host-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.host-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.host-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.host-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.host-metric-label {
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+}
+
+.host-metric-value {
+  font-family: var(--font-family);
+  font-weight: var(--weight-medium);
+}
+
+.host-metric-empty {
+  font-size: var(--font-sm);
+  margin: 0;
 }

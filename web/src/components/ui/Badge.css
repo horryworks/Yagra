@@ -9,6 +9,9 @@
   border: var(--border-width) solid var(--border-color);
   color: var(--text-secondary);
   white-space: nowrap;
+  /* A status chip must never be squeezed/clipped when it sits in a flex row next to a
+     long label — keep it at full width and let siblings shrink or the row wrap instead. */
+  flex-shrink: 0;
 }
 
 .badge-neutral {

@@ -36,11 +36,12 @@ use yagra_bus::{
     HeartbeatMsg, JobSpec, NodeJobs, SyncBus, SyncMsg, SyncRequest, WorkingSetDelta,
     WorkingSetSnapshot, BUS_SCHEMA_VERSION, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
-use yagra_common::NodeId;
+use yagra_common::{HostSample, NodeId};
 
 use crate::pollers::PollerRepo;
 use crate::ring::HashRing;
 use crate::scheduler::SchedulerStats;
+use crate::store::MetricStore;
 use crate::volatile::{PollerLiveDoc, VolatileStore};
 
 /// A poller is "offline" once this long has elapsed since its last heartbeat (ADR-009). Sourced
@@ -79,6 +80,9 @@ struct PollerEntry {
     inflight: u32,
     /// Total results the poller last reported producing since its start.
     results_total: u64,
+    /// The poller host's latest resource sample (CPU/load/mem/disk), from its heartbeat. `None`
+    /// until the first beat carrying host telemetry (an N-1 poller never sets it).
+    host: Option<HostSample>,
     /// When core last wrote this poller to the durable PG inventory (throttle bookkeeping).
     last_upserted: Option<Instant>,
 }
@@ -119,6 +123,8 @@ pub struct PollerView {
     pub inflight: u32,
     /// Results core has consumed from it (via [`Coordinator::record_result`]).
     pub results_total: u64,
+    /// The poller host's latest resource sample (CPU/load/mem/disk), if it reports host telemetry.
+    pub host: Option<HostSample>,
 }
 
 /// Live poller registry + working-set publisher (ADR-009/020).
@@ -139,6 +145,10 @@ pub struct Coordinator<B: SyncBus> {
     pollers_repo: Option<Arc<PollerRepo>>,
     /// Shared self-monitoring counters (snapshots/deltas published).
     stats: Arc<SchedulerStats>,
+    /// TSDB seam for writing each poller's host self-sample (self-observability). `None` in
+    /// skeleton/tests — host telemetry is then simply not persisted. Core is the single writer of
+    /// `yagra_host_*` series for every poller, since remote pollers can't reach the TSDB directly.
+    store: Option<Arc<dyn MetricStore>>,
     /// The registry + published baselines + result counters.
     state: Mutex<CoordState>,
 }
@@ -161,6 +171,7 @@ impl<B: SyncBus> Coordinator<B> {
         volatile: Arc<VolatileStore>,
         pollers_repo: Option<Arc<PollerRepo>>,
         stats: Arc<SchedulerStats>,
+        store: Option<Arc<dyn MetricStore>>,
     ) -> Self {
         Self {
             epoch: Uuid::new_v4(),
@@ -168,6 +179,7 @@ impl<B: SyncBus> Coordinator<B> {
             volatile,
             pollers_repo,
             stats,
+            store,
             state: Mutex::new(CoordState::default()),
         }
     }
@@ -197,6 +209,7 @@ impl<B: SyncBus> Coordinator<B> {
                     working_set_specs: 0,
                     inflight: 0,
                     results_total: 0,
+                    host: None,
                     last_upserted: None,
                 });
             if known {
@@ -219,6 +232,9 @@ impl<B: SyncBus> Coordinator<B> {
             entry.working_set_specs = hb.working_set_specs;
             entry.inflight = hb.inflight;
             entry.results_total = hb.results_total;
+            if hb.host.is_some() {
+                entry.host = hb.host.clone(); // keep the last known sample if a beat omits it
+            }
             // Throttle the durable inventory write (a 10s beat must not be a write per beat).
             let do_pg = match entry.last_upserted {
                 None => true,
@@ -244,6 +260,13 @@ impl<B: SyncBus> Coordinator<B> {
         self.volatile
             .record_poller(&hb.poller_id, &doc, REDIS_TTL)
             .await;
+        // Persist the poller host self-sample to the TSDB. Core is the single writer for remote
+        // pollers (they can't reach VictoriaMetrics), so this is the only path for their trends.
+        if let (Some(store), Some(host)) = (&self.store, &hb.host) {
+            store
+                .write_host_sample(&hb.poller_id, "poller", Some(&hb.pool), host, now_unix_ms())
+                .await;
+        }
         if do_pg {
             if let Some(repo) = &self.pollers_repo {
                 if let Err(e) = repo
@@ -276,6 +299,7 @@ impl<B: SyncBus> Coordinator<B> {
                     working_set_specs: 0,
                     inflight: 0,
                     results_total: 0,
+                    host: None,
                     last_upserted: None,
                 });
             entry.needs_snapshot = true;
@@ -516,6 +540,7 @@ impl<B: SyncBus> Coordinator<B> {
                 working_set_specs: e.working_set_specs,
                 inflight: e.inflight,
                 results_total: st.results_seen.get(id).copied().unwrap_or(0),
+                host: e.host.clone(),
             })
             .collect();
         views.sort_by(|a, b| a.id.cmp(&b.id));
@@ -564,6 +589,7 @@ mod tests {
             Arc::new(VolatileStore::disabled()),
             None,
             stats.clone(),
+            None,
         ));
         (coord, bus, stats)
     }
@@ -582,6 +608,7 @@ mod tests {
             inflight: 0,
             results_total: 0,
             listeners: Vec::new(),
+            host: None,
         }
     }
 
@@ -1074,6 +1101,31 @@ mod tests {
         let stale = coord.poller_views(later);
         assert!(stale.iter().all(|v| !v.online));
         assert!(stale[0].seconds_since_seen >= OFFLINE_AFTER_SECS);
+    }
+
+    #[tokio::test]
+    async fn poller_view_carries_host_sample_from_the_beat() {
+        let (coord, _bus, _stats) = coordinator();
+        let now = t0();
+        let mut hb = heartbeat("p1", "default", Uuid::new_v4());
+        hb.host = Some(HostSample {
+            cpu_pct: 33.0,
+            mem_used_bytes: 4,
+            mem_total_bytes: 8,
+            ..Default::default()
+        });
+        coord.observe_heartbeat(hb, now).await;
+
+        let views = coord.poller_views(now);
+        let host = views[0].host.as_ref().expect("host sample surfaced");
+        assert!((host.cpu_pct - 33.0).abs() < f64::EPSILON);
+        assert_eq!(host.mem_used_pct(), Some(50.0));
+
+        // A later beat that omits the host block keeps the last known sample.
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", views[0].incarnation), now)
+            .await;
+        assert!(coord.poller_views(now)[0].host.is_some());
     }
 
     #[tokio::test]

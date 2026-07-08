@@ -11,6 +11,7 @@
 pub mod address;
 pub mod classification;
 pub mod collection;
+pub mod host;
 pub mod ids;
 pub mod meraki;
 pub mod metric;
@@ -31,6 +32,7 @@ pub use collection::{
     resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
     InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED, TEMPLATE_STANDARD_SNMP,
 };
+pub use host::{DiskUsage, HostSample};
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,

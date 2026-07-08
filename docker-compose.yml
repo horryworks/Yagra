@@ -20,6 +20,11 @@ services:
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Host self-metrics (Settings ▸ System Health ▸ Host resources): filesystems core reports
+      # capacity for. `root` = the container rootfs; `metrics` = the VictoriaMetrics data volume
+      # (mounted read-only below) so the metrics-storage disk trend is visible. Database growth is
+      # tracked separately via pg_database_size (the pgdata dir is 0700 and can't be stat'd).
+      YAGRA_DISK_WATCH_PATHS: "/=root,/hostfs/vm=metrics"
       # First-boot admin: if YAGRA_ADMIN_PASSWORD is unset, core generates a one-time random
       # admin password and prints it once in its logs (`docker compose logs core`). Uncomment
       # to choose your own:
@@ -32,6 +37,10 @@ services:
       # YAGRA_OTEL_ENDPOINT: "http://jaeger:4318"
     ports:
       - "8080:8080"   # northbound API
+    volumes:
+      # Read-only view of the metrics data volume so core can statvfs its backing disk for the
+      # Host-resources "metrics" trend. Read-only: core only measures capacity, never writes here.
+      - vmdata:/hostfs/vm:ro
     # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does
     restart: unless-stopped
 

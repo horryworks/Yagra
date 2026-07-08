@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    ExpectedStatus, HttpMethod, IfIndex, InterfaceField, MerakiTier, MetricKind, NodeId, SeriesKey,
+    ExpectedStatus, HostSample, HttpMethod, IfIndex, InterfaceField, MerakiTier, MetricKind,
+    NodeId, SeriesKey,
 };
 
 /// Current bus message schema version. Bump on a backward-compatible change; a
@@ -417,6 +418,12 @@ pub struct HeartbeatMsg {
     /// Passive-event listeners the poller has bound (e.g. `syslog:514`, `trap:162`).
     #[serde(default)]
     pub listeners: Vec<String>,
+    /// The poller host's own resource sample (CPU/load/memory/disk) for self-observability. `None`
+    /// from an N-1 poller that predates host telemetry — core then simply shows no host data for
+    /// it. Core is the single writer of the resulting `yagra_host_*` series to the TSDB (remote
+    /// pollers can't reach it directly), so this heartbeat field is that path.
+    #[serde(default)]
+    pub host: Option<HostSample>,
 }
 
 /// A poller's request for a fresh full snapshot, published on [`crate::subjects::sync_request`]
@@ -1587,6 +1594,17 @@ mod tests {
             inflight: 1,
             results_total: 100,
             listeners: vec!["syslog:514".into()],
+            host: Some(yagra_common::HostSample {
+                cpu_pct: 12.5,
+                mem_used_bytes: 2,
+                mem_total_bytes: 8,
+                disks: vec![yagra_common::DiskUsage {
+                    mount: "root".into(),
+                    used_bytes: 10,
+                    size_bytes: 100,
+                }],
+                ..Default::default()
+            }),
         };
         let json = serde_json::to_string(&hb).unwrap();
         let back: HeartbeatMsg = serde_json::from_str(&json).unwrap();
@@ -1605,6 +1623,7 @@ mod tests {
         assert!(hb.epoch.is_none());
         assert_eq!(hb.last_seq, 0);
         assert!(hb.listeners.is_empty());
+        assert!(hb.host.is_none()); // N-1 poller: no host telemetry
     }
 
     #[test]

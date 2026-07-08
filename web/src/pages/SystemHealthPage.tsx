@@ -1,19 +1,37 @@
 // System Health (Settings ▸ System Health). Yagra's own health in one place: the poll loop's
-// live counters, backing-service reachability (PostgreSQL / TSDB / bus), and fleet data coverage.
-// Read-only; the backend gates each read with View. Reuses the dashboard monitoring widgets so this
-// page and the dashboard cards stay in sync.
+// live counters, backing-service reachability (PostgreSQL / TSDB / bus), fleet data coverage, and
+// — new — host-resource trends (CPU / load / memory / disk) for the core and every distributed
+// poller. Read-only; the backend gates each read with View. Reuses the dashboard monitoring widgets
+// so this page and the dashboard cards stay in sync, and the shared MetricChart + RangeControl for
+// the trend charts so they match the node-detail health charts.
 //
 // Split out of the former "Pollers & system health" page so Settings ▸ Pollers can be reserved for
 // future distributed-poller configuration.
 
+import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
+import { MetricChart, PALETTE } from '../components/MetricChart/MetricChart';
+import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
+import { useRangeStore } from '../store';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
-import type { DependencyHealth } from '../types/api';
+import { formatBytes, formatUtil, pointsToSeries } from '../lib/format';
+import type {
+  DependencyHealth,
+  DiskUsage,
+  HostInfo,
+  HostMetricRange,
+  MetricPoint,
+} from '../types/api';
 import './SystemHealthPage.css';
+
+const REFRESH_MS = 15_000;
+/** A bounded gauge's Y range — CPU/mem/disk read 0–100%, so the baseline is 0. Module-level so
+ *  MetricChart isn't rebuilt each refresh. */
+const PCT_RANGE: [number, number] = [0, 100];
 
 /** One backing dependency as a name + detail + reachability badge. */
 function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | undefined }) {
@@ -43,13 +61,254 @@ function DependencyHealthCard() {
   );
 }
 
+/** Align one series onto a base timestamp axis (missing points → null, drawn as a gap). */
+function alignTo(base: number[], points: MetricPoint[]): (number | null)[] {
+  const byT = new Map(points.map((p) => [p.t, p.v]));
+  return base.map((t) => byT.get(t) ?? null);
+}
+
+/** Derive a used-% series by aligning used/size point arrays on shared timestamps. */
+function pctSeries(
+  used: MetricPoint[],
+  size: MetricPoint[],
+): { timestamps: number[]; values: number[] } {
+  const sizeByT = new Map(size.map((p) => [p.t, p.v]));
+  const timestamps: number[] = [];
+  const values: number[] = [];
+  for (const p of used) {
+    const s = sizeByT.get(p.t);
+    if (s == null || s <= 0) continue;
+    timestamps.push(p.t);
+    values.push((p.v / s) * 100);
+  }
+  return { timestamps, values };
+}
+
+/** Human label for an instance in the selector: "Core" or the poller id (with its pool). */
+function instanceLabel(h: HostInfo): string {
+  if (h.role === 'core') return 'Core';
+  return h.pool ? `${h.instance} · ${h.pool}` : h.instance;
+}
+
+/** A single metric card: a current-value headline over a trend chart (mirrors the node-detail
+ *  Device-health cards). Hides the chart with a muted note until history arrives. */
+function HostMetricCard({
+  label,
+  value,
+  timestamps,
+  values,
+  series,
+  yFormat,
+  yRange,
+  legendFormat,
+  win,
+}: {
+  label: string;
+  value: string;
+  timestamps: number[];
+  values?: number[];
+  series?: { label: string; values: (number | null)[]; color?: string }[];
+  yFormat?: (v: number) => string;
+  yRange?: [number, number];
+  legendFormat?: (v: number) => string;
+  win: [number, number] | null;
+}) {
+  const hasData = timestamps.length > 0;
+  return (
+    <div className="host-metric">
+      <div className="host-metric-head">
+        <span className="host-metric-label">{label}</span>
+        <span className="host-metric-value">{value}</span>
+      </div>
+      {hasData ? (
+        <MetricChart
+          title=""
+          timestamps={timestamps}
+          values={values}
+          series={series}
+          yFormat={yFormat}
+          yRange={yRange}
+          legendFormat={legendFormat}
+          xRange={win ?? undefined}
+        />
+      ) : (
+        <p className="muted host-metric-empty">No history yet…</p>
+      )}
+    </div>
+  );
+}
+
+/** The Disk card headline: "used / size · pct" when capacity is known, else a bare size (the
+ *  PostgreSQL `database` proxy has no capacity). */
+function diskHeadline(current: DiskUsage | undefined): string {
+  if (!current) return '—';
+  if (current.size_bytes > 0) {
+    const pct = (current.used_bytes / current.size_bytes) * 100;
+    return `${formatBytes(current.used_bytes)} / ${formatBytes(current.size_bytes)} · ${formatUtil(pct)}`;
+  }
+  return formatBytes(current.used_bytes);
+}
+
+/** Host resources for the selected instance: an instance selector (Core + each poller) + a shared
+ *  range picker, then CPU %, load average, memory %, and a disk card per watched filesystem. */
+function HostResourcesCard() {
+  const [hosts, setHosts] = useState<HostInfo[]>([]);
+  const [instance, setInstance] = useState('core');
+  const [data, setData] = useState<HostMetricRange | null>(null);
+  const [win, setWin] = useState<[number, number] | null>(null);
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
+
+  // Instance list (core + pollers reporting telemetry), refreshed on the standard cadence.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .getSystemHosts()
+        .then((r) => !cancelled && setHosts(r.hosts))
+        .catch(() => undefined);
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Keep the selection valid if the chosen poller drops out of the fleet.
+  useEffect(() => {
+    if (hosts.length > 0 && !hosts.some((h) => h.instance === instance)) setInstance('core');
+  }, [hosts, instance]);
+
+  // Trend series for the selected instance + window.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      const { from, to } = resolveRange(range);
+      api
+        .getHostMetricRange(instance, { from, to })
+        .then((r) => {
+          if (cancelled) return;
+          setData(r);
+          setWin([from, to]);
+        })
+        .catch(() => !cancelled && setData(null));
+    };
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [instance, range]);
+
+  const current = hosts.find((h) => h.instance === instance) ?? null;
+
+  // Load average as a 3-series chart (1m/5m/15m) on a shared timestamp axis.
+  const loadChart = useMemo(() => {
+    const base = (data?.load1 ?? []).map((p) => p.t);
+    if (base.length === 0) return { timestamps: [] as number[], series: [] };
+    return {
+      timestamps: base,
+      series: [
+        { label: '1m', values: alignTo(base, data?.load1 ?? []), color: PALETTE[0] },
+        { label: '5m', values: alignTo(base, data?.load5 ?? []), color: PALETTE[1] },
+        { label: '15m', values: alignTo(base, data?.load15 ?? []), color: PALETTE[2] },
+      ],
+    };
+  }, [data]);
+
+  const cpu = pointsToSeries(data?.cpu_pct ?? []);
+  const mem = pctSeries(data?.mem_used_bytes ?? [], data?.mem_total_bytes ?? []);
+
+  const memHeadline =
+    current?.mem_used_bytes != null && current.mem_total_bytes != null && current.mem_total_bytes > 0
+      ? `${formatBytes(current.mem_used_bytes)} / ${formatBytes(current.mem_total_bytes)}`
+      : formatUtil(current?.mem_used_pct ?? null);
+
+  const options = hosts.length > 0 ? hosts : [];
+
+  return (
+    <div className="host-resources">
+      <div className="host-head">
+        <span className="host-title">Host resources</span>
+        <div className="host-controls">
+          <select
+            className="host-select"
+            value={instance}
+            onChange={(e) => setInstance(e.target.value)}
+            aria-label="Instance"
+          >
+            {options.length === 0 && <option value="core">Core</option>}
+            {options.map((h) => (
+              <option key={h.instance} value={h.instance}>
+                {instanceLabel(h)}
+                {h.role === 'poller' && !h.online ? ' (offline)' : ''}
+              </option>
+            ))}
+          </select>
+          <RangeControl value={range} onChange={setRange} />
+        </div>
+      </div>
+
+      <div className="host-metrics">
+        <HostMetricCard
+          label="CPU"
+          value={formatUtil(current?.cpu_pct ?? null)}
+          timestamps={cpu.timestamps}
+          values={cpu.values}
+          yFormat={formatUtil}
+          yRange={PCT_RANGE}
+          win={win}
+        />
+        <HostMetricCard
+          label="Load average"
+          value={current?.load1 != null ? current.load1.toFixed(2) : '—'}
+          timestamps={loadChart.timestamps}
+          series={loadChart.series}
+          yFormat={(v) => v.toFixed(2)}
+          legendFormat={(v) => v.toFixed(2)}
+          win={win}
+        />
+        <HostMetricCard
+          label="Memory"
+          value={memHeadline}
+          timestamps={mem.timestamps}
+          values={mem.values}
+          yFormat={formatUtil}
+          yRange={PCT_RANGE}
+          win={win}
+        />
+        {(data?.disks ?? []).map((d) => {
+          const known = d.size_bytes.some((p) => p.v > 0);
+          const dcur = current?.disks.find((c) => c.mount === d.mount);
+          const chart = known ? pctSeries(d.used_bytes, d.size_bytes) : pointsToSeries(d.used_bytes);
+          return (
+            <HostMetricCard
+              key={d.mount}
+              label={`Disk · ${d.mount}`}
+              value={diskHeadline(dcur)}
+              timestamps={chart.timestamps}
+              values={chart.values}
+              yFormat={known ? formatUtil : formatBytes}
+              yRange={known ? PCT_RANGE : undefined}
+              legendFormat={known ? formatUtil : formatBytes}
+              win={win}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function SystemHealthPage() {
   return (
     <div>
       <PageHeader
         title="System health"
         trail={[{ label: 'Settings' }, { label: 'System health' }]}
-        note="Yagra's own health: the poll loop, its backing services, and fleet data coverage."
+        note="Yagra's own health: the poll loop, its backing services, fleet data coverage, and host resources."
       />
       <div className="system-health-grid">
         <Card title="Poll-loop health">
@@ -62,6 +321,9 @@ export function SystemHealthPage() {
           <DataCoverageWidget />
         </Card>
       </div>
+      <Card className="host-resources-card">
+        <HostResourcesCard />
+      </Card>
     </div>
   );
 }
