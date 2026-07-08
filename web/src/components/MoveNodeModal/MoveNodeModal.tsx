@@ -3,6 +3,7 @@
 // identical wherever it is reached. Assignment is immediate; the caller refreshes on success.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
@@ -23,6 +24,7 @@ export function MoveNodeModal({
   onClose: () => void;
   onMoved: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const [target, setTarget] = useState<string>(node.group_id ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -34,31 +36,31 @@ export function MoveNodeModal({
       .setNodeGroup(node.id, target || null)
       .then(onMoved)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to move node'));
+        setError(errMsg(e, t('err.moveNode')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={`Move ${node.name}`}
+      title={t('moveNode.title', { name: node.name })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={busy}>
-            Move
+            {t('moveNode.move')}
           </Button>
         </>
       }
     >
       <div className="form-stack">
         <label className="form-label">
-          Group
+          {t('field.group')}
           <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-            <option value="">— Ungrouped —</option>
+            <option value="">{t('moveNode.ungroupedOption')}</option>
             {groupOptions(groups).map((o) => (
               <option key={o.id} value={o.id}>
                 {o.label}

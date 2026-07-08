@@ -10,6 +10,7 @@
 // wins — so a vendor's NOS-specific rules can precede its prefix-only catch-all.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
@@ -29,6 +30,7 @@ const COLS = '90px 1.7fr 1.2fr 110px 110px';
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function ClassificationRulesPage() {
+  const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ClassificationRule[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -87,22 +89,20 @@ export function ClassificationRulesPage() {
     api
       .updateClassificationRule(r.id, ruleToInput({ ...r, enabled: !r.enabled }))
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to update rule')));
+      .catch((e: unknown) => setError(errMsg(e, t('rules.err.update'))));
   };
 
   return (
     <div>
       <PageHeader
-        title="Classification rules"
-        trail={[{ label: 'Nodes' }, { label: 'Classification rules' }]}
-        note="Map a discovered device's sysObjectID / sysDescr to a Device profile. Discovery pre-selects the match on import."
+        title={t('nav:nodes.classificationRules')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.classificationRules') }]}
+        note={t('rules.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">
-            Classification-rule management is unavailable in skeleton mode (no metadata store).
-          </p>
+          <p className="muted">{t('rules.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -110,14 +110,18 @@ export function ClassificationRulesPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search signature, profile, maker…"
-              ariaLabel="Search classification rules"
+              placeholder={t('rules.searchPlaceholder')}
+              ariaLabel={t('rules.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="rules" />
+            <ResultCount
+              shown={filtered.length}
+              total={rows.length}
+              noun={t('common:noun.rule', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add rule
+                + {t('rules.addRule')}
               </Button>
             )}
           </TableToolbar>
@@ -126,27 +130,25 @@ export function ClassificationRulesPage() {
 
           <div className="ytable classrules-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Priority</div>
-              <div className="ytable-h">Match</div>
-              <div className="ytable-h">Profile</div>
-              <div className="ytable-h">Status</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('rules.cols.priority')}</div>
+              <div className="ytable-h">{t('rules.cols.match')}</div>
+              <div className="ytable-h">{t('rules.cols.profile')}</div>
+              <div className="ytable-h">{t('rules.cols.status')}</div>
+              <div className="ytable-h right">{t('shared.colActions')}</div>
             </div>
 
             {filtered.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
                   {loading
-                    ? 'Loading…'
+                    ? t('common:loading')
                     : rows.length === 0
-                      ? 'No classification rules'
-                      : 'No rules match'}
+                      ? t('rules.empty.none')
+                      : t('rules.empty.noMatch')}
                 </p>
                 {!loading && (
                   <p className="yt-empty-sub">
-                    {rows.length === 0
-                      ? 'Add a rule mapping a sysObjectID prefix or sysDescr pattern to a profile.'
-                      : 'Try a different search.'}
+                    {rows.length === 0 ? t('rules.empty.noneSub') : t('shared.trySearch')}
                   </p>
                 )}
               </div>
@@ -171,22 +173,22 @@ export function ClassificationRulesPage() {
                   <div className="ytable-cell">{profileName(r.profile_id)}</div>
                   <div className="ytable-cell">
                     <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? 'enabled' : 'disabled'}
+                      {r.enabled ? t('rules.enabled') : t('rules.disabled')}
                     </Badge>
                   </div>
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
                         <IconButton
-                          title={r.enabled ? 'Disable rule' : 'Enable rule'}
+                          title={r.enabled ? t('rules.disable') : t('rules.enable')}
                           onClick={() => toggleEnabled(r)}
                         >
                           <PowerIcon />
                         </IconButton>
-                        <IconButton title="Edit rule" onClick={() => setEditing(r)}>
+                        <IconButton title={t('rules.editRule')} onClick={() => setEditing(r)}>
                           <EditIcon />
                         </IconButton>
-                        <IconButton title="Delete rule" danger onClick={() => setDeleting(r)}>
+                        <IconButton title={t('rules.deleteRule')} danger onClick={() => setDeleting(r)}>
                           <TrashIcon />
                         </IconButton>
                       </span>
@@ -264,6 +266,7 @@ function RuleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [priority, setPriority] = useState(String(rule?.priority ?? 100));
   const [prefix, setPrefix] = useState(rule?.sysobjectid_prefix ?? '');
   const [regex, setRegex] = useState(rule?.sysdescr_regex ?? '');
@@ -295,32 +298,32 @@ function RuleModal({
         ? api.updateClassificationRule(rule.id, body)
         : api.createClassificationRule(body).then(() => undefined);
     call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, 'failed to save rule'));
+      setError(errMsg(e, t('rules.err.save')));
       setBusy(false);
     });
   };
 
   return (
     <Modal
-      title={mode === 'edit' ? 'Edit classification rule' : 'Add classification rule'}
+      title={mode === 'edit' ? t('rules.modal.editTitle') : t('rules.modal.addTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {mode === 'edit' ? 'Save' : 'Add rule'}
+            {mode === 'edit' ? t('common:actions.save') : t('rules.addRule')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">
-          Profile <RequiredMark />
+          {t('rules.cols.profile')} <RequiredMark />
         </label>
         <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-          <option value="">(choose a profile)</option>
+          <option value="">{t('rules.modal.chooseProfile')}</option>
           {profiles.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -329,56 +332,51 @@ function RuleModal({
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">sysObjectID prefix</label>
+        <label className="modal-field-label">{t('rules.modal.oidPrefix')}</label>
         <TextInput
           className="mono"
-          placeholder="e.g. 1.3.6.1.4.1.9."
+          placeholder={t('rules.modal.oidPrefixPlaceholder')}
           value={prefix}
           onChange={(e) => setPrefix(e.target.value)}
         />
-        <FieldHint>
-          Authoritative — outranks sysDescr. End with a dot so 1.3…9. won't also match …91.
-          Pair with a sysDescr regex to split one vendor by NOS.
-        </FieldHint>
+        <FieldHint>{t('rules.modal.oidPrefixHint')}</FieldHint>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">sysDescr regex</label>
+        <label className="modal-field-label">{t('rules.modal.descrRegex')}</label>
         <TextInput
           className="mono"
-          placeholder="e.g. (?i)cisco|ios"
+          placeholder={t('rules.modal.descrRegexPlaceholder')}
           value={regex}
           onChange={(e) => setRegex(e.target.value)}
         />
         <FieldHint error={!hasMatcher}>
-          {hasMatcher
-            ? 'With a prefix set, both must match (vendor + NOS); on its own, it matches sysDescr directly.'
-            : 'Provide a sysObjectID prefix and/or a sysDescr regex.'}
+          {hasMatcher ? t('rules.modal.descrRegexHintBoth') : t('rules.modal.matcherRequired')}
         </FieldHint>
       </div>
       <div className="modal-field-row">
         <div className="modal-field">
           <label className="modal-field-label">
-            Priority <RequiredMark />
+            {t('rules.cols.priority')} <RequiredMark />
           </label>
           <TextInput
             type="number"
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
           />
-          <FieldHint>Lower = evaluated first.</FieldHint>
+          <FieldHint>{t('rules.modal.priorityHint')}</FieldHint>
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Maker</label>
+          <label className="modal-field-label">{t('rules.modal.maker')}</label>
           <TextInput
-            placeholder="optional"
+            placeholder={t('shared.optional')}
             value={vendor}
             onChange={(e) => setVendor(e.target.value)}
           />
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Model</label>
+          <label className="modal-field-label">{t('rules.modal.model')}</label>
           <TextInput
-            placeholder="optional"
+            placeholder={t('shared.optional')}
             value={model}
             onChange={(e) => setModel(e.target.value)}
           />
@@ -386,7 +384,7 @@ function RuleModal({
       </div>
       <label className="classrules-enabled">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        <span>Enabled</span>
+        <span>{t('rules.modal.enabledLabel')}</span>
       </label>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -405,6 +403,7 @@ function DeleteRuleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -415,7 +414,7 @@ function DeleteRuleModal({
       .deleteClassificationRule(rule.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete rule'));
+        setError(errMsg(e, t('rules.err.delete')));
         setBusy(false);
       });
   };
@@ -423,23 +422,26 @@ function DeleteRuleModal({
   const sig = rule.sysobjectid_prefix ?? rule.sysdescr_regex ?? '';
   return (
     <Modal
-      title="Delete classification rule"
+      title={t('rules.modal.deleteTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete the rule mapping <strong className="mono">{sig}</strong> →{' '}
-        <strong>{profileName}</strong>? Discovery will stop suggesting this profile for matching
-        devices (already-imported nodes are unaffected).
+        <Trans
+          t={t}
+          i18nKey="rules.delete.confirm"
+          values={{ sig, profile: profileName }}
+          components={{ m: <strong className="mono" />, strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

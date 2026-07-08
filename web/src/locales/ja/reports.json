@@ -1,1 +1,142 @@
-{}
+{
+  "page": {
+    "note": "レポートをカスタマイズして作成し、スケジュールで実行して結果を保存します。"
+  },
+  "tabs": {
+    "saved": "保存済みレポート",
+    "templates": "テンプレート",
+    "schedules": "スケジュール"
+  },
+  "noun": {
+    "savedReport_other": "保存済みレポート",
+    "schedule_other": "スケジュール"
+  },
+  "trigger": {
+    "manual": "手動",
+    "scheduled": "スケジュール"
+  },
+  "run": {
+    "status": {
+      "generating": "生成中 {{pct}}%",
+      "queued": "待機中",
+      "ready": "準備完了",
+      "failed": "失敗"
+    }
+  },
+  "runs": {
+    "cols": {
+      "report": "レポート",
+      "status": "ステータス",
+      "trigger": "トリガー",
+      "generated": "生成日時"
+    },
+    "view": "表示",
+    "empty": "生成されたレポートはまだありません。テンプレートを実行して作成してください。"
+  },
+  "defs": {
+    "cols": {
+      "template": "テンプレート",
+      "sections": "セクション",
+      "updated": "更新日時"
+    },
+    "runNow": "今すぐ実行",
+    "running": "実行中…",
+    "newReport": "新規レポート",
+    "empty": "レポートテンプレートはまだありません。",
+    "emptyAdmin": "レポートテンプレートはまだありません。「新規レポート」をクリックして作成してください。"
+  },
+  "scheds": {
+    "cols": {
+      "report": "レポート",
+      "cadence": "頻度",
+      "nextRun": "次回実行",
+      "state": "状態"
+    },
+    "enabled": "有効",
+    "paused": "一時停止",
+    "newSchedule": "新規スケジュール",
+    "empty": "スケジュールはまだありません。",
+    "emptyNoDefs": "先にレポートテンプレートを作成してから、スケジュールを設定してください。"
+  },
+  "confirm": {
+    "deleteTemplate": "レポートテンプレート「{{name}}」を削除しますか？保存済みの実行結果は保持されます。",
+    "deleteRun": "保存済みレポート「{{name}}」を削除しますか？",
+    "deleteSchedule": "「{{name}}」のスケジュールを削除しますか？"
+  },
+  "builder": {
+    "newTitle": "新規レポート",
+    "editTitle": "レポートを編集",
+    "save": "レポートを保存",
+    "saving": "保存中…",
+    "name": "名前",
+    "namePlaceholder": "例: 週次可用性レポート",
+    "description": "説明",
+    "descriptionPlaceholder": "このレポートの内容の概要（任意）",
+    "timeWindow": "期間",
+    "sectionsCount_other": "セクション ({{count}})",
+    "addSection": "セクションを追加",
+    "hideCatalog": "カタログを隠す",
+    "noSections": "セクションがまだありません — 上のカタログから追加してください。",
+    "moveUp": "上へ移動",
+    "moveDown": "下へ移動",
+    "removeSection": "セクションを削除",
+    "range": {
+      "h24": "過去24時間",
+      "d7": "過去7日間",
+      "d30": "過去30日間",
+      "d90": "過去90日間"
+    },
+    "err": {
+      "nameRequired": "レポート名は必須です。",
+      "noSections": "セクションを少なくとも1つ追加してください。",
+      "saveFailed": "レポートの保存に失敗しました。"
+    }
+  },
+  "viewer": {
+    "fallbackTitle": "レポート",
+    "print": "印刷",
+    "generating": "レポートを生成中… {{pct}}%",
+    "failed": "失敗",
+    "genFailed": "レポートの生成に失敗しました。",
+    "err": {
+      "loadFailed": "レポートの読み込みに失敗しました。",
+      "exportFailed": "{{format}} のエクスポートに失敗しました。"
+    }
+  },
+  "schedule": {
+    "newTitle": "新規スケジュール",
+    "editTitle": "スケジュールを編集",
+    "save": "スケジュールを保存",
+    "saving": "保存中…",
+    "report": "レポート",
+    "frequency": "頻度",
+    "dayOfWeek": "曜日",
+    "dayOfMonth": "日付 (1–28)",
+    "timeUtc": "時刻 (UTC)",
+    "enabled": "有効",
+    "freq": {
+      "daily": "毎日",
+      "weekly": "毎週",
+      "monthly": "毎月"
+    },
+    "err": {
+      "chooseReport": "レポートを選択してください。",
+      "invalidTime": "有効な時刻を入力してください。",
+      "saveFailed": "スケジュールの保存に失敗しました。"
+    }
+  },
+  "weekday": {
+    "sun": "日曜日",
+    "mon": "月曜日",
+    "tue": "火曜日",
+    "wed": "水曜日",
+    "thu": "木曜日",
+    "fri": "金曜日",
+    "sat": "土曜日"
+  },
+  "cadence": {
+    "daily": "毎日 · {{time}}",
+    "weekly": "毎週 · {{day}} {{time}}",
+    "monthly": "毎月 · {{day}}日 {{time}}"
+  }
+}

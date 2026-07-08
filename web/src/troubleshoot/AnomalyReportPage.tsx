@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -15,28 +16,19 @@ import { KINDS, kindMeta, type Kind } from './data';
 import { runningCount, useTroubleshootStore } from './store';
 import { useTroubleshootStream } from './useTroubleshootStream';
 import { ScopePicker } from './ScopePicker';
-import { ALL_SCOPE, type ScopeValue } from './scope';
+import { allScope, type ScopeValue } from './scope';
 import { AnomalyChart } from './AnomalyChart';
 import { TroubleshootToast } from './TroubleshootToast';
 import { relTime } from './format';
 import type { AnalysisFinding, AnomalyDetail } from '../types/api';
 import './troubleshoot.css';
 
-const TRAIL = [{ label: 'Troubleshoot', to: '/troubleshoot' }, { label: 'Anomaly Detection' }];
-const WINDOWS = [
-  { value: '86400', label: 'last 24 h' },
-  { value: '604800', label: 'last 7 d' },
-  { value: '2592000', label: 'last 30 d' },
-];
-const BASELINES = [
-  { value: String(14 * 86_400), label: '14 d trailing' },
-  { value: String(30 * 86_400), label: '30 d trailing' },
-];
-const PHASES = [
-  'Fetching baseline…',
-  'Fitting per-metric models…',
-  'Scoring residuals…',
-  'Ranking & classifying findings…',
+/** i18next keys for the four processing phases (resolved with `t()` where they render). */
+const PHASE_KEYS = [
+  'anomaly.phases.baseline',
+  'anomaly.phases.fit',
+  'anomaly.phases.score',
+  'anomaly.phases.rank',
 ];
 
 /** 1–5 sensitivity slider → σ threshold (looser = higher σ). */
@@ -45,6 +37,7 @@ function sigmaFor(slider: number): number {
 }
 
 function AnomalyCard({ finding }: { finding: AnalysisFinding }) {
+  const { t } = useTranslation('troubleshoot');
   const meta = kindMeta(finding.kind);
   const detail = finding.detail as AnomalyDetail;
   const sev = (finding.severity === 'crit' || finding.severity === 'warn' ? finding.severity : 'info') as
@@ -55,14 +48,14 @@ function AnomalyCard({ finding }: { finding: AnalysisFinding }) {
     <div className={`ts-anom sev-${sev}`}>
       <div className="ts-anom-score">
         <span className="ts-anom-score-num">{Math.round(finding.score)}</span>
-        <span className="ts-anom-score-cap">score</span>
+        <span className="ts-anom-score-cap">{t('anomaly.card.score')}</span>
       </div>
       <div className="ts-anom-id">
         <span className="ts-anom-node">{finding.node_name}</span>
         <span className="ts-anom-metric">{finding.metric}</span>
         <span className="ts-anom-kind">
           <span className="ts-anom-kind-dot" style={{ background: meta.color }} />
-          {meta.label}
+          {t(meta.label)}
         </span>
       </div>
       <div className="ts-anom-chart">
@@ -77,18 +70,20 @@ function AnomalyCard({ finding }: { finding: AnalysisFinding }) {
 }
 
 function Processing({ pct, phase, onCancel }: { pct: number; phase: string; onCancel: () => void }) {
-  const step = Math.min(PHASES.length - 1, Math.floor(pct / 25));
+  const { t } = useTranslation('troubleshoot');
+  const phases = useMemo(() => PHASE_KEYS.map((k) => t(k)), [t]);
+  const step = Math.min(phases.length - 1, Math.floor(pct / 25));
   return (
     <Card>
       <div className="ts-processing">
         <div className="ts-processing-ring" />
-        <div className="ts-processing-title">Running analysis…</div>
-        <div className="ts-processing-phase">{phase || PHASES[step]}</div>
+        <div className="ts-processing-title">{t('anomaly.processing.title')}</div>
+        <div className="ts-processing-phase">{phase || phases[step]}</div>
         <div className="ts-pbar">
           <div className="ts-pbar-fill" style={{ width: `${pct}%` }} />
         </div>
         <div className="ts-processing-steps">
-          {PHASES.map((p, i) => (
+          {phases.map((p, i) => (
             <div key={p} className={`ts-pstep ${i < step ? 'done' : i === step ? 'active' : ''}`}>
               <span className="ts-pstep-mark">{i < step ? '✓' : i === step ? '▸' : '·'}</span>
               {p}
@@ -96,7 +91,7 @@ function Processing({ pct, phase, onCancel }: { pct: number; phase: string; onCa
           ))}
         </div>
         <Button className="btn-sm" style={{ marginTop: 8 }} onClick={onCancel}>
-          Cancel
+          {t('common:actions.cancel')}
         </Button>
       </div>
     </Card>
@@ -104,6 +99,7 @@ function Processing({ pct, phase, onCancel }: { pct: number; phase: string; onCa
 }
 
 export function AnomalyReportPage() {
+  const { t } = useTranslation('troubleshoot');
   useTroubleshootStream();
   const [params, setParams] = useSearchParams();
   const jobId = params.get('job');
@@ -112,8 +108,24 @@ export function AnomalyReportPage() {
   const cancelJob = useTroubleshootStore((s) => s.cancelJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
 
+  const WINDOWS = useMemo(
+    () => [
+      { value: '86400', label: t('anomaly.windows.d1') },
+      { value: '604800', label: t('anomaly.windows.d7') },
+      { value: '2592000', label: t('anomaly.windows.d30') },
+    ],
+    [t],
+  );
+  const BASELINES = useMemo(
+    () => [
+      { value: String(14 * 86_400), label: t('anomaly.baselines.d14') },
+      { value: String(30 * 86_400), label: t('anomaly.baselines.d30') },
+    ],
+    [t],
+  );
+
   // Config bar state.
-  const [scope, setScope] = useState<ScopeValue>(ALL_SCOPE);
+  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
   const [windowVal, setWindowVal] = useState('86400');
   const [baselineVal, setBaselineVal] = useState(String(14 * 86_400));
   const [sensitivity, setSensitivity] = useState(3);
@@ -159,7 +171,7 @@ export function AnomalyReportPage() {
       setLoadedFor(null);
       setParams({ job: j.id });
     } catch {
-      showToast('Could not start the analysis.');
+      showToast(t('toast.startFailed'));
     }
   };
 
@@ -180,13 +192,13 @@ export function AnomalyReportPage() {
     <div className="ts-cfgbar">
       <div className="ts-fgroup">
         <label className="ts-flabel" htmlFor="ts-cfg-scope">
-          Scope
+          {t('fields.scope')}
         </label>
         <ScopePicker id="ts-cfg-scope" value={scope} onChange={setScope} />
       </div>
       <div className="ts-fgroup">
         <label className="ts-flabel" htmlFor="ts-cfg-window">
-          Window
+          {t('fields.window')}
         </label>
         <Select id="ts-cfg-window" value={windowVal} onChange={(e) => setWindowVal(e.target.value)}>
           {WINDOWS.map((w) => (
@@ -198,7 +210,7 @@ export function AnomalyReportPage() {
       </div>
       <div className="ts-fgroup">
         <label className="ts-flabel" htmlFor="ts-cfg-baseline">
-          Baseline
+          {t('fields.baseline')}
         </label>
         <Select
           id="ts-cfg-baseline"
@@ -214,7 +226,7 @@ export function AnomalyReportPage() {
       </div>
       <div className="ts-fgroup" style={{ minWidth: 170 }}>
         <label className="ts-flabel" htmlFor="ts-cfg-sens">
-          Sensitivity
+          {t('fields.sensitivity')}
         </label>
         <div className="ts-slider-row">
           <input
@@ -231,7 +243,7 @@ export function AnomalyReportPage() {
       </div>
       <div className="ts-cfgbar-spacer" />
       <Button variant="primary" onClick={() => void run()}>
-        Run analysis
+        {t('actions.runAnalysis')}
       </Button>
     </div>
   );
@@ -239,23 +251,23 @@ export function AnomalyReportPage() {
   return (
     <div>
       <PageHeader
-        title="Anomaly Detection"
-        trail={TRAIL}
-        note="Baseline-relative deviations across every collected series. Each finding is scored by how far and how unusually it left its learned envelope."
+        title={t('tools.anomaly.name')}
+        trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('tools.anomaly.name') }]}
+        note={t('anomaly.note')}
         actions={
           <>
             <Button className="btn-sm" onClick={() => void run()}>
-              Re-run
+              {t('actions.rerun')}
             </Button>
             <Button
               className="btn-sm"
               onClick={() =>
                 showToast(
-                  findings.length ? 'Export to CSV is coming soon.' : 'Run an analysis first.',
+                  findings.length ? t('anomaly.toast.exportSoon') : t('anomaly.toast.runFirst'),
                 )
               }
             >
-              Export
+              {t('actions.export')}
             </Button>
           </>
         }
@@ -266,9 +278,7 @@ export function AnomalyReportPage() {
       {!job && (
         <Card>
           <div className="ts-empty-note">
-            {running > 0
-              ? 'An analysis is running — open it from Analysis runs, or start a new one above.'
-              : 'Set the scope and window above, then Run analysis to detect anomalies.'}
+            {running > 0 ? t('anomaly.empty.running') : t('anomaly.empty.idle')}
           </div>
         </Card>
       )}
@@ -280,8 +290,10 @@ export function AnomalyReportPage() {
       {job && (job.state === 'failed' || job.state === 'cancelled') && (
         <Card>
           <div className="ts-empty-note">
-            Analysis {job.state}
-            {job.error ? ` · ${job.error}` : ''}. Adjust the scope and run again.
+            {t('anomaly.terminalNote', {
+              state: t(`runs.state.${job.state}`),
+              detail: job.error ? ` · ${job.error}` : '',
+            })}
           </div>
         </Card>
       )}
@@ -291,23 +303,23 @@ export function AnomalyReportPage() {
           <div className="ts-res-summary">
             <div className="ts-res-stat">
               <span className="ts-res-num crit">{crit}</span>
-              <span className="ts-res-cap">critical</span>
+              <span className="ts-res-cap">{t('anomaly.summary.critical')}</span>
             </div>
             <div className="ts-res-stat">
               <span className="ts-res-num warn">{warn}</span>
-              <span className="ts-res-cap">warning</span>
+              <span className="ts-res-cap">{t('anomaly.summary.warning')}</span>
             </div>
             <div className="ts-res-stat">
               <span className="ts-res-num">{findings.length}</span>
-              <span className="ts-res-cap">total</span>
+              <span className="ts-res-cap">{t('anomaly.summary.total')}</span>
             </div>
             <div className="ts-res-sep" />
             <div className="ts-res-stat">
               <span className="ts-res-num">{nodes}</span>
-              <span className="ts-res-cap">nodes</span>
+              <span className="ts-res-cap">{t('anomaly.summary.nodes')}</span>
             </div>
             <div className="ts-res-meta">
-              finished {relTime(job.finished_ms)}
+              {t('anomaly.summary.finished', { time: relTime(job.finished_ms) })}
               <br />
               {job.summary ?? ''}
             </div>
@@ -321,7 +333,7 @@ export function AnomalyReportPage() {
                 aria-pressed={filter === 'all'}
                 onClick={() => setFilter('all')}
               >
-                All kinds
+                {t('anomaly.filters.allKinds')}
               </button>
               {(Object.keys(KINDS) as Kind[]).map((k) => (
                 <button
@@ -332,21 +344,21 @@ export function AnomalyReportPage() {
                   onClick={() => setFilter(k)}
                 >
                   <span className="ts-chip-dot" style={{ background: KINDS[k].color }} />
-                  {KINDS[k].label}
+                  {t(KINDS[k].label)}
                 </button>
               ))}
             </div>
             <div className="ts-cfgbar-spacer" />
             <label className="ts-sort-label" htmlFor="ts-anom-sort">
-              Sort
+              {t('anomaly.sort.label')}
             </label>
             <Select
               id="ts-anom-sort"
               value={sort}
               onChange={(e) => setSort(e.target.value as 'score' | 'node')}
             >
-              <option value="score">by score</option>
-              <option value="node">by node</option>
+              <option value="score">{t('anomaly.sort.byScore')}</option>
+              <option value="node">{t('anomaly.sort.byNode')}</option>
             </Select>
           </div>
 
@@ -355,9 +367,7 @@ export function AnomalyReportPage() {
               list.map((f) => <AnomalyCard key={f.id} finding={f} />)
             ) : (
               <div className="ts-empty-note">
-                {findings.length
-                  ? 'No anomalies of this kind in the current scope.'
-                  : 'No anomalies found — everything is within its learned envelope.'}
+                {findings.length ? t('anomaly.list.emptyKind') : t('anomaly.list.emptyAll')}
               </div>
             )}
           </div>

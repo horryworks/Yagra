@@ -3,6 +3,7 @@
 // the launch drawer and the toast; live job updates arrive via useTroubleshootStream.
 
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -36,6 +37,7 @@ function avgRuntime(jobs: AnalysisJob[]): string {
 }
 
 export function TroubleshootCatalogPage() {
+  const { t } = useTranslation('troubleshoot');
   useTroubleshootStream();
   const navigate = useNavigate();
   const jobs = useTroubleshootStore((s) => s.jobs);
@@ -44,42 +46,42 @@ export function TroubleshootCatalogPage() {
   return (
     <div>
       <PageHeader
-        title="Troubleshoot"
-        trail={[{ label: 'Troubleshoot', to: '/troubleshoot' }, { label: 'Tools' }]}
-        note="Deep diagnostics for problems normal metrics and thresholds can’t see. These analyses fetch long histories and run heavier models, so they run as background jobs — start one, keep working, review the report when it lands."
+        title={t('nav:sections.troubleshoot')}
+        trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.all') }]}
+        note={t('catalog.note')}
       />
 
       <div className="ts-intro">
         <div className="ts-intro-stat">
           <span className="ts-intro-num">{TOOLS.length}</span>
-          <span className="ts-intro-cap">tools</span>
+          <span className="ts-intro-cap">{t('catalog.stat.tools')}</span>
         </div>
         <div className="ts-intro-sep" />
         <div className="ts-intro-stat">
           <span className="ts-intro-num">{running}</span>
-          <span className="ts-intro-cap">running now</span>
+          <span className="ts-intro-cap">{t('catalog.stat.runningNow')}</span>
         </div>
         <div className="ts-intro-sep" />
         <div className="ts-intro-stat">
           <span className="ts-intro-num">{runsToday(jobs)}</span>
-          <span className="ts-intro-cap">runs today</span>
+          <span className="ts-intro-cap">{t('catalog.stat.runsToday')}</span>
         </div>
         <div className="ts-intro-sep" />
         <div className="ts-intro-stat">
           <span className="ts-intro-num">{avgRuntime(jobs)}</span>
-          <span className="ts-intro-cap">avg runtime</span>
+          <span className="ts-intro-cap">{t('catalog.stat.avgRuntime')}</span>
         </div>
       </div>
 
       <Card
-        title="Analysis runs"
+        title={t('nav:troubleshoot.runs')}
         actions={
           <Button
             variant="ghost"
             className="btn-sm"
             onClick={() => navigate('/troubleshoot/runs')}
           >
-            View all
+            {t('catalog.viewAll')}
           </Button>
         }
       >
@@ -87,8 +89,8 @@ export function TroubleshootCatalogPage() {
       </Card>
 
       <div className="ts-section-label">
-        <h2>Diagnostic tools</h2>
-        <span>Pick a tool, set its scope, and run it as a job.</span>
+        <h2>{t('catalog.toolsHeading')}</h2>
+        <span>{t('catalog.toolsSub')}</span>
       </div>
       <div className="ts-tool-grid">
         {TOOLS.map((t) => (

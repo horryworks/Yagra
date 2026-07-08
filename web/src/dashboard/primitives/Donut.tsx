@@ -2,6 +2,7 @@
 // severity mix widgets. Colors are passed in (CSS-var strings) — the widget chooses the channel
 // (status for health, severity for the alert mix), so this primitive stays channel-agnostic.
 
+import { useTranslation } from 'react-i18next';
 import './Donut.css';
 
 export interface DonutSegment {
@@ -26,12 +27,13 @@ const R = 15.915;
 const CIRC = 2 * Math.PI * R;
 
 export function Donut({ segments, centerValue, centerSub, legend = true }: Props) {
+  const { t } = useTranslation('dashboard');
   const total = segments.reduce((s, x) => s + Math.max(0, x.value), 0);
   // Cumulative offset so segments lay end-to-end starting at 12 o'clock.
   let acc = 0;
   return (
     <div className="donut">
-      <svg className="donut-svg" viewBox="0 0 42 42" role="img" aria-label="distribution">
+      <svg className="donut-svg" viewBox="0 0 42 42" role="img" aria-label={t('primitives.donut.aria')}>
         <circle className="donut-track" cx="21" cy="21" r={R} />
         {total > 0 &&
           segments.map((seg) => {

@@ -5,6 +5,7 @@
 // they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { stateColorVar, stateLabel } from '../../lib/format';
 import type { PlacedNode, TopologyLayout } from './layout';
@@ -45,10 +46,11 @@ function NodeBox({
   onOpen: (id: string) => void;
   nameById: Map<string, string>;
 }) {
+  const { t } = useTranslation('topology');
   const cause = node.rootCause ? nameById.get(node.rootCause) ?? null : null;
   const title = cause
-    ? `${node.name} — ${stateLabel(node.state)} · suppressed, root cause: ${cause}`
-    : `${node.name} — ${stateLabel(node.state)}`;
+    ? t('map.nodeTitleSuppressed', { name: node.name, state: stateLabel(node.state), cause })
+    : t('map.nodeTitle', { name: node.name, state: stateLabel(node.state) });
   const cls = ['topomap-node', node.suppressed ? 'suppressed' : ''].filter(Boolean).join(' ');
   return (
     <g
@@ -85,6 +87,7 @@ function NodeBox({
 }
 
 export function TopologyMap({ layout }: { layout: TopologyLayout }) {
+  const { t } = useTranslation('topology');
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<View | null>(null);
@@ -151,22 +154,27 @@ export function TopologyMap({ layout }: { layout: TopologyLayout }) {
   return (
     <div className="topomap" ref={wrapRef}>
       <div className="topomap-controls">
-        <button className="topomap-ctl" onClick={fit} title="Fit to view" aria-label="Fit to view">
-          Fit
+        <button
+          className="topomap-ctl"
+          onClick={fit}
+          title={t('map.control.fitToView')}
+          aria-label={t('map.control.fitToView')}
+        >
+          {t('map.control.fit')}
         </button>
         <button
           className="topomap-ctl"
           onClick={() => setView((s) => (s ? { ...s, scale: Math.min(MAX_SCALE, s.scale * 1.2) } : s))}
-          title="Zoom in"
-          aria-label="Zoom in"
+          title={t('map.control.zoomIn')}
+          aria-label={t('map.control.zoomIn')}
         >
           +
         </button>
         <button
           className="topomap-ctl"
           onClick={() => setView((s) => (s ? { ...s, scale: Math.max(MIN_SCALE, s.scale / 1.2) } : s))}
-          title="Zoom out"
-          aria-label="Zoom out"
+          title={t('map.control.zoomOut')}
+          aria-label={t('map.control.zoomOut')}
         >
           −
         </button>

@@ -2,6 +2,7 @@
 // warning, the working-set summary, id/pool validation, and the remote-poller config snippet are
 // all unit-testable without the DOM.
 
+import type { TFunction } from 'i18next';
 import type { PoolSummary } from '../types/api';
 import { relativeTime } from './format';
 
@@ -10,24 +11,38 @@ export function poolHasWarning(pool: PoolSummary): boolean {
   return pool.warning === 'nodes_without_live_poller';
 }
 
-/** Human label for a pool's dispatch mode. */
-export function poolModeLabel(mode: PoolSummary['mode']): string {
-  return mode === 'working_set' ? 'Working set' : 'Legacy';
+/** Human label for a pool's dispatch mode. `t` is threaded from the caller so the label follows the
+ *  active language (this module must never resolve translations at load time). Keys are namespace-
+ *  qualified so any bound `t` resolves them. */
+export function poolModeLabel(mode: PoolSummary['mode'], t: TFunction): string {
+  return mode === 'working_set'
+    ? t('system:pollers.mode.workingSet')
+    : t('system:pollers.mode.legacy');
 }
 
-/** Compact working-set summary ("5 nodes / 9 specs"), singularizing 1. An offline poller reports
- *  zeroes, so callers pass `online: false` to render an em dash instead of "0 nodes / 0 specs". */
-export function workingSetLabel(nodes: number, specs: number, online = true): string {
+/** Compact working-set summary ("5 nodes / 9 specs"), singularizing 1 via the count-pluralized
+ *  keys. An offline poller reports zeroes, so callers pass `online: false` to render an em dash
+ *  instead of "0 nodes / 0 specs". */
+export function workingSetLabel(
+  nodes: number,
+  specs: number,
+  online: boolean,
+  t: TFunction,
+): string {
   if (!online) return '—';
-  const noun = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-  return `${noun(nodes, 'node')} / ${noun(specs, 'spec')}`;
+  return `${t('system:pollers.workingSet.nodes', { count: nodes })} / ${t('system:pollers.workingSet.specs', { count: specs })}`;
 }
 
 /** "Last seen" label: relative time when we have a durable timestamp; otherwise "Live" for a poller
  *  that is online but not yet persisted (within the 60s inventory throttle), or an em dash. */
-export function lastSeenLabel(iso: string | null, online: boolean, now: number = Date.now()): string {
+export function lastSeenLabel(
+  iso: string | null,
+  online: boolean,
+  t: TFunction,
+  now: number = Date.now(),
+): string {
   if (iso) return relativeTime(iso, now);
-  return online ? 'Live' : '—';
+  return online ? t('system:pollers.lastSeen.live') : '—';
 }
 
 /** Poller id / pool naming rule — matches the server-side sanitizer's accepted alphabet

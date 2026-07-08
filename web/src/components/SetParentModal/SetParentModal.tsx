@@ -5,6 +5,7 @@
 // refreshes on success.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { TopologyNode } from '../../types/api';
 import { invalidParentIds } from '../../lib/dependencies';
@@ -27,6 +28,7 @@ export function SetParentModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const [topo, setTopo] = useState<TopologyNode[] | null>(null);
   const [parent, setParent] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,40 +64,38 @@ export function SetParentModal({
       .setNodeParent(nodeId, parent?.id ?? null)
       .then(onSaved)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to set dependency'));
+        setError(errMsg(e, t('err.setDependency')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={`Dependency for ${nodeName}`}
+      title={t('setParent.title', { name: nodeName })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="form-stack">
         <label className="form-label">
-          Depends on (upstream)
+          {t('setParent.dependsOn')}
           <NodePicker
             value={parent?.id ?? null}
             valueLabel={parent?.name}
             onChange={setParent}
             exclude={exclude}
-            placeholder="— No upstream (top-level) —"
+            placeholder={t('setParent.noUpstream')}
           />
         </label>
-        <p className="form-hint">
-          When this upstream is down, {nodeName}&apos;s alert is suppressed and rolled up under it.
-        </p>
+        <p className="form-hint">{t('setParent.hint', { name: nodeName })}</p>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

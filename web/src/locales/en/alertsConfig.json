@@ -1,1 +1,267 @@
-{}
+{
+  "status": {
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "noun": {
+    "channel_one": "channel",
+    "channel_other": "channels",
+    "source_one": "source",
+    "source_other": "sources"
+  },
+  "routing": {
+    "unavailable": "Notification routing is unavailable in skeleton mode.",
+    "note": "Channels are where alerts go; rules pick which alerts (by severity) reach which channels.",
+    "channels": {
+      "title": "Notification channels",
+      "add": "+ Add channel",
+      "cols": {
+        "name": "Name",
+        "kind": "Kind",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "empty": "No channels yet",
+      "emptySub": "Add a webhook or email destination.",
+      "enable": "Enable channel",
+      "disable": "Disable channel",
+      "delete": "Delete channel",
+      "deleteBody": "Delete channel <strong>{{name}}</strong>? Rules that target it will no longer reach this destination."
+    },
+    "rules": {
+      "title": "Routing rules",
+      "add": "+ Add rule",
+      "cols": {
+        "name": "Name",
+        "severity": "Severity",
+        "channels": "Channels",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "empty": "No routing rules",
+      "emptySub": "Without a rule, alerts only use the env default route.",
+      "any": "any",
+      "noChannels": "(no channels)",
+      "enable": "Enable rule",
+      "disable": "Disable rule",
+      "delete": "Delete rule",
+      "deleteTitle": "Delete routing rule",
+      "deleteBody": "Delete rule <strong>{{name}}</strong>? Matching alerts will fall back to the env default route."
+    },
+    "channelModal": {
+      "title": "Add notification channel",
+      "name": "Name",
+      "kind": "Kind",
+      "add": "Add channel",
+      "webhookUrl": "Webhook URL",
+      "webhookSealed": "The URL is sealed server-side and never returned.",
+      "smtpHost": "SMTP host",
+      "from": "From",
+      "to": "To",
+      "routingKey": "Integration routing key",
+      "routingKeyHint": "Events API v2 key — sealed server-side and never returned. Fires trigger/resolve correlated by a stable dedup key.",
+      "region": "Region",
+      "regionUs": "US (events.pagerduty.com)",
+      "regionEu": "EU (events.eu.pagerduty.com)",
+      "apiUrl": "API URL",
+      "jsmUrlHint": "JSM Alerts / Opsgenie integration base (api.atlassian.com or api.opsgenie.com).",
+      "apiKey": "API key (GenieKey)",
+      "sealed": "Sealed server-side and never returned."
+    },
+    "ruleModal": {
+      "title": "Add routing rule",
+      "name": "Name",
+      "severity": "Severity",
+      "anySeverity": "any severity",
+      "channels": "Channels",
+      "add": "Add rule"
+    },
+    "err": {
+      "update": "failed to update",
+      "addChannel": "failed to add channel",
+      "addRule": "failed to add rule",
+      "delete": "failed to delete"
+    }
+  },
+  "thresholds": {
+    "note": "Hierarchical overrides: profile → group → node. The most specific scope wins.",
+    "explainer": "ICMP liveness (node up/down) alerts automatically — no rule needed. Rules here add metric thresholds on top: each is evaluated live on every matching poll sample, with the most-specific scope winning. Warning/critical bounds and a dwell (consecutive samples before it commits, anti-flap) are per rule.",
+    "unavailable": "Threshold management is unavailable in skeleton mode.",
+    "add": "+ Add rule",
+    "cols": {
+      "scope": "Scope",
+      "metric": "Metric",
+      "direction": "Direction",
+      "bounds": "Bounds",
+      "dwell": "Dwell",
+      "actions": "Actions"
+    },
+    "empty": "No threshold rules yet",
+    "emptySub": "Add a metric threshold scoped to a profile, group, or node.",
+    "warnShort": "W",
+    "critShort": "C",
+    "dwellValue": "dwell {{n}}",
+    "delete": "Delete",
+    "scopeLevel": {
+      "profile": "profile",
+      "group": "group",
+      "node": "node"
+    },
+    "direction": {
+      "above": "above",
+      "below": "below"
+    },
+    "addModal": {
+      "title": "Add threshold rule",
+      "scopeLevel": "Scope level",
+      "scopeId": "Scope id",
+      "scopeIdPlaceholder": {
+        "profile": "profile id",
+        "group": "group tag value",
+        "node": "node id"
+      },
+      "scopeIdNoun": {
+        "profile": "device-profile id",
+        "group": "group tag value (e.g. a site name)",
+        "node": "node id"
+      },
+      "scopeIdHint": "The {{noun}} this rule targets.",
+      "metric": "Metric",
+      "metricPlaceholder": "metric (e.g. icmp_rtt_ms)",
+      "direction": "Direction",
+      "boundsDwell": "Bounds & dwell",
+      "warnPlaceholder": "warn",
+      "critPlaceholder": "crit",
+      "dwellPlaceholder": "dwell",
+      "dwellTitle": "Dwell: consecutive readings that must breach before the alert fires",
+      "boundsHint": "Warn / crit / dwell are optional. Dwell is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
+      "add": "Add rule"
+    },
+    "deleteModal": {
+      "title": "Delete threshold rule",
+      "body": "Delete the <strong>{{level}}</strong> rule on <mono>{{metric}}</mono> for <mono>{{scope}}</mono>? This cannot be undone."
+    },
+    "err": {
+      "add": "failed to add",
+      "delete": "failed to delete"
+    }
+  },
+  "eventRules": {
+    "note": "Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting.",
+    "unavailable": "Event rules are unavailable in this mode (no metadata store).",
+    "searchPlaceholder": "Search name, pattern, severity…",
+    "searchAria": "Search event rules",
+    "add": "+ Add rule",
+    "cols": {
+      "name": "Name",
+      "severity": "Severity",
+      "pattern": "Pattern",
+      "scope": "Scope",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "empty": "No event rules",
+    "emptyMatch": "No rules match",
+    "emptySub": "Add a rule to turn matching events into alerts.",
+    "emptyMatchSub": "Try a different search.",
+    "any": "any",
+    "clear": "clear",
+    "matchKind": {
+      "substring": "substring",
+      "regex": "regex"
+    },
+    "enable": "Enable rule",
+    "disable": "Disable rule",
+    "edit": "Edit rule",
+    "delete": "Delete rule",
+    "modal": {
+      "addTitle": "Add event rule",
+      "editTitle": "Edit event rule",
+      "name": "Name",
+      "matchKind": "Match kind",
+      "severity": "Severity",
+      "severityInfo": "{{label}} — record only",
+      "pattern": "Pattern",
+      "patternHint": "Matching is case-sensitive; use (?i) in a regex for case-insensitive.",
+      "clearPattern": "Clear pattern",
+      "clearPatternHint": "Optional — a message matching this resolves the alert (e.g. link-up clears link-down).",
+      "sourceKind": "Source kind",
+      "webhookSource": "Webhook source",
+      "autoClose": "Auto-close (s)",
+      "fireAfter": "Fire after N",
+      "within": "within (s)",
+      "enabled": "Enabled",
+      "test": "Test against a sample",
+      "samplePlaceholder": "paste a sample event message…",
+      "testBtn": "Test",
+      "add": "Add rule"
+    },
+    "test": {
+      "error": "error: {{msg}}",
+      "clearMatched": "clear-pattern matched → would resolve",
+      "matched": "matched → would fire",
+      "noMatch": "no match",
+      "failed": "test failed"
+    },
+    "deleteModal": {
+      "title": "Delete event rule",
+      "body": "Delete rule <strong>{{name}}</strong>? Active alerts it raised will auto-close on their TTL; this only stops future matches."
+    },
+    "err": {
+      "update": "failed to update rule",
+      "save": "failed to save rule",
+      "delete": "failed to delete rule"
+    }
+  },
+  "eventSources": {
+    "note": "Webhook senders that POST events to Yagra. Each carries a bearer token, shown once at create/rotate; store it in the sender's config.",
+    "unavailable": "Event sources are unavailable in this mode (no metadata store).",
+    "searchPlaceholder": "Search sources…",
+    "searchAria": "Search event sources",
+    "add": "+ Add source",
+    "cols": {
+      "name": "Name",
+      "kind": "Kind",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "empty": "No event sources",
+    "emptyMatch": "No sources match",
+    "emptySub": "Add a webhook source to receive events over HTTP.",
+    "rotate": "Rotate token",
+    "enable": "Enable source",
+    "disable": "Disable source",
+    "edit": "Edit source",
+    "delete": "Delete source",
+    "addModal": {
+      "title": "Add webhook source",
+      "name": "Name",
+      "namePlaceholder": "e.g. Grafana alerts",
+      "hint": "A bearer token is generated and shown once after create.",
+      "create": "Create"
+    },
+    "editModal": {
+      "title": "Edit webhook source",
+      "name": "Name"
+    },
+    "deleteModal": {
+      "title": "Delete webhook source",
+      "body": "Delete source <strong>{{name}}</strong>? Its token stops working immediately and rules scoped to it are removed."
+    },
+    "token": {
+      "title": "Webhook token — shown once",
+      "sendAs": "Copy this token now — it is stored only as a hash and cannot be shown again. Send it as",
+      "label": "Token",
+      "url": "Ingest URL",
+      "copy": "Copy",
+      "done": "Done"
+    },
+    "err": {
+      "update": "failed to update source",
+      "rotate": "failed to rotate token",
+      "add": "failed to add source",
+      "save": "failed to save source",
+      "delete": "failed to delete source"
+    }
+  }
+}

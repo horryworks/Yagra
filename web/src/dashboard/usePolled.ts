@@ -4,6 +4,7 @@
 // unmount/dep-change so a slow response can't write into a torn-down widget.
 
 import { useEffect, useState } from 'react';
+import i18n from '../i18n';
 import { ApiError } from '../services/api';
 
 export interface Polled<T> {
@@ -41,7 +42,7 @@ export function usePolled<T>(
             setState((s) => ({
               ...s,
               loading: false,
-              error: e instanceof ApiError ? e.message : 'request failed',
+              error: e instanceof ApiError ? e.message : i18n.t('dashboard:err.requestFailed'),
             }));
           }
         });

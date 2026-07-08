@@ -9,6 +9,7 @@
 // destructive-consent via the shared Modal.
 
 import { useCallback, useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { PollerInfo, PoolSummary } from '../types/api';
@@ -41,27 +42,28 @@ const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.mess
 /** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
  *  the pool has nodes but no live poller (icon + text, never color alone — a11y). */
 function PoolCard({ pool }: { pool: PoolSummary }) {
+  const { t } = useTranslation('system');
   const warn = poolHasWarning(pool);
   return (
     <div className={`pool-card${warn ? ' has-warn' : ''}`}>
       <div className="pool-card-head">
         <span className="pool-card-name mono">{pool.pool}</span>
-        <Badge tone={pool.mode === 'working_set' ? 'up' : 'neutral'}>{poolModeLabel(pool.mode)}</Badge>
+        <Badge tone={pool.mode === 'working_set' ? 'up' : 'neutral'}>{poolModeLabel(pool.mode, t)}</Badge>
       </div>
       <div className="pool-card-stats">
         <span>
-          <strong>{formatCount(pool.nodes)}</strong> {pool.nodes === 1 ? 'node' : 'nodes'}
+          <strong>{formatCount(pool.nodes)}</strong> {t('common:noun.node', { count: pool.nodes })}
         </span>
         <span className="pool-card-sep">·</span>
         <span>
-          <strong>{formatCount(pool.live_pollers)}</strong> live{' '}
-          {pool.live_pollers === 1 ? 'poller' : 'pollers'}
+          <strong>{formatCount(pool.live_pollers)}</strong>{' '}
+          {t('pollers.pool.livePoller', { count: pool.live_pollers })}
         </span>
       </div>
       {warn && (
         <span className="pool-warn">
           <WarningIcon />
-          No live poller
+          {t('pollers.noLivePoller')}
         </span>
       )}
     </div>
@@ -79,6 +81,7 @@ function DeletePollerModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('system');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -89,29 +92,33 @@ function DeletePollerModal({
       .deletePoller(poller.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to remove poller'));
+        setError(errMsg(e, t('pollers.err.remove')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Remove poller"
+      title={t('pollers.remove.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Remove poller
+            {t('pollers.remove.title')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Remove poller <strong className="mono">{poller.id}</strong> from the inventory? If it
-        reconnects it will re-register automatically.
+        <Trans
+          t={t}
+          i18nKey="pollers.remove.confirmText"
+          values={{ id: poller.id }}
+          components={{ code: <strong className="mono" /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -121,6 +128,7 @@ function DeletePollerModal({
 /** Client-side helper: collect id/pool/bus URL and render the ready-to-paste config for a remote
  *  poller container. No API call — it only produces the `docker-compose.poller.yml` `.env`. */
 function RegisterPollerModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation('system');
   const [id, setId] = useState('');
   const [pool, setPool] = useState('');
   const [busUrl, setBusUrl] = useState('');
@@ -143,22 +151,24 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Register a poller"
+      title={t('pollers.register.title')}
       onClose={onClose}
       footer={
         <Button variant="primary" onClick={onClose}>
-          Done
+          {t('pollers.register.done')}
         </Button>
       }
     >
       <p className="modal-confirm-text">
-        Run a poller container at the remote site; it connects outbound to the central NATS bus. Fill
-        in its identity below, then drop the generated <span className="mono">.env</span> next to{' '}
-        <span className="mono">docker-compose.poller.yml</span> and bring it up.
+        <Trans
+          t={t}
+          i18nKey="pollers.register.intro"
+          components={{ env: <span className="mono" />, file: <span className="mono" /> }}
+        />
       </p>
 
       <div className="modal-field">
-        <label className="modal-field-label">Poller ID</label>
+        <label className="modal-field-label">{t('pollers.register.fields.id.label')}</label>
         <TextInput
           value={id}
           onChange={(e) => setId(e.target.value)}
@@ -166,62 +176,58 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
           autoFocus
         />
         <FieldHint error={idBad}>
-          {idBad ? 'Use letters, digits, dash or underscore only.' : 'Stable, unique per poller.'}
+          {idBad ? t('pollers.register.invalidToken') : t('pollers.register.fields.id.hint')}
         </FieldHint>
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">Pool</label>
+        <label className="modal-field-label">{t('pollers.register.fields.pool.label')}</label>
         <TextInput value={pool} onChange={(e) => setPool(e.target.value)} placeholder="tokyo" />
         <FieldHint error={poolBad}>
-          {poolBad
-            ? 'Use letters, digits, dash or underscore only.'
-            : 'Nodes assigned to this pool are polled here.'}
+          {poolBad ? t('pollers.register.invalidToken') : t('pollers.register.fields.pool.hint')}
         </FieldHint>
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">Bus URL</label>
+        <label className="modal-field-label">{t('pollers.register.fields.busUrl.label')}</label>
         <TextInput
           value={busUrl}
           onChange={(e) => setBusUrl(e.target.value)}
           placeholder="tls://poller:<password>@yagra.example.com:4222"
         />
-        <FieldHint>Include the poller credentials; a TLS URL is required off-site.</FieldHint>
+        <FieldHint>{t('pollers.register.fields.busUrl.hint')}</FieldHint>
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">CA file path (optional)</label>
+        <label className="modal-field-label">{t('pollers.register.fields.caFile.label')}</label>
         <TextInput
           value={caFile}
           onChange={(e) => setCaFile(e.target.value)}
           placeholder="/certs/ca.pem"
         />
-        <FieldHint>Only when the bus cert is signed by a private CA.</FieldHint>
+        <FieldHint>{t('pollers.register.fields.caFile.hint')}</FieldHint>
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">.env for docker-compose.poller.yml</label>
+        <label className="modal-field-label">{t('pollers.register.fields.env.label')}</label>
         {ready ? (
           <div className="poller-copyrow">
             <pre className="poller-snippet mono">{env}</pre>
             <Button variant="outline" onClick={() => copy(env, 'env')}>
-              {copied === 'env' ? 'Copied' : 'Copy'}
+              {copied === 'env' ? t('common:copy.copied') : t('pollers.register.copy')}
             </Button>
           </div>
         ) : (
-          <p className="muted poller-snippet-empty">
-            Enter a valid ID, pool and bus URL to generate the snippet.
-          </p>
+          <p className="muted poller-snippet-empty">{t('pollers.register.snippetEmpty')}</p>
         )}
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">Bring it up</label>
+        <label className="modal-field-label">{t('pollers.register.fields.bringUp.label')}</label>
         <div className="poller-copyrow">
           <code className="poller-snippet mono">{POLLER_UP_COMMAND}</code>
           <Button variant="outline" onClick={() => copy(POLLER_UP_COMMAND, 'cmd')}>
-            {copied === 'cmd' ? 'Copied' : 'Copy'}
+            {copied === 'cmd' ? t('common:copy.copied') : t('pollers.register.copy')}
           </Button>
         </div>
       </div>
@@ -230,6 +236,7 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
 }
 
 export function PollersPage() {
+  const { t } = useTranslation('system');
   const authed = useAuthStore((s) => s.authed);
   const [pollers, setPollers] = useState<PollerInfo[]>([]);
   const [pools, setPools] = useState<PoolSummary[]>([]);
@@ -263,14 +270,14 @@ export function PollersPage() {
   return (
     <div>
       <PageHeader
-        title="Pollers"
-        trail={[{ label: 'Settings' }, { label: 'Pollers' }]}
-        note="The distributed poller fleet. Each pool's nodes are polled by the pollers registered to it; a pool with no live poller goes unmonitored."
+        title={t('nav:settings.pollers')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.pollers') }]}
+        note={t('pollers.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">Poller management is unavailable in skeleton mode.</p>
+          <p className="muted">{t('pollers.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -284,10 +291,13 @@ export function PollersPage() {
 
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={pollers.length} noun="pollers" />
+            <ResultCount
+              shown={pollers.length}
+              noun={t('common:noun.poller', { count: pollers.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setRegistering(true)}>
-                Register poller
+                {t('pollers.registerButton')}
               </Button>
             )}
           </TableToolbar>
@@ -295,26 +305,31 @@ export function PollersPage() {
           <div className="ytable">
             <div className="ytable-scroll">
               <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">Poller</div>
-                <div className="ytable-h">Pool</div>
-                <div className="ytable-h">Status</div>
-                <div className="ytable-h">Version</div>
-                <div className="ytable-h">Working set</div>
-                <div className="ytable-h right">Results</div>
-                <div className="ytable-h right">CPU</div>
-                <div className="ytable-h right">Mem</div>
-                <div className="ytable-h right">Disk</div>
-                <div className="ytable-h">Last seen</div>
-                <div className="ytable-h right">Actions</div>
+                <div className="ytable-h">{t('pollers.cols.poller')}</div>
+                <div className="ytable-h">{t('pollers.cols.pool')}</div>
+                <div className="ytable-h">{t('pollers.cols.status')}</div>
+                <div className="ytable-h">{t('pollers.cols.version')}</div>
+                <div className="ytable-h">{t('pollers.cols.workingSet')}</div>
+                <div className="ytable-h right">{t('pollers.cols.results')}</div>
+                <div className="ytable-h right">{t('pollers.cols.cpu')}</div>
+                <div className="ytable-h right">{t('pollers.cols.mem')}</div>
+                <div className="ytable-h right">{t('pollers.cols.disk')}</div>
+                <div className="ytable-h">{t('pollers.cols.lastSeen')}</div>
+                <div className="ytable-h right">{t('pollers.cols.actions')}</div>
               </div>
 
               {pollers.length === 0 ? (
                 <div className="yt-empty">
-                  <p className="yt-empty-title">{loading ? 'Loading…' : 'No pollers yet'}</p>
+                  <p className="yt-empty-title">
+                    {loading ? t('common:loading') : t('pollers.empty.title')}
+                  </p>
                   {!loading && (
                     <p className="yt-empty-sub">
-                      Pollers appear here once they connect to the bus and send a heartbeat. Use{' '}
-                      <strong>Register poller</strong> for the remote-site setup snippet.
+                      <Trans
+                        t={t}
+                        i18nKey="pollers.empty.sub"
+                        components={{ b: <strong /> }}
+                      />
                     </p>
                   )}
                 </div>
@@ -330,22 +345,26 @@ export function PollersPage() {
                       <div className="ytable-cell">
                         <span className={`poller-status ${online ? 'online' : 'offline'}`}>
                           <span className="poller-status-dot" />
-                          {online ? 'Online' : 'Offline'}
+                          {online ? t('pollers.status.online') : t('pollers.status.offline')}
                         </span>
                       </div>
                       <div className="ytable-cell mono">{p.version ?? '—'}</div>
                       <div className="ytable-cell">
-                        {workingSetLabel(p.working_set_nodes, p.working_set_specs, online)}
+                        {workingSetLabel(p.working_set_nodes, p.working_set_specs, online, t)}
                       </div>
                       <div className="ytable-cell right mono">{formatCount(p.results_total)}</div>
                       <div className="ytable-cell right mono">{formatUtil(p.cpu_pct)}</div>
                       <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct)}</div>
                       <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct)}</div>
-                      <div className="ytable-cell">{lastSeenLabel(p.last_seen, online)}</div>
+                      <div className="ytable-cell">{lastSeenLabel(p.last_seen, online, t)}</div>
                       <div className="ytable-cell right">
                         {authed && !online && (
                           <span className="ytable-actions">
-                            <IconButton title="Remove poller" danger onClick={() => setDeleting(p)}>
+                            <IconButton
+                              title={t('pollers.remove.title')}
+                              danger
+                              onClick={() => setDeleting(p)}
+                            >
                               <TrashIcon />
                             </IconButton>
                           </span>

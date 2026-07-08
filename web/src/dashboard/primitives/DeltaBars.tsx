@@ -2,6 +2,7 @@
 // magnitude and the value reads with a ▲/▼ and sign. Powers traffic spikes/drops. The fill is a
 // series color (a delta direction is not a node status), passed in by the widget.
 
+import { useTranslation } from 'react-i18next';
 import './DeltaBars.css';
 
 export interface DeltaRow {
@@ -19,8 +20,9 @@ interface Props {
   empty?: string;
 }
 
-export function DeltaBars({ rows, color = 'var(--series-4)', empty = 'No change yet…' }: Props) {
-  if (rows.length === 0) return <p className="muted">{empty}</p>;
+export function DeltaBars({ rows, color = 'var(--series-4)', empty }: Props) {
+  const { t } = useTranslation('dashboard');
+  if (rows.length === 0) return <p className="muted">{empty ?? t('primitives.deltaBars.empty')}</p>;
   const peak = Math.max(...rows.map((r) => Math.abs(r.value)), 0);
   return (
     <ul className="deltabars">

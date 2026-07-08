@@ -6,6 +6,7 @@
 // (every node is present), so no raw UUIDs are shown.
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
@@ -32,6 +33,7 @@ function StatusTag({ state }: { state: NodeState }) {
 }
 
 export function DependencyPage() {
+  const { t } = useTranslation('topology');
   const authed = useAuthStore((s) => s.authed);
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -63,7 +65,7 @@ export function DependencyPage() {
     () => [
       {
         key: 'node',
-        header: 'Node',
+        header: t('dependency.cols.node'),
         width: '1.4fr',
         render: (r) => (
           <span className="dep-name" title={r.id}>
@@ -73,7 +75,7 @@ export function DependencyPage() {
       },
       {
         key: 'upstream',
-        header: 'Depends on',
+        header: t('dependency.cols.upstream'),
         width: '1.4fr',
         render: (r) =>
           r.parent_id ? (
@@ -82,10 +84,10 @@ export function DependencyPage() {
             <span className="dep-none">—</span>
           ),
       },
-      { key: 'status', header: 'Status', width: '140px', render: (r) => <StatusTag state={r.state} /> },
+      { key: 'status', header: t('dependency.cols.status'), width: '140px', render: (r) => <StatusTag state={r.state} /> },
       {
         key: 'root',
-        header: 'Root cause',
+        header: t('dependency.cols.root'),
         width: '1.4fr',
         render: (r) =>
           r.root_cause ? (
@@ -96,7 +98,7 @@ export function DependencyPage() {
       },
       {
         key: 'actions',
-        header: 'Actions',
+        header: t('dependency.cols.actions'),
         width: '110px',
         align: 'right',
         render: (r) =>
@@ -108,20 +110,20 @@ export function DependencyPage() {
                 setEditing(r);
               }}
             >
-              Edit
+              {t('common:actions.edit')}
             </Button>
           ) : null,
       },
     ],
-    [authed, nameOf],
+    [authed, nameOf, t],
   );
 
   return (
     <div className="page-fill">
       <PageHeader
-        title="Dependencies"
-        trail={[{ label: 'Topology' }, { label: 'Dependencies' }]}
-        note="Manage the dependency graph: each node's upstream drives parent-down alert suppression and root-cause roll-up. The Network map visualizes the same edges."
+        title={t('nav:topology.dependency')}
+        trail={[{ label: t('nav:sections.topology') }, { label: t('nav:topology.dependency') }]}
+        note={t('dependency.note')}
       />
 
       {error ? (
@@ -134,20 +136,20 @@ export function DependencyPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search nodes by name…"
-              ariaLabel="Search nodes"
+              placeholder={t('dependency.searchPlaceholder')}
+              ariaLabel={t('dependency.searchAria')}
             />
             <Select
               value={filter}
               onChange={(e) => setFilter(e.target.value as typeof filter)}
-              aria-label="Filter dependencies"
+              aria-label={t('dependency.filterAria')}
             >
-              <option value="all">All nodes</option>
-              <option value="upstream">With upstream</option>
-              <option value="suppressed">Currently suppressed</option>
+              <option value="all">{t('dependency.filter.all')}</option>
+              <option value="upstream">{t('dependency.filter.upstream')}</option>
+              <option value="suppressed">{t('dependency.filter.suppressed')}</option>
             </Select>
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="nodes" />
+            <ResultCount shown={rows.length} noun={t('common:noun.node', { count: rows.length })} />
           </TableToolbar>
 
           <DataTable
@@ -158,8 +160,8 @@ export function DependencyPage() {
             loading={loading}
             empty={
               nodes.length === 0
-                ? 'No nodes in the inventory yet.'
-                : 'No matching nodes — adjust the search or filter.'
+                ? t('dependency.emptyInventory')
+                : t('dependency.emptyFiltered')
             }
           />
         </>

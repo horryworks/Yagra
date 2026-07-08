@@ -5,31 +5,15 @@
 // View → link to the report for tools that have one). The created row appears in Analysis runs
 // and progresses over SSE.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { Segmented } from './Segmented';
 import { ScopePicker } from './ScopePicker';
-import { ALL_SCOPE, type ScopeValue } from './scope';
+import { allScope, type ScopeValue } from './scope';
 import { METHODS, toolById, type Tool } from './data';
 import { useTroubleshootStore } from './store';
 import type { AnalysisJobInput } from '../types/api';
-
-const WINDOWS = [
-  { value: '86400', label: '24 h' },
-  { value: '604800', label: '7 d' },
-  { value: '2592000', label: '30 d' },
-  { value: '7776000', label: '90 d' },
-];
-const DEPTHS = [
-  { value: 'quick', label: 'Quick' },
-  { value: 'standard', label: 'Standard' },
-  { value: 'exhaustive', label: 'Exhaustive' },
-];
-const NOTIFY = [
-  { value: 'notify', label: 'Notify me' },
-  { value: 'silent', label: 'Run silently' },
-];
-const SENS_LABELS = ['very loose', 'loose', 'balanced', 'strict', 'very strict'];
 
 /** Map the 1–5 sensitivity slider to a σ threshold (looser = higher σ = fewer flags). */
 function sigmaFor(slider: number): number {
@@ -39,14 +23,50 @@ function sigmaFor(slider: number): number {
 const BASELINE_SECS = 14 * 86_400;
 
 export function LaunchDrawer() {
+  const { t } = useTranslation('troubleshoot');
   const openToolId = useTroubleshootStore((s) => s.openToolId);
   const closeDrawer = useTroubleshootStore((s) => s.closeDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
 
+  const WINDOWS = useMemo(
+    () => [
+      { value: '86400', label: t('launch.windows.h24') },
+      { value: '604800', label: t('launch.windows.d7') },
+      { value: '2592000', label: t('launch.windows.d30') },
+      { value: '7776000', label: t('launch.windows.d90') },
+    ],
+    [t],
+  );
+  const DEPTHS = useMemo(
+    () => [
+      { value: 'quick', label: t('launch.depths.quick') },
+      { value: 'standard', label: t('launch.depths.standard') },
+      { value: 'exhaustive', label: t('launch.depths.exhaustive') },
+    ],
+    [t],
+  );
+  const NOTIFY = useMemo(
+    () => [
+      { value: 'notify', label: t('launch.notify.notify') },
+      { value: 'silent', label: t('launch.notify.silent') },
+    ],
+    [t],
+  );
+  const SENS_LABELS = useMemo(
+    () => [
+      t('launch.sens.veryLoose'),
+      t('launch.sens.loose'),
+      t('launch.sens.balanced'),
+      t('launch.sens.strict'),
+      t('launch.sens.veryStrict'),
+    ],
+    [t],
+  );
+
   // Mirror the selected tool so its content survives the slide-out after openToolId clears.
   const [tool, setTool] = useState<Tool | null>(null);
-  const [scope, setScope] = useState<ScopeValue>(ALL_SCOPE);
+  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
   const [windowVal, setWindowVal] = useState('604800');
   const [depth, setDepth] = useState('standard');
   const [sensitivity, setSensitivity] = useState(3);
@@ -59,17 +79,17 @@ export function LaunchDrawer() {
 
   useEffect(() => {
     if (openToolId) {
-      const t = toolById(openToolId);
-      if (t) {
-        setTool(t);
-        setScope(ALL_SCOPE);
+      const picked = toolById(openToolId);
+      if (picked) {
+        setTool(picked);
+        setScope(allScope(t));
         setWindowVal('604800');
         setDepth('standard');
         setSensitivity(3);
         setNotify('notify');
       }
     }
-  }, [openToolId]);
+  }, [openToolId, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,11 +122,11 @@ export function LaunchDrawer() {
       const job = await createJob(input);
       closeDrawer();
       showToast(
-        `${tool.name} started — running in background.`,
+        t('launch.toast.started', { name: t(tool.name) }),
         tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
       );
     } catch {
-      showToast('Could not start the analysis.');
+      showToast(t('toast.startFailed'));
     } finally {
       setSubmitting(false);
     }
@@ -119,19 +139,19 @@ export function LaunchDrawer() {
         className={open ? 'ts-drawer open' : 'ts-drawer'}
         aria-hidden={!open}
         role="dialog"
-        aria-label={tool ? `Configure ${tool.name}` : 'Configure analysis'}
+        aria-label={tool ? t('launch.aria.configureTool', { name: t(tool.name) }) : t('launch.aria.configure')}
       >
         {tool && (
           <>
             <div className="ts-drawer-head">
               <div className="ts-drawer-mono">{tool.mono}</div>
               <div>
-                <div className="ts-drawer-title">{tool.name}</div>
+                <div className="ts-drawer-title">{t(tool.name)}</div>
                 <div className="ts-drawer-sub">
-                  {METHODS[tool.method].label} · configure &amp; run
+                  {t('launch.sub', { method: t(METHODS[tool.method].label) })}
                 </div>
               </div>
-              <button className="ts-drawer-x" onClick={closeDrawer} aria-label="Close">
+              <button className="ts-drawer-x" onClick={closeDrawer} aria-label={t('common:actions.close')}>
                 ×
               </button>
             </div>
@@ -139,7 +159,7 @@ export function LaunchDrawer() {
             <div className="ts-drawer-body">
               <div className="ts-fgroup">
                 <label className="ts-flabel" htmlFor="ts-drawer-scope">
-                  Scope
+                  {t('fields.scope')}
                 </label>
                 <ScopePicker
                   id="ts-drawer-scope"
@@ -147,31 +167,29 @@ export function LaunchDrawer() {
                   value={scope}
                   onChange={setScope}
                 />
-                <span className="ts-fhint">{tool.scope}</span>
+                <span className="ts-fhint">{t(tool.scope)}</span>
               </div>
 
               <div className="ts-fgroup">
-                <span className="ts-flabel">Time window</span>
+                <span className="ts-flabel">{t('fields.timeWindow')}</span>
                 <Segmented
                   options={WINDOWS}
                   value={windowVal}
                   onChange={setWindowVal}
-                  ariaLabel="Time window"
+                  ariaLabel={t('fields.timeWindow')}
                 />
               </div>
 
               <div className="ts-fgroup">
-                <span className="ts-flabel">Depth</span>
-                <Segmented options={DEPTHS} value={depth} onChange={setDepth} ariaLabel="Depth" />
-                <span className="ts-fhint">
-                  Exhaustive scans more nodes and series — slower, more thorough.
-                </span>
+                <span className="ts-flabel">{t('fields.depth')}</span>
+                <Segmented options={DEPTHS} value={depth} onChange={setDepth} ariaLabel={t('fields.depth')} />
+                <span className="ts-fhint">{t('launch.depthHint')}</span>
               </div>
 
               {showSensitivity && (
                 <div className="ts-fgroup">
                   <label className="ts-flabel" htmlFor="ts-drawer-sens">
-                    Sensitivity
+                    {t('fields.sensitivity')}
                   </label>
                   <div className="ts-slider-row">
                     <input
@@ -189,21 +207,21 @@ export function LaunchDrawer() {
               )}
 
               <div className="ts-fgroup">
-                <span className="ts-flabel">When done</span>
+                <span className="ts-flabel">{t('fields.whenDone')}</span>
                 <Segmented
                   options={NOTIFY}
                   value={notify}
                   onChange={setNotify}
-                  ariaLabel="When done"
+                  ariaLabel={t('fields.whenDone')}
                 />
               </div>
             </div>
 
             <div className="ts-drawer-foot">
-              <span className="ts-est">est. {tool.est}</span>
-              <Button onClick={closeDrawer}>Cancel</Button>
+              <span className="ts-est">{t('launch.est', { est: t(tool.est) })}</span>
+              <Button onClick={closeDrawer}>{t('common:actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void submit()} disabled={submitting}>
-                {submitting ? 'Starting…' : 'Run analysis'}
+                {submitting ? t('actions.starting') : t('actions.runAnalysis')}
               </Button>
             </div>
           </>

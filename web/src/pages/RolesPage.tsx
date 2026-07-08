@@ -7,6 +7,8 @@
 // note. When custom roles land, the same matrix renders them with `builtin: false`.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import type { RoleMatrix } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -14,6 +16,7 @@ import { Card } from '../components/ui/Card';
 import './RolesPage.css';
 
 export function RolesPage() {
+  const { t } = useTranslation('access');
   const [matrix, setMatrix] = useState<RoleMatrix | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,16 +25,16 @@ export function RolesPage() {
       .listRoles()
       .then(setMatrix)
       .catch((e: unknown) =>
-        setError(e instanceof ApiError ? e.message : 'failed to load roles'),
+        setError(e instanceof ApiError ? e.message : t('roles.err.load')),
       );
-  }, []);
+  }, [t]);
 
   return (
     <div>
       <PageHeader
-        title="Roles & privileges"
-        trail={[{ label: 'Settings' }, { label: 'Roles & privileges' }]}
-        note="What each role can do. The matrix is derived from the privileges the API enforces."
+        title={t('nav:settings.roles')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.roles') }]}
+        note={t('roles.note')}
       />
 
       {error && (
@@ -42,25 +45,25 @@ export function RolesPage() {
 
       {matrix && (
         <>
-          <Card title="Roles">
+          <Card title={t('roles.section.roles')}>
             <div className="roles-list">
               {matrix.roles.map((r) => (
                 <div className="roles-role" key={r.key}>
                   <span className="roles-role-name">{r.label}</span>
                   <span className="roles-role-key mono">{r.key}</span>
-                  {r.builtin && <span className="roles-builtin">built-in</span>}
+                  {r.builtin && <span className="roles-builtin">{t('roles.builtin')}</span>}
                   <span className="muted roles-role-desc">{r.description}</span>
                 </div>
               ))}
             </div>
           </Card>
 
-          <Card title="Privilege matrix" className="roles-matrix-card">
+          <Card title={t('roles.matrixTitle')} className="roles-matrix-card">
             <div
               className="roles-matrix"
               style={{ gridTemplateColumns: `minmax(220px, 2fr) repeat(${matrix.roles.length}, 1fr)` }}
             >
-              <div className="roles-h roles-h-perm">Privilege</div>
+              <div className="roles-h roles-h-perm">{t('roles.privilege')}</div>
               {matrix.roles.map((r) => (
                 <div className="roles-h roles-h-role" key={r.key}>
                   {r.label}
@@ -68,13 +71,17 @@ export function RolesPage() {
               ))}
 
               {matrix.permissions.map((p) => (
-                <RowFragment key={p.key} permKey={p.key} label={p.label} description={p.description} roles={matrix.roles} />
+                <RowFragment
+                  key={p.key}
+                  permKey={p.key}
+                  label={p.label}
+                  description={p.description}
+                  roles={matrix.roles}
+                  t={t}
+                />
               ))}
             </div>
-            <p className="muted roles-note">
-              Built-in roles are fixed. Custom roles (operator-defined privilege sets) are planned
-              — they will appear here as additional columns once configurable.
-            </p>
+            <p className="muted roles-note">{t('roles.customNote')}</p>
           </Card>
         </>
       )}
@@ -89,11 +96,13 @@ function RowFragment({
   label,
   description,
   roles,
+  t,
 }: {
   permKey: string;
   label: string;
   description: string;
   roles: RoleMatrix['roles'];
+  t: TFunction;
 }) {
   return (
     <>
@@ -106,12 +115,18 @@ function RowFragment({
         return (
           <div className="roles-cell roles-cell-mark" key={r.key}>
             {granted ? (
-              <span className="roles-granted" title={`${r.label} can ${label.toLowerCase()}`}>
-                ✓<span className="roles-sr"> granted</span>
+              <span
+                className="roles-granted"
+                title={t('roles.granted.title', { role: r.label, privilege: label.toLowerCase() })}
+              >
+                ✓<span className="roles-sr">{' '}{t('roles.sr.granted')}</span>
               </span>
             ) : (
-              <span className="roles-denied" title={`${r.label} cannot ${label.toLowerCase()}`}>
-                —<span className="roles-sr"> not granted</span>
+              <span
+                className="roles-denied"
+                title={t('roles.denied.title', { role: r.label, privilege: label.toLowerCase() })}
+              >
+                —<span className="roles-sr">{' '}{t('roles.sr.notGranted')}</span>
               </span>
             )}
           </div>

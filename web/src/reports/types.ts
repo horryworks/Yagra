@@ -1,6 +1,7 @@
 // Frontend helpers for the report document (spec). The backend stores `spec` opaquely and the
 // WebUI owns the shape (same contract as the dashboard layout) — these helpers build/sanitize it.
 
+import type { TFunction } from 'i18next';
 import type {
   ReportFrequency,
   ReportSchedule,
@@ -9,12 +10,13 @@ import type {
   ReportSpec,
 } from '../types/api';
 
-/** Time-range presets for a report window. */
-export const RANGE_OPTIONS: { label: string; secs: number }[] = [
-  { label: 'Last 24 hours', secs: 24 * 3600 },
-  { label: 'Last 7 days', secs: 7 * 86400 },
-  { label: 'Last 30 days', secs: 30 * 86400 },
-  { label: 'Last 90 days', secs: 90 * 86400 },
+/** Time-range presets for a report window. `labelKey` resolves in the reports namespace (this is a
+ *  non-component module, so it stores i18n keys instead of resolving them at module load). */
+export const RANGE_OPTIONS: { labelKey: string; secs: number }[] = [
+  { labelKey: 'reports:builder.range.h24', secs: 24 * 3600 },
+  { labelKey: 'reports:builder.range.d7', secs: 7 * 86400 },
+  { labelKey: 'reports:builder.range.d30', secs: 30 * 86400 },
+  { labelKey: 'reports:builder.range.d90', secs: 90 * 86400 },
 ];
 
 /** Default report window (7 days) — mirrors the backend default. */
@@ -69,33 +71,42 @@ export function sectionTitle(defs: ReportSectionDef[], kind: string): string {
   return defs.find((d) => d.kind === kind)?.title ?? kind;
 }
 
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-/** Weekday name for 0=Sun..6=Sat (clamped). */
-export function weekdayName(dow: number): string {
-  return WEEKDAYS[Math.max(0, Math.min(6, dow))] ?? 'Sunday';
+/** Weekday name for 0=Sun..6=Sat (clamped). `t` is threaded in (non-component module) so the label
+ *  re-resolves on language change. */
+export function weekdayName(t: TFunction, dow: number): string {
+  const key = WEEKDAY_KEYS[Math.max(0, Math.min(6, dow))] ?? 'sun';
+  return t(`reports:weekday.${key}`);
 }
 
-/** Human-readable cadence for a schedule (e.g. "Weekly · Monday 09:00 UTC"). */
-export function cadenceLabel(s: {
-  frequency: ReportFrequency;
-  day_of_week: number | null;
-  day_of_month: number | null;
-  at_hour: number;
-  at_minute: number;
-}): string {
+/** Human-readable cadence for a schedule (e.g. "Weekly · Monday 09:00 UTC"). Word order comes from
+ *  the translation so a language like Japanese can reorder it. */
+export function cadenceLabel(
+  t: TFunction,
+  s: {
+    frequency: ReportFrequency;
+    day_of_week: number | null;
+    day_of_month: number | null;
+    at_hour: number;
+    at_minute: number;
+  },
+): string {
   const time = `${String(s.at_hour).padStart(2, '0')}:${String(s.at_minute).padStart(2, '0')} UTC`;
   switch (s.frequency) {
     case 'weekly':
-      return `Weekly · ${weekdayName(s.day_of_week ?? 0)} ${time}`;
+      return t('reports:cadence.weekly', { day: weekdayName(t, s.day_of_week ?? 0), time });
     case 'monthly':
-      return `Monthly · day ${s.day_of_month ?? 1} ${time}`;
+      return t('reports:cadence.monthly', { day: s.day_of_month ?? 1, time });
     default:
-      return `Daily · ${time}`;
+      return t('reports:cadence.daily', { time });
   }
 }
 
-export const WEEKDAY_OPTIONS = WEEKDAYS.map((label, value) => ({ value, label }));
+export const WEEKDAY_OPTIONS = WEEKDAY_KEYS.map((key, value) => ({
+  value,
+  labelKey: `reports:weekday.${key}`,
+}));
 
 /** Whether a schedule is the cheapest "next run is soon" — for sorting display (unused stub kept
  *  small; the list is server-ordered by next_run_at). */

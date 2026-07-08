@@ -8,6 +8,7 @@
 // modal, delete via confirm modal. Each row expands to its metric editor.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate } from '../types/api';
@@ -27,6 +28,7 @@ const COLS = '1.6fr 1.6fr 130px 72px';
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function CollectionTemplatesPage() {
+  const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
   const [query, setQuery] = useState('');
@@ -57,24 +59,22 @@ export function CollectionTemplatesPage() {
     const q = query.trim().toLowerCase();
     if (q === '') return rows;
     return rows.filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) || (t.description ?? '').toLowerCase().includes(q),
+      (tmpl) =>
+        tmpl.name.toLowerCase().includes(q) || (tmpl.description ?? '').toLowerCase().includes(q),
     );
   }, [rows, query]);
 
   return (
     <div>
       <PageHeader
-        title="Metric sets"
-        trail={[{ label: 'Nodes' }, { label: 'Metric sets' }]}
-        note="Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it."
+        title={t('nav:nodes.metricSets')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.metricSets') }]}
+        note={t('sets.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">
-            Metric sets are unavailable in skeleton mode (no metadata store).
-          </p>
+          <p className="muted">{t('sets.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -82,63 +82,65 @@ export function CollectionTemplatesPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search name or description…"
-              ariaLabel="Search metric sets"
+              placeholder={t('sets.searchPlaceholder')}
+              ariaLabel={t('sets.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="sets" />
+            <ResultCount
+              shown={filtered.length}
+              total={rows.length}
+              noun={t('sets.noun', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add metric set
+                + {t('sets.addSet')}
               </Button>
             )}
           </TableToolbar>
 
           <div className="ytable templates-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Name</div>
-              <div className="ytable-h">Description</div>
-              <div className="ytable-h">Metrics</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('sets.cols.name')}</div>
+              <div className="ytable-h">{t('sets.cols.description')}</div>
+              <div className="ytable-h">{t('sets.cols.metrics')}</div>
+              <div className="ytable-h right">{t('shared.colActions')}</div>
             </div>
 
             {filtered.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
                   {loading
-                    ? 'Loading…'
+                    ? t('common:loading')
                     : rows.length === 0
-                      ? 'No metric sets yet'
-                      : 'No metric sets match'}
+                      ? t('sets.empty.none')
+                      : t('sets.empty.noMatch')}
                 </p>
                 {!loading && (
                   <p className="yt-empty-sub">
-                    {rows.length === 0
-                      ? 'Add a reusable metric bundle (e.g. “Standard interfaces”).'
-                      : 'Try a different search.'}
+                    {rows.length === 0 ? t('sets.empty.noneSub') : t('shared.trySearch')}
                   </p>
                 )}
               </div>
             ) : (
-              filtered.map((t) => {
-                const open = openItems === t.id;
+              filtered.map((tmpl) => {
+                const open = openItems === tmpl.id;
                 return (
-                  <Fragment key={t.id}>
+                  <Fragment key={tmpl.id}>
                     <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
                       <div className="ytable-cell">
-                        <span className="yt-name-txt">{t.name}</span>
+                        <span className="yt-name-txt">{tmpl.name}</span>
                       </div>
                       <div className="ytable-cell ellipsis">
-                        <span className="muted">{t.description ?? '—'}</span>
+                        <span className="muted">{tmpl.description ?? '—'}</span>
                       </div>
                       <div className="ytable-cell">
                         <button
                           type="button"
                           className={`tmpl-metrics-toggle${open ? ' open' : ''}`}
                           aria-expanded={open}
-                          onClick={() => setOpenItems((cur) => (cur === t.id ? null : t.id))}
+                          onClick={() => setOpenItems((cur) => (cur === tmpl.id ? null : tmpl.id))}
                         >
-                          {t.item_count} metrics
+                          {t('shared.metricsCount', { count: tmpl.item_count })}
                           <svg className="tmpl-metrics-chev" viewBox="0 0 12 12" aria-hidden="true">
                             <path
                               d="M4 2l4 4-4 4"
@@ -154,7 +156,7 @@ export function CollectionTemplatesPage() {
                       <div className="ytable-cell right">
                         {authed && (
                           <span className="ytable-actions">
-                            <IconButton title="Delete metric set" danger onClick={() => setDeleting(t)}>
+                            <IconButton title={t('sets.deleteSet')} danger onClick={() => setDeleting(tmpl)}>
                               <TrashIcon />
                             </IconButton>
                           </span>
@@ -163,7 +165,7 @@ export function CollectionTemplatesPage() {
                     </div>
                     {open && (
                       <div className="crud-collection">
-                        <CollectionEditor scope="template" scopeId={t.id} canEdit={authed} />
+                        <CollectionEditor scope="template" scopeId={tmpl.id} canEdit={authed} />
                       </div>
                     )}
                   </Fragment>
@@ -199,6 +201,7 @@ export function CollectionTemplatesPage() {
 
 /** Create a collection template (focused-editing modal — name + optional description). */
 function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { t } = useTranslation('monitoring');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -212,41 +215,41 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
       .createCollectionTemplate({ name: name.trim(), description: description.trim() || undefined })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to create template'));
+        setError(errMsg(e, t('sets.err.create')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add metric set"
+      title={t('sets.addSet')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            Add set
+            {t('sets.modal.addSubmit')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">
-          Name <RequiredMark />
+          {t('sets.cols.name')} <RequiredMark />
         </label>
         <TextInput
-          placeholder="e.g. Standard interfaces"
+          placeholder={t('sets.modal.namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Description</label>
+        <label className="modal-field-label">{t('sets.cols.description')}</label>
         <TextInput
-          placeholder="Optional"
+          placeholder={t('sets.modal.descPlaceholder')}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
@@ -266,6 +269,7 @@ function DeleteTemplateModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -276,29 +280,33 @@ function DeleteTemplateModal({
       .deleteCollectionTemplate(template.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete template'));
+        setError(errMsg(e, t('sets.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete metric set"
+      title={t('sets.deleteSet')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete metric set <strong>{template.name}</strong>? Profiles that attach it lose this
-        bundle's metrics.
+        <Trans
+          t={t}
+          i18nKey="sets.delete.confirm"
+          values={{ name: template.name }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
+import type { TFunction } from 'i18next';
 import { PROFILE_CATEGORIES, categoryLabel } from './profileCategories';
+import enMonitoring from '../locales/en/monitoring.json';
+
+// Resolve a `monitoring:categories.*` key against the bundled English strings, mirroring how
+// i18next would — enough for the label assertions without booting the full i18n stack.
+const t = ((key: string): string => {
+  const path = key.replace(/^monitoring:/, '').split('.');
+  let cur: unknown = enMonitoring;
+  for (const seg of path) cur = (cur as Record<string, unknown> | undefined)?.[seg];
+  return typeof cur === 'string' ? cur : key;
+}) as unknown as TFunction;
 
 describe('profileCategories', () => {
   it('covers the 14 ProfileCategory tokens', () => {
@@ -9,9 +20,9 @@ describe('profileCategories', () => {
   });
 
   it('maps a token to its label and falls back to the raw token', () => {
-    expect(categoryLabel('firewall')).toBe('Firewall');
-    expect(categoryLabel('l3-switch')).toBe('L3 switch');
-    expect(categoryLabel('unknown-token')).toBe('unknown-token');
+    expect(categoryLabel('firewall', t)).toBe('Firewall');
+    expect(categoryLabel('l3-switch', t)).toBe('L3 switch');
+    expect(categoryLabel('unknown-token', t)).toBe('unknown-token');
   });
 
   it('has unique tokens', () => {

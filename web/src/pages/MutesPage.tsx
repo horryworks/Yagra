@@ -7,6 +7,7 @@
 // expiry; lifting is a destructive-consent confirm.
 
 import { useCallback, useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -48,6 +49,7 @@ function LiftMuteModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('suppression');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -58,37 +60,42 @@ function LiftMuteModal({
       .deleteMute(mute.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to lift mute'));
+        setError(errMsg(e, t('mutes.err.lift')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Lift mute"
+      title={t('mutes.lift.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Lift mute
+            {t('mutes.lift.title')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Lift the mute on <strong>{targetName}</strong>
         {mute.metric_name ? (
-          <>
-            {' '}
-            (<span className="mono">{mute.metric_name}</span>)
-          </>
+          <Trans
+            t={t}
+            i18nKey="mutes.lift.confirmMetric"
+            values={{ target: targetName, metric: mute.metric_name }}
+            components={{ b: <strong />, m: <span className="mono" /> }}
+          />
         ) : (
-          ' (all metrics)'
+          <Trans
+            t={t}
+            i18nKey="mutes.lift.confirmAll"
+            values={{ target: targetName }}
+            components={{ b: <strong /> }}
+          />
         )}
-        ? Notifications resume immediately.
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -96,6 +103,7 @@ function LiftMuteModal({
 }
 
 export function MutesPage() {
+  const { t } = useTranslation('suppression');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<Mute[]>([]);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
@@ -133,29 +141,29 @@ export function MutesPage() {
   return (
     <div>
       <PageHeader
-        title="Mutes"
-        trail={[{ label: 'Alerts' }, { label: 'Mutes' }]}
+        title={t('nav:alerts.mutes')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.mutes') }]}
         note={
-          <>
-            Silence notifications for a node (or one check) until a time — the alert still fires and
-            node state / SLA are unaffected. For planned work, use{' '}
-            <Link to="/alerts/maintenance">Maintenance windows</Link>.
-          </>
+          <Trans
+            t={t}
+            i18nKey="mutes.note"
+            components={{ maintenanceLink: <Link to="/alerts/maintenance" /> }}
+          />
         }
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">Mute management is unavailable in skeleton mode.</p>
+          <p className="muted">{t('mutes.unavailable')}</p>
         </Card>
       ) : (
         <>
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="active mutes" />
+            <ResultCount shown={rows.length} noun={t('mutes.resultNoun')} />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add mute
+                {t('mutes.add')}
               </Button>
             )}
           </TableToolbar>
@@ -163,20 +171,18 @@ export function MutesPage() {
           <div className="ytable">
             <div className="ytable-scroll">
               <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">Target</div>
-                <div className="ytable-h">Metric</div>
-                <div className="ytable-h">Until</div>
-                <div className="ytable-h">Reason</div>
-                <div className="ytable-h right">Actions</div>
+                <div className="ytable-h">{t('mutes.cols.target')}</div>
+                <div className="ytable-h">{t('mutes.cols.metric')}</div>
+                <div className="ytable-h">{t('mutes.cols.until')}</div>
+                <div className="ytable-h">{t('mutes.cols.reason')}</div>
+                <div className="ytable-h right">{t('mutes.cols.actions')}</div>
               </div>
 
               {rows.length === 0 ? (
                 <div className="yt-empty">
-                  <p className="yt-empty-title">{loading ? 'Loading…' : 'No active mutes'}</p>
+                  <p className="yt-empty-title">{loading ? t('common:loading') : t('mutes.empty.title')}</p>
                   {!loading && (
-                    <p className="yt-empty-sub">
-                      Silence a node (or one check) until a time to suppress its notifications.
-                    </p>
+                    <p className="yt-empty-sub">{t('mutes.empty.sub')}</p>
                   )}
                 </div>
               ) : (
@@ -184,19 +190,19 @@ export function MutesPage() {
                   <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={m.id}>
                     <div className="ytable-cell">
                       <span className="mute-target">
-                        {m.scope_kind === 'group' && <Badge>group</Badge>}
+                        {m.scope_kind === 'group' && <Badge>{t('mutes.badge.group')}</Badge>}
                         <span className="yt-name-txt">{targetName(m)}</span>
                       </span>
                     </div>
                     <div className="ytable-cell">
                       {m.scope_kind === 'group' ? (
-                        <Badge tone="info">incl. subgroups</Badge>
+                        <Badge tone="info">{t('mutes.badge.subgroups')}</Badge>
                       ) : m.metric_name ? (
                         <Badge tone="neutral">
                           <span className="mono">{m.metric_name}</span>
                         </Badge>
                       ) : (
-                        <Badge tone="info">all metrics</Badge>
+                        <Badge tone="info">{t('mutes.badge.allMetrics')}</Badge>
                       )}
                     </div>
                     <div className="ytable-cell mono">{fmtTime(m.until_at)}</div>
@@ -204,7 +210,7 @@ export function MutesPage() {
                     <div className="ytable-cell right">
                       {authed && (
                         <span className="ytable-actions">
-                          <IconButton title="Lift mute" danger onClick={() => setLifting(m)}>
+                          <IconButton title={t('mutes.lift.title')} danger onClick={() => setLifting(m)}>
                             <TrashIcon />
                           </IconButton>
                         </span>

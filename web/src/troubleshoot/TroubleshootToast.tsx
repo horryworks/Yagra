@@ -5,9 +5,11 @@
 
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useTroubleshootStore } from './store';
 
 export function TroubleshootToast() {
+  const { t } = useTranslation('troubleshoot');
   const toast = useTroubleshootStore((s) => s.toast);
   const dismiss = useTroubleshootStore((s) => s.dismissToast);
   const navigate = useNavigate();
@@ -31,7 +33,7 @@ export function TroubleshootToast() {
                 dismiss();
               }}
             >
-              View →
+              {t('actions.view')} →
             </button>
           )}
         </>

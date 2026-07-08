@@ -5,6 +5,7 @@
 // the result is ready.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { api, ApiError } from '../services/api';
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export function ReportViewer({ runId, onClose }: Props) {
+  const { t } = useTranslation('reports');
   const [detail, setDetail] = useState<ReportRunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function ReportViewer({ runId, onClose }: Props) {
           }
         })
         .catch((e: unknown) => {
-          if (alive) setError(e instanceof ApiError ? e.message : 'Failed to load the report.');
+          if (alive) setError(e instanceof ApiError ? e.message : t('viewer.err.loadFailed'));
         });
     };
     load();
@@ -46,7 +48,7 @@ export function ReportViewer({ runId, onClose }: Props) {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [runId]);
+  }, [runId, t]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -70,7 +72,11 @@ export function ReportViewer({ runId, onClose }: Props) {
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : `Failed to export ${format.toUpperCase()}.`);
+      setError(
+        e instanceof ApiError
+          ? e.message
+          : t('viewer.err.exportFailed', { format: format.toUpperCase() }),
+      );
     } finally {
       setBusy(null);
     }
@@ -87,10 +93,10 @@ export function ReportViewer({ runId, onClose }: Props) {
       <div className="rp-viewer" onClick={(e) => e.stopPropagation()}>
         <header className="rp-viewer-head">
           <div className="rp-viewer-title">
-            <strong>{detail?.name ?? 'Report'}</strong>
+            <strong>{detail?.name ?? t('viewer.fallbackTitle')}</strong>
             {detail && (
               <span className="muted rp-viewer-meta">
-                {formatTimestamp(detail.created_ms)} · {detail.trigger}
+                {formatTimestamp(detail.created_ms)} · {t(`trigger.${detail.trigger}`)}
               </span>
             )}
           </div>
@@ -107,37 +113,37 @@ export function ReportViewer({ runId, onClose }: Props) {
                   {busy === 'html' ? '…' : 'HTML'}
                 </Button>
                 <Button variant="ghost" onClick={print}>
-                  Print
+                  {t('viewer.print')}
                 </Button>
               </>
             )}
-            <Button onClick={onClose}>Close</Button>
+            <Button onClick={onClose}>{t('common:actions.close')}</Button>
           </div>
         </header>
 
         {error && <div className="rp-viewer-error">{error}</div>}
 
         <div className="rp-viewer-body">
-          {!detail && !error && <div className="rp-viewer-state">Loading…</div>}
+          {!detail && !error && <div className="rp-viewer-state">{t('common:loading')}</div>}
           {detail && (detail.state === 'running' || detail.state === 'queued') && (
             <div className="rp-viewer-state">
               <div className="rp-progress">
                 <div className="rp-progress-bar" style={{ width: `${detail.pct}%` }} />
               </div>
-              <p className="muted">Generating report… {detail.pct}%</p>
+              <p className="muted">{t('viewer.generating', { pct: detail.pct })}</p>
             </div>
           )}
           {detail?.state === 'failed' && (
             <div className="rp-viewer-state">
-              <Badge tone="critical">Failed</Badge>
-              <p className="muted">{detail.error ?? 'Report generation failed.'}</p>
+              <Badge tone="critical">{t('viewer.failed')}</Badge>
+              <p className="muted">{detail.error ?? t('viewer.genFailed')}</p>
             </div>
           )}
           {ready && (
             <iframe
               ref={iframeRef}
               className="rp-frame"
-              title={detail?.name ?? 'Report'}
+              title={detail?.name ?? t('viewer.fallbackTitle')}
               sandbox="allow-same-origin allow-modals"
               srcDoc={detail.result_html ?? ''}
             />

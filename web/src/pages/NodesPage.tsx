@@ -10,6 +10,8 @@
 // follow-up for very large fleets.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -41,13 +43,7 @@ const PAGE = 100;
 /** Max nodes the tree loads (pages of PAGE). Beyond this we flag the inventory as truncated. */
 const NODE_CAP = 5000;
 
-const GROUP_TYPES: { value: GroupType; label: string }[] = [
-  { value: 'site', label: 'Site' },
-  { value: 'region', label: 'Region' },
-  { value: 'device_type', label: 'Device type' },
-  { value: 'service', label: 'Service' },
-  { value: 'generic', label: 'Generic' },
-];
+const GROUP_TYPES: GroupType[] = ['site', 'region', 'device_type', 'service', 'generic'];
 
 const PROBLEM_STATES = new Set<NodeSummary['state']>(['warning', 'critical', 'unreachable']);
 
@@ -64,6 +60,7 @@ interface GroupModalState {
 }
 
 export function NodesPage() {
+  const { t } = useTranslation('nodes');
   const navigate = useNavigate();
   const authed = useAuthStore((s) => s.authed);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
@@ -154,11 +151,11 @@ export function NodesPage() {
       setNodes(allNodes.nodes);
       setTruncated(allNodes.truncated);
     } catch (e: unknown) {
-      setError(errMsg(e, 'failed to load nodes'));
+      setError(errMsg(e, t('err.loadNodes')));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void reload();
@@ -188,14 +185,14 @@ export function NodesPage() {
     const now = new Date();
     api
       .createMaintenanceWindow({
-        name: `Maintenance — ${target.name}`,
+        name: t('maintenanceWindowName', { name: target.name }),
         scope_level: target.kind === 'group' ? 'group_id' : 'node',
         scope_id: target.id,
         starts_at: now.toISOString(),
         ends_at: new Date(now.getTime() + durationMs).toISOString(),
       })
       .then(reloadSuppression)
-      .catch((e: unknown) => scopeError(e, 'failed to set maintenance'));
+      .catch((e: unknown) => scopeError(e, t('err.setMaintenance')));
   };
 
   const setMute = (target: SuppressionTarget, durationMs: number | null) => {
@@ -210,7 +207,7 @@ export function NodesPage() {
         until: new Date(Date.now() + durationMs).toISOString(),
       })
       .then(reloadSuppression)
-      .catch((e: unknown) => scopeError(e, 'failed to mute'));
+      .catch((e: unknown) => scopeError(e, t('err.mute')));
   };
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
@@ -294,14 +291,14 @@ export function NodesPage() {
         void reload();
       })
       .catch((e: unknown) =>
-        setAddError(errMsg(e, monType === 'url' ? 'failed to add URL monitor' : 'failed to add node')),
+        setAddError(errMsg(e, monType === 'url' ? t('err.addUrlMonitor') : t('err.addNode'))),
       );
   };
 
   // Direct moves (drag-drop): assign immediately and refresh.
   const moveNode = (nodeId: string, groupId: string | null) =>
     api.setNodeGroup(nodeId, groupId).then(reload).catch((e: unknown) =>
-      setError(errMsg(e, 'failed to move node')),
+      setError(errMsg(e, t('err.moveNode'))),
     );
 
   // Nest a group under another (or null = top level), appending it to the end of the destination —
@@ -310,7 +307,7 @@ export function NodesPage() {
     api
       .placeNodeGroup(groupId, { parent_id: parentGroupId })
       .then(reload)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to move group')));
+      .catch((e: unknown) => setError(errMsg(e, t('err.moveGroup'))));
 
   // Drag-reorder (before/after a sibling): place the item relative to a neighbour and refresh.
   const reorderNode = (
@@ -320,7 +317,7 @@ export function NodesPage() {
     api
       .placeNode(nodeId, { group_id: dest.groupId, before: dest.before, after: dest.after })
       .then(reload)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to reorder node')));
+      .catch((e: unknown) => setError(errMsg(e, t('err.reorderNode'))));
 
   const reorderGroup = (
     groupId: string,
@@ -329,7 +326,7 @@ export function NodesPage() {
     api
       .placeNodeGroup(groupId, { parent_id: dest.parentId, before: dest.before, after: dest.after })
       .then(reload)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to reorder group')));
+      .catch((e: unknown) => setError(errMsg(e, t('err.reorderGroup'))));
 
   const nodeCount = nodes.length;
   const attention = tallyStates(nodes).needAttention;
@@ -341,13 +338,22 @@ export function NodesPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title="All nodes"
-        trail={[{ label: 'Nodes' }, { label: 'All nodes' }]}
+        title={t('nav:nodes.all')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all') }]}
         note={
           <>
             {nodeCount}
-            {truncated ? '+' : ''} nodes · {groups.length} groups
-            {attention > 0 && <> · <span className="nodes-attention">{attention} need attention</span></>}
+            {truncated ? '+' : ''} {t('common:noun.node', { count: nodeCount })} ·{' '}
+            {t('inventory.groupCount', { count: groups.length })}
+            {attention > 0 && (
+              <>
+                {' '}
+                ·{' '}
+                <span className="nodes-attention">
+                  {t('inventory.needAttention', { count: attention })}
+                </span>
+              </>
+            )}
           </>
         }
         actions={
@@ -359,7 +365,7 @@ export function NodesPage() {
                 setAdding(true);
               }}
             >
-              Add node
+              {t('add.node')}
             </Button>
           )
         }
@@ -367,22 +373,19 @@ export function NodesPage() {
 
       {error && <p className="form-error">{error}</p>}
       {truncated && (
-        <p className="muted nodes-truncated">
-          Showing the first {NODE_CAP} nodes. Use search/filter for larger inventories (virtualized
-          tree loading is planned).
-        </p>
+        <p className="muted nodes-truncated">{t('inventory.truncated', { count: NODE_CAP })}</p>
       )}
 
       <div className="nodes-split">
         <div className="nodes-pane">
           <div className="nodes-pane-head">
-            <span className="nodes-pane-title">Inventory</span>
+            <span className="nodes-pane-title">{t('nav:groups.inventory')}</span>
             <div className="nodes-pane-tools">
               {authed && (
                 <Button
                   variant="outline"
                   className="nodes-pane-add"
-                  title="Add group"
+                  title={t('group.add')}
                   onClick={() => setGroupModal({ mode: 'add', parentId: null })}
                 >
                   ＋
@@ -392,7 +395,7 @@ export function NodesPage() {
                 className="nodes-pane-search"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                placeholder="Search…"
+                placeholder={t('inventory.searchPlaceholder')}
               />
             </div>
           </div>
@@ -455,7 +458,7 @@ export function NodesPage() {
             />
           ) : (
             <div className="nd-empty">
-              {loading ? 'Loading inventory…' : 'Select a node or group to see its detail.'}
+              {loading ? t('inventory.loadingInventory') : t('inventory.selectPrompt')}
             </div>
           )}
         </div>
@@ -463,39 +466,43 @@ export function NodesPage() {
 
       {adding && (
         <Modal
-          title={monType === 'url' ? 'Add URL monitor' : 'Add node'}
+          title={monType === 'url' ? t('add.urlMonitor') : t('add.node')}
           onClose={resetAddForm}
           footer={
             <>
-              <Button onClick={resetAddForm}>Cancel</Button>
+              <Button onClick={resetAddForm}>{t('common:actions.cancel')}</Button>
               <Button
                 variant="primary"
                 onClick={submitAdd}
                 disabled={!name || (monType === 'url' ? !url : !address)}
               >
-                {monType === 'url' ? 'Add URL monitor' : 'Add node'}
+                {monType === 'url' ? t('add.urlMonitor') : t('add.node')}
               </Button>
             </>
           }
         >
           <div className="form-stack">
             <p className="form-note">
-              Adding to{' '}
-              <strong>{groups.find((g) => g.id === addGroupId)?.name ?? 'top level'}</strong>.
+              <Trans
+                t={t}
+                i18nKey="add.addingTo"
+                values={{ target: groups.find((g) => g.id === addGroupId)?.name ?? t('add.topLevel') }}
+                components={{ b: <strong /> }}
+              />
             </p>
             <label className="form-label">
-              Monitoring type
+              {t('add.monitoringType')}
               <Select
                 value={monType}
                 onChange={(e) => setMonType(e.target.value as 'device' | 'url')}
               >
-                <option value="device">Device (ICMP / SNMP)</option>
-                <option value="url">URL monitor (HTTP / HTTPS)</option>
+                <option value="device">{t('add.typeDevice')}</option>
+                <option value="url">{t('add.typeUrl')}</option>
               </Select>
             </label>
             <label className="form-label">
               <span>
-                Name <RequiredMark />
+                {t('field.name')} <RequiredMark />
               </span>
               <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
             </label>
@@ -503,7 +510,7 @@ export function NodesPage() {
               <>
                 <label className="form-label">
                   <span>
-                    URL <RequiredMark />
+                    {t('field.url')} <RequiredMark />
                   </span>
                   <TextInput
                     className="mono"
@@ -514,7 +521,7 @@ export function NodesPage() {
                 </label>
                 <div className="form-row">
                   <label className="form-label">
-                    Method
+                    {t('add.method')}
                     <Select
                       value={urlMethod}
                       onChange={(e) => setUrlMethod(e.target.value as 'GET' | 'HEAD' | 'POST')}
@@ -530,7 +537,7 @@ export function NodesPage() {
                       checked={verifyTls}
                       onChange={(e) => setVerifyTls(e.target.checked)}
                     />
-                    <span>Verify TLS certificate</span>
+                    <span>{t('add.verifyTls')}</span>
                   </label>
                 </div>
               </>
@@ -538,19 +545,19 @@ export function NodesPage() {
               <>
                 <label className="form-label">
                   <span>
-                    IP address <RequiredMark />
+                    {t('field.ipAddress')} <RequiredMark />
                   </span>
                   <TextInput
                     className="mono"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
-                    placeholder="10.0.0.1 or 2001:db8::1"
+                    placeholder={t('add.addressPlaceholder')}
                   />
                 </label>
                 <label className="form-label">
-                  Device profile (optional)
+                  {t('add.deviceProfileOptional')}
                   <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-                    <option value="">— none —</option>
+                    <option value="">{t('add.none')}</option>
                     {profiles.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
@@ -559,9 +566,9 @@ export function NodesPage() {
                   </Select>
                 </label>
                 <label className="form-label">
-                  SNMP credential (optional — enables SNMP polling)
+                  {t('add.snmpCredentialOptional')}
                   <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-                    <option value="">— none —</option>
+                    <option value="">{t('add.none')}</option>
                     {credentials.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
@@ -572,9 +579,9 @@ export function NodesPage() {
               </>
             )}
             <label className="form-label">
-              Parent node (optional — for dependency suppression)
+              {t('add.parentNodeOptional')}
               <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
-                <option value="">— none —</option>
+                <option value="">{t('add.none')}</option>
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
                     {n.name}
@@ -585,20 +592,20 @@ export function NodesPage() {
             {monType === 'device' && (
               <div className="form-row">
                 <label className="form-label">
-                  Maker (optional)
+                  {t('add.makerOptional')}
                   <TextInput
                     value={vendor}
                     onChange={(e) => setVendor(e.target.value)}
-                    placeholder="e.g. Cisco"
+                    placeholder={t('field.makerPlaceholder')}
                   />
                 </label>
                 <label className="form-label">
-                  Model (optional)
+                  {t('add.modelOptional')}
                   <TextInput
                     className="mono"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
-                    placeholder="e.g. C2960"
+                    placeholder={t('field.modelPlaceholder')}
                   />
                 </label>
               </div>
@@ -622,12 +629,12 @@ export function NodesPage() {
 
       {deletingGroup && (
         <Modal
-          title="Delete group"
+          title={t('group.delete')}
           onClose={() => setDeletingGroup(null)}
           footer={
             <>
               <Button variant="outline" onClick={() => setDeletingGroup(null)}>
-                Cancel
+                {t('common:actions.cancel')}
               </Button>
               <Button
                 variant="danger"
@@ -638,18 +645,24 @@ export function NodesPage() {
                       setDeletingGroup(null);
                       void reload();
                     })
-                    .catch((e: unknown) => setError(errMsg(e, 'failed to delete group')))
+                    .catch((e: unknown) => setError(errMsg(e, t('err.deleteGroup'))))
                 }
               >
-                Delete
+                {t('common:actions.delete')}
               </Button>
             </>
           }
         >
           <p>
-            Delete group <strong>{deletingGroup.name}</strong>?{' '}
-            {groupDeletionImpact(groups, nodes, deletingGroup)} —{' '}
-            <strong>no nodes are deleted</strong>.
+            <Trans
+              t={t}
+              i18nKey="deleteGroup.confirm"
+              values={{
+                name: deletingGroup.name,
+                impact: groupDeletionImpact(groups, nodes, deletingGroup, t),
+              }}
+              components={{ b: <strong /> }}
+            />
           </p>
         </Modal>
       )}
@@ -717,11 +730,18 @@ async function loadAllNodes(): Promise<{ nodes: NodeSummary[]; truncated: boolea
 
 /** One-line impact summary for deleting a group: how many direct subgroups and member nodes
  *  will be re-parented (nothing is deleted). Pluralised for readability. */
-function groupDeletionImpact(groups: NodeGroup[], nodes: NodeSummary[], g: NodeGroup): string {
+function groupDeletionImpact(
+  groups: NodeGroup[],
+  nodes: NodeSummary[],
+  g: NodeGroup,
+  t: TFunction,
+): string {
   const subs = groups.filter((x) => x.parent_id === g.id).length;
   const members = nodes.filter((n) => n.group_id === g.id).length;
-  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  return `${count(subs, 'subgroup')} and ${count(members, 'member node')} move up to the parent`;
+  return t('deleteGroup.impact', {
+    subgroups: t('count.subgroup', { count: subs }),
+    members: t('count.memberNode', { count: members }),
+  });
 }
 
 /** Add or edit a group (name + type + parent). Editing the parent moves the group; self and
@@ -737,6 +757,7 @@ function GroupModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const editing = state.mode === 'edit';
   const [name, setName] = useState(state.group?.name ?? '');
   const [type, setType] = useState<GroupType>(state.group?.group_type ?? 'generic');
@@ -761,22 +782,22 @@ function GroupModal({
     call
       .then(onSaved)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save group'));
+        setError(errMsg(e, t('err.saveGroup')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={editing ? 'Edit group' : 'Add group'}
+      title={editing ? t('group.edit') : t('group.add')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={!name.trim() || busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
@@ -784,24 +805,24 @@ function GroupModal({
       <div className="form-stack">
         <label className="form-label">
           <span>
-            Name <RequiredMark />
+            {t('field.name')} <RequiredMark />
           </span>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </label>
         <label className="form-label">
-          Type
+          {t('group.type')}
           <Select value={type} onChange={(e) => setType(e.target.value as GroupType)}>
-            {GROUP_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
+            {GROUP_TYPES.map((gt) => (
+              <option key={gt} value={gt}>
+                {t(`groupType.${gt}`)}
               </option>
             ))}
           </Select>
         </label>
         <label className="form-label">
-          Parent group
+          {t('group.parentGroup')}
           <Select value={parent} onChange={(e) => setParent(e.target.value)}>
-            <option value="">— top level —</option>
+            <option value="">{t('group.topLevelOption')}</option>
             {parentChoices.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.label}

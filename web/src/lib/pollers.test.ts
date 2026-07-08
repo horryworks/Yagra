@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PoolSummary } from '../types/api';
+import i18n from '../i18n';
 import {
   buildPollerEnv,
   isValidPollerToken,
@@ -9,6 +10,10 @@ import {
   workingSetLabel,
   POLLER_UP_COMMAND,
 } from './pollers';
+
+// English is bundled synchronously (see i18n.ts), so `t` resolves the `system:` keys the label
+// helpers use; the assertions below check the resolved English strings.
+const t = i18n.t.bind(i18n);
 
 const pool = (over: Partial<PoolSummary> = {}): PoolSummary => ({
   pool: 'tokyo',
@@ -28,20 +33,20 @@ describe('poolHasWarning', () => {
 
 describe('poolModeLabel', () => {
   it('humanizes the dispatch mode', () => {
-    expect(poolModeLabel('working_set')).toBe('Working set');
-    expect(poolModeLabel('legacy')).toBe('Legacy');
+    expect(poolModeLabel('working_set', t)).toBe('Working set');
+    expect(poolModeLabel('legacy', t)).toBe('Legacy');
   });
 });
 
 describe('workingSetLabel', () => {
   it('summarizes nodes and specs, singularizing 1', () => {
-    expect(workingSetLabel(5, 9)).toBe('5 nodes / 9 specs');
-    expect(workingSetLabel(1, 1)).toBe('1 node / 1 spec');
-    expect(workingSetLabel(0, 0)).toBe('0 nodes / 0 specs');
+    expect(workingSetLabel(5, 9, true, t)).toBe('5 nodes / 9 specs');
+    expect(workingSetLabel(1, 1, true, t)).toBe('1 node / 1 spec');
+    expect(workingSetLabel(0, 0, true, t)).toBe('0 nodes / 0 specs');
   });
 
   it('renders an em dash for an offline poller (its counts are zeroes)', () => {
-    expect(workingSetLabel(0, 0, false)).toBe('—');
+    expect(workingSetLabel(0, 0, false, t)).toBe('—');
   });
 });
 
@@ -49,12 +54,12 @@ describe('lastSeenLabel', () => {
   const now = Date.parse('2026-07-06T01:00:00Z');
 
   it('shows relative time when a timestamp exists', () => {
-    expect(lastSeenLabel('2026-07-06T00:55:00Z', true, now)).toBe('5m ago');
+    expect(lastSeenLabel('2026-07-06T00:55:00Z', true, t, now)).toBe('5m ago');
   });
 
   it('shows Live for an online poller not yet persisted, em dash when offline', () => {
-    expect(lastSeenLabel(null, true, now)).toBe('Live');
-    expect(lastSeenLabel(null, false, now)).toBe('—');
+    expect(lastSeenLabel(null, true, t, now)).toBe('Live');
+    expect(lastSeenLabel(null, false, t, now)).toBe('—');
   });
 });
 
