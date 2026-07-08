@@ -4,6 +4,7 @@
 // groups say so rather than showing an empty member list. Reuses the parent page's modals for edit
 // and add-node.
 
+import { useTranslation } from 'react-i18next';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { HealthBar } from '../HealthBar/HealthBar';
@@ -17,16 +18,8 @@ import {
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
-import type { GroupType, NodeGroup, NodeSummary } from '../../types/api';
+import type { NodeGroup, NodeSummary } from '../../types/api';
 import './NodeDetail.css';
-
-const TYPE_LABEL: Record<GroupType, string> = {
-  site: 'Site',
-  region: 'Region',
-  device_type: 'Device type',
-  service: 'Service',
-  generic: 'Group',
-};
 
 /** Find a group's built node (with children + nodes resolved) anywhere in the tree. */
 function findTreeGroup(roots: TreeGroup[], id: string): TreeGroup | null {
@@ -48,6 +41,7 @@ interface Props {
 }
 
 export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddNode }: Props) {
+  const { t } = useTranslation('nodes');
   const tree = buildNodeTree(groups, nodes);
   const tg = findTreeGroup(tree.roots, group.id);
   const all = tg ? descendantNodes(tg) : [];
@@ -60,7 +54,10 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
     <div className="nd">
       <div className="nd-head">
         <div className="nd-eyebrow">
-          <GroupIcon type={group.group_type} /> {TYPE_LABEL[group.group_type]}
+          <GroupIcon type={group.group_type} />{' '}
+          {group.group_type === 'generic'
+            ? t('groupType.genericFolder')
+            : t(`groupType.${group.group_type}`)}
         </div>
         <div className="nd-namerow">
           <div className="nd-namewrap">
@@ -69,32 +66,30 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
           {canEdit && (
             <div className="nd-actions">
               <Button variant="outline" onClick={() => onEditGroup(group)}>
-                Edit group
+                {t('group.edit')}
               </Button>
               <Button variant="primary" onClick={onAddNode}>
-                Add node
+                {t('add.node')}
               </Button>
             </div>
           )}
         </div>
         <div className="nd-sub">
           <span>
-            {all.length} node{all.length === 1 ? '' : 's'}
+            {all.length} {t('common:noun.node', { count: all.length })}
           </span>
           <span className="nd-sep">·</span>
-          <span>
-            {subgroups} subgroup{subgroups === 1 ? '' : 's'}
-          </span>
+          <span>{t('count.subgroup', { count: subgroups })}</span>
           <span className="nd-sep">·</span>
           <span className={tally.needAttention ? 'nd-attention' : undefined}>
-            {tally.needAttention} need attention
+            {t('inventory.needAttention', { count: tally.needAttention })}
           </span>
         </div>
       </div>
 
       <div className="nd-grpbody">
         <section>
-          <div className="nd-section-t">Health</div>
+          <div className="nd-section-t">{t('groupDetail.health')}</div>
           <HealthBar nodes={all} className="nd-grp-healthbar" />
           <div className="nd-grp-legend">
             {STATE_ORDER.filter((s) => tally.counts[s] > 0).map((s) => (
@@ -103,12 +98,12 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
                 {tally.counts[s]} {stateLabel(s)}
               </span>
             ))}
-            {all.length === 0 && <span className="nd-muted">No nodes in this group.</span>}
+            {all.length === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
           </div>
         </section>
 
         <section>
-          <div className="nd-section-t">Members</div>
+          <div className="nd-section-t">{t('groupDetail.members')}</div>
           {directMembers.length > 0 ? (
             <div className="nd-members">
               {directMembers.map((n) => (
@@ -120,7 +115,7 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
               ))}
             </div>
           ) : (
-            <p className="nd-muted">No direct member nodes — see subgroups.</p>
+            <p className="nd-muted">{t('groupDetail.noDirectMembers')}</p>
           )}
         </section>
       </div>

@@ -1,1 +1,204 @@
-{}
+{
+  "role": {
+    "viewer": "閲覧者",
+    "operator": "運用者",
+    "admin": "管理者"
+  },
+  "cred": {
+    "note": "保存時に暗号化されます。シークレットの値が表示されたり、APIから返されることはありません。",
+    "unavailable": "資格情報の管理はスケルトンモードでは利用できません（シークレットストアがありません）。",
+    "searchPlaceholder": "名前またはIDを検索…",
+    "searchAria": "資格情報を検索",
+    "filterAria": "種類で絞り込み",
+    "filter": {
+      "allTypes": "すべての種類",
+      "snmp_v2c": "SNMP v2c",
+      "snmp_v3": "SNMP v3",
+      "api_token": "API トークン"
+    },
+    "kind": {
+      "snmp_v2c": "SNMP v2c（コミュニティ）",
+      "snmp_v3": "SNMP v3（ユーザー/パスワード）",
+      "api_token": "API トークン",
+      "meraki_api": "Cisco Meraki API キー"
+    },
+    "cols": {
+      "name": "名前",
+      "type": "種類",
+      "secret": "シークレット",
+      "usedBy": "使用元",
+      "credentialId": "資格情報ID",
+      "actions": "操作"
+    },
+    "usage": {
+      "unused": "未使用",
+      "count_other": "{{count}} ノード"
+    },
+    "empty": {
+      "none": "資格情報はまだありません",
+      "filtered": "一致する資格情報がありません",
+      "noneSub": "SNMPコミュニティ、SNMPv3 USM、またはAPIトークンを追加してください。",
+      "filteredSub": "検索条件やフィルターを変えてみてください。"
+    },
+    "field": {
+      "name": "名前",
+      "type": "種類",
+      "secret": "シークレット"
+    },
+    "v3": {
+      "usmUser": "USM ユーザー",
+      "usmUserPlaceholder": "usm-user",
+      "securityLevel": "セキュリティレベル",
+      "authProtocol": "認証プロトコル",
+      "authPassphrase": "認証パスフレーズ",
+      "privacyProtocol": "暗号化プロトコル",
+      "privacyPassphrase": "暗号化パスフレーズ"
+    },
+    "add": {
+      "title": "資格情報を追加",
+      "namePlaceholder": "例: core-rtr-usm",
+      "secretPlaceholder": {
+        "apiToken": "Bearer トークン",
+        "community": "コミュニティ文字列"
+      },
+      "secretHint": "保存時暗号化のエンドポイントに送信され、サーバー側で封印されます。以降は二度と表示されません。"
+    },
+    "edit": {
+      "title": "資格情報を編集",
+      "replaceSecret": "シークレットを置き換える",
+      "replaceHint": "再入力しない限り、保存済みのシークレットはそのまま維持されます。",
+      "newSecret": "新しいシークレット"
+    },
+    "delete": {
+      "title": "資格情報を削除",
+      "confirm": "資格情報 <strong>{{name}}</strong> を削除しますか？",
+      "inUse": "{{usage}} が参照しています — この紐付けが失われます。",
+      "unused": "未使用です。",
+      "irreversible": "この操作は取り消せません。"
+    },
+    "err": {
+      "add": "資格情報の追加に失敗しました",
+      "update": "更新に失敗しました",
+      "delete": "削除に失敗しました"
+    }
+  },
+  "users": {
+    "note": "ノースバウンドAPI用のローカルアカウント。ロール: viewer（読み取り専用）、operator（確認/メンテナンス）、admin（フル権限）。",
+    "unavailable": "ユーザー管理はスケルトンモードでは利用できません（データベースがありません）。",
+    "forbidden": "ユーザー管理には管理者アカウントが必要です。",
+    "searchPlaceholder": "ユーザー名を検索…",
+    "searchAria": "ユーザーを検索",
+    "filterAria": "ロールで絞り込み",
+    "filter": {
+      "all": "すべて",
+      "admin": "管理者",
+      "operator": "運用者",
+      "viewer": "閲覧者"
+    },
+    "you": "あなた",
+    "status": {
+      "active": "有効",
+      "disabled": "無効"
+    },
+    "created": "作成日 {{date}}",
+    "lastLogin": "最終ログイン {{time}}",
+    "roleFor": "{{name}} のロール",
+    "empty": {
+      "none": "ユーザーはまだいません。",
+      "filtered": "一致するユーザーがいません。"
+    },
+    "actions": {
+      "addUser": "ユーザーを追加"
+    },
+    "action": {
+      "enable": "アカウントを有効化",
+      "disable": "アカウントを無効化",
+      "changePassword": "パスワードを変更",
+      "delete": "ユーザーを削除"
+    },
+    "field": {
+      "username": "ユーザー名",
+      "password": "パスワード（最低 {{min}} 文字）",
+      "role": "ロール"
+    },
+    "changePw": {
+      "title": "パスワード変更 — {{name}}",
+      "newPassword": "新しいパスワード（最低 {{min}} 文字）",
+      "confirm": "新しいパスワード（確認）",
+      "mismatch": "パスワードが一致しません"
+    },
+    "delete": {
+      "title": "ユーザーを削除",
+      "confirm": "ユーザー <strong>{{name}}</strong> を削除しますか？記録のため監査ログのエントリは残りますが、アカウントは復元できません。"
+    },
+    "err": {
+      "changeRole": "ロールの変更に失敗しました",
+      "changeStatus": "アカウント状態の変更に失敗しました",
+      "create": "ユーザーの作成に失敗しました",
+      "delete": "ユーザーの削除に失敗しました",
+      "changePw": "パスワードの変更に失敗しました"
+    }
+  },
+  "roles": {
+    "note": "各ロールで何ができるか。この一覧はAPIが実際に適用する権限から生成されています。",
+    "section": {
+      "roles": "ロール"
+    },
+    "builtin": "組み込み",
+    "matrixTitle": "権限マトリクス",
+    "privilege": "権限",
+    "granted": {
+      "title": "{{role}} は {{privilege}} が可能"
+    },
+    "denied": {
+      "title": "{{role}} は {{privilege}} が不可"
+    },
+    "sr": {
+      "granted": "許可",
+      "notGranted": "不許可"
+    },
+    "customNote": "組み込みロールは固定です。カスタムロール（運用者が定義する権限セット）は計画中で、設定可能になり次第、追加の列としてここに表示されます。",
+    "err": {
+      "load": "ロールの読み込みに失敗しました"
+    }
+  },
+  "audit": {
+    "note": "すべての設定変更とログインイベント: 誰が・何を・いつ。読み取り専用 · 変更不可 · 保持期間365日。",
+    "signInPrompt": "監査ログを表示するには管理者としてサインインしてください。",
+    "searchPlaceholder": "ユーザーまたはパスを検索…",
+    "searchAria": "監査ログを検索",
+    "filterActionAria": "操作で絞り込み",
+    "filterStatusAria": "ステータスで絞り込み",
+    "signIn": "サインイン",
+    "filter": {
+      "allActions": "すべての操作",
+      "signIn": "サインイン",
+      "allStatus": "すべてのステータス",
+      "success": "成功 (2xx)",
+      "clientError": "クライアントエラー (4xx)",
+      "serverError": "サーバーエラー (5xx)"
+    },
+    "range": {
+      "all": "全期間",
+      "last24h": "過去24時間",
+      "last7d": "過去7日間",
+      "last30d": "過去30日間"
+    },
+    "cols": {
+      "time": "時刻",
+      "user": "ユーザー",
+      "action": "操作",
+      "status": "ステータス"
+    },
+    "entry_other": "エントリ",
+    "export": "エクスポート",
+    "empty": {
+      "none": "監査エントリはまだありません",
+      "filtered": "一致するエントリがありません — フィルターまたは期間を調整してください。"
+    },
+    "err": {
+      "load": "監査ログの読み込みに失敗しました",
+      "loadMore": "追加の読み込みに失敗しました"
+    }
+  }
+}

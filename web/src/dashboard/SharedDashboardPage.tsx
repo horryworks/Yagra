@@ -7,6 +7,7 @@
 // Single-board (no board tabs).
 
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   DndContext,
   KeyboardSensor,
@@ -34,6 +35,7 @@ import './MyDashboardPage.css';
 import './SharedDashboardPage.css';
 
 export function SharedDashboardPage() {
+  const { t } = useTranslation('dashboard');
   // One SSE subscription for the whole board (alert widgets read the shared store).
   useAlertStream();
 
@@ -84,21 +86,21 @@ export function SharedDashboardPage() {
 
   const actions = editing ? (
     <>
-      <Button onClick={() => setCatalogOpen(true)}>Add widget</Button>
+      <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
       <Button variant="ghost" onClick={() => setConfirmReset(true)}>
-        Reset
+        {t('common:actions.reset')}
       </Button>
       <Button variant="primary" onClick={() => setEditing(false)}>
-        Done
+        {t('actions.done')}
       </Button>
     </>
   ) : (
     <Button
       onClick={() => setConfirmEdit(true)}
       disabled={!isAdmin}
-      title={isAdmin ? undefined : 'Only admins can customize the shared dashboard'}
+      title={isAdmin ? undefined : t('shared.adminOnly')}
     >
-      Customize
+      {t('actions.customize')}
     </Button>
   );
 
@@ -106,14 +108,14 @@ export function SharedDashboardPage() {
     <LayoutStoreProvider store={useSharedLayoutStore}>
       <div>
         <PageHeader
-          title="Shared dashboard"
-          trail={[{ label: 'Dashboard' }, { label: 'Shared dashboard' }]}
+          title={t('nav:dashboard.shared')}
+          trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.shared') }]}
           actions={actions}
         />
 
         {editing && (
           <div className="shared-dash-warning" role="status">
-            Editing the shared dashboard — changes are visible to all users.
+            {t('shared.editingWarning')}
           </div>
         )}
 
@@ -121,7 +123,7 @@ export function SharedDashboardPage() {
           <div className="mydash-save-error" role="alert">
             <span>{saveError}</span>
             <Button variant="ghost" onClick={dismissSaveError}>
-              Dismiss
+              {t('actions.dismiss')}
             </Button>
           </div>
         )}
@@ -129,20 +131,20 @@ export function SharedDashboardPage() {
         {status === 'loading' && widgets.length === 0 ? (
           loadSlow ? (
             <div className="mydash-empty">
-              <p className="muted">Loading the shared dashboard is taking longer than expected.</p>
+              <p className="muted">{t('shared.loadSlow')}</p>
               <Button variant="primary" onClick={() => void load()}>
-                Retry
+                {t('common:actions.retry')}
               </Button>
             </div>
           ) : (
-            <p className="muted">Loading the shared dashboard…</p>
+            <p className="muted">{t('shared.loading')}</p>
           )
         ) : widgets.length === 0 ? (
           <div className="mydash-empty">
-            <p className="muted">The shared dashboard has no widgets yet.</p>
+            <p className="muted">{t('shared.empty')}</p>
             {isAdmin && (
               <Button variant="primary" onClick={() => setConfirmEdit(true)}>
-                Customize
+                {t('actions.customize')}
               </Button>
             )}
           </div>
@@ -165,11 +167,11 @@ export function SharedDashboardPage() {
 
         {confirmEdit && (
           <Modal
-            title="Customize the shared dashboard?"
+            title={t('shared.confirmEditTitle')}
             onClose={() => setConfirmEdit(false)}
             footer={
               <>
-                <Button onClick={() => setConfirmEdit(false)}>Cancel</Button>
+                <Button onClick={() => setConfirmEdit(false)}>{t('common:actions.cancel')}</Button>
                 <Button
                   variant="primary"
                   onClick={() => {
@@ -177,25 +179,24 @@ export function SharedDashboardPage() {
                     setEditing(true);
                   }}
                 >
-                  Customize for everyone
+                  {t('shared.confirmEditConfirm')}
                 </Button>
               </>
             }
           >
             <p>
-              Changes you make here apply to <strong>every user</strong> — everyone’s Shared
-              Dashboard updates. Continue?
+              <Trans t={t} i18nKey="shared.confirmEditBody" components={{ strong: <strong /> }} />
             </p>
           </Modal>
         )}
 
         {confirmReset && (
           <Modal
-            title="Reset shared dashboard?"
+            title={t('shared.resetTitle')}
             onClose={() => setConfirmReset(false)}
             footer={
               <>
-                <Button onClick={() => setConfirmReset(false)}>Cancel</Button>
+                <Button onClick={() => setConfirmReset(false)}>{t('common:actions.cancel')}</Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -203,15 +204,12 @@ export function SharedDashboardPage() {
                     setConfirmReset(false);
                   }}
                 >
-                  Reset to default
+                  {t('actions.resetToDefault')}
                 </Button>
               </>
             }
           >
-            <p>
-              This replaces the shared dashboard’s widgets with the default set — for all users. It
-              can’t be undone.
-            </p>
+            <p>{t('shared.resetBody')}</p>
           </Modal>
         )}
       </div>

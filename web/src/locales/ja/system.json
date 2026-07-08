@@ -1,1 +1,228 @@
-{}
+{
+  "pollers": {
+    "note": "分散ポーラー群。各プールのノードは、そのプールに登録されたポーラーがポーリングします。稼働中のポーラーがないプールのノードは監視されません。",
+    "unavailable": "スケルトンモードではポーラー管理を利用できません。",
+    "registerButton": "ポーラーを登録",
+    "noLivePoller": "稼働中のポーラーなし",
+    "mode": {
+      "workingSet": "ワーキングセット",
+      "legacy": "レガシー"
+    },
+    "pool": {
+      "livePoller_other": "稼働中ポーラー"
+    },
+    "status": {
+      "online": "オンライン",
+      "offline": "オフライン"
+    },
+    "lastSeen": {
+      "live": "ライブ"
+    },
+    "workingSet": {
+      "nodes_other": "{{count}} ノード",
+      "specs_other": "{{count}} スペック"
+    },
+    "cols": {
+      "poller": "ポーラー",
+      "pool": "プール",
+      "status": "ステータス",
+      "version": "バージョン",
+      "workingSet": "ワーキングセット",
+      "results": "結果数",
+      "cpu": "CPU",
+      "mem": "メモリ",
+      "disk": "ディスク",
+      "lastSeen": "最終確認",
+      "actions": "操作"
+    },
+    "empty": {
+      "title": "ポーラーがまだありません",
+      "sub": "ポーラーはバスに接続してハートビートを送信すると、ここに表示されます。リモートサイトのセットアップ手順は <b>ポーラーを登録</b> から取得できます。"
+    },
+    "remove": {
+      "title": "ポーラーを削除",
+      "confirmText": "ポーラー <code>{{id}}</code> をインベントリから削除しますか？再接続すると自動的に再登録されます。"
+    },
+    "register": {
+      "title": "ポーラーを登録",
+      "done": "完了",
+      "intro": "リモートサイトでポーラーコンテナを起動すると、中央の NATS バスへアウトバウンド接続します。以下でその識別情報を入力し、生成された <env>.env</env> を <file>docker-compose.poller.yml</file> の隣に配置して起動してください。",
+      "invalidToken": "英数字・ハイフン・アンダースコアのみ使用できます。",
+      "copy": "コピー",
+      "snippetEmpty": "スニペットを生成するには、有効な ID・プール・バス URL を入力してください。",
+      "fields": {
+        "id": {
+          "label": "ポーラー ID",
+          "hint": "ポーラーごとに一意で変わらない値。"
+        },
+        "pool": {
+          "label": "プール",
+          "hint": "このプールに割り当てられたノードがここでポーリングされます。"
+        },
+        "busUrl": {
+          "label": "バス URL",
+          "hint": "ポーラーの認証情報を含めます。オフサイトでは TLS URL が必須です。"
+        },
+        "caFile": {
+          "label": "CA ファイルパス（任意）",
+          "hint": "バス証明書がプライベート CA で署名されている場合のみ。"
+        },
+        "env": {
+          "label": "docker-compose.poller.yml 用の .env"
+        },
+        "bringUp": {
+          "label": "起動する"
+        }
+      }
+    },
+    "err": {
+      "remove": "ポーラーの削除に失敗しました"
+    }
+  },
+  "health": {
+    "note": "Yagra 自身の健全性：ポールループ、バックエンドサービス、フリートのデータカバレッジ、ホストリソース。",
+    "reachable": "到達可能",
+    "unreachable": "到達不可",
+    "noHistory": "履歴はまだありません…",
+    "core": "コア",
+    "hostResources": "ホストリソース",
+    "instanceAria": "インスタンス",
+    "offlineSuffix": "（オフライン）",
+    "deps": {
+      "postgres": "PostgreSQL",
+      "tsdb": "VictoriaMetrics (TSDB)",
+      "bus": "NATS バス"
+    },
+    "cards": {
+      "pollLoop": "ポールループの健全性",
+      "dependency": "依存サービスの健全性",
+      "dataCoverage": "データカバレッジ"
+    },
+    "metric": {
+      "cpu": "CPU",
+      "loadAverage": "ロードアベレージ",
+      "memory": "メモリ",
+      "disk": "ディスク · {{mount}}"
+    }
+  },
+  "settings": {
+    "note": "システム全体の監視デフォルト値。プロファイル単位のオーバーライドが優先されます。",
+    "saved": "保存しました。",
+    "signInHint": "変更するには設定管理ロールでサインインしてください。",
+    "polling": {
+      "title": "ポーリング",
+      "intervalName": "デフォルトのポーリング間隔",
+      "intervalHelp": "各ノードをポーリングする間隔（デバイスプロファイルが独自の間隔を設定していない場合）。{{min}}〜{{max}} 秒。",
+      "intervalAria": "デフォルトのポーリング間隔（秒）",
+      "seconds": "秒"
+    },
+    "err": {
+      "range": "{{min}}〜{{max}} の範囲で秒数を整数で入力してください。",
+      "save": "設定の保存に失敗しました"
+    }
+  },
+  "integrations": {
+    "note": "ベンダーのクラウド API を通じて監視する外部システムを接続します。",
+    "unavailable": "スケルトンモードでは連携を利用できません（ストアなし）。",
+    "status": {
+      "checking": "確認中…",
+      "unavailable": "利用不可",
+      "notConfigured": "未設定",
+      "pollingPaused": "接続済み · ポーリング停止中",
+      "connected_other": "接続済み · {{count}} 組織"
+    },
+    "meraki": {
+      "desc": "読み取り専用の Dashboard API 監視 — Meraki 組織全体の可用性・アップリンク・トラフィック。"
+    },
+    "more": {
+      "name": "その他の連携",
+      "desc": "追加のベンダー連携や通知連携は、今後のリリースでここに表示されます。"
+    }
+  },
+  "meraki": {
+    "name": "Cisco Meraki",
+    "note": "読み取り専用の Dashboard API 監視。",
+    "tiersPrefix": "ティア:",
+    "tiersNone": "なし",
+    "tier": {
+      "availability": "可用性",
+      "uplink": "アップリンク",
+      "traffic": "トラフィック"
+    },
+    "regions": {
+      "global": "グローバル (api.meraki.com)",
+      "canada": "カナダ (api.meraki.ca)",
+      "china": "中国 (api.meraki.cn)",
+      "usGov": "米国政府 (api.gov-meraki.com)"
+    },
+    "polling": {
+      "title": "Meraki ポーリング",
+      "enabled": "ポーリング有効",
+      "paused": "ポーリング停止中（キルスイッチ作動）",
+      "hint": "グローバルセーフガード — 組織設定を削除せずに、フリート全体の Meraki Dashboard API ポーリングを即座に停止します。"
+    },
+    "orgs": {
+      "title": "組織",
+      "add": "+ 組織を追加",
+      "empty": "Meraki 組織がまだありません。監視を開始するには 1 つ追加してください。",
+      "orgId": "組織 {{id}}",
+      "stateEnabled": "有効",
+      "statePaused": "停止中"
+    },
+    "org": {
+      "import": "デバイスをインポート",
+      "networks": "ネットワーク",
+      "cadence": "取得間隔",
+      "pause": "一時停止",
+      "resume": "再開"
+    },
+    "addOrg": {
+      "title": "Meraki 組織を追加",
+      "find": "組織を検索",
+      "add_other": "{{count}} 組織を追加",
+      "region": "リージョン",
+      "apiKeyLabel": "API キー（読み取り専用）",
+      "apiKeyPlaceholder": "Meraki Dashboard API キー",
+      "apiKeyHint": "<b>読み取り専用</b> の Dashboard API キーを使用してください。保存時に暗号化され、以後表示されません。Yagra は Meraki に対して読み取り専用の GET 呼び出ししか行いません。",
+      "selectHint": "監視する組織を選択してください。すべてこの API キーを共有します。",
+      "noOrgs": "このキーではどの組織にもアクセスできません。"
+    },
+    "networks": {
+      "title": "ネットワーク範囲 — {{name}}",
+      "hint": "監視対象のネットワークのみが収集されます。ネットワークのチェックを外すと、そのネットワークへの API 呼び出しの絞り込みが停止します（既存のデバイスノードはそのままです。デバイスの監視を停止するには削除してください）。",
+      "empty": "ネットワークがまだありません — まず「デバイスをインポート」を実行して組織を列挙してください。"
+    },
+    "cadence": {
+      "title": "取得間隔 — {{name}}",
+      "enabledTiers": "有効なティア",
+      "availabilityInterval": "可用性の取得間隔（秒）",
+      "uplinkInterval": "アップリンクの取得間隔（秒）",
+      "trafficInterval": "トラフィックの取得間隔（秒）",
+      "inventoryInterval": "インベントリの取得間隔（秒）",
+      "rateBudget": "レート予算（req/s）",
+      "rateBudgetHint": "控えめな値 — 組織の API 上限に対して十分な余裕を残すよう抑えています。"
+    },
+    "delete": {
+      "title": "組織を削除",
+      "confirmText": "<b>{{name}}</b> を削除しますか？インポートしたデバイスノード・ネットワーク範囲・HostTree グループが削除されます。TSDB 内のメトリクス履歴は残ります。この操作は取り消せません。"
+    },
+    "import": {
+      "title": "デバイスをインポート — {{name}}",
+      "importBtn_other": "{{count}} デバイスをインポート",
+      "enumerating": "組織を列挙中…",
+      "noData": "データがありません。",
+      "allImported": "インポートする新しいデバイスはありません — このキーで参照できるデバイスはすべて監視済みです。",
+      "err": {
+        "enumerate": "組織の列挙に失敗しました",
+        "import": "デバイスのインポートに失敗しました"
+      }
+    },
+    "err": {
+      "discover": "Meraki API への接続に失敗しました",
+      "addOrgs": "組織の追加に失敗しました",
+      "loadNetworks": "ネットワークの読み込みに失敗しました",
+      "saveScope": "ネットワーク範囲の保存に失敗しました",
+      "saveCadence": "取得間隔の保存に失敗しました"
+    }
+  }
+}

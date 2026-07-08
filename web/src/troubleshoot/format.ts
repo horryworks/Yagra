@@ -1,16 +1,19 @@
 // Small Troubleshoot display helpers: relative timestamps and turning a stored job's params
 // back into a re-run request (the "Retry" / "Re-run" path).
 
+import i18n from '../i18n';
 import type { AnalysisJob, AnalysisJobInput } from '../types/api';
 
-/** Compact "Xm ago" / "Xh ago" / "Xd ago" from an epoch-millis timestamp. */
+/** Compact "just now" / "Xm ago" / "Xh ago" / "Xd ago" from an epoch-millis timestamp, empty for a
+ *  missing one. Reuses the shared `format:relative.*` keys (resolved at call time via the global
+ *  i18n instance — not at module load — so it follows the active language, like lib/format.ts). */
 export function relTime(ms: number | null | undefined): string {
   if (!ms) return '';
   const d = Date.now() - ms;
-  if (d < 60_000) return 'just now';
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
-  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`;
-  return `${Math.floor(d / 86_400_000)}d ago`;
+  if (d < 60_000) return i18n.t('format:relative.justNow');
+  if (d < 3_600_000) return i18n.t('format:relative.min', { count: Math.floor(d / 60_000) });
+  if (d < 86_400_000) return i18n.t('format:relative.hour', { count: Math.floor(d / 3_600_000) });
+  return i18n.t('format:relative.day', { count: Math.floor(d / 86_400_000) });
 }
 
 /** Read a numeric param from a job's params blob, with a fallback. */

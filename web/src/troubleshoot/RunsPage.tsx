@@ -2,6 +2,7 @@
 // the catalog summarises, on its own page. Live progress streams via useTroubleshootStream; cancel / retry /
 // view actions are wired through the store (toasts surface their results).
 
+import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { runningCount, useTroubleshootStore } from './store';
@@ -11,17 +12,18 @@ import { TroubleshootToast } from './TroubleshootToast';
 import './troubleshoot.css';
 
 export function RunsPage() {
+  const { t } = useTranslation('troubleshoot');
   useTroubleshootStream();
   const running = useTroubleshootStore((s) => runningCount(s.jobs));
 
   return (
     <div>
       <PageHeader
-        title="Analysis runs"
-        trail={[{ label: 'Troubleshoot', to: '/troubleshoot' }, { label: 'Analysis runs' }]}
-        note={`${running} running · background diagnostic jobs with live progress and results`}
+        title={t('nav:troubleshoot.runs')}
+        trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.runs') }]}
+        note={t('runs.pageNote', { n: running })}
       />
-      <Card title="Runs">
+      <Card title={t('runs.card')}>
         <AnalysisRuns />
       </Card>
       <TroubleshootToast />

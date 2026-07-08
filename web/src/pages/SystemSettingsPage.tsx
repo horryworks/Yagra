@@ -5,6 +5,7 @@
 // a change applies without a restart.
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -21,6 +22,7 @@ const MAX = 3600;
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function SystemSettingsPage() {
+  const { t } = useTranslation('system');
   const authed = useAuthStore((s) => s.authed);
   const [value, setValue] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -43,7 +45,7 @@ export function SystemSettingsPage() {
   const save = () => {
     const n = Number(value.trim());
     if (!Number.isInteger(n) || n < MIN || n > MAX) {
-      setError(`Enter a whole number of seconds between ${MIN} and ${MAX}.`);
+      setError(t('settings.err.range', { min: MIN, max: MAX }));
       setSaved(false);
       return;
     }
@@ -53,24 +55,23 @@ export function SystemSettingsPage() {
     api
       .updateConfig({ default_poll_interval_secs: n })
       .then(() => setSaved(true))
-      .catch((e: unknown) => setError(errMsg(e, 'failed to save setting')))
+      .catch((e: unknown) => setError(errMsg(e, t('settings.err.save'))))
       .finally(() => setBusy(false));
   };
 
   return (
     <div>
       <PageHeader
-        title="System settings"
-        trail={[{ label: 'Settings' }, { label: 'System settings' }]}
-        note="System-wide monitoring defaults. Per-profile overrides take precedence over these."
+        title={t('nav:settings.system')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.system') }]}
+        note={t('settings.note')}
       />
-      <Card title="Polling">
+      <Card title={t('settings.polling.title')}>
         <div className="sys-setting">
           <div className="sys-setting-label">
-            <div className="sys-setting-name">Default polling interval</div>
+            <div className="sys-setting-name">{t('settings.polling.intervalName')}</div>
             <div className="sys-setting-help muted">
-              How often each node is polled, unless its Device profile sets its own interval.{' '}
-              {MIN}–{MAX} seconds.
+              {t('settings.polling.intervalHelp', { min: MIN, max: MAX })}
             </div>
           </div>
           <div className="sys-setting-control">
@@ -83,21 +84,19 @@ export function SystemSettingsPage() {
               }}
               inputMode="numeric"
               disabled={!authed || !loaded || busy}
-              aria-label="Default polling interval in seconds"
+              aria-label={t('settings.polling.intervalAria')}
             />
-            <span className="sys-setting-unit muted">seconds</span>
+            <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
             {authed && (
               <Button variant="primary" onClick={save} disabled={busy || !loaded}>
-                Save
+                {t('common:actions.save')}
               </Button>
             )}
           </div>
         </div>
-        {!authed && (
-          <p className="muted">Sign in with a config-management role to change this.</p>
-        )}
+        {!authed && <p className="muted">{t('settings.signInHint')}</p>}
         {error && <p className="form-error">{error}</p>}
-        {saved && <p className="sys-setting-saved">Saved.</p>}
+        {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
       </Card>
     </div>
   );

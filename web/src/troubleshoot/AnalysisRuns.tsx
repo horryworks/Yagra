@@ -7,32 +7,35 @@
 // Progress and terminal states arrive over SSE (store.upsertJob); no client-side faking.
 
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useTroubleshootStore } from './store';
 import { toolById } from './data';
 import { relTime, inputFromJob } from './format';
 import type { AnalysisJob } from '../types/api';
 
 function RunRow({ job }: { job: AnalysisJob }) {
+  const { t } = useTranslation('troubleshoot');
   const navigate = useNavigate();
   const cancelJob = useTroubleshootStore((s) => s.cancelJob);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
 
   const tool = toolById(job.tool);
-  const name = tool?.name ?? job.tool;
+  // `tool.name` is an i18next key (see data.ts); an unknown tool falls back to its raw backend id.
+  const name = tool ? t(tool.name) : job.tool;
   const reportPath = tool?.reportPath;
 
   const view = () => {
     if (reportPath) navigate(`${reportPath}?job=${encodeURIComponent(job.id)}`);
-    else showToast(`A report screen for ${name} is coming soon.`);
+    else showToast(t('runs.toast.reportSoon', { name }));
   };
 
   const retry = async () => {
     try {
       const fresh = await createJob(inputFromJob(job));
-      showToast(`${name} re-queued.`, reportPath ? `${reportPath}?job=${fresh.id}` : undefined);
+      showToast(t('runs.toast.requeued', { name }), reportPath ? `${reportPath}?job=${fresh.id}` : undefined);
     } catch {
-      showToast('Could not re-queue the analysis.');
+      showToast(t('runs.toast.requeueFailed'));
     }
   };
 
@@ -55,13 +58,13 @@ function RunRow({ job }: { job: AnalysisJob }) {
           <div className="ts-run-bar">
             <div className="ts-run-bar-fill" style={{ width: `${pct}%` }} />
           </div>
-          <span className="ts-run-phase">{job.phase ?? 'Running…'}</span>
+          <span className="ts-run-phase">{job.phase ?? t('runs.running')}</span>
         </div>
         <div className="ts-run-eta">{pct}%</div>
         <div className="ts-run-time">{relTime(job.created_ms)}</div>
         <div className="ts-run-action">
           <button className="ts-linkbtn ts-run-link" onClick={() => void cancelJob(job.id)}>
-            Cancel
+            {t('common:actions.cancel')}
           </button>
         </div>
       </div>
@@ -75,12 +78,14 @@ function RunRow({ job }: { job: AnalysisJob }) {
           <span className="ts-run-dot" style={{ background: 'var(--status-up)' }} />
         </div>
         {main}
-        <div className="ts-run-findings">{job.summary ?? `${job.finding_count} findings`}</div>
-        <div className="ts-run-eta">done</div>
+        <div className="ts-run-findings">
+          {job.summary ?? t('runs.findingCount', { count: job.finding_count })}
+        </div>
+        <div className="ts-run-eta">{t('runs.done')}</div>
         <div className="ts-run-time">{relTime(job.finished_ms)}</div>
         <div className="ts-run-action">
           <button className="ts-linkbtn ts-run-link" onClick={view}>
-            View →
+            {t('actions.view')} →
           </button>
         </div>
       </div>
@@ -99,24 +104,27 @@ function RunRow({ job }: { job: AnalysisJob }) {
       </div>
       {main}
       <div className="ts-run-failed">
-        {failed ? `failed · ${job.error ?? 'analysis error'}` : 'cancelled'}
+        {failed
+          ? `${t('runs.state.failed')} · ${job.error ?? t('runs.analysisError')}`
+          : t('runs.state.cancelled')}
       </div>
       <div className="ts-run-eta">—</div>
       <div className="ts-run-time">{relTime(job.finished_ms)}</div>
       <div className="ts-run-action">
         <button className="ts-linkbtn ts-run-link" onClick={() => void retry()}>
-          Retry
+          {t('common:actions.retry')}
         </button>
       </div>
     </div>
   );
 }
 
-export function AnalysisRuns({ empty = 'No analysis runs yet.' }: { empty?: string }) {
+export function AnalysisRuns({ empty }: { empty?: string }) {
+  const { t } = useTranslation('troubleshoot');
   const jobs = useTroubleshootStore((s) => s.jobs);
   const loaded = useTroubleshootStore((s) => s.loaded);
   if (jobs.length === 0) {
-    return <p className="muted">{loaded ? empty : 'Loading…'}</p>;
+    return <p className="muted">{loaded ? (empty ?? t('runs.empty')) : t('common:loading')}</p>;
   }
   return (
     <div className="ts-runs">

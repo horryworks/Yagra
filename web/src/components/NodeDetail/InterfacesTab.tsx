@@ -7,6 +7,8 @@
 // refreshes on an interval (shared with the tab badge); per-interface series are loaded lazily.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
 import { formatBps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
@@ -29,9 +31,9 @@ const SPARK_H = 26;
 const LIST_HEAD_H = 32;
 
 /** Human oper label from ifOperStatus (1 = up). */
-function operLabel(oper: number | null): string {
-  if (oper == null) return 'unknown';
-  return oper === 1 ? 'up' : 'down';
+function operLabel(oper: number | null, t: TFunction): string {
+  if (oper == null) return t('interfaces.operUnknown');
+  return oper === 1 ? t('interfaces.operUp') : t('interfaces.operDown');
 }
 
 interface Props {
@@ -43,6 +45,7 @@ interface Props {
 }
 
 export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
+  const { t } = useTranslation('nodes');
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -99,10 +102,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     return (
       <div className="nd-tabpad">
         {error && <p className="form-error">{error}</p>}
-        <p className="nd-muted">
-          No interfaces discovered yet. They appear after an SNMP table walk runs — the node needs a
-          bound SNMP credential and a table metric in its collection set.
-        </p>
+        <p className="nd-muted">{t('interfaces.emptyDiscovered')}</p>
       </div>
     );
   }
@@ -111,27 +111,27 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     <div className="nd-if">
       <div className="nd-if-toolbar">
         <span className="nd-if-summary">
-          <b>{up}</b> / {rows.length} up
-          <span className="nd-if-summary-hint"> · sparklines show last 1h</span>
+          <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
+          <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
         <TextInput
           className="nd-if-filter"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter interfaces…"
+          placeholder={t('interfaces.filterPlaceholder')}
         />
       </div>
       {error && <p className="form-error nd-tabpad">{error}</p>}
 
       <div className="nd-if-list" ref={listRef}>
         <div className="nd-if-head">
-          <div className="nd-if-h">Interface</div>
-          <div className="nd-if-h">Description</div>
-          <div className="nd-if-h" title="Operational status — whether the interface is up or down">
-            Oper
+          <div className="nd-if-h">{t('interfaces.colInterface')}</div>
+          <div className="nd-if-h">{t('interfaces.colDescription')}</div>
+          <div className="nd-if-h" title={t('interfaces.colOperTitle')}>
+            {t('interfaces.colOper')}
           </div>
-          <div className="nd-if-h">Throughput (1h)</div>
-          <div className="nd-if-h right">In / Out</div>
+          <div className="nd-if-h">{t('interfaces.colThroughput')}</div>
+          <div className="nd-if-h right">{t('interfaces.colInOut')}</div>
         </div>
         {shown.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
@@ -150,24 +150,28 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-cell nd-if-desc">{r.if_alias || '—'}</span>
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status)} withLabel={false} />
-                {operLabel(r.oper_status)}
+                {operLabel(r.oper_status, t)}
               </span>
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
               </span>
               <span className="nd-if-cell right">
-                {r.oper_status === 1 ? `${formatBps(r.in_bps)} / ${formatBps(r.out_bps)}` : 'down'}
+                {r.oper_status === 1
+                  ? `${formatBps(r.in_bps)} / ${formatBps(r.out_bps)}`
+                  : t('interfaces.operDown')}
               </span>
             </button>
           );
         })}
-        {shown.length === 0 && <p className="nd-muted nd-tabpad">No interfaces match “{filter}”.</p>}
+        {shown.length === 0 && (
+          <p className="nd-muted nd-tabpad">{t('interfaces.noMatch', { filter })}</p>
+        )}
       </div>
 
       {selectedRow ? (
         <InterfaceDock nodeId={nodeId} row={selectedRow} onClose={() => setSelected(null)} />
       ) : (
-        <div className="nd-if-dockhint">Select an interface to dock its charts.</div>
+        <div className="nd-if-dockhint">{t('interfaces.dockHint')}</div>
       )}
     </div>
   );
@@ -276,6 +280,7 @@ function InterfaceDock({
   row: InterfaceRow;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
@@ -321,14 +326,14 @@ function InterfaceDock({
         <div className="nd-if-dock-ctl">
           <span className="nd-if-dock-stats">
             <span>
-              <span className="nd-muted">In</span> {formatBps(row.in_bps)}
+              <span className="nd-muted">{t('interfaces.in')}</span> {formatBps(row.in_bps)}
             </span>
             <span>
-              <span className="nd-muted">Out</span> {formatBps(row.out_bps)}
+              <span className="nd-muted">{t('interfaces.out')}</span> {formatBps(row.out_bps)}
             </span>
             {errRate != null && errRate > 0 && (
               <span>
-                <span className="nd-muted">Err</span>{' '}
+                <span className="nd-muted">{t('interfaces.err')}</span>{' '}
                 <span className="nd-if-dock-err">{errRate.toFixed(1)}/s</span>
               </span>
             )}
@@ -338,8 +343,8 @@ function InterfaceDock({
         <button
           type="button"
           className="nd-if-dock-close"
-          aria-label="Close detail"
-          title="Close detail (or click the row again)"
+          aria-label={t('interfaces.closeDetail')}
+          title={t('interfaces.closeDetailTitle')}
           onClick={onClose}
         >
           <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -352,7 +357,8 @@ function InterfaceDock({
         <div className="nd-if-chart">
           <div className="nd-if-chart-t">
             <span>
-              Throughput <span className="nd-unit">(In / Out, bps)</span>
+              {t('interfaces.throughput')}{' '}
+              <span className="nd-unit">{t('interfaces.throughputUnit')}</span>
             </span>
             <span className="nd-if-chart-ctl">
               {hasBandwidth && (
@@ -362,11 +368,13 @@ function InterfaceDock({
                   onClick={toggleThroughputScale}
                   title={
                     throughputScale === 'capacity'
-                      ? 'Y-axis scaled to bandwidth — click for auto-fit'
-                      : 'Y-axis auto-fits traffic — click to scale to bandwidth'
+                      ? t('interfaces.scaleToggleTitleCapacity')
+                      : t('interfaces.scaleToggleTitleAuto')
                   }
                 >
-                  {throughputScale === 'capacity' ? 'Bandwidth' : 'Auto'}
+                  {throughputScale === 'capacity'
+                    ? t('interfaces.bandwidth')
+                    : t('interfaces.auto')}
                 </button>
               )}
               <ChartLegend bandwidth={hasBandwidth} />
@@ -383,19 +391,20 @@ function InterfaceDock({
               xRange={win ?? undefined}
               referenceLine={bw.referenceLine}
               series={[
-                { label: 'In', values: series!.in_bps, color: SERIES_IN },
-                { label: 'Out', values: series!.out_bps, color: SERIES_OUT },
+                { label: t('interfaces.in'), values: series!.in_bps, color: SERIES_IN },
+                { label: t('interfaces.out'), values: series!.out_bps, color: SERIES_OUT },
               ]}
             />
           ) : (
-            <div className="nd-if-chart-empty">No data for this window yet…</div>
+            <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
           )}
         </div>
 
         <div className="nd-if-chart">
           <div className="nd-if-chart-t">
             <span>
-              Errors <span className="nd-unit">(In / Out, /s)</span>
+              {t('interfaces.errors')}{' '}
+              <span className="nd-unit">{t('interfaces.errorsUnit')}</span>
             </span>
             <ChartLegend />
           </div>
@@ -408,12 +417,12 @@ function InterfaceDock({
               legendFormat={(v) => `${formatSi(v)}/s`}
               xRange={win ?? undefined}
               series={[
-                { label: 'In', values: series!.in_errors, color: SERIES_IN },
-                { label: 'Out', values: series!.out_errors, color: SERIES_OUT },
+                { label: t('interfaces.in'), values: series!.in_errors, color: SERIES_IN },
+                { label: t('interfaces.out'), values: series!.out_errors, color: SERIES_OUT },
               ]}
             />
           ) : (
-            <div className="nd-if-chart-empty">No data for this window yet…</div>
+            <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
           )}
         </div>
       </div>
@@ -424,20 +433,21 @@ function InterfaceDock({
 /** In/Out colour key shown beside a dock chart title (matches the chart series colours). With
  *  `bandwidth`, also shows the red configured-bandwidth reference-line key. */
 function ChartLegend({ bandwidth = false }: { bandwidth?: boolean }) {
+  const { t } = useTranslation('nodes');
   return (
     <span className="nd-if-legend">
       <span className="nd-if-legend-k">
         <span className="nd-if-legend-sw" style={{ background: SERIES_IN }} />
-        In
+        {t('interfaces.in')}
       </span>
       <span className="nd-if-legend-k">
         <span className="nd-if-legend-sw" style={{ background: SERIES_OUT }} />
-        Out
+        {t('interfaces.out')}
       </span>
       {bandwidth && (
         <span className="nd-if-legend-k">
           <span className="nd-if-legend-sw nd-if-legend-bw" />
-          Bandwidth
+          {t('interfaces.bandwidth')}
         </span>
       )}
     </span>

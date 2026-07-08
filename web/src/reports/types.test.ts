@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import i18n from '../i18n';
 import type { ReportSectionDef, ReportSpec } from '../types/api';
 import {
   cadenceLabel,
@@ -8,6 +9,10 @@ import {
   sanitizeSpec,
   weekdayName,
 } from './types';
+
+// cadenceLabel/weekdayName resolve their display strings through i18next now; pass the real
+// (English-bundled) translator so the expected output stays the human-readable label.
+const t = i18n.t;
 
 const topCpu: ReportSectionDef = {
   kind: 'top-cpu',
@@ -69,7 +74,7 @@ describe('sanitizeSpec', () => {
 describe('cadenceLabel', () => {
   it('formats daily/weekly/monthly with UTC time', () => {
     expect(
-      cadenceLabel({
+      cadenceLabel(t, {
         frequency: 'daily',
         day_of_week: null,
         day_of_month: null,
@@ -78,7 +83,7 @@ describe('cadenceLabel', () => {
       }),
     ).toBe('Daily · 09:00 UTC');
     expect(
-      cadenceLabel({
+      cadenceLabel(t, {
         frequency: 'weekly',
         day_of_week: 1,
         day_of_month: null,
@@ -87,7 +92,7 @@ describe('cadenceLabel', () => {
       }),
     ).toBe('Weekly · Monday 08:30 UTC');
     expect(
-      cadenceLabel({
+      cadenceLabel(t, {
         frequency: 'monthly',
         day_of_week: null,
         day_of_month: 15,
@@ -98,8 +103,8 @@ describe('cadenceLabel', () => {
   });
 
   it('weekdayName clamps out-of-range indices', () => {
-    expect(weekdayName(0)).toBe('Sunday');
-    expect(weekdayName(6)).toBe('Saturday');
-    expect(weekdayName(99)).toBe('Saturday');
+    expect(weekdayName(t, 0)).toBe('Sunday');
+    expect(weekdayName(t, 6)).toBe('Saturday');
+    expect(weekdayName(t, 99)).toBe('Saturday');
   });
 });

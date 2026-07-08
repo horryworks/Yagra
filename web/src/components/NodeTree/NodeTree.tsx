@@ -15,6 +15,7 @@
 // interaction only; the page owns the data and turns the callbacks into API calls + a reload.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import {
   buildNodeTree,
@@ -138,6 +139,7 @@ export function NodeTree({
   onSetMaintenance,
   onSetMute,
 }: Props) {
+  const { t } = useTranslation('nodes');
   const tree = buildNodeTree(groups, nodes);
   // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
   // set of groups the user explicitly collapsed (empty ⇒ everything open), so the last layout is
@@ -163,12 +165,12 @@ export function NodeTree({
     return (
       <span className="ntree-supp">
         {maint && (
-          <span className="ntree-supp-icon maint" title="In a maintenance window">
+          <span className="ntree-supp-icon maint" title={t('tree.maintTitle')}>
             <WrenchIcon />
           </span>
         )}
         {muted && (
-          <span className="ntree-supp-icon mute" title="Muted — notifications suppressed">
+          <span className="ntree-supp-icon mute" title={t('tree.muteTitle')}>
             <BellOffIcon />
           </span>
         )}
@@ -205,7 +207,7 @@ export function NodeTree({
               setMenu(null);
             }}
           >
-            Custom…
+            {t('tree.custom')}
           </button>
         </div>
       </div>
@@ -213,8 +215,8 @@ export function NodeTree({
     return (
       <>
         <div className="ntree-menu-sep" />
-        {onSetMaintenance && row('Maintenance', onSetMaintenance)}
-        {onSetMute && row('Mute', onSetMute)}
+        {onSetMaintenance && row(t('tree.maintenance'), onSetMaintenance)}
+        {onSetMute && row(t('tree.mute'), onSetMute)}
       </>
     );
   };
@@ -361,7 +363,7 @@ export function NodeTree({
               e.stopPropagation();
               toggle(group.id);
             }}
-            aria-label={isOpen ? 'Collapse' : 'Expand'}
+            aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
             disabled={!hasChildren}
           >
             ▶
@@ -390,7 +392,7 @@ export function NodeTree({
               <button
                 type="button"
                 className="ntree-act"
-                title="Add subgroup"
+                title={t('group.addSubgroup')}
                 onClick={(e) => {
                   e.stopPropagation();
                   onAddGroup(group.id);
@@ -401,7 +403,7 @@ export function NodeTree({
               <button
                 type="button"
                 className="ntree-act"
-                title="Edit / move group"
+                title={t('tree.editMoveGroup')}
                 onClick={(e) => {
                   e.stopPropagation();
                   onEditGroup(group);
@@ -412,7 +414,7 @@ export function NodeTree({
               <button
                 type="button"
                 className="ntree-act"
-                title="Delete group"
+                title={t('group.delete')}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteGroup(group);
@@ -473,7 +475,7 @@ export function NodeTree({
           {node.name}
         </button>
         {node.source === 'meraki' && (
-          <span className="ntree-badge ntree-badge-meraki" title="Cisco Meraki (Dashboard API)">
+          <span className="ntree-badge ntree-badge-meraki" title={t('tree.merakiBadgeTitle')}>
             Meraki
           </span>
         )}
@@ -486,7 +488,7 @@ export function NodeTree({
             <button
               type="button"
               className="ntree-act"
-              title="Move to group…"
+              title={t('tree.moveToGroup')}
               onClick={(e) => {
                 e.stopPropagation();
                 onRequestMoveNode(node);
@@ -511,11 +513,9 @@ export function NodeTree({
       {showToolbar && canEdit && (
         <div className="ntree-toolbar">
           <Button variant="outline" onClick={() => onAddGroup(null)}>
-            ＋ Add group
+            ＋ {t('group.add')}
           </Button>
-          <span className="muted ntree-hint">
-            Drag onto a group to nest/assign; drag between rows to reorder.
-          </span>
+          <span className="muted ntree-hint">{t('tree.dragHint')}</span>
         </div>
       )}
 
@@ -547,7 +547,7 @@ export function NodeTree({
             >
               <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
               <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
-              <span className="ntree-grp-name ntree-ungrouped-label">Ungrouped</span>
+              <span className="ntree-grp-name ntree-ungrouped-label">{t('ungrouped')}</span>
               <span className="ntree-count">{tree.ungrouped.length}</span>
             </div>
             {ungroupedShown.map((n) => renderNode(n, 1))}
@@ -557,7 +557,7 @@ export function NodeTree({
         {tree.roots.length === 0 &&
           tree.ungrouped.length === 0 &&
           (loading ? (
-            <p className="muted ntree-empty">Loading nodes…</p>
+            <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (
             <p
               className="muted ntree-empty"
@@ -567,7 +567,7 @@ export function NodeTree({
                 setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
               }}
             >
-              No nodes in inventory. Add one to start monitoring.
+              {t('tree.emptyInventory')}
             </p>
           ))}
       </div>
@@ -577,33 +577,33 @@ export function NodeTree({
           {menu.kind === 'group' ? (
             <>
               <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
-                Add subgroup
+                {t('group.addSubgroup')}
               </button>
               {onAddNode && (
                 <button type="button" onClick={() => { onAddNode(menu.group.id); setMenu(null); }}>
-                  Add node here…
+                  {t('tree.addNodeHere')}
                 </button>
               )}
               <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
-                Edit / move…
+                {t('tree.editMove')}
               </button>
               {suppressionMenu({ kind: 'group', id: menu.group.id, name: menu.group.name })}
               <div className="ntree-menu-sep" />
               <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
-                Delete
+                {t('common:actions.delete')}
               </button>
             </>
           ) : menu.kind === 'node' ? (
             <>
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
-                Open
+                {t('tree.open')}
               </button>
               <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
-                Move to group…
+                {t('tree.moveToGroup')}
               </button>
               {onAddNode && (
                 <button type="button" onClick={() => { onAddNode(menu.node.group_id); setMenu(null); }}>
-                  Add node…
+                  {t('tree.addNodeEllipsis')}
                 </button>
               )}
               {suppressionMenu({ kind: 'node', id: menu.node.id, name: menu.node.name })}
@@ -611,7 +611,7 @@ export function NodeTree({
                 <>
                   <div className="ntree-menu-sep" />
                   <button type="button" className="danger" onClick={() => { onDeleteNode(menu.node); setMenu(null); }}>
-                    Delete…
+                    {t('tree.deleteEllipsis')}
                   </button>
                 </>
               )}
@@ -620,7 +620,7 @@ export function NodeTree({
             // kind === 'root': right-click on the Ungrouped header / empty tree → add at top level.
             onAddNode && (
               <button type="button" onClick={() => { onAddNode(null); setMenu(null); }}>
-                Add node here…
+                {t('tree.addNodeHere')}
               </button>
             )
           )}

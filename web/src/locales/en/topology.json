@@ -1,1 +1,43 @@
-{}
+{
+  "map": {
+    "note": {
+      "linked": "{{linked}} linked · {{unlinked}} unlinked (no dependencies, not shown)",
+      "default": "Dependency graph — parent → child links, colored by live status."
+    },
+    "loading": "Loading topology…",
+    "emptyInventory": "No nodes in the inventory yet.",
+    "noLinks_one": "No dependency links defined yet. Set a node's upstream on the <depLink>Dependencies</depLink> page (or a node's \"Dependency…\" action) to build the map. {{count}} node in the inventory.",
+    "noLinks_other": "No dependency links defined yet. Set a node's upstream on the <depLink>Dependencies</depLink> page (or a node's \"Dependency…\" action) to build the map. {{count}} nodes in the inventory.",
+    "tooMany": "This topology has {{count}} linked nodes — too many to render as a legible map. Drill in from a specific node's detail page, or use the dependency widget on the dashboard.",
+    "legend": "Legend",
+    "suppressed": "Suppressed (upstream cause)",
+    "nodeTitle": "{{name}} — {{state}}",
+    "nodeTitleSuppressed": "{{name}} — {{state}} · suppressed, root cause: {{cause}}",
+    "control": {
+      "fit": "Fit",
+      "fitToView": "Fit to view",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out"
+    }
+  },
+  "dependency": {
+    "note": "Manage the dependency graph: each node's upstream drives parent-down alert suppression and root-cause roll-up. The Network map visualizes the same edges.",
+    "searchPlaceholder": "Search nodes by name…",
+    "searchAria": "Search nodes",
+    "filterAria": "Filter dependencies",
+    "filter": {
+      "all": "All nodes",
+      "upstream": "With upstream",
+      "suppressed": "Currently suppressed"
+    },
+    "cols": {
+      "node": "Node",
+      "upstream": "Depends on",
+      "status": "Status",
+      "root": "Root cause",
+      "actions": "Actions"
+    },
+    "emptyInventory": "No nodes in the inventory yet.",
+    "emptyFiltered": "No matching nodes — adjust the search or filter."
+  }
+}

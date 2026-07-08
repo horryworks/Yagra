@@ -7,6 +7,8 @@
 // read-only toward Meraki — nothing this page does can change a customer's Meraki configuration.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api, ApiError } from '../../services/api';
 import { useAuthStore } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
@@ -18,20 +20,23 @@ import { TextInput, Select } from '../../components/ui/Field';
 import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
 import './MerakiIntegrationPage.css';
 
-const REGIONS: { label: string; base_url: string }[] = [
-  { label: 'Global (api.meraki.com)', base_url: 'https://api.meraki.com' },
-  { label: 'Canada (api.meraki.ca)', base_url: 'https://api.meraki.ca' },
-  { label: 'China (api.meraki.cn)', base_url: 'https://api.meraki.cn' },
-  { label: 'US Gov (api.gov-meraki.com)', base_url: 'https://api.gov-meraki.com' },
+// The visible region name is a translation key; the base_url (the technical Meraki endpoint) is not.
+const REGIONS: { labelKey: string; base_url: string }[] = [
+  { labelKey: 'meraki.regions.global', base_url: 'https://api.meraki.com' },
+  { labelKey: 'meraki.regions.canada', base_url: 'https://api.meraki.ca' },
+  { labelKey: 'meraki.regions.china', base_url: 'https://api.meraki.cn' },
+  { labelKey: 'meraki.regions.usGov', base_url: 'https://api.gov-meraki.com' },
 ];
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
-const tierList = (tiers: string[]) => (tiers.length ? tiers.join(', ') : 'none');
+const tierList = (tiers: string[], t: TFunction) =>
+  tiers.length ? tiers.map((x) => t(`meraki.tier.${x}`)).join(', ') : t('meraki.tiersNone');
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select). */
 function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation('system');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(REGIONS[0].base_url);
   const [orgs, setOrgs] = useState<MerakiOrgOption[] | null>(null);
@@ -48,7 +53,7 @@ function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
         setOrgs(list);
         setSelected(new Set(list.map((o) => o.id)));
       })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to reach the Meraki API')))
+      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.discover'))))
       .finally(() => setBusy(false));
   };
 
@@ -70,27 +75,27 @@ function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add organizations'));
+        setError(errMsg(e, t('meraki.err.addOrgs')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add Meraki organization"
+      title={t('meraki.addOrg.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           {orgs === null ? (
             <Button variant="primary" onClick={discover} disabled={!apiKey.trim() || busy}>
-              Find organizations
+              {t('meraki.addOrg.find')}
             </Button>
           ) : (
             <Button variant="primary" onClick={create} disabled={selected.size === 0 || busy}>
-              Add {selected.size} organization{selected.size === 1 ? '' : 's'}
+              {t('meraki.addOrg.add', { count: selected.size })}
             </Button>
           )}
         </>
@@ -99,39 +104,36 @@ function AddOrgModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
       {orgs === null ? (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">Region</label>
+            <label className="modal-field-label">{t('meraki.addOrg.region')}</label>
             <Select value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}>
               {REGIONS.map((r) => (
                 <option key={r.base_url} value={r.base_url}>
-                  {r.label}
+                  {t(r.labelKey)}
                 </option>
               ))}
             </Select>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">API key (read-only)</label>
+            <label className="modal-field-label">{t('meraki.addOrg.apiKeyLabel')}</label>
             <TextInput
               className="mono"
               type="password"
-              placeholder="Meraki Dashboard API key"
+              placeholder={t('meraki.addOrg.apiKeyPlaceholder')}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               autoComplete="new-password"
               autoFocus
             />
             <span className="modal-hint">
-              Use a <strong>read-only</strong> Dashboard API key. It is sealed (encrypted at rest)
-              and never shown again. Yagra only ever issues read-only GET calls to Meraki.
+              <Trans t={t} i18nKey="meraki.addOrg.apiKeyHint" components={{ b: <strong /> }} />
             </span>
           </div>
         </>
       ) : (
         <>
-          <p className="modal-hint">
-            Select the organizations to monitor. All share this one API key.
-          </p>
+          <p className="modal-hint">{t('meraki.addOrg.selectHint')}</p>
           <div className="meraki-org-picker">
-            {orgs.length === 0 && <p className="muted">This key can't access any organizations.</p>}
+            {orgs.length === 0 && <p className="muted">{t('meraki.addOrg.noOrgs')}</p>}
             {orgs.map((o) => (
               <label className="meraki-check-row" key={o.id}>
                 <input
@@ -161,6 +163,7 @@ function NetworksModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('system');
   const [networks, setNetworks] = useState<MerakiNetwork[] | null>(null);
   const [monitored, setMonitored] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -173,7 +176,8 @@ function NetworksModal({
         setNetworks(nets);
         setMonitored(new Set(nets.filter((n) => n.monitored).map((n) => n.network_id)));
       })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to load networks')));
+      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.loadNetworks'))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org.id]);
 
   const toggle = (id: string) =>
@@ -199,34 +203,31 @@ function NetworksModal({
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save network scope'));
+        setError(errMsg(e, t('meraki.err.saveScope')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={`Network scope — ${org.name}`}
+      title={t('meraki.networks.title', { name: org.name })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={busy || !networks}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
-      <p className="modal-hint">
-        Only monitored networks are collected. Un-checking a network stops narrowing API calls to it
-        (existing device nodes are untouched — remove them to stop monitoring a device).
-      </p>
+      <p className="modal-hint">{t('meraki.networks.hint')}</p>
       {networks === null ? (
-        <p className="muted">Loading…</p>
+        <p className="muted">{t('common:loading')}</p>
       ) : networks.length === 0 ? (
-        <p className="muted">No networks yet — run “Import devices” to enumerate the org first.</p>
+        <p className="muted">{t('meraki.networks.empty')}</p>
       ) : (
         <div className="meraki-org-picker">
           {networks.map((n) => (
@@ -257,6 +258,7 @@ function CadenceModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('system');
   const [availability, setAvailability] = useState(org.availability_secs);
   const [uplink, setUplink] = useState(org.uplink_secs);
   const [traffic, setTraffic] = useState(org.traffic_secs);
@@ -266,11 +268,11 @@ function CadenceModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const toggleTier = (t: string) =>
+  const toggleTier = (tier: string) =>
     setTiers((s) => {
       const next = new Set(s);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
+      if (next.has(tier)) next.delete(tier);
+      else next.add(tier);
       return next;
     });
 
@@ -291,7 +293,7 @@ function CadenceModal({
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save cadence'));
+        setError(errMsg(e, t('meraki.err.saveCadence')));
         setBusy(false);
       });
   };
@@ -310,39 +312,39 @@ function CadenceModal({
 
   return (
     <Modal
-      title={`Cadence — ${org.name}`}
+      title={t('meraki.cadence.title', { name: org.name })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Enabled tiers</label>
+        <label className="modal-field-label">{t('meraki.cadence.enabledTiers')}</label>
         <div className="meraki-tier-row">
-          {(['availability', 'uplink', 'traffic'] as const).map((t) => (
-            <label className="meraki-chip-check" key={t}>
-              <input type="checkbox" checked={tiers.has(t)} onChange={() => toggleTier(t)} />
-              <span>{t}</span>
+          {(['availability', 'uplink', 'traffic'] as const).map((tier) => (
+            <label className="meraki-chip-check" key={tier}>
+              <input type="checkbox" checked={tiers.has(tier)} onChange={() => toggleTier(tier)} />
+              <span>{t(`meraki.tier.${tier}`)}</span>
             </label>
           ))}
         </div>
       </div>
-      {numField('Availability interval (s)', availability, setAvailability, '60–3600')}
-      {numField('Uplink interval (s)', uplink, setUplink, '60–3600')}
-      {numField('Traffic interval (s)', traffic, setTraffic, '300–86400')}
-      {numField('Inventory interval (s)', inventory, setInventory, '900–604800')}
+      {numField(t('meraki.cadence.availabilityInterval'), availability, setAvailability, '60–3600')}
+      {numField(t('meraki.cadence.uplinkInterval'), uplink, setUplink, '60–3600')}
+      {numField(t('meraki.cadence.trafficInterval'), traffic, setTraffic, '300–86400')}
+      {numField(t('meraki.cadence.inventoryInterval'), inventory, setInventory, '900–604800')}
       {numField(
-        'Rate budget (req/s)',
+        t('meraki.cadence.rateBudget'),
         targetRps,
         setTargetRps,
-        'Conservative — kept well under the org API cap so the customer keeps headroom.',
+        t('meraki.cadence.rateBudgetHint'),
       )}
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -350,6 +352,7 @@ function CadenceModal({
 }
 
 export function MerakiIntegrationPage() {
+  const { t } = useTranslation('system');
   const authed = useAuthStore((s) => s.authed);
   const [orgs, setOrgs] = useState<MerakiOrg[]>([]);
   const [loading, setLoading] = useState(true);
@@ -395,13 +398,13 @@ export function MerakiIntegrationPage() {
     if (unavailable) {
       return (
         <Card>
-          <p className="muted">Integrations are unavailable in skeleton mode (no store).</p>
+          <p className="muted">{t('integrations.unavailable')}</p>
         </Card>
       );
     }
     return (
       <>
-        <Card title="Meraki polling" className="meraki-killswitch-card">
+        <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
           <label className="meraki-switch">
             <input
               type="checkbox"
@@ -409,60 +412,55 @@ export function MerakiIntegrationPage() {
               onChange={togglePolling}
               disabled={!authed}
             />
-            <span>
-              {pollingOn ? 'Polling enabled' : 'Polling paused (kill switch engaged)'}
-            </span>
+            <span>{pollingOn ? t('meraki.polling.enabled') : t('meraki.polling.paused')}</span>
           </label>
-          <p className="muted meraki-killswitch-hint">
-            Global safeguard — instantly halt all Meraki Dashboard API polling fleet-wide, without
-            deleting any organization config.
-          </p>
+          <p className="muted meraki-killswitch-hint">{t('meraki.polling.hint')}</p>
         </Card>
 
         <Card
-          title="Organizations"
+          title={t('meraki.orgs.title')}
           actions={
             authed ? (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add organization
+                {t('meraki.orgs.add')}
               </Button>
             ) : undefined
           }
         >
           {orgs.length === 0 ? (
-            <p className="muted">
-              {loading ? 'Loading…' : 'No Meraki organizations yet. Add one to start monitoring.'}
-            </p>
+            <p className="muted">{loading ? t('common:loading') : t('meraki.orgs.empty')}</p>
           ) : (
             <div className="meraki-org-list">
               {orgs.map((o) => (
                 <div className="meraki-org" key={o.id}>
                   <div className="meraki-org-main">
                     <span className="meraki-org-name">{o.name}</span>
-                    <span className="meraki-org-id mono">org {o.org_id}</span>
+                    <span className="meraki-org-id mono">{t('meraki.orgs.orgId', { id: o.org_id })}</span>
                     <span
                       className={`meraki-org-state ${o.enabled ? 'on' : 'off'}`}
                     >
-                      {o.enabled ? 'enabled' : 'paused'}
+                      {o.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
                     </span>
-                    <span className="meraki-org-tiers">tiers: {tierList(o.enabled_tiers)}</span>
+                    <span className="meraki-org-tiers">
+                      {t('meraki.tiersPrefix')} {tierList(o.enabled_tiers, t)}
+                    </span>
                   </div>
                   {authed && (
                     <div className="meraki-org-actions">
                       <Button variant="outline" onClick={() => setImporting(o)}>
-                        Import devices
+                        {t('meraki.org.import')}
                       </Button>
                       <Button variant="outline" onClick={() => setScoping(o)}>
-                        Networks
+                        {t('meraki.org.networks')}
                       </Button>
                       <Button variant="outline" onClick={() => setEditing(o)}>
-                        Cadence
+                        {t('meraki.org.cadence')}
                       </Button>
                       <Button variant="outline" onClick={() => toggleEnabled(o)}>
-                        {o.enabled ? 'Pause' : 'Resume'}
+                        {o.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
                       </Button>
                       <Button variant="danger" onClick={() => setDeleting(o)}>
-                        Delete
+                        {t('common:actions.delete')}
                       </Button>
                     </div>
                   )}
@@ -474,18 +472,18 @@ export function MerakiIntegrationPage() {
       </>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, loading, unavailable, pollingOn, authed]);
+  }, [orgs, loading, unavailable, pollingOn, authed, t]);
 
   return (
     <div>
       <PageHeader
-        title="Cisco Meraki"
+        title={t('meraki.name')}
         trail={[
-          { label: 'Settings' },
-          { label: 'Integrations', to: '/settings/integrations' },
-          { label: 'Cisco Meraki' },
+          { label: t('nav:sections.settings') },
+          { label: t('nav:settings.integrations'), to: '/settings/integrations' },
+          { label: t('meraki.name') },
         ]}
-        note="Read-only Dashboard API monitoring."
+        note={t('meraki.note')}
       />
       {content}
 
@@ -512,12 +510,12 @@ export function MerakiIntegrationPage() {
       )}
       {deleting && (
         <Modal
-          title="Delete organization"
+          title={t('meraki.delete.title')}
           onClose={() => setDeleting(null)}
           footer={
             <>
               <Button variant="outline" onClick={() => setDeleting(null)}>
-                Cancel
+                {t('common:actions.cancel')}
               </Button>
               <Button
                 variant="danger"
@@ -527,14 +525,18 @@ export function MerakiIntegrationPage() {
                   api.deleteMerakiOrg(id).then(load).catch(() => undefined);
                 }}
               >
-                Delete
+                {t('common:actions.delete')}
               </Button>
             </>
           }
         >
           <p className="modal-confirm-text">
-            Delete <strong>{deleting.name}</strong>? Its imported device nodes, network scope, and
-            HostTree groups are removed. Metric history in the TSDB is left. This cannot be undone.
+            <Trans
+              t={t}
+              i18nKey="meraki.delete.confirmText"
+              values={{ name: deleting.name }}
+              components={{ b: <strong /> }}
+            />
           </p>
         </Modal>
       )}

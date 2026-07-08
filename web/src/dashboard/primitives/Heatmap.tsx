@@ -3,6 +3,7 @@
 // a series base mixed toward the track color by intensity (color-mix) — the base is passed in so
 // the widget owns the channel (series for counts, status for utilization).
 
+import { useTranslation } from 'react-i18next';
 import './Heatmap.css';
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function Heatmap({ rowLabels, colLabels, values, max, colorBase = 'var(--series-1)', title }: Props) {
+  const { t: tr } = useTranslation('dashboard');
   const peak = max ?? Math.max(1, ...values.flat());
   return (
     <div className="heatmap" style={{ ['--heat-cols' as string]: colLabels.length }}>
@@ -48,7 +50,7 @@ export function Heatmap({ rowLabels, colLabels, values, max, colorBase = 'var(--
                 style={missing ? undefined : { background: bg }}
                 title={
                   missing
-                    ? `${row} · ${colLabels[c]}: no data`
+                    ? `${row} · ${colLabels[c]}: ${tr('primitives.heatmap.noData')}`
                     : title
                       ? title(row, colLabels[c], v)
                       : String(v)

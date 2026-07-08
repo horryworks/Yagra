@@ -8,6 +8,8 @@
 // loaded pages (the server query stays limit+keyset); scrolling to the end loads the next page.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { AuditRow } from '../types/api';
@@ -47,40 +49,45 @@ function parseAction(action: string): ParsedAction {
 /** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
 const csvField = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
-/** Columns for the virtualized table. Stateless renderers → a stable module constant. */
-const COLUMNS: Column<AuditRow>[] = [
-  { key: 'time', header: 'Time', width: '190px', render: (r) => <TimeCell iso={r.at} /> },
-  {
-    key: 'user',
-    header: 'User',
-    width: '168px',
-    render: (r) => (
-      <span className={r.username === 'unknown' ? 'yt-user system' : 'yt-user'}>
-        <Monogram name={r.username} system={r.username === 'unknown'} />
-        <span className="yt-user-name">{r.username}</span>
-      </span>
-    ),
-  },
-  {
-    key: 'action',
-    header: 'Action',
-    width: '1fr',
-    render: (r) => {
-      const a = parseAction(r.action);
-      return a.login ? (
-        <MethodChip label="SIGN IN" />
-      ) : (
-        <>
-          <MethodChip label={a.method} />
-          <span className="yt-path">{a.path}</span>
-        </>
-      );
+/** Columns for the virtualized table. Stateless renderers, but the headers + synthetic "sign in"
+ *  label are localized, so build them from the calling component's `t` (rebuild on language
+ *  change). HTTP method names (POST/PUT/…) and paths are technical and rendered verbatim. */
+function auditColumns(t: TFunction): Column<AuditRow>[] {
+  return [
+    { key: 'time', header: t('audit.cols.time'), width: '190px', render: (r) => <TimeCell iso={r.at} /> },
+    {
+      key: 'user',
+      header: t('audit.cols.user'),
+      width: '168px',
+      render: (r) => (
+        <span className={r.username === 'unknown' ? 'yt-user system' : 'yt-user'}>
+          <Monogram name={r.username} system={r.username === 'unknown'} />
+          <span className="yt-user-name">{r.username}</span>
+        </span>
+      ),
     },
-  },
-  { key: 'status', header: 'Status', width: '150px', render: (r) => <HttpStatus status={r.status} /> },
-];
+    {
+      key: 'action',
+      header: t('audit.cols.action'),
+      width: '1fr',
+      render: (r) => {
+        const a = parseAction(r.action);
+        return a.login ? (
+          <MethodChip label={t('audit.signIn')} />
+        ) : (
+          <>
+            <MethodChip label={a.method} />
+            <span className="yt-path">{a.path}</span>
+          </>
+        );
+      },
+    },
+    { key: 'status', header: t('audit.cols.status'), width: '150px', render: (r) => <HttpStatus status={r.status} /> },
+  ];
+}
 
 export function AuditPage() {
+  const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [exhausted, setExhausted] = useState(false);
@@ -95,6 +102,9 @@ export function AuditPage() {
   const [statusF, setStatusF] = useState('all');
   const [rangeF, setRangeF] = useState('all');
 
+  // Columns close over the translator, so rebuild them on a language switch.
+  const columns = useMemo(() => auditColumns(t), [t]);
+
   const loadFirst = useCallback(() => {
     setError(null);
     api
@@ -104,10 +114,10 @@ export function AuditPage() {
         setExhausted(page.length < PAGE_SIZE);
       })
       .catch((e: unknown) =>
-        setError(e instanceof ApiError ? e.message : 'failed to load the audit log'),
+        setError(e instanceof ApiError ? e.message : t('audit.err.load')),
       )
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (authed) loadFirst();
@@ -124,11 +134,11 @@ export function AuditPage() {
         setRows((cur) => [...cur, ...page]);
         setExhausted(page.length < PAGE_SIZE);
       })
-      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'failed to load more'))
+      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : t('audit.err.loadMore')))
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [rows, exhausted]);
+  }, [rows, exhausted, t]);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -162,14 +172,14 @@ export function AuditPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title="Audit log"
-        trail={[{ label: 'Settings' }, { label: 'Audit log' }]}
-        note="Every configuration change and login event: who, what, when. Read-only · immutable · 365-day retention."
+        title={t('nav:settings.audit')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.audit') }]}
+        note={t('audit.note')}
       />
 
       {!authed ? (
         <Card>
-          <p className="muted">Sign in as an admin to view the audit log.</p>
+          <p className="muted">{t('audit.signInPrompt')}</p>
         </Card>
       ) : (
         <>
@@ -177,33 +187,33 @@ export function AuditPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search user or path…"
-              ariaLabel="Search audit log"
+              placeholder={t('audit.searchPlaceholder')}
+              ariaLabel={t('audit.searchAria')}
             />
-            <Select value={methodF} onChange={(e) => setMethodF(e.target.value)} aria-label="Filter by action">
-              <option value="all">All actions</option>
+            <Select value={methodF} onChange={(e) => setMethodF(e.target.value)} aria-label={t('audit.filterActionAria')}>
+              <option value="all">{t('audit.filter.allActions')}</option>
               <option value="POST">POST</option>
               <option value="PUT">PUT</option>
               <option value="PATCH">PATCH</option>
               <option value="DELETE">DELETE</option>
-              <option value="login">Sign in</option>
+              <option value="login">{t('audit.filter.signIn')}</option>
             </Select>
-            <Select value={statusF} onChange={(e) => setStatusF(e.target.value)} aria-label="Filter by status">
-              <option value="all">All status</option>
-              <option value="ok">Success (2xx)</option>
-              <option value="client">Client error (4xx)</option>
-              <option value="server">Server error (5xx)</option>
+            <Select value={statusF} onChange={(e) => setStatusF(e.target.value)} aria-label={t('audit.filterStatusAria')}>
+              <option value="all">{t('audit.filter.allStatus')}</option>
+              <option value="ok">{t('audit.filter.success')}</option>
+              <option value="client">{t('audit.filter.clientError')}</option>
+              <option value="server">{t('audit.filter.serverError')}</option>
             </Select>
-            <Select value={rangeF} onChange={(e) => setRangeF(e.target.value)} aria-label="Time range">
-              <option value="all">All time</option>
-              <option value="24h">Last 24h</option>
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
+            <Select value={rangeF} onChange={(e) => setRangeF(e.target.value)} aria-label={t('common:range.timeRange')}>
+              <option value="all">{t('audit.range.all')}</option>
+              <option value="24h">{t('audit.range.last24h')}</option>
+              <option value="7d">{t('audit.range.last7d')}</option>
+              <option value="30d">{t('audit.range.last30d')}</option>
             </Select>
             <TableSpacer />
-            <ResultCount shown={list.length} noun="entries" />
+            <ResultCount shown={list.length} noun={t('audit.entry', { count: list.length })} />
             <Button variant="outline" onClick={exportCsv} disabled={list.length === 0}>
-              <DownloadIcon width={15} height={15} /> Export
+              <DownloadIcon width={15} height={15} /> {t('audit.export')}
             </Button>
           </TableToolbar>
 
@@ -211,13 +221,11 @@ export function AuditPage() {
 
           <DataTable
             rows={list}
-            columns={COLUMNS}
+            columns={columns}
             rowKey={(r) => r.id}
             onReachEnd={exhausted ? undefined : loadMore}
             loading={loading}
-            empty={
-              rows.length === 0 ? 'No audit entries yet' : 'No matching entries — adjust the filters or time range.'
-            }
+            empty={rows.length === 0 ? t('audit.empty.none') : t('audit.empty.filtered')}
           />
         </>
       )}

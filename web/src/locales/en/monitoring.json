@@ -1,1 +1,267 @@
-{}
+{
+  "categories": {
+    "router": "Router",
+    "l3-switch": "L3 switch",
+    "l2-switch": "L2 switch",
+    "firewall": "Firewall",
+    "wireless-controller": "Wireless controller",
+    "wireless-ap": "Wireless AP",
+    "load-balancer": "Load balancer",
+    "server": "Server",
+    "hypervisor": "Hypervisor",
+    "storage": "Storage / NAS",
+    "power": "Power (UPS / PDU)",
+    "printer": "Printer",
+    "generic-snmp": "Generic SNMP",
+    "ping-only": "Ping only"
+  },
+  "enum": {
+    "scalar": "scalar",
+    "table": "table",
+    "tablePerInterface": "table (per-interface)",
+    "gauge": "gauge",
+    "counter": "counter"
+  },
+  "shared": {
+    "trySearch": "Try a different search.",
+    "optional": "optional",
+    "colActions": "Actions",
+    "metricsCount_one": "{{count}} metric",
+    "metricsCount_other": "{{count}} metrics"
+  },
+  "profiles": {
+    "note": "Device-class buckets (role × vendor). Attach Metric sets here; nodes inherit them via their profile.",
+    "unavailable": "Profile management is unavailable in skeleton mode (no metadata store).",
+    "searchPlaceholder": "Search name, vendor or role…",
+    "searchAria": "Search profiles",
+    "addProfile": "Add profile",
+    "otherGroup": "Other",
+    "defaultInterval": "default",
+    "hideSets": "Hide sets",
+    "editProfile": "Edit profile",
+    "deleteProfile": "Delete profile",
+    "cols": {
+      "name": "Name",
+      "vendor": "Vendor",
+      "pollInterval": "Poll interval",
+      "metricSets": "Metric sets"
+    },
+    "empty": {
+      "none": "No profiles yet",
+      "noMatch": "No profiles match",
+      "noneSub": "Add a device-class profile (e.g. “Cisco Catalyst switch”)."
+    },
+    "modal": {
+      "addTitle": "Add device profile",
+      "editTitle": "Edit device profile",
+      "namePlaceholder": "e.g. Cisco Catalyst switch",
+      "role": "Role",
+      "pollInterval": "Poll interval (seconds)",
+      "pollIntervalPlaceholder": "leave blank to use the system default",
+      "pollIntervalHint": "Overrides the system default for nodes using this profile. 10–3600 seconds; leave blank to inherit the default."
+    },
+    "delete": {
+      "confirm": "Delete profile <strong>{{name}}</strong>? Nodes using it keep running but lose this class's collection defaults."
+    },
+    "templates": {
+      "empty": "No metric sets exist yet. Create some first."
+    },
+    "err": {
+      "pollInterval": "Poll interval must be a whole number of seconds between 10 and 3600.",
+      "save": "failed to save profile",
+      "delete": "failed to delete profile",
+      "loadTemplates": "failed to load attached templates",
+      "saveTemplates": "failed to save templates"
+    }
+  },
+  "rules": {
+    "note": "Map a discovered device's sysObjectID / sysDescr to a Device profile. Discovery pre-selects the match on import.",
+    "unavailable": "Classification-rule management is unavailable in skeleton mode (no metadata store).",
+    "searchPlaceholder": "Search signature, profile, maker…",
+    "searchAria": "Search classification rules",
+    "addRule": "Add rule",
+    "enabled": "enabled",
+    "disabled": "disabled",
+    "enable": "Enable rule",
+    "disable": "Disable rule",
+    "editRule": "Edit rule",
+    "deleteRule": "Delete rule",
+    "cols": {
+      "priority": "Priority",
+      "match": "Match",
+      "profile": "Profile",
+      "status": "Status"
+    },
+    "empty": {
+      "none": "No classification rules",
+      "noMatch": "No rules match",
+      "noneSub": "Add a rule mapping a sysObjectID prefix or sysDescr pattern to a profile."
+    },
+    "modal": {
+      "addTitle": "Add classification rule",
+      "editTitle": "Edit classification rule",
+      "deleteTitle": "Delete classification rule",
+      "chooseProfile": "(choose a profile)",
+      "oidPrefix": "sysObjectID prefix",
+      "oidPrefixPlaceholder": "e.g. 1.3.6.1.4.1.9.",
+      "oidPrefixHint": "Authoritative — outranks sysDescr. End with a dot so 1.3…9. won't also match …91. Pair with a sysDescr regex to split one vendor by NOS.",
+      "descrRegex": "sysDescr regex",
+      "descrRegexPlaceholder": "e.g. (?i)cisco|ios",
+      "descrRegexHintBoth": "With a prefix set, both must match (vendor + NOS); on its own, it matches sysDescr directly.",
+      "matcherRequired": "Provide a sysObjectID prefix and/or a sysDescr regex.",
+      "priorityHint": "Lower = evaluated first.",
+      "maker": "Maker",
+      "model": "Model",
+      "enabledLabel": "Enabled"
+    },
+    "delete": {
+      "confirm": "Delete the rule mapping <m>{{sig}}</m> → <strong>{{profile}}</strong>? Discovery will stop suggesting this profile for matching devices (already-imported nodes are unaffected)."
+    },
+    "err": {
+      "update": "failed to update rule",
+      "save": "failed to save rule",
+      "delete": "failed to delete rule"
+    }
+  },
+  "sets": {
+    "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
+    "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",
+    "searchPlaceholder": "Search name or description…",
+    "searchAria": "Search metric sets",
+    "addSet": "Add metric set",
+    "deleteSet": "Delete metric set",
+    "noun_one": "set",
+    "noun_other": "sets",
+    "cols": {
+      "name": "Name",
+      "description": "Description",
+      "metrics": "Metrics"
+    },
+    "empty": {
+      "none": "No metric sets yet",
+      "noMatch": "No metric sets match",
+      "noneSub": "Add a reusable metric bundle (e.g. “Standard interfaces”)."
+    },
+    "modal": {
+      "addSubmit": "Add set",
+      "namePlaceholder": "e.g. Standard interfaces",
+      "descPlaceholder": "Optional"
+    },
+    "delete": {
+      "confirm": "Delete metric set <strong>{{name}}</strong>? Profiles that attach it lose this bundle's metrics."
+    },
+    "err": {
+      "create": "failed to create template",
+      "delete": "failed to delete template"
+    }
+  },
+  "editor": {
+    "metricNamePlaceholder": "metric_name (e.g. cpu_util)",
+    "oidPlaceholder": "OID (e.g. 1.3.6.1.2.1.1.3.0)",
+    "collectionKindAria": "Collection kind",
+    "metricKindAria": "Metric kind",
+    "browseCatalog": "Browse catalog",
+    "closeCatalog": "Close catalog",
+    "addMetric": "Add metric",
+    "deleteMetric": "Delete metric",
+    "pickerSearchPlaceholder": "Search the MIB catalog by name / OID / vendor…",
+    "noCatalogMatch": "No catalog entries match.",
+    "emptyTemplate": "No metrics in this set yet.",
+    "emptyNode": "No node-level metrics. The profile's metric sets / built-in defaults still apply.",
+    "cols": {
+      "metric": "Metric",
+      "oid": "OID",
+      "type": "Type",
+      "kind": "Kind"
+    },
+    "err": {
+      "load": "failed to load metrics",
+      "add": "failed to add metric",
+      "delete": "failed to delete metric"
+    }
+  },
+  "mib": {
+    "note": "A curated OID catalog. Pick metrics by name in the collection editor instead of typing OIDs.",
+    "unavailable": "The MIB catalog is unavailable in skeleton mode.",
+    "searchPlaceholder": "Search metric / OID / vendor…",
+    "searchAria": "Search MIB catalog",
+    "addEntry": "Add entry",
+    "addTitle": "Add catalog entry",
+    "deleteTitle": "Delete catalog entry",
+    "standard": "standard",
+    "noun_one": "entry",
+    "noun_other": "entries",
+    "cols": {
+      "metric": "Metric",
+      "oid": "OID",
+      "type": "Type",
+      "vendor": "Vendor"
+    },
+    "empty": {
+      "noMatch": "No catalog entries match"
+    },
+    "modal": {
+      "metricName": "Metric name",
+      "metricNamePlaceholder": "metric_name",
+      "oid": "OID",
+      "oidPlaceholder": "OID (e.g. 1.3.6.1.2.1.1.3.0)",
+      "collection": "Collection",
+      "metricKind": "Metric kind",
+      "vendor": "Vendor",
+      "vendorPlaceholder": "vendor (optional)",
+      "vendorHint": "Leave blank for a standard (non-vendor) OID."
+    },
+    "delete": {
+      "confirm": "Delete catalog entry <strong>{{name}}</strong>? Collections referencing it by name will no longer resolve from the catalog. This cannot be undone."
+    },
+    "err": {
+      "add": "failed to add entry",
+      "delete": "failed to delete entry"
+    }
+  },
+  "discovery": {
+    "note": "Sweep a subnet for live + SNMP devices, then import the ones you want.",
+    "scanTitle": "Scan a subnet",
+    "resultsTitle": "Discovered devices",
+    "signIn": "Sign in as an admin to run discovery.",
+    "targetPlaceholder": "CIDR, range or list (e.g. 192.168.1.0/24, 10.0.0.5, 192.168.1.10-20)",
+    "scan": "Scan",
+    "scanning": "Scanning…",
+    "examplesHint": "Examples: <c>192.168.1.0/24</c> · <c>10.0.0.5</c> · <c>192.168.1.10-20</c> · <c>192.168.1.10-192.168.1.20</c> — comma-separate for multiple.",
+    "credsLink": "Discovery uses your stored credentials. <lnk>Manage credentials →</lnk>",
+    "none": "(none)",
+    "noSnmp": "no SNMP",
+    "sysObjectIdTitle": "sysObjectID",
+    "matchedSuffix": " ✓ matched",
+    "importSelectedCount": "Import {{count}} selected",
+    "importSelectedNone": "Import selected",
+    "badge": {
+      "imported": "imported",
+      "ping": "ping",
+      "noPing": "no ping"
+    },
+    "cols": {
+      "address": "Address",
+      "identity": "Identity",
+      "name": "Name",
+      "profile": "Profile",
+      "credential": "Credential"
+    },
+    "msg": {
+      "scanningCount_one": "Scanning {{count}} address…",
+      "scanningCount_other": "Scanning {{count}} addresses…",
+      "scanComplete_one": "Scan complete — {{count}} device found.",
+      "scanComplete_other": "Scan complete — {{count}} devices found.",
+      "scanningProgress": "Scanning… {{probed}}/{{total}} addresses probed",
+      "nowAt": " — now at {{addr}}",
+      "imported_one": "Imported {{count}} node — they will start polling shortly.",
+      "imported_other": "Imported {{count}} nodes — they will start polling shortly."
+    },
+    "err": {
+      "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",
+      "startScan": "failed to start scan",
+      "selectOne": "Select at least one device to import.",
+      "import": "failed to import"
+    }
+  }
+}

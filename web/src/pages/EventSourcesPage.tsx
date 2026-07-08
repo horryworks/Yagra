@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { EventSource } from '../types/api';
@@ -17,6 +18,7 @@ const COLS = '1.6fr 120px 110px 130px';
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function EventSourcesPage() {
+  const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<EventSource[]>([]);
   const [query, setQuery] = useState('');
@@ -56,7 +58,7 @@ export function EventSourcesPage() {
     api
       .updateEventSource(r.id, { name: r.name, enabled: !r.enabled, node_id: r.node_id })
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to update source')));
+      .catch((e: unknown) => setError(errMsg(e, t('eventSources.err.update'))));
   };
 
   const rotate = (r: EventSource) => {
@@ -64,49 +66,54 @@ export function EventSourcesPage() {
     api
       .rotateEventSourceToken(r.id)
       .then(({ token }) => setIssued({ id: r.id, token }))
-      .catch((e: unknown) => setError(errMsg(e, 'failed to rotate token')));
+      .catch((e: unknown) => setError(errMsg(e, t('eventSources.err.rotate'))));
   };
 
   return (
     <div>
-      <PageHeader
-        title="Event sources"
-        note="Webhook senders that POST events to Yagra. Each carries a bearer token, shown once at create/rotate; store it in the sender's config."
-      />
+      <PageHeader title={t('nav:alerts.eventSources')} note={t('eventSources.note')} />
       {unavailable ? (
-        <Card>Event sources are unavailable in this mode (no metadata store).</Card>
+        <Card>{t('eventSources.unavailable')}</Card>
       ) : (
         <>
           <TableToolbar>
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search sources…"
-              ariaLabel="Search event sources"
+              placeholder={t('eventSources.searchPlaceholder')}
+              ariaLabel={t('eventSources.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="sources" />
+            <ResultCount
+              shown={filtered.length}
+              total={rows.length}
+              noun={t('noun.source', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add source
+                {t('eventSources.add')}
               </Button>
             )}
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
           <div className="ytable eventsources-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Name</div>
-              <div className="ytable-h">Kind</div>
-              <div className="ytable-h">Status</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('eventSources.cols.name')}</div>
+              <div className="ytable-h">{t('eventSources.cols.kind')}</div>
+              <div className="ytable-h">{t('eventSources.cols.status')}</div>
+              <div className="ytable-h right">{t('eventSources.cols.actions')}</div>
             </div>
             {filtered.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
-                  {loading ? 'Loading…' : rows.length === 0 ? 'No event sources' : 'No sources match'}
+                  {loading
+                    ? t('common:loading')
+                    : rows.length === 0
+                      ? t('eventSources.empty')
+                      : t('eventSources.emptyMatch')}
                 </p>
                 {!loading && rows.length === 0 && (
-                  <p className="yt-empty-sub">Add a webhook source to receive events over HTTP.</p>
+                  <p className="yt-empty-sub">{t('eventSources.emptySub')}</p>
                 )}
               </div>
             ) : (
@@ -118,25 +125,29 @@ export function EventSourcesPage() {
                   </div>
                   <div className="ytable-cell">
                     <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? 'enabled' : 'disabled'}
+                      {r.enabled ? t('status.enabled') : t('status.disabled')}
                     </Badge>
                   </div>
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
-                        <IconButton title="Rotate token" onClick={() => rotate(r)}>
+                        <IconButton title={t('eventSources.rotate')} onClick={() => rotate(r)}>
                           <KeyIcon />
                         </IconButton>
                         <IconButton
-                          title={r.enabled ? 'Disable source' : 'Enable source'}
+                          title={r.enabled ? t('eventSources.disable') : t('eventSources.enable')}
                           onClick={() => toggleEnabled(r)}
                         >
                           <PowerIcon />
                         </IconButton>
-                        <IconButton title="Edit source" onClick={() => setEditing(r)}>
+                        <IconButton title={t('eventSources.edit')} onClick={() => setEditing(r)}>
                           <EditIcon />
                         </IconButton>
-                        <IconButton title="Delete source" danger onClick={() => setDeleting(r)}>
+                        <IconButton
+                          title={t('eventSources.delete')}
+                          danger
+                          onClick={() => setDeleting(r)}
+                        >
                           <TrashIcon />
                         </IconButton>
                       </span>
@@ -190,6 +201,7 @@ function AddSourceModal({
   onClose: () => void;
   onDone: (created: { id: string; token: string }) => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -202,34 +214,34 @@ function AddSourceModal({
       .createEventSource({ name: name.trim() })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add source'));
+        setError(errMsg(e, t('eventSources.err.add')));
         setBusy(false);
       });
   };
   return (
     <Modal
-      title="Add webhook source"
+      title={t('eventSources.addModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            Create
+            {t('eventSources.addModal.create')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('eventSources.addModal.name')}</label>
         <TextInput
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Grafana alerts"
+          placeholder={t('eventSources.addModal.namePlaceholder')}
           autoFocus
         />
-        <span className="modal-hint">A bearer token is generated and shown once after create.</span>
+        <span className="modal-hint">{t('eventSources.addModal.hint')}</span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -245,6 +257,7 @@ function EditSourceModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(source.name);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -257,27 +270,27 @@ function EditSourceModal({
       .updateEventSource(source.id, { name: name.trim(), enabled: source.enabled, node_id: source.node_id })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save source'));
+        setError(errMsg(e, t('eventSources.err.save')));
         setBusy(false);
       });
   };
   return (
     <Modal
-      title="Edit webhook source"
+      title={t('eventSources.editModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('eventSources.editModal.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
       {error && <p className="form-error">{error}</p>}
@@ -294,6 +307,7 @@ function DeleteSourceModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = () => {
@@ -303,28 +317,32 @@ function DeleteSourceModal({
       .deleteEventSource(source.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete source'));
+        setError(errMsg(e, t('eventSources.err.delete')));
         setBusy(false);
       });
   };
   return (
     <Modal
-      title="Delete webhook source"
+      title={t('eventSources.deleteModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete source <strong>{source.name}</strong>? Its token stops working immediately and rules
-        scoped to it are removed.
+        <Trans
+          t={t}
+          i18nKey="eventSources.deleteModal.body"
+          values={{ name: source.name }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -338,6 +356,7 @@ function TokenModal({
   issued: { id: string; token: string };
   onClose: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [copiedToken, setCopiedToken] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const url = `${window.location.origin}/api/v1/ingest/webhook/${issued.id}`;
@@ -350,33 +369,33 @@ function TokenModal({
 
   return (
     <Modal
-      title="Webhook token — shown once"
+      title={t('eventSources.token.title')}
       onClose={onClose}
       footer={
         <Button variant="primary" onClick={onClose}>
-          Done
+          {t('eventSources.token.done')}
         </Button>
       }
     >
       <p className="modal-confirm-text">
-        Copy this token now — it is stored only as a hash and cannot be shown again. Send it as
+        {t('eventSources.token.sendAs')}
         <span className="mono"> Authorization: Bearer &lt;token&gt;</span>.
       </p>
       <div className="modal-field">
-        <label className="modal-field-label">Token</label>
+        <label className="modal-field-label">{t('eventSources.token.label')}</label>
         <div className="eventsources-copyrow">
           <code className="eventsources-token mono">{issued.token}</code>
           <Button variant="outline" onClick={() => copy(issued.token, setCopiedToken)}>
-            {copiedToken ? 'Copied' : 'Copy'}
+            {copiedToken ? t('common:copy.copied') : t('eventSources.token.copy')}
           </Button>
         </div>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Ingest URL</label>
+        <label className="modal-field-label">{t('eventSources.token.url')}</label>
         <div className="eventsources-copyrow">
           <code className="eventsources-token mono">{url}</code>
           <Button variant="outline" onClick={() => copy(url, setCopiedUrl)}>
-            {copiedUrl ? 'Copied' : 'Copy'}
+            {copiedUrl ? t('common:copy.copied') : t('eventSources.token.copy')}
           </Button>
         </div>
       </div>

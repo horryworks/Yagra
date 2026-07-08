@@ -1,1 +1,261 @@
-{}
+{
+  "categories": {
+    "router": "ルーター",
+    "l3-switch": "L3 スイッチ",
+    "l2-switch": "L2 スイッチ",
+    "firewall": "ファイアウォール",
+    "wireless-controller": "ワイヤレスコントローラー",
+    "wireless-ap": "ワイヤレス AP",
+    "load-balancer": "ロードバランサー",
+    "server": "サーバー",
+    "hypervisor": "ハイパーバイザー",
+    "storage": "ストレージ / NAS",
+    "power": "電源 (UPS / PDU)",
+    "printer": "プリンター",
+    "generic-snmp": "汎用 SNMP",
+    "ping-only": "Ping のみ"
+  },
+  "enum": {
+    "scalar": "スカラー",
+    "table": "テーブル",
+    "tablePerInterface": "テーブル（インターフェース別）",
+    "gauge": "ゲージ",
+    "counter": "カウンタ"
+  },
+  "shared": {
+    "trySearch": "検索条件を変えてお試しください。",
+    "optional": "任意",
+    "colActions": "操作",
+    "metricsCount_other": "メトリクス {{count}} 件"
+  },
+  "profiles": {
+    "note": "デバイスクラス単位のバケット（役割 × ベンダー）。ここにメトリクスセットを紐付けると、ノードはプロファイル経由で継承します。",
+    "unavailable": "スケルトンモードではプロファイル管理は利用できません（メタデータストアなし）。",
+    "searchPlaceholder": "名前・ベンダー・役割で検索…",
+    "searchAria": "プロファイルを検索",
+    "addProfile": "プロファイルを追加",
+    "otherGroup": "その他",
+    "defaultInterval": "デフォルト",
+    "hideSets": "セットを隠す",
+    "editProfile": "プロファイルを編集",
+    "deleteProfile": "プロファイルを削除",
+    "cols": {
+      "name": "名前",
+      "vendor": "ベンダー",
+      "pollInterval": "ポーリング間隔",
+      "metricSets": "メトリクスセット"
+    },
+    "empty": {
+      "none": "プロファイルがありません",
+      "noMatch": "一致するプロファイルがありません",
+      "noneSub": "デバイスクラスのプロファイルを追加してください（例：「Cisco Catalyst スイッチ」）。"
+    },
+    "modal": {
+      "addTitle": "デバイスプロファイルを追加",
+      "editTitle": "デバイスプロファイルを編集",
+      "namePlaceholder": "例：Cisco Catalyst スイッチ",
+      "role": "役割",
+      "pollInterval": "ポーリング間隔（秒）",
+      "pollIntervalPlaceholder": "空欄でシステムのデフォルトを使用",
+      "pollIntervalHint": "このプロファイルを使うノードのシステムデフォルトを上書きします。10〜3600 秒。空欄でデフォルトを継承します。"
+    },
+    "delete": {
+      "confirm": "プロファイル <strong>{{name}}</strong> を削除しますか？使用中のノードは動作を続けますが、このクラスの収集デフォルトを失います。"
+    },
+    "templates": {
+      "empty": "メトリクスセットがまだありません。先に作成してください。"
+    },
+    "err": {
+      "pollInterval": "ポーリング間隔は 10〜3600 の整数（秒）で指定してください。",
+      "save": "プロファイルの保存に失敗しました",
+      "delete": "プロファイルの削除に失敗しました",
+      "loadTemplates": "紐付けられたテンプレートの読み込みに失敗しました",
+      "saveTemplates": "テンプレートの保存に失敗しました"
+    }
+  },
+  "rules": {
+    "note": "検出デバイスの sysObjectID / sysDescr をデバイスプロファイルへマッピングします。ディスカバリはインポート時に一致を事前選択します。",
+    "unavailable": "スケルトンモードでは分類ルール管理は利用できません（メタデータストアなし）。",
+    "searchPlaceholder": "シグネチャ・プロファイル・メーカーで検索…",
+    "searchAria": "分類ルールを検索",
+    "addRule": "ルールを追加",
+    "enabled": "有効",
+    "disabled": "無効",
+    "enable": "ルールを有効化",
+    "disable": "ルールを無効化",
+    "editRule": "ルールを編集",
+    "deleteRule": "ルールを削除",
+    "cols": {
+      "priority": "優先度",
+      "match": "一致条件",
+      "profile": "プロファイル",
+      "status": "状態"
+    },
+    "empty": {
+      "none": "分類ルールがありません",
+      "noMatch": "一致するルールがありません",
+      "noneSub": "sysObjectID プレフィックスまたは sysDescr パターンをプロファイルへマッピングするルールを追加してください。"
+    },
+    "modal": {
+      "addTitle": "分類ルールを追加",
+      "editTitle": "分類ルールを編集",
+      "deleteTitle": "分類ルールを削除",
+      "chooseProfile": "（プロファイルを選択）",
+      "oidPrefix": "sysObjectID プレフィックス",
+      "oidPrefixPlaceholder": "例：1.3.6.1.4.1.9.",
+      "oidPrefixHint": "権威的 — sysDescr より優先されます。末尾をドットにすると 1.3…9. が …91 に誤って一致しません。sysDescr 正規表現と組み合わせて 1 つのベンダーを NOS 単位で分割できます。",
+      "descrRegex": "sysDescr 正規表現",
+      "descrRegexPlaceholder": "例：(?i)cisco|ios",
+      "descrRegexHintBoth": "プレフィックスを指定すると両方が一致する必要があります（ベンダー + NOS）。単独の場合は sysDescr に直接一致します。",
+      "matcherRequired": "sysObjectID プレフィックスまたは sysDescr 正規表現を指定してください。",
+      "priorityHint": "小さいほど先に評価されます。",
+      "maker": "メーカー",
+      "model": "モデル",
+      "enabledLabel": "有効"
+    },
+    "delete": {
+      "confirm": "ルール <m>{{sig}}</m> → <strong>{{profile}}</strong> のマッピングを削除しますか？ディスカバリは一致するデバイスにこのプロファイルを提案しなくなります（インポート済みのノードには影響しません）。"
+    },
+    "err": {
+      "update": "ルールの更新に失敗しました",
+      "save": "ルールの保存に失敗しました",
+      "delete": "ルールの削除に失敗しました"
+    }
+  },
+  "sets": {
+    "note": "再利用可能なメトリクスの束。デバイスプロファイルに紐付けると、1 つ編集するだけで使用中のすべてのプロファイルに反映されます。",
+    "unavailable": "スケルトンモードではメトリクスセットは利用できません（メタデータストアなし）。",
+    "searchPlaceholder": "名前または説明で検索…",
+    "searchAria": "メトリクスセットを検索",
+    "addSet": "メトリクスセットを追加",
+    "deleteSet": "メトリクスセットを削除",
+    "noun_other": "セット",
+    "cols": {
+      "name": "名前",
+      "description": "説明",
+      "metrics": "メトリクス"
+    },
+    "empty": {
+      "none": "メトリクスセットがありません",
+      "noMatch": "一致するメトリクスセットがありません",
+      "noneSub": "再利用可能なメトリクスの束を追加してください（例：「標準インターフェース」）。"
+    },
+    "modal": {
+      "addSubmit": "セットを追加",
+      "namePlaceholder": "例：標準インターフェース",
+      "descPlaceholder": "任意"
+    },
+    "delete": {
+      "confirm": "メトリクスセット <strong>{{name}}</strong> を削除しますか？紐付けているプロファイルはこの束のメトリクスを失います。"
+    },
+    "err": {
+      "create": "テンプレートの作成に失敗しました",
+      "delete": "テンプレートの削除に失敗しました"
+    }
+  },
+  "editor": {
+    "metricNamePlaceholder": "metric_name（例: cpu_util）",
+    "oidPlaceholder": "OID（例: 1.3.6.1.2.1.1.3.0）",
+    "collectionKindAria": "収集種別",
+    "metricKindAria": "メトリクス種別",
+    "browseCatalog": "カタログを参照",
+    "closeCatalog": "カタログを閉じる",
+    "addMetric": "メトリクスを追加",
+    "deleteMetric": "メトリクスを削除",
+    "pickerSearchPlaceholder": "MIB カタログを名前 / OID / ベンダーで検索…",
+    "noCatalogMatch": "一致するカタログエントリがありません。",
+    "emptyTemplate": "このセットにはまだメトリクスがありません。",
+    "emptyNode": "ノード固有のメトリクスはありません。プロファイルのメトリクスセット / 組み込みデフォルトが引き続き適用されます。",
+    "cols": {
+      "metric": "メトリクス",
+      "oid": "OID",
+      "type": "種別",
+      "kind": "種類"
+    },
+    "err": {
+      "load": "メトリクスの読み込みに失敗しました",
+      "add": "メトリクスの追加に失敗しました",
+      "delete": "メトリクスの削除に失敗しました"
+    }
+  },
+  "mib": {
+    "note": "厳選された OID カタログ。収集エディタで OID を入力する代わりに名前でメトリクスを選べます。",
+    "unavailable": "スケルトンモードでは MIB カタログは利用できません。",
+    "searchPlaceholder": "メトリクス / OID / ベンダーで検索…",
+    "searchAria": "MIB カタログを検索",
+    "addEntry": "エントリを追加",
+    "addTitle": "カタログエントリを追加",
+    "deleteTitle": "カタログエントリを削除",
+    "standard": "標準",
+    "noun_other": "エントリ",
+    "cols": {
+      "metric": "メトリクス",
+      "oid": "OID",
+      "type": "種別",
+      "vendor": "ベンダー"
+    },
+    "empty": {
+      "noMatch": "一致するカタログエントリがありません"
+    },
+    "modal": {
+      "metricName": "メトリクス名",
+      "metricNamePlaceholder": "metric_name",
+      "oid": "OID",
+      "oidPlaceholder": "OID（例: 1.3.6.1.2.1.1.3.0）",
+      "collection": "収集",
+      "metricKind": "メトリクス種別",
+      "vendor": "ベンダー",
+      "vendorPlaceholder": "ベンダー（任意）",
+      "vendorHint": "標準（非ベンダー）OID の場合は空欄にします。"
+    },
+    "delete": {
+      "confirm": "カタログエントリ <strong>{{name}}</strong> を削除しますか？名前で参照している収集はカタログから解決できなくなります。この操作は取り消せません。"
+    },
+    "err": {
+      "add": "エントリの追加に失敗しました",
+      "delete": "エントリの削除に失敗しました"
+    }
+  },
+  "discovery": {
+    "note": "サブネットを掃引して稼働中 + SNMP デバイスを検出し、必要なものをインポートします。",
+    "scanTitle": "サブネットをスキャン",
+    "resultsTitle": "検出されたデバイス",
+    "signIn": "ディスカバリを実行するには管理者としてサインインしてください。",
+    "targetPlaceholder": "CIDR・範囲・リスト（例: 192.168.1.0/24, 10.0.0.5, 192.168.1.10-20）",
+    "scan": "スキャン",
+    "scanning": "スキャン中…",
+    "examplesHint": "例: <c>192.168.1.0/24</c> · <c>10.0.0.5</c> · <c>192.168.1.10-20</c> · <c>192.168.1.10-192.168.1.20</c> — 複数指定はカンマ区切り。",
+    "credsLink": "ディスカバリは保存済みの認証情報を使用します。<lnk>認証情報を管理 →</lnk>",
+    "none": "（なし）",
+    "noSnmp": "SNMP なし",
+    "sysObjectIdTitle": "sysObjectID",
+    "matchedSuffix": " ✓ 一致",
+    "importSelectedCount": "{{count}} 件をインポート",
+    "importSelectedNone": "選択項目をインポート",
+    "badge": {
+      "imported": "インポート済み",
+      "ping": "ping",
+      "noPing": "ping 応答なし"
+    },
+    "cols": {
+      "address": "アドレス",
+      "identity": "識別情報",
+      "name": "名前",
+      "profile": "プロファイル",
+      "credential": "認証情報"
+    },
+    "msg": {
+      "scanningCount_other": "{{count}} 件のアドレスをスキャン中…",
+      "scanComplete_other": "スキャン完了 — デバイス {{count}} 台を検出しました。",
+      "scanningProgress": "スキャン中… {{probed}}/{{total}} 件のアドレスをプローブ済み",
+      "nowAt": " — 現在 {{addr}}",
+      "imported_other": "ノード {{count}} 台をインポートしました — まもなくポーリングを開始します。"
+    },
+    "err": {
+      "badTargets": "IP・CIDR（≤/22）・範囲（例: 192.168.1.10-20）をカンマ区切りで入力してください — 合計 ≤1024 ホスト。",
+      "startScan": "スキャンの開始に失敗しました",
+      "selectOne": "インポートするデバイスを 1 つ以上選択してください。",
+      "import": "インポートに失敗しました"
+    }
+  }
+}

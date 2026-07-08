@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { EventRule, EventRuleInput, EventSource, Severity } from '../types/api';
@@ -11,6 +12,7 @@ import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
+import { severityLabel } from '../lib/format';
 import './EventRulesPage.css';
 
 const COLS = '1.4fr 130px 1fr 120px 110px 110px';
@@ -40,6 +42,7 @@ function ruleToInput(r: EventRule): EventRuleInput {
 }
 
 export function EventRulesPage() {
+  const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<EventRule[]>([]);
   const [sources, setSources] = useState<EventSource[]>([]);
@@ -86,54 +89,59 @@ export function EventRulesPage() {
     api
       .updateEventRule(r.id, { ...ruleToInput(r), enabled: !r.enabled })
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to update rule')));
+      .catch((e: unknown) => setError(errMsg(e, t('eventRules.err.update'))));
   };
 
   return (
     <div>
-      <PageHeader
-        title="Event rules"
-        note="Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting."
-      />
+      <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
       {unavailable ? (
-        <Card>Event rules are unavailable in this mode (no metadata store).</Card>
+        <Card>{t('eventRules.unavailable')}</Card>
       ) : (
         <>
           <TableToolbar>
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search name, pattern, severity…"
-              ariaLabel="Search event rules"
+              placeholder={t('eventRules.searchPlaceholder')}
+              ariaLabel={t('eventRules.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="rules" />
+            <ResultCount
+              shown={filtered.length}
+              total={rows.length}
+              noun={t('common:noun.rule', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add rule
+                {t('eventRules.add')}
               </Button>
             )}
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
           <div className="ytable eventrules-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Name</div>
-              <div className="ytable-h">Severity</div>
-              <div className="ytable-h">Pattern</div>
-              <div className="ytable-h">Scope</div>
-              <div className="ytable-h">Status</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('eventRules.cols.name')}</div>
+              <div className="ytable-h">{t('eventRules.cols.severity')}</div>
+              <div className="ytable-h">{t('eventRules.cols.pattern')}</div>
+              <div className="ytable-h">{t('eventRules.cols.scope')}</div>
+              <div className="ytable-h">{t('eventRules.cols.status')}</div>
+              <div className="ytable-h right">{t('eventRules.cols.actions')}</div>
             </div>
             {filtered.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
-                  {loading ? 'Loading…' : rows.length === 0 ? 'No event rules' : 'No rules match'}
+                  {loading
+                    ? t('common:loading')
+                    : rows.length === 0
+                      ? t('eventRules.empty')
+                      : t('eventRules.emptyMatch')}
                 </p>
                 {!loading && (
                   <p className="yt-empty-sub">
                     {rows.length === 0
-                      ? 'Add a rule to turn matching events into alerts.'
-                      : 'Try a different search.'}
+                      ? t('eventRules.emptySub')
+                      : t('eventRules.emptyMatchSub')}
                   </p>
                 )}
               </div>
@@ -142,43 +150,49 @@ export function EventRulesPage() {
                 <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
                   <div className="ytable-cell">{r.name}</div>
                   <div className="ytable-cell">
-                    <Badge tone={SEVERITY_TONE[r.severity]}>{r.severity}</Badge>
+                    <Badge tone={SEVERITY_TONE[r.severity]}>{severityLabel(r.severity)}</Badge>
                   </div>
                   <div className="ytable-cell eventrules-match">
                     <div className="eventrules-sig">
-                      <span className="eventrules-sig-kind">{r.match_kind}</span>
+                      <span className="eventrules-sig-kind">
+                        {t(`eventRules.matchKind.${r.match_kind}`)}
+                      </span>
                       <span className="eventrules-sig-val mono" title={r.pattern}>
                         {r.pattern}
                       </span>
                     </div>
                     {r.clear_pattern && (
                       <div className="eventrules-sig">
-                        <span className="eventrules-sig-kind">clear</span>
+                        <span className="eventrules-sig-kind">{t('eventRules.clear')}</span>
                         <span className="eventrules-sig-val mono" title={r.clear_pattern}>
                           {r.clear_pattern}
                         </span>
                       </div>
                     )}
                   </div>
-                  <div className="ytable-cell mono">{r.source_kind ?? 'any'}</div>
+                  <div className="ytable-cell mono">{r.source_kind ?? t('eventRules.any')}</div>
                   <div className="ytable-cell">
                     <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? 'enabled' : 'disabled'}
+                      {r.enabled ? t('status.enabled') : t('status.disabled')}
                     </Badge>
                   </div>
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
                         <IconButton
-                          title={r.enabled ? 'Disable rule' : 'Enable rule'}
+                          title={r.enabled ? t('eventRules.disable') : t('eventRules.enable')}
                           onClick={() => toggleEnabled(r)}
                         >
                           <PowerIcon />
                         </IconButton>
-                        <IconButton title="Edit rule" onClick={() => setEditing(r)}>
+                        <IconButton title={t('eventRules.edit')} onClick={() => setEditing(r)}>
                           <EditIcon />
                         </IconButton>
-                        <IconButton title="Delete rule" danger onClick={() => setDeleting(r)}>
+                        <IconButton
+                          title={t('eventRules.delete')}
+                          danger
+                          onClick={() => setDeleting(r)}
+                        >
                           <TrashIcon />
                         </IconButton>
                       </span>
@@ -240,6 +254,7 @@ function RuleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(rule?.name ?? '');
   const [matchKind, setMatchKind] = useState<'substring' | 'regex'>(rule?.match_kind ?? 'substring');
   const [pattern, setPattern] = useState(rule?.pattern ?? '');
@@ -270,12 +285,12 @@ function RuleModal({
         sample,
       })
       .then((r) => {
-        if (r.error) setTestResult(`error: ${r.error}`);
-        else if (r.clear_matched) setTestResult('clear-pattern matched → would resolve');
-        else if (r.matched) setTestResult('matched → would fire');
-        else setTestResult('no match');
+        if (r.error) setTestResult(t('eventRules.test.error', { msg: r.error }));
+        else if (r.clear_matched) setTestResult(t('eventRules.test.clearMatched'));
+        else if (r.matched) setTestResult(t('eventRules.test.matched'));
+        else setTestResult(t('eventRules.test.noMatch'));
       })
-      .catch((e: unknown) => setTestResult(errMsg(e, 'test failed')));
+      .catch((e: unknown) => setTestResult(errMsg(e, t('eventRules.test.failed'))));
   };
 
   const submit = () => {
@@ -301,55 +316,57 @@ function RuleModal({
         ? api.updateEventRule(rule.id, body)
         : api.createEventRule(body).then(() => undefined);
     call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, 'failed to save rule'));
+      setError(errMsg(e, t('eventRules.err.save')));
       setBusy(false);
     });
   };
 
   return (
     <Modal
-      title={mode === 'edit' ? 'Edit event rule' : 'Add event rule'}
+      title={mode === 'edit' ? t('eventRules.modal.editTitle') : t('eventRules.modal.addTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {mode === 'edit' ? 'Save' : 'Add rule'}
+            {mode === 'edit' ? t('common:actions.save') : t('eventRules.modal.add')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">
-          Name <RequiredMark />
+          {t('eventRules.modal.name')} <RequiredMark />
         </label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
       <div className="modal-field-row">
         <div className="modal-field">
-          <label className="modal-field-label">Match kind</label>
+          <label className="modal-field-label">{t('eventRules.modal.matchKind')}</label>
           <Select
             value={matchKind}
             onChange={(e) => setMatchKind(e.target.value as 'substring' | 'regex')}
           >
-            <option value="substring">substring</option>
-            <option value="regex">regex</option>
+            <option value="substring">{t('eventRules.matchKind.substring')}</option>
+            <option value="regex">{t('eventRules.matchKind.regex')}</option>
           </Select>
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Severity</label>
+          <label className="modal-field-label">{t('eventRules.modal.severity')}</label>
           <Select value={severity} onChange={(e) => setSeverity(e.target.value as Severity)}>
-            <option value="critical">critical</option>
-            <option value="warning">warning</option>
-            <option value="info">info — record only</option>
+            <option value="critical">{severityLabel('critical')}</option>
+            <option value="warning">{severityLabel('warning')}</option>
+            <option value="info">
+              {t('eventRules.modal.severityInfo', { label: severityLabel('info') })}
+            </option>
           </Select>
         </div>
       </div>
       <div className="modal-field">
         <label className="modal-field-label">
-          Pattern <RequiredMark />
+          {t('eventRules.modal.pattern')} <RequiredMark />
         </label>
         <TextInput
           className="mono"
@@ -357,32 +374,32 @@ function RuleModal({
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
         />
-        <FieldHint>Matching is case-sensitive; use {'(?i)'} in a regex for case-insensitive.</FieldHint>
+        <FieldHint>{t('eventRules.modal.patternHint')}</FieldHint>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Clear pattern</label>
+        <label className="modal-field-label">{t('eventRules.modal.clearPattern')}</label>
         <TextInput
           className="mono"
           placeholder="link up"
           value={clearPattern}
           onChange={(e) => setClearPattern(e.target.value)}
         />
-        <FieldHint>Optional — a message matching this resolves the alert (e.g. link-up clears link-down).</FieldHint>
+        <FieldHint>{t('eventRules.modal.clearPatternHint')}</FieldHint>
       </div>
       <div className="modal-field-row">
         <div className="modal-field">
-          <label className="modal-field-label">Source kind</label>
+          <label className="modal-field-label">{t('eventRules.modal.sourceKind')}</label>
           <Select value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
-            <option value="">any</option>
+            <option value="">{t('eventRules.any')}</option>
             <option value="syslog">syslog</option>
             <option value="trap">trap</option>
             <option value="webhook">webhook</option>
           </Select>
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Webhook source</label>
+          <label className="modal-field-label">{t('eventRules.modal.webhookSource')}</label>
           <Select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-            <option value="">any</option>
+            <option value="">{t('eventRules.any')}</option>
             {sources.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -393,7 +410,7 @@ function RuleModal({
       </div>
       <div className="modal-field-row">
         <div className="modal-field">
-          <label className="modal-field-label">Auto-close (s)</label>
+          <label className="modal-field-label">{t('eventRules.modal.autoClose')}</label>
           <TextInput
             type="number"
             value={ttl}
@@ -401,7 +418,7 @@ function RuleModal({
           />
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Fire after N</label>
+          <label className="modal-field-label">{t('eventRules.modal.fireAfter')}</label>
           <TextInput
             type="number"
             value={minCount}
@@ -409,7 +426,7 @@ function RuleModal({
           />
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">within (s)</label>
+          <label className="modal-field-label">{t('eventRules.modal.within')}</label>
           <TextInput
             type="number"
             value={windowSecs}
@@ -419,20 +436,20 @@ function RuleModal({
       </div>
       <label className="eventrules-enabled">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        <span>Enabled</span>
+        <span>{t('eventRules.modal.enabled')}</span>
       </label>
 
       <div className="eventrules-tester">
-        <label className="modal-field-label">Test against a sample</label>
+        <label className="modal-field-label">{t('eventRules.modal.test')}</label>
         <div className="eventrules-tester-row">
           <TextInput
             className="mono"
-            placeholder="paste a sample event message…"
+            placeholder={t('eventRules.modal.samplePlaceholder')}
             value={sample}
             onChange={(e) => setSample(e.target.value)}
           />
           <Button variant="outline" onClick={runTest} disabled={pattern.trim() === ''}>
-            Test
+            {t('eventRules.modal.testBtn')}
           </Button>
         </div>
         {testResult && <p className="eventrules-tester-result">{testResult}</p>}
@@ -452,6 +469,7 @@ function DeleteRuleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = () => {
@@ -461,28 +479,32 @@ function DeleteRuleModal({
       .deleteEventRule(rule.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete rule'));
+        setError(errMsg(e, t('eventRules.err.delete')));
         setBusy(false);
       });
   };
   return (
     <Modal
-      title="Delete event rule"
+      title={t('eventRules.deleteModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete rule <strong>{rule.name}</strong>? Active alerts it raised will auto-close on their
-        TTL; this only stops future matches.
+        <Trans
+          t={t}
+          i18nKey="eventRules.deleteModal.body"
+          values={{ name: rule.name }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

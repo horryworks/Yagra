@@ -4,19 +4,15 @@
 // (lazy-loaded, in-memory filtered, capped) — never a flat dropdown of the whole inventory.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../components/ui/TableToolbar';
 import { groupOptions } from '../lib/nodeTree';
 import { Segmented } from './Segmented';
 import { useScopeData } from './useScopeData';
-import { ALL_SCOPE, filterNodes, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
+import { allScope, filterNodes, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
 import './ScopePicker.css';
 
 type Mode = 'all' | 'group' | 'node';
-const MODES = [
-  { value: 'all', label: 'All' },
-  { value: 'group', label: 'Group' },
-  { value: 'node', label: 'Node' },
-];
 /** Rendered node-result cap — filter first, then show this many (keep typing to narrow). */
 const MAX_RESULTS = 50;
 
@@ -29,7 +25,16 @@ interface Props {
 }
 
 export function ScopePicker({ value, onChange, id, className, disabled }: Props) {
+  const { t } = useTranslation('troubleshoot');
   const { groups, nodes, nodesLoaded, loadNodes } = useScopeData();
+  const MODES = useMemo(
+    () => [
+      { value: 'all', label: t('scope.modes.all') },
+      { value: 'group', label: t('scope.modes.group') },
+      { value: 'node', label: t('scope.modes.node') },
+    ],
+    [t],
+  );
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>(value.kind);
   const [query, setQuery] = useState('');
@@ -78,7 +83,7 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
     setMode(m);
     setActive(0);
     if (m === 'all') {
-      onChange(ALL_SCOPE);
+      onChange(allScope(t));
       setOpen(false);
     } else if (m === 'node') {
       loadNodes();
@@ -87,12 +92,12 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
 
   const pickGroup = (gid: string) => {
     const name = nameById.get(gid) ?? gid;
-    onChange({ kind: 'group', id: gid, label: groupScopeLabel(name) });
+    onChange({ kind: 'group', id: gid, label: groupScopeLabel(name, t) });
     setOpen(false);
   };
 
   const pickNode = (nid: string, name: string) => {
-    onChange({ kind: 'node', id: nid, label: nodeScopeLabel(name) });
+    onChange({ kind: 'node', id: nid, label: nodeScopeLabel(name, t) });
     setOpen(false);
   };
 
@@ -131,19 +136,19 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
       {open && (
         <div className="scope-pop">
           <div className="scope-pop-modes">
-            <Segmented options={MODES} value={mode} onChange={(m) => changeMode(m as Mode)} ariaLabel="Scope type" />
+            <Segmented options={MODES} value={mode} onChange={(m) => changeMode(m as Mode)} ariaLabel={t('scope.modeAria')} />
           </div>
 
           {mode === 'all' && (
             <button type="button" className="scope-option" onClick={() => changeMode('all')}>
-              <span className="scope-opt-name">All nodes</span>
+              <span className="scope-opt-name">{t('scope.all')}</span>
             </button>
           )}
 
           {mode === 'group' && (
-            <div className="scope-list" role="listbox" aria-label="Groups">
+            <div className="scope-list" role="listbox" aria-label={t('scope.groupsAria')}>
               {groupItems.length === 0 ? (
-                <div className="scope-empty">No node groups yet.</div>
+                <div className="scope-empty">{t('scope.noGroups')}</div>
               ) : (
                 groupItems.map((g) => (
                   <button
@@ -174,15 +179,15 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
                     setQuery(v);
                     setActive(0);
                   }}
-                  placeholder="Search nodes by name or address…"
-                  ariaLabel="Search nodes"
+                  placeholder={t('common:nodePicker.searchPlaceholder')}
+                  ariaLabel={t('common:nodePicker.searchAria')}
                 />
               </div>
-              <div className="scope-list" role="listbox" aria-label="Nodes">
+              <div className="scope-list" role="listbox" aria-label={t('common:nodePicker.listAria')}>
                 {!nodesLoaded ? (
-                  <div className="scope-empty">Loading nodes…</div>
+                  <div className="scope-empty">{t('common:nodePicker.loading')}</div>
                 ) : shown.length === 0 ? (
-                  <div className="scope-empty">No matching nodes.</div>
+                  <div className="scope-empty">{t('common:nodePicker.noMatch')}</div>
                 ) : (
                   shown.map((n, i) => (
                     <button
@@ -207,7 +212,7 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
                 )}
                 {nodesLoaded && filtered.length > MAX_RESULTS && (
                   <div className="scope-empty">
-                    +{filtered.length - MAX_RESULTS} more — keep typing to narrow
+                    {t('common:nodePicker.more', { count: filtered.length - MAX_RESULTS })}
                   </div>
                 )}
               </div>

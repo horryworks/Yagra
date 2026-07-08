@@ -3,6 +3,7 @@
 // relative to the largest row, so the ranking reads at a glance. The fill color is a series
 // color by default (Top-N is categorical, not a node status); callers may override per row.
 
+import { useTranslation } from 'react-i18next';
 import './RankedBars.css';
 
 export interface RankedRow {
@@ -24,8 +25,9 @@ interface Props {
   empty?: string;
 }
 
-export function RankedBars({ rows, max, empty = 'No data yet…' }: Props) {
-  if (rows.length === 0) return <p className="muted">{empty}</p>;
+export function RankedBars({ rows, max, empty }: Props) {
+  const { t } = useTranslation('dashboard');
+  if (rows.length === 0) return <p className="muted">{empty ?? t('primitives.rankedBars.empty')}</p>;
   const peak = max ?? Math.max(...rows.map((r) => r.value), 0);
   return (
     <ul className="rankedbars">

@@ -3,6 +3,7 @@
 // board set. A user always keeps ≥1 board (the last one can't be removed).
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
 import { Modal } from '../components/ui/Modal';
@@ -10,6 +11,7 @@ import { useLayoutStoreContext } from './LayoutStoreContext';
 import './BoardTabs.css';
 
 export function BoardTabs({ editing }: { editing: boolean }) {
+  const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
   const boards = useStore((s) => s.boards);
   const activeBoardId = useStore((s) => s.activeBoardId);
@@ -50,7 +52,7 @@ export function BoardTabs({ editing }: { editing: boolean }) {
                   if (e.key === 'Enter') commitRename();
                   if (e.key === 'Escape') setRenamingId(null);
                 }}
-                aria-label="Board name"
+                aria-label={t('boardTabs.nameAria')}
               />
             </span>
           );
@@ -75,8 +77,8 @@ export function BoardTabs({ editing }: { editing: boolean }) {
                 <button
                   type="button"
                   className="board-tab-btn"
-                  aria-label={`Rename ${b.name}`}
-                  title="Rename board"
+                  aria-label={t('boardTabs.rename', { name: b.name })}
+                  title={t('boardTabs.renameTitle')}
                   onClick={() => startRename(b.id, b.name)}
                 >
                   ✎
@@ -84,8 +86,8 @@ export function BoardTabs({ editing }: { editing: boolean }) {
                 <button
                   type="button"
                   className="board-tab-btn"
-                  aria-label={`Remove ${b.name}`}
-                  title={boards.length <= 1 ? 'A dashboard needs at least one board' : 'Remove board'}
+                  aria-label={t('boardTabs.remove', { name: b.name })}
+                  title={boards.length <= 1 ? t('boardTabs.removeLastTitle') : t('boardTabs.removeTitle')}
                   disabled={boards.length <= 1}
                   onClick={() =>
                     b.widgets.length === 0
@@ -106,19 +108,19 @@ export function BoardTabs({ editing }: { editing: boolean }) {
           type="button"
           className="board-tab-add"
           onClick={() => addBoard()}
-          title="Add a board"
+          title={t('boardTabs.addBoardTitle')}
         >
-          + Add board
+          + {t('boardTabs.addBoard')}
         </button>
       )}
 
       {confirmRemove && (
         <Modal
-          title="Remove board?"
+          title={t('boardTabs.removeConfirmTitle')}
           onClose={() => setConfirmRemove(null)}
           footer={
             <>
-              <Button onClick={() => setConfirmRemove(null)}>Cancel</Button>
+              <Button onClick={() => setConfirmRemove(null)}>{t('common:actions.cancel')}</Button>
               <Button
                 variant="danger"
                 onClick={() => {
@@ -126,14 +128,12 @@ export function BoardTabs({ editing }: { editing: boolean }) {
                   setConfirmRemove(null);
                 }}
               >
-                Remove board
+                {t('boardTabs.removeConfirm')}
               </Button>
             </>
           }
         >
-          <p>
-            Remove “{confirmRemove.name}” and its widgets? This can’t be undone.
-          </p>
+          <p>{t('boardTabs.removeBody', { name: confirmRemove.name })}</p>
         </Modal>
       )}
     </div>

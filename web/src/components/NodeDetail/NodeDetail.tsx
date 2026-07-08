@@ -6,6 +6,7 @@
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
@@ -68,6 +69,7 @@ export function NodeDetail({
   onOpenDetail,
   onDeleted,
 }: Props) {
+  const { t } = useTranslation('nodes');
   const activeTab = TABS.includes(tab) ? tab : 'overview';
   const [node, setNode] = useState<NodeDetailData | null>(null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
@@ -125,7 +127,7 @@ export function NodeDetail({
         })
         .catch((e: unknown) => {
           if (cancelled) return;
-          setIfError(errMsg(e, 'failed to load interfaces'));
+          setIfError(errMsg(e, t('err.loadInterfaces')));
           setIfLoaded(true);
         });
     };
@@ -135,7 +137,7 @@ export function NodeDetail({
       cancelled = true;
       clearInterval(id);
     };
-  }, [nodeId, refreshNonce]);
+  }, [nodeId, refreshNonce, t]);
 
   // Collection-set count for the Collection tab badge (the profile's attached templates).
   useEffect(() => {
@@ -161,13 +163,13 @@ export function NodeDetail({
       .then((r) => {
         const n = r.dispatched;
         setPollMsg({
-          text: `Poll requested — ${n} check${n === 1 ? '' : 's'} dispatched.`,
+          text: t('detail.pollDispatched', { count: n }),
           tone: 'info',
         });
         window.setTimeout(() => setRefreshNonce((v) => v + 1), 4000);
         window.setTimeout(() => setPollMsg(null), 8000);
       })
-      .catch((e: unknown) => setPollMsg({ text: errMsg(e, 'failed to request poll'), tone: 'error' }))
+      .catch((e: unknown) => setPollMsg({ text: errMsg(e, t('err.requestPoll')), tone: 'error' }))
       .finally(() => setPolling(false));
   };
 
@@ -175,7 +177,7 @@ export function NodeDetail({
     return (
       <div className="nd">
         <div className="nd-body nd-tabpad">
-          <p className="nd-muted">Loading…</p>
+          <p className="nd-muted">{t('common:loading')}</p>
         </div>
       </div>
     );
@@ -191,7 +193,7 @@ export function NodeDetail({
     <div className="nd">
       <div className="nd-head">
         <div className="nd-eyebrow">
-          <BoxIcon width={12} height={12} /> {path.length ? path.join(' / ') : 'Ungrouped'}
+          <BoxIcon width={12} height={12} /> {path.length ? path.join(' / ') : t('ungrouped')}
         </div>
         <div className="nd-namerow">
           <div className="nd-namewrap">
@@ -201,32 +203,32 @@ export function NodeDetail({
           <div className="nd-actions">
             {canEdit && (
               <Button variant="outline" onClick={pollNow} disabled={polling}>
-                {polling ? 'Polling…' : 'Poll now'}
+                {polling ? t('detail.polling') : t('detail.pollNow')}
               </Button>
             )}
             {canEdit && (
               <Button variant="outline" onClick={() => setEditingParent(true)}>
-                Dependency…
+                {t('detail.dependency')}
               </Button>
             )}
             {variant === 'inline' && canEdit && onMove && (
               <Button variant="outline" onClick={onMove}>
-                Move…
+                {t('detail.move')}
               </Button>
             )}
             {variant === 'inline' && onOpenDetail && (
               <Button variant="outline" onClick={onOpenDetail}>
-                Open detail
+                {t('detail.openDetail')}
               </Button>
             )}
             {variant === 'page' && canEdit && (
               <Button variant="outline" onClick={() => setEditingBindings(true)}>
-                Edit node
+                {t('detail.editNode')}
               </Button>
             )}
             {variant === 'page' && canEdit && (
               <Button variant="danger" onClick={() => setDeleting(true)}>
-                Delete
+                {t('common:actions.delete')}
               </Button>
             )}
           </div>
@@ -234,11 +236,17 @@ export function NodeDetail({
         <div className="nd-sub">
           <span className="mono">{node.address}</span>
           <span className="nd-sep">·</span>
-          <span>{[node.vendor, node.model].filter(Boolean).join(' ') || 'unknown device'}</span>
+          <span>
+            {[node.vendor, node.model].filter(Boolean).join(' ') || t('detail.unknownDevice')}
+          </span>
           {lastSeen != null && (
             <>
               <span className="nd-sep">·</span>
-              <span>seen {relativeTime(new Date(lastSeen * 1000).toISOString())}</span>
+              <span>
+                {t('detail.seen', {
+                  time: relativeTime(new Date(lastSeen * 1000).toISOString()),
+                })}
+              </span>
             </>
           )}
         </div>
@@ -250,22 +258,26 @@ export function NodeDetail({
 
       <div className="nd-tabs" role="tablist">
         {[
-          { key: 'overview', label: 'Overview' as const },
-          { key: 'interfaces', label: 'Interfaces' as const, n: interfaces.length || null, warn: ifWarn },
-          { key: 'collection', label: 'Collection' as const, n: collCount, warn: collWarn },
-          { key: 'events', label: 'Events' as const },
-        ].map((t) => (
+          { key: 'overview', label: t('tabs.overview') },
+          { key: 'interfaces', label: t('tabs.interfaces'), n: interfaces.length || null, warn: ifWarn },
+          { key: 'collection', label: t('tabs.collection'), n: collCount, warn: collWarn },
+          { key: 'events', label: t('tabs.events') },
+        ].map((tb) => (
           <button
-            key={t.key}
+            key={tb.key}
             type="button"
             role="tab"
-            aria-selected={activeTab === t.key}
-            className={`nd-tab${activeTab === t.key ? ' on' : ''}`}
-            onClick={() => onTabChange(t.key)}
+            aria-selected={activeTab === tb.key}
+            className={`nd-tab${activeTab === tb.key ? ' on' : ''}`}
+            onClick={() => onTabChange(tb.key)}
           >
-            {t.label}
-            {'n' in t && t.n != null && <span className="nd-tab-n">{t.n}</span>}
-            {'warn' in t && t.warn && <span className="nd-tab-warn" aria-label="needs attention">●</span>}
+            {tb.label}
+            {'n' in tb && tb.n != null && <span className="nd-tab-n">{tb.n}</span>}
+            {'warn' in tb && tb.warn && (
+              <span className="nd-tab-warn" aria-label={t('detail.needsAttention')}>
+                ●
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -345,6 +357,7 @@ export function DeleteNodeModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -355,30 +368,28 @@ export function DeleteNodeModal({
       .deleteNode(nodeId)
       .then(onDeleted)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete node'));
+        setError(errMsg(e, t('err.deleteNode')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete node"
+      title={t('deleteNode.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p>
-        Delete node <strong>{name}</strong>? This removes its inventory entry and its discovered
-        interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency
-        chain, its dependents will no longer be suppressed by it. This cannot be undone.
+        <Trans t={t} i18nKey="deleteNode.body" values={{ name }} components={{ b: <strong /> }} />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -396,6 +407,7 @@ function BindingsModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('nodes');
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [profileId, setProfileId] = useState('');
@@ -434,31 +446,31 @@ function BindingsModal({
       })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to save node'));
+        setError(errMsg(e, t('err.saveNode')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Edit node"
+      title={t('detail.editNode')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="form-stack">
         <label className="form-label">
-          Device profile
+          {t('field.deviceProfile')}
           <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-            <option value="">— none —</option>
+            <option value="">{t('add.none')}</option>
             {profiles.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -467,9 +479,9 @@ function BindingsModal({
           </Select>
         </label>
         <label className="form-label">
-          SNMP credential
+          {t('field.snmpCredential')}
           <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-            <option value="">— none —</option>
+            <option value="">{t('add.none')}</option>
             {credentials.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -479,20 +491,20 @@ function BindingsModal({
         </label>
         <div className="form-row">
           <label className="form-label">
-            Maker
+            {t('field.maker')}
             <TextInput
               value={vendor}
               onChange={(e) => setVendor(e.target.value)}
-              placeholder="e.g. Cisco"
+              placeholder={t('field.makerPlaceholder')}
             />
           </label>
           <label className="form-label">
-            Model
+            {t('field.model')}
             <TextInput
               className="mono"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="e.g. C2960"
+              placeholder={t('field.modelPlaceholder')}
             />
           </label>
         </div>

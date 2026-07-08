@@ -1,1 +1,350 @@
-{}
+{
+  "actions": {
+    "customize": "カスタマイズ",
+    "done": "完了",
+    "addWidget": "ウィジェットを追加",
+    "dismiss": "閉じる",
+    "resetToDefault": "デフォルトに戻す"
+  },
+  "my": {
+    "loadSlow": "ダッシュボードの読み込みに時間がかかっています。",
+    "loading": "ダッシュボードを読み込み中…",
+    "empty": "このボードは空です。",
+    "addFirst": "最初のウィジェットを追加",
+    "resetTitle": "ボードをリセットしますか？",
+    "resetBody": "このボードのウィジェットをデフォルトのセットに置き換えます。元に戻せません。"
+  },
+  "shared": {
+    "adminOnly": "共有ダッシュボードをカスタマイズできるのは管理者のみです",
+    "editingWarning": "共有ダッシュボードを編集中 — 変更はすべてのユーザーに表示されます。",
+    "loadSlow": "共有ダッシュボードの読み込みに時間がかかっています。",
+    "loading": "共有ダッシュボードを読み込み中…",
+    "empty": "共有ダッシュボードにはまだウィジェットがありません。",
+    "confirmEditTitle": "共有ダッシュボードをカスタマイズしますか？",
+    "confirmEditConfirm": "全員向けにカスタマイズ",
+    "confirmEditBody": "ここでの変更は<strong>すべてのユーザー</strong>に適用され、全員の共有ダッシュボードが更新されます。続行しますか？",
+    "resetTitle": "共有ダッシュボードをリセットしますか？",
+    "resetBody": "共有ダッシュボードのウィジェットをデフォルトのセットに置き換えます（全ユーザーが対象）。元に戻せません。"
+  },
+  "save": {
+    "expired": "セッションの有効期限が切れました — ダッシュボードの変更を保存するには再度サインインしてください。",
+    "forbidden": "共有ダッシュボードを変更する権限がありません。",
+    "failed": "ダッシュボードの変更を保存できませんでした。次回の編集時に再試行されます。"
+  },
+  "boardTabs": {
+    "nameAria": "ボード名",
+    "rename": "{{name}} の名前を変更",
+    "renameTitle": "ボード名を変更",
+    "remove": "{{name}} を削除",
+    "removeLastTitle": "ダッシュボードには少なくとも 1 つのボードが必要です",
+    "removeTitle": "ボードを削除",
+    "addBoard": "ボードを追加",
+    "addBoardTitle": "ボードを追加",
+    "removeConfirmTitle": "ボードを削除しますか？",
+    "removeConfirm": "ボードを削除",
+    "removeBody": "「{{name}}」とそのウィジェットを削除しますか？元に戻せません。"
+  },
+  "widgetFrame": {
+    "span": {
+      "4": "⅓ 幅",
+      "6": "½ 幅",
+      "8": "⅔ 幅",
+      "12": "全幅"
+    },
+    "width": "ウィジェット幅",
+    "remove": "{{name}} を削除",
+    "dragTitle": "ドラッグして並べ替え",
+    "drag": "{{name}} をドラッグして並べ替え"
+  },
+  "catalog": {
+    "title": "ウィジェットを追加",
+    "plannedHint": "予定 — このウィジェットのデータバックエンドはまだ利用できません",
+    "backing": {
+      "live": "ライブ",
+      "rollup": "ロールアップ",
+      "new": "予定"
+    }
+  },
+  "registry": {
+    "sections": {
+      "fleet": "フリート状況",
+      "alerts": "アラート",
+      "performance": "パフォーマンスのホットスポット",
+      "sites": "サイトとトポロジ",
+      "capacity": "キャパシティとトラフィック",
+      "monitoring": "監視ヘルス"
+    },
+    "widgets": {
+      "status-summary": {
+        "title": "ステータスサマリー",
+        "blurb": "総ノード数と状態別の内訳。"
+      },
+      "health-ring": {
+        "title": "ヘルスリング",
+        "blurb": "正常 / 警告 / 重大のドーナツと正常率（%）。"
+      },
+      "nodes-down": {
+        "title": "ダウン中のノード",
+        "blurb": "大きな数字のタイル：現在重大または到達不能のノード。"
+      },
+      "fleet-health-timeline": {
+        "title": "フリートヘルスの推移",
+        "blurb": "過去 24 時間のダウン / 警告 / 不明のノード数。"
+      },
+      "recent-state-changes": {
+        "title": "最近の状態変化",
+        "blurb": "直近のアップ/ダウン遷移（発生 + 回復）。"
+      },
+      "active-alerts": {
+        "title": "アクティブアラート",
+        "blurb": "発生中アラートの重大度順ライブフィード。"
+      },
+      "alert-volume": {
+        "title": "アラート件数",
+        "blurb": "過去 24 時間の 1 時間あたりのアラート発生数。"
+      },
+      "severity-mix": {
+        "title": "重大度の内訳",
+        "blurb": "アクティブアラートを重大度別に示すドーナツ。"
+      },
+      "flapping-watchlist": {
+        "title": "フラッピング監視リスト",
+        "blurb": "繰り返し切り替わるチェック（フラッピング）。"
+      },
+      "top-alerting-nodes": {
+        "title": "アラート発生の多いノード",
+        "blurb": "最も多くアラートを発生させるノード（常習的な問題源）。"
+      },
+      "alert-calendar": {
+        "title": "アラートカレンダー",
+        "blurb": "時間 × 曜日のアラート件数ヒートマップ（7 日間）。"
+      },
+      "top-rtt": {
+        "title": "ICMP RTT 上位",
+        "blurb": "遅延の大きいノード（現在値または 1 時間ピーク）。"
+      },
+      "top-cpu": {
+        "title": "CPU 上位",
+        "blurb": "CPU 使用率（%）が最も高いノード（ベンダー報告値）。"
+      },
+      "top-memory": {
+        "title": "メモリ上位",
+        "blurb": "メモリ使用率（%）が最も高いノード（ベンダー報告値）。"
+      },
+      "busiest-interfaces": {
+        "title": "混雑インターフェース",
+        "blurb": "スループット上位のリンク。速度が既知なら使用率（%）を表示。"
+      },
+      "most-interface-errors": {
+        "title": "インターフェースエラー上位",
+        "blurb": "エラー/秒（送受信合計）が最も多いリンク。"
+      },
+      "top-talkers": {
+        "title": "トップトーカー",
+        "blurb": "現在最も多くのビットを転送しているインターフェース（送受信合計）。"
+      },
+      "aggregate-throughput": {
+        "title": "総スループット",
+        "blurb": "全インターフェースのトラフィック合計（送受信、bit/秒）、過去 24 時間。"
+      },
+      "interface-heatmap": {
+        "title": "インターフェース使用率ヒートマップ",
+        "blurb": "混雑リンク × 時間をスループットで濃淡表示。"
+      },
+      "traffic-spikes": {
+        "title": "トラフィック急増",
+        "blurb": "5 分前と比べてスループットが最も増えたインターフェース。"
+      },
+      "traffic-drops": {
+        "title": "トラフィック急減",
+        "blurb": "5 分前と比べてスループットが最も減ったインターフェース（障害の可能性）。"
+      },
+      "site-matrix": {
+        "title": "サイトヘルスマトリクス",
+        "blurb": "ノードグループごとのタイル：最悪のメンバー状態と稼働/総数。"
+      },
+      "region-rollup": {
+        "title": "リージョン集計",
+        "blurb": "トップレベルグループごとの正常率。"
+      },
+      "geo-map": {
+        "title": "ジオマップ",
+        "blurb": "座標でサイトを配置し、最悪の状態でピンを色分け。"
+      },
+      "dependency-view": {
+        "title": "依存関係 / 根本原因",
+        "blurb": "親→子の依存ツリー。根本原因とされる上流ノードを表示。"
+      },
+      "maintenance": {
+        "title": "メンテナンスウィンドウ",
+        "blurb": "現在抑制中の対象と今後のウィンドウ。"
+      },
+      "poller-health": {
+        "title": "ポーラーと収集の状態",
+        "blurb": "直近のポーリング実行、実行あたりのジョブ数、収集結果数。"
+      },
+      "discovery-queue": {
+        "title": "ディスカバリキュー",
+        "blurb": "最近検出された未分類のデバイス。"
+      },
+      "data-coverage": {
+        "title": "データカバレッジ",
+        "blurb": "ゲージ：新しいデータを返しているノードの割合（%）（ブラインドスポット検出）。"
+      },
+      "stale-data": {
+        "title": "データ停滞の監視リスト",
+        "blurb": "最終サンプルが期限切れのノード（サイレント障害）。"
+      },
+      "audit": {
+        "title": "最近の変更",
+        "blurb": "直近の設定/管理操作（監査ログ、管理者のみ）。"
+      }
+    }
+  },
+  "widgets": {
+    "loadingNodes": "ノードを読み込み中…",
+    "noNodes": "ノードはまだありません。",
+    "healthRing": {
+      "healthy": "正常",
+      "healthyPct": "% 正常"
+    },
+    "nodesDown": {
+      "caption": "ダウン中のノード"
+    },
+    "fleetTimeline": {
+      "empty": "履歴はまだありません — 状態のスナップショットは 5 分ごとに蓄積されます。",
+      "down": "ダウン"
+    },
+    "activeAlerts": {
+      "empty": "アクティブアラートはありません。監視中のすべてのノードが正常です。",
+      "viewAll": "すべて表示"
+    },
+    "severityMix": {
+      "empty": "アクティブアラートはありません。",
+      "active": "アクティブ"
+    },
+    "flapping": {
+      "empty": "フラッピング中のチェックはありません。状態は安定しています。"
+    },
+    "alertVolume": {
+      "empty": "過去 24 時間に発生したアラートはありません。",
+      "aria": "過去 24 時間の 1 時間あたりのアラート発生数",
+      "opened_other": "{{count}} 件発生"
+    },
+    "topAlerting": {
+      "empty": "まだアラートは記録されていません。"
+    },
+    "alertCalendar": {
+      "empty": "過去 7 日間にアラートはありません。",
+      "cell_other": "{{row}} {{hour}}:00 — {{count}} 件",
+      "dow": {
+        "sun": "日",
+        "mon": "月",
+        "tue": "火",
+        "wed": "水",
+        "thu": "木",
+        "fri": "金",
+        "sat": "土"
+      }
+    },
+    "recentChanges": {
+      "empty": "最近の状態変化はありません。",
+      "recovered": "回復"
+    },
+    "topAgg": {
+      "windowAria": "メトリクスの期間",
+      "windowTitle": "現在値と 1 時間ピークの比較",
+      "current": "現在値",
+      "peak1h": "1時間ピーク"
+    },
+    "topRtt": {
+      "empty": "RTT データはまだありません…"
+    },
+    "topCpu": {
+      "empty": "CPU データはまだありません…"
+    },
+    "topMemory": {
+      "empty": "メモリデータはまだありません…"
+    },
+    "interfaceTraffic": {
+      "empty": "インターフェーストラフィックはまだありません…"
+    },
+    "mostErrors": {
+      "empty": "インターフェースエラーはありません。🎉"
+    },
+    "trafficSpikes": {
+      "empty": "トラフィックの急増はありません。"
+    },
+    "trafficDrops": {
+      "empty": "トラフィックの急減はありません。"
+    },
+    "throughput": {
+      "empty": "スループットデータはまだありません…",
+      "in": "受信",
+      "out": "送信"
+    },
+    "siteMatrix": {
+      "error": "サイトヘルスを読み込めませんでした。",
+      "empty": "グループ化されたノードはまだありません。"
+    },
+    "regionRollup": {
+      "error": "リージョン集計を読み込めませんでした。",
+      "empty": "メンバーを持つトップレベルグループはまだありません。"
+    },
+    "geoMap": {
+      "error": "マップを読み込めませんでした。",
+      "empty": "位置情報のあるサイトがありません。グループに座標を設定するとプロットされます。",
+      "aria": "座標で配置され、最悪の状態で色分けされたサイト",
+      "pinTitle_other": "{{name}}: {{state}}（{{count}} ノード）"
+    },
+    "maintenance": {
+      "empty": "現在メンテナンス中または予定されているものはありません。",
+      "active": "実施中",
+      "upcoming": "予定",
+      "ends": "{{time}} に終了"
+    },
+    "dataCoverage": {
+      "freshPct": "% 最新",
+      "nodes": "{{fresh}}/{{total}} ノード"
+    },
+    "staleData": {
+      "empty": "すべてのノードが最新のデータを報告しています。🎉",
+      "noRecent": "最近のデータなし"
+    },
+    "pollerHealth": {
+      "never": "なし",
+      "lastRun": "直近のポーリング実行",
+      "jobsPerRun": "実行あたりのジョブ数",
+      "results": "収集結果数"
+    },
+    "discovery": {
+      "empty": "保留中のディスカバリはありません。ノード → ディスカバリ からスキャンを実行してください。",
+      "unclassified": "未分類"
+    },
+    "audit": {
+      "forbidden": "最近の変更を表示するには管理者ロールが必要です。",
+      "empty": "最近の変更はありません。"
+    },
+    "dependency": {
+      "empty": "インベントリにノードがありません。",
+      "depthLimit": "… 深さの上限に達しました（依存関係の循環の可能性）"
+    }
+  },
+  "primitives": {
+    "donut": {
+      "aria": "内訳"
+    },
+    "rankedBars": {
+      "empty": "データはまだありません…"
+    },
+    "deltaBars": {
+      "empty": "変化はまだありません…"
+    },
+    "heatmap": {
+      "noData": "データなし"
+    }
+  },
+  "err": {
+    "requestFailed": "リクエストに失敗しました"
+  }
+}

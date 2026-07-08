@@ -1,1 +1,123 @@
-{}
+{
+  "maintenance": {
+    "note": "Planned work: covered nodes enter the maintenance state, raise no alerts, and are excluded from SLA. To silence notifications only (state and SLA unchanged), use <mutesLink>Mutes</mutesLink>.",
+    "unavailable": "Maintenance management is unavailable in skeleton mode.",
+    "add": "+ Add window",
+    "cols": {
+      "status": "Status",
+      "name": "Name",
+      "scope": "Scope",
+      "range": "Range",
+      "actions": "Actions"
+    },
+    "empty": {
+      "title": "No maintenance windows",
+      "sub": "Schedule planned work so covered nodes raise no alerts."
+    },
+    "status": {
+      "disabled": "disabled",
+      "active": "active",
+      "ended": "ended",
+      "scheduled": "scheduled"
+    },
+    "scope": {
+      "group": "group",
+      "groupTag": "group (tag)",
+      "node": "node",
+      "profile": "profile"
+    },
+    "actions": {
+      "enable": "Enable",
+      "disable": "Disable"
+    },
+    "err": {
+      "delete": "failed to delete window",
+      "update": "failed to update window"
+    },
+    "delete": {
+      "title": "Delete maintenance window",
+      "confirm": "Delete maintenance window <b>{{name}}</b>? This cannot be undone."
+    }
+  },
+  "maintenanceForm": {
+    "title": "Add maintenance window",
+    "submit": "Add window",
+    "defaultName": "Maintenance — {{name}}",
+    "name": "Name",
+    "namePlaceholder": "e.g. core switch firmware",
+    "scope": "Scope",
+    "scopeLevel": "Scope level",
+    "lockedNode": "Node",
+    "lockedGroup": "Folder group",
+    "inclSubgroups": " (incl. subgroups)",
+    "level": {
+      "node": "node",
+      "groupId": "folder group",
+      "profile": "device profile"
+    },
+    "pickNode": "(pick a node)",
+    "pickProfile": "(pick a profile)",
+    "pickGroup": "(pick a group)",
+    "groupHint": "Covers the group and all its subgroups.",
+    "tzHint": "“From”/“To” are in {{tz}} (your browser’s local time) and are stored as UTC.",
+    "err": {
+      "add": "failed to add window"
+    }
+  },
+  "mutes": {
+    "note": "Silence notifications for a node (or one check) until a time — the alert still fires and node state / SLA are unaffected. For planned work, use <maintenanceLink>Maintenance windows</maintenanceLink>.",
+    "unavailable": "Mute management is unavailable in skeleton mode.",
+    "add": "+ Add mute",
+    "resultNoun": "active mutes",
+    "cols": {
+      "target": "Target",
+      "metric": "Metric",
+      "until": "Until",
+      "reason": "Reason",
+      "actions": "Actions"
+    },
+    "empty": {
+      "title": "No active mutes",
+      "sub": "Silence a node (or one check) until a time to suppress its notifications."
+    },
+    "badge": {
+      "group": "group",
+      "subgroups": "incl. subgroups",
+      "allMetrics": "all metrics"
+    },
+    "err": {
+      "lift": "failed to lift mute"
+    },
+    "lift": {
+      "title": "Lift mute",
+      "confirmMetric": "Lift the mute on <b>{{target}}</b> (<m>{{metric}}</m>)? Notifications resume immediately.",
+      "confirmAll": "Lift the mute on <b>{{target}}</b> (all metrics)? Notifications resume immediately."
+    }
+  },
+  "muteForm": {
+    "title": "Add mute",
+    "submit": "Add mute",
+    "scope": "Scope",
+    "lockedNode": "Node",
+    "lockedGroup": "Folder group",
+    "inclSubgroups": " (incl. subgroups)",
+    "kind": {
+      "node": "node",
+      "group": "folder group"
+    },
+    "entityNode": "Node",
+    "entityGroup": "Group",
+    "pickNode": "(pick a node)",
+    "pickGroup": "(pick a group)",
+    "groupHint": "Silences every node under the group and its subgroups.",
+    "metric": "Metric",
+    "metricPlaceholder": "metric (empty = whole node)",
+    "until": "Until",
+    "tzHint": "In {{tz}} (your browser’s local time) and stored as UTC.",
+    "reason": "Reason",
+    "reasonPlaceholder": "reason (optional)",
+    "err": {
+      "add": "failed to add mute"
+    }
+  }
+}

@@ -5,6 +5,7 @@
 // monitored device shows everything. Nothing from the old detail page is dropped, only restyled.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import {
   deriveMem,
@@ -49,11 +50,12 @@ interface Props {
 }
 
 export function OverviewTab({ node, groups, nodes, status, series, unreachable }: Props) {
+  const { t } = useTranslation('nodes');
   const facts = useFacts(node, groups, nodes, unreachable);
   return (
     <div className="nd-overview">
       <section>
-        <div className="nd-section-t">ICMP RTT · last 30 min</div>
+        <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
         {series.timestamps.length > 0 ? (
           <MetricChart
             title=""
@@ -65,7 +67,7 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
           />
         ) : (
           <p className="nd-muted nd-spark-empty">
-            {unreachable ? '— (unreachable)' : 'No RTT history yet…'}
+            {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
           </p>
         )}
       </section>
@@ -81,7 +83,7 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
 
       {status && status.alerts.length > 0 && (
         <section>
-          <div className="nd-section-t">Active alerts</div>
+          <div className="nd-section-t">{t('nav:alerts.active')}</div>
           <div className="nd-alerts">
             {status.alerts.map((a) => (
               <div className="nd-alert" key={`${a.check}|${a.severity}`}>
@@ -91,9 +93,11 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
                 />
                 <span className="nd-alert-state">{stateLabel(a.state)}</span>
                 {a.root_cause && (
-                  <span className="nd-muted mono nd-alert-cause">← caused by {a.root_cause}</span>
+                  <span className="nd-muted mono nd-alert-cause">
+                    {t('overview.causedBy', { cause: a.root_cause })}
+                  </span>
                 )}
-                {a.flapping && <span className="nd-alert-flap">flapping</span>}
+                {a.flapping && <span className="nd-alert-flap">{t('alerts:row.flapping')}</span>}
                 <span className="nd-muted nd-alert-time">{formatTimestamp(a.at_unix_ms)}</span>
               </div>
             ))}
@@ -129,6 +133,7 @@ function certTone(days: number): 'up' | 'warning' | 'critical' {
  *  TLS certificate's days-to-expiry. Mirrors the Device-health card layout; self-refreshes. Shown
  *  only for URL-monitor nodes (the caller guards on `node.url_check`). */
 function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
+  const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const [up, setUp] = useState<number | null>(null);
@@ -174,24 +179,24 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
   return (
     <section>
       <div className="nd-section-head">
-        <div className="nd-section-t">URL monitor</div>
+        <div className="nd-section-t">{t('overview.urlMonitor')}</div>
         <RangeControl value={range} onChange={setRange} />
       </div>
       <div className="nd-fact-v mono nd-url-target">{url}</div>
       <div className="nd-health-metrics">
         <div className="nd-health-metric">
           <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">Availability</span>
+            <span className="nd-health-metric-label">{t('overview.availability')}</span>
             <span
               className="nd-health-metric-value"
               style={{ color: httpToneVar(availabilityTone) }}
             >
-              {up == null ? '—' : up === 1 ? 'Up' : 'Down'}
+              {up == null ? '—' : up === 1 ? t('overview.up') : t('overview.down')}
             </span>
           </div>
           <div className="nd-url-status-line">
             {code == null ? (
-              <span className="nd-muted">No response yet…</span>
+              <span className="nd-muted">{t('overview.noResponse')}</span>
             ) : (
               <span style={{ color: httpToneVar(httpStatusTone(code)) }}>
                 HTTP {code} · {httpStatusLabel(code)}
@@ -212,7 +217,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
         {certDays != null && (
           <div className="nd-health-metric">
             <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">TLS certificate</span>
+              <span className="nd-health-metric-label">{t('overview.tlsCertificate')}</span>
               <span
                 className="nd-health-metric-value"
                 style={{ color: httpToneVar(certTone(certDays)) }}
@@ -244,6 +249,7 @@ function MerakiHealth({
   nodeId: string;
   device: NonNullable<NodeDetail['meraki_device']>;
 }) {
+  const { t } = useTranslation('nodes');
   const [up, setUp] = useState<number | null>(null);
   const [clients, setClients] = useState<number | null>(null);
   const [sent, setSent] = useState<number | null>(null);
@@ -281,23 +287,23 @@ function MerakiHealth({
         <div className="nd-section-t">Cisco Meraki</div>
       </div>
       <div className="nd-fact-v mono nd-url-target">
-        {device.product_type} · serial {device.serial}
+        {t('overview.merakiIdentity', { productType: device.product_type, serial: device.serial })}
       </div>
       <div className="nd-health-metrics">
         <div className="nd-health-metric">
           <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">Availability</span>
+            <span className="nd-health-metric-label">{t('overview.availability')}</span>
             <span
               className="nd-health-metric-value"
               style={{ color: httpToneVar(availabilityTone) }}
             >
-              {up == null ? '—' : up === 1 ? 'Online' : 'Offline'}
+              {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
             </span>
           </div>
         </div>
         <div className="nd-health-metric">
           <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">Clients</span>
+            <span className="nd-health-metric-label">{t('overview.clients')}</span>
             <span className="nd-health-metric-value">
               {clients == null ? '—' : Math.round(clients)}
             </span>
@@ -305,7 +311,7 @@ function MerakiHealth({
         </div>
         <div className="nd-health-metric">
           <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">Traffic (sent / recv)</span>
+            <span className="nd-health-metric-label">{t('overview.trafficSentRecv')}</span>
             <span className="nd-health-metric-value">
               {sent == null && recv == null
                 ? '—'
@@ -332,6 +338,7 @@ function useFacts(
   nodes: NodeSummary[] | undefined,
   unreachable: boolean,
 ): Fact[] {
+  const { t } = useTranslation('nodes');
   const [profileName, setProfileName] = useState<string | null>(null);
   const [credentialName, setCredentialName] = useState<string | null>(null);
   const [parentName, setParentName] = useState<string | null>(null);
@@ -395,16 +402,16 @@ function useFacts(
 
   const path = groupPath(groups, node.group_id);
   return [
-    { label: 'Group', value: path.length ? path.join(' / ') : 'Ungrouped' },
-    { label: 'IP address', value: node.address, mono: true },
-    { label: 'Maker', value: node.vendor || '—' },
-    { label: 'Model', value: node.model || '—', mono: true },
-    { label: 'Device profile', value: profileName ?? '—' },
-    { label: 'SNMP credential', value: credentialName ?? '—' },
-    { label: 'Parent node', value: parentName ?? '—', mono: !!parentName },
+    { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
+    { label: t('field.ipAddress'), value: node.address, mono: true },
+    { label: t('field.maker'), value: node.vendor || '—' },
+    { label: t('field.model'), value: node.model || '—', mono: true },
+    { label: t('field.deviceProfile'), value: profileName ?? '—' },
+    { label: t('field.snmpCredential'), value: credentialName ?? '—' },
+    { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },
     {
-      label: 'Uptime',
-      value: unreachable ? '— (unreachable)' : (uptime ?? '—'),
+      label: t('field.uptime'),
+      value: unreachable ? t('overview.unreachableDash') : (uptime ?? '—'),
     },
   ];
 }
@@ -509,6 +516,7 @@ interface ResolvedMem {
  *  table) with a 0–100% trend chart. Resolves which CPU metric and memory source the node
  *  actually has from its effective collection set, and hides entirely when it has neither. */
 function DeviceHealth({ nodeId }: { nodeId: string }) {
+  const { t } = useTranslation('nodes');
   // `undefined` = still resolving; `null` = resolved, none present.
   const [cpuMetric, setCpuMetric] = useState<string | null | undefined>(undefined);
   const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
@@ -563,29 +571,44 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   return (
     <section>
       <div className="nd-section-head">
-        <div className="nd-section-t">Device health</div>
+        <div className="nd-section-t">{t('overview.deviceHealth')}</div>
         <RangeControl value={range} onChange={setRange} />
       </div>
       <div className="nd-health-metrics">
         {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} range={range} />}
         {mem && <MemHealth nodeId={nodeId} mem={mem} range={range} />}
         {sessTotal && (
-          <SessionHealth nodeId={nodeId} label="Sessions" session={sessTotal} range={range} />
+          <SessionHealth
+            nodeId={nodeId}
+            label={t('overview.sessions')}
+            session={sessTotal}
+            range={range}
+          />
         )}
         {sessRate && (
           <SessionHealth
             nodeId={nodeId}
-            label="Setup rate"
+            label={t('overview.setupRate')}
             unit="/s"
             session={sessRate}
             range={range}
           />
         )}
         {vpnUsers && (
-          <SessionHealth nodeId={nodeId} label="VPN users" session={vpnUsers} range={range} />
+          <SessionHealth
+            nodeId={nodeId}
+            label={t('overview.vpnUsers')}
+            session={vpnUsers}
+            range={range}
+          />
         )}
         {vpnTunnels && (
-          <SessionHealth nodeId={nodeId} label="VPN tunnels" session={vpnTunnels} range={range} />
+          <SessionHealth
+            nodeId={nodeId}
+            label={t('overview.vpnTunnels')}
+            session={vpnTunnels}
+            range={range}
+          />
         )}
       </div>
     </section>
@@ -609,6 +632,7 @@ function SessionHealth({
   range: Range;
   unit?: string;
 }) {
+  const { t } = useTranslation('nodes');
   const [value, setValue] = useState<number | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -661,7 +685,7 @@ function SessionHealth({
           xRange={win ?? undefined}
         />
       ) : (
-        <p className="nd-muted">No history yet…</p>
+        <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
     </div>
   );
@@ -677,6 +701,7 @@ function CpuHealth({
   metric: string;
   range: Range;
 }) {
+  const { t } = useTranslation('nodes');
   const [value, setValue] = useState<number | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -711,7 +736,7 @@ function CpuHealth({
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">CPU</span>
+        <span className="nd-health-metric-label">{t('overview.cpu')}</span>
         <span className="nd-health-metric-value">{formatUtil(value)}</span>
       </div>
       {series.timestamps.length > 0 ? (
@@ -724,7 +749,7 @@ function CpuHealth({
           xRange={win ?? undefined}
         />
       ) : (
-        <p className="nd-muted">No history yet…</p>
+        <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
     </div>
   );
@@ -743,6 +768,7 @@ function MemHealth({
   mem: ResolvedMem;
   range: Range;
 }) {
+  const { t } = useTranslation('nodes');
   const [usedBytes, setUsedBytes] = useState<number | null>(null);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [pct, setPct] = useState<number | null>(null);
@@ -797,7 +823,7 @@ function MemHealth({
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">Memory</span>
+        <span className="nd-health-metric-label">{t('overview.memory')}</span>
         <span className="nd-health-metric-value">
           {absolute ? (
             <>
@@ -819,7 +845,7 @@ function MemHealth({
           xRange={win ?? undefined}
         />
       ) : (
-        <p className="nd-muted">No history yet…</p>
+        <p className="nd-muted">{t('overview.noHistory')}</p>
       )}
     </div>
   );
@@ -853,6 +879,7 @@ const BUILTIN_SCALARS = ['snmp_sys_uptime_ticks'];
 /** Latest values of the node's scalar SNMP metrics. Hidden when the node has none (e.g. an
  *  ICMP-only node), so it never shows an empty section. */
 function SnmpScalars({ nodeId }: { nodeId: string }) {
+  const { t } = useTranslation('nodes');
   const [readings, setReadings] = useState<{ name: string; value: number }[] | null>(null);
 
   useEffect(() => {
@@ -884,7 +911,7 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
   if (!readings || readings.length === 0) return null;
   return (
     <section>
-      <div className="nd-section-t">System (SNMP)</div>
+      <div className="nd-section-t">{t('overview.systemSnmp')}</div>
       <div className="nd-scalars">
         {readings.map((r) => {
           const d = scalarDisplay(r.name, r.value);

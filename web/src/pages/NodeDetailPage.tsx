@@ -5,6 +5,7 @@
 // the post-delete navigation back to the inventory.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { useAuthStore } from '../store';
@@ -15,6 +16,7 @@ import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 const TABS = ['overview', 'interfaces', 'collection', 'events'];
 
 export function NodeDetailPage() {
+  const { t } = useTranslation();
   const { nodeId = '' } = useParams();
   const navigate = useNavigate();
   const authed = useAuthStore((s) => s.authed);
@@ -36,7 +38,9 @@ export function NodeDetailPage() {
 
   return (
     <div className="page-fill">
-      <Breadcrumb trail={[{ label: 'Nodes' }, { label: 'All nodes', to: '/nodes' }]} />
+      <Breadcrumb
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all'), to: '/nodes' }]}
+      />
       <NodeDetail
         nodeId={nodeId}
         variant="page"
