@@ -4,7 +4,14 @@
 // the virtualized DataTable on the v2 table standard.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { alertWhat, formatTimestamp, severityColorVar, stateLabel } from '../lib/format';
+import { useTranslation } from 'react-i18next';
+import {
+  alertWhat,
+  formatTimestamp,
+  severityColorVar,
+  severityLabel,
+  stateLabel,
+} from '../lib/format';
 import { api } from '../services/api';
 import type { AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -17,9 +24,10 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
  *  reads as "Reachability"; legacy rows with no captured metric read as "—". Formatting logic is
  *  the pure `alertWhat` (unit-tested); this just maps its parts to styled spans. */
 function WhatCell({ row }: { row: AlertHistoryRow }) {
+  const { t } = useTranslation();
   const what = alertWhat(row);
   if (what.kind === 'none') return <span className="muted">—</span>;
-  if (what.kind === 'liveness') return <span>Reachability</span>;
+  if (what.kind === 'liveness') return <span>{t('format:liveness')}</span>;
   return (
     <span>
       <span className="mono">{what.metric}</span>
@@ -32,6 +40,7 @@ function WhatCell({ row }: { row: AlertHistoryRow }) {
 const PAGE_SIZE = 100;
 
 export function HistoryPage() {
+  const { t } = useTranslation('alerts');
   const [rows, setRows] = useState<AlertHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
@@ -75,40 +84,48 @@ export function HistoryPage() {
     () => [
       {
         key: 'sev',
-        header: 'Severity',
+        header: t('history.cols.severity'),
         width: '110px',
         render: (r) => (
           <span className="yt-status">
             <span className="yt-status-dot" style={{ background: severityColorVar(r.severity) }} />
-            <span className="muted">{r.severity}</span>
+            <span className="muted">{severityLabel(r.severity)}</span>
           </span>
         ),
       },
       {
         key: 'node',
-        header: 'Node',
+        header: t('history.cols.node'),
         width: '1.4fr',
         render: (r) => <EntityName name={nodeName(r.node)} id={r.node} />,
       },
-      { key: 'what', header: 'What', width: '1.6fr', render: (r) => <WhatCell row={r} /> },
-      { key: 'state', header: 'State', width: '120px', render: (r) => stateLabel(r.state) },
+      { key: 'what', header: t('history.cols.what'), width: '1.6fr', render: (r) => <WhatCell row={r} /> },
+      { key: 'state', header: t('history.cols.state'), width: '120px', render: (r) => stateLabel(r.state) },
       {
         key: 'phase',
-        header: 'Event',
+        header: t('history.cols.event'),
         width: '100px',
         render: (r) =>
-          r.resolved ? <Badge tone="up">cleared</Badge> : <Badge tone="critical">fired</Badge>,
+          r.resolved ? (
+            <Badge tone="up">{t('history.phase.cleared')}</Badge>
+          ) : (
+            <Badge tone="critical">{t('history.phase.fired')}</Badge>
+          ),
       },
       {
         // Read-only ack mirrored from the external tool (ADR-015) — Yagra has no ack action.
         key: 'acked',
-        header: 'Acked',
+        header: t('history.cols.acked'),
         width: '120px',
         render: (r) =>
           r.acked ? (
             <span
               className="muted"
-              title={`Acknowledged in ${r.acked.source} by ${r.acked.by}${r.acked.note ? ` — ${r.acked.note}` : ''} (read-only, mirrored from your external tool)`}
+              title={t('acked.title', {
+                source: r.acked.source,
+                by: r.acked.by,
+                note: r.acked.note ? t('acked.note', { note: r.acked.note }) : '',
+              })}
             >
               {r.acked.source}
             </span>
@@ -118,31 +135,34 @@ export function HistoryPage() {
       },
       {
         key: 'at',
-        header: 'When',
+        header: t('history.cols.when'),
         width: '1fr',
         render: (r) => <span className="muted">{formatTimestamp(r.at_unix_ms)}</span>,
       },
     ],
-    [nodeName],
+    [nodeName, t],
   );
 
   return (
     <div className="page-fill">
       <PageHeader
-        title="History"
-        trail={[{ label: 'Alerts' }, { label: 'History' }]}
-        note="Append-only alert lifecycle: each row is a fire or clear transition."
+        title={t('nav:alerts.history')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
+        note={t('history.note')}
       />
       <TableToolbar>
         <TableSpacer />
-        <ResultCount shown={rows.length} noun={exhausted ? 'transitions' : 'transitions loaded'} />
+        <ResultCount
+          shown={rows.length}
+          noun={exhausted ? t('history.transitions') : t('history.transitionsLoaded')}
+        />
       </TableToolbar>
       <DataTable
         rows={rows}
         columns={columns}
         rowKey={(r) => `${r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`}
         onReachEnd={loadMore}
-        empty="No alert history yet."
+        empty={t('history.empty')}
         loading={loading}
       />
     </div>

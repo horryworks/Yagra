@@ -18,9 +18,10 @@ import enNav from './locales/en/nav.json';
 import enFormat from './locales/en/format.json';
 import enSettings from './locales/en/settings.json';
 import enAuth from './locales/en/auth.json';
+import enAlerts from './locales/en/alerts.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
-export const NAMESPACES = ['common', 'nav', 'format', 'settings', 'auth'] as const;
+export const NAMESPACES = ['common', 'nav', 'format', 'settings', 'auth', 'alerts'] as const;
 
 void i18n
   // Non-English resources are fetched on demand via dynamic import → Vite code-splits each
@@ -40,7 +41,14 @@ void i18n
     defaultNS: 'common',
     ns: NAMESPACES,
     resources: {
-      en: { common: enCommon, nav: enNav, format: enFormat, settings: enSettings, auth: enAuth },
+      en: {
+        common: enCommon,
+        nav: enNav,
+        format: enFormat,
+        settings: enSettings,
+        auth: enAuth,
+        alerts: enAlerts,
+      },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages
     interpolation: { escapeValue: false }, // React already escapes rendered values

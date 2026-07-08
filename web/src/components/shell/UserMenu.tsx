@@ -4,11 +4,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { useAuthStore } from '../../store';
 import './UserMenu.css';
 
 export function UserMenu() {
+  const { t } = useTranslation('nav');
   const authed = useAuthStore((s) => s.authed);
   const setAuthed = useAuthStore((s) => s.setAuthed);
   const setRole = useAuthStore((s) => s.setRole);
@@ -37,17 +39,23 @@ export function UserMenu() {
 
   return (
     <div className="usermenu" ref={ref}>
-      <button className="usermenu-avatar" onClick={() => setOpen((o) => !o)} aria-label="User menu">
+      <button
+        className="usermenu-avatar"
+        onClick={() => setOpen((o) => !o)}
+        aria-label={t('shell.userMenu')}
+      >
         {initial}
       </button>
       {open && (
         <div className="usermenu-pop">
           <div className="usermenu-head">
-            <div className="usermenu-role">{role ? `Signed in · ${role}` : 'Not signed in'}</div>
+            <div className="usermenu-role">
+              {role ? t('shell.signedInAs', { role }) : t('shell.notSignedIn')}
+            </div>
           </div>
           {authed ? (
             <button className="usermenu-item" onClick={logout}>
-              Log out
+              {t('shell.logOut')}
             </button>
           ) : (
             <button
@@ -57,7 +65,7 @@ export function UserMenu() {
                 navigate('/login');
               }}
             >
-              Sign in
+              {t('shell.signIn')}
             </button>
           )}
         </div>

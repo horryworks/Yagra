@@ -18,6 +18,8 @@ import enSettings from './locales/en/settings.json';
 import jaSettings from './locales/ja/settings.json';
 import enAuth from './locales/en/auth.json';
 import jaAuth from './locales/ja/auth.json';
+import enAlerts from './locales/en/alerts.json';
+import jaAlerts from './locales/ja/alerts.json';
 
 type Json = Record<string, unknown>;
 
@@ -36,6 +38,7 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   format: { en: enFormat, ja: jaFormat },
   settings: { en: enSettings, ja: jaSettings },
   auth: { en: enAuth, ja: jaAuth },
+  alerts: { en: enAlerts, ja: jaAlerts },
 };
 
 describe('i18n mechanism', () => {
@@ -49,6 +52,13 @@ describe('i18n mechanism', () => {
     expect(i18n.t('format:state.critical')).toBe('Critical');
     expect(i18n.t('format:relative.min', { count: 5 })).toBe('5m ago');
     expect(i18n.t('settings:prefs.language')).toBe('Language');
+    // Shared-UI + shell strings (Area 1 extraction).
+    expect(i18n.t('common:noRows')).toBe('No rows.');
+    expect(i18n.t('common:credPicker.remove', { name: 'snmp-ro' })).toBe('Remove snmp-ro');
+    expect(i18n.t('nav:shell.signedInAs', { role: 'admin' })).toBe('Signed in · admin');
+    // Alerts triage namespace (Area 2 extraction).
+    expect(i18n.t('alerts:history.cols.severity')).toBe('Severity');
+    expect(i18n.t('format:severity.critical')).toBe('Critical');
   });
 
   it('swaps strings immediately when the language changes (lazy JA load)', async () => {
@@ -58,6 +68,11 @@ describe('i18n mechanism', () => {
     expect(i18n.t('format:relative.min', { count: 5 })).toBe('5 分前');
     // A missing JA key falls back to English rather than rendering blank.
     expect(i18n.t('common:actions.save')).toBe('保存');
+    // Shared-UI + shell strings swap to Japanese too (Area 1 extraction).
+    expect(i18n.t('common:noRows')).toBe('データがありません。');
+    expect(i18n.t('nav:shell.signIn')).toBe('サインイン');
+    expect(i18n.t('alerts:history.cols.severity')).toBe('重大度');
+    expect(i18n.t('format:severity.critical')).toBe('重大');
   });
 });
 

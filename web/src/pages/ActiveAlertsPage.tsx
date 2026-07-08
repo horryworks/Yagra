@@ -5,6 +5,7 @@
 // are Mute and "open in external tool" — both pending their backends, shown disabled so the
 // intended affordance is visible without implying it works. Alerts (and acks) arrive live over SSE.
 
+import { useTranslation } from 'react-i18next';
 import { useAlertStream } from '../hooks/useAlertStream';
 import { useAlertStore } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -13,36 +14,36 @@ import { Button } from '../components/ui/Button';
 import { AlertRows } from '../widgets/AlertRows';
 
 export function ActiveAlertsPage() {
+  const { t } = useTranslation('alerts');
   useAlertStream();
   const count = useAlertStore((s) => Object.keys(s.alerts).length);
 
   return (
     <div>
       <PageHeader
-        title="Active alerts"
-        trail={[{ label: 'Alerts' }, { label: 'Active alerts' }]}
-        note={`${count} active · triage view (ack & escalation are handled in your external tool)`}
+        title={t('nav:alerts.active')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.active') }]}
+        note={t('active.note', { count })}
       />
-      <Card title="Active">
+      <Card title={t('active.card')}>
         <AlertRows
-          empty="No active alerts."
           actions={() => (
             <>
               <Button
                 variant="ghost"
                 disabled
-                aria-label="Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now"
-                title="Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now"
+                aria-label={t('active.muteHint')}
+                title={t('active.muteHint')}
               >
-                Mute
+                {t('active.mute')}
               </Button>
               <Button
                 variant="ghost"
                 disabled
-                aria-label="No external routing integration is configured yet (PagerDuty / JSM)"
-                title="No external routing integration is configured yet (PagerDuty / JSM)"
+                aria-label={t('active.openExternalHint')}
+                title={t('active.openExternalHint')}
               >
-                Open external
+                {t('active.openExternal')}
               </Button>
             </>
           )}

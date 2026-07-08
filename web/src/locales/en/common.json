@@ -1,5 +1,27 @@
 {
   "loading": "Loading…",
+  "noRows": "No rows.",
+  "copy": {
+    "copied": "Copied",
+    "copyId": "Copy id"
+  },
+  "form": {
+    "required": "Required"
+  },
+  "sealed": "Encrypted at rest — never displayed",
+  "healthbar": {
+    "noNodes": "No nodes"
+  },
+  "statusSummary": {
+    "loading": "Loading nodes…",
+    "empty": "No nodes yet."
+  },
+  "credPicker": {
+    "placeholder": "Select stored credentials…",
+    "remove": "Remove {{name}}",
+    "empty": "No stored SNMP credentials yet.",
+    "manage": "Manage credentials"
+  },
   "actions": {
     "save": "Save",
     "cancel": "Cancel",
