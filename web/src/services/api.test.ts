@@ -1009,6 +1009,59 @@ describe('api client', () => {
     expect(res.pools[0].mode).toBe('working_set');
   });
 
+  it('lists self-monitored hosts (core + pollers)', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        hosts: [
+          {
+            instance: 'core',
+            role: 'core',
+            pool: null,
+            online: true,
+            cpu_pct: 12.5,
+            load1: 0.4,
+            mem_used_bytes: 2,
+            mem_total_bytes: 8,
+            mem_used_pct: 25,
+            disk_used_pct: 60,
+            disks: [{ mount: 'root', used_bytes: 60, size_bytes: 100 }],
+          },
+        ],
+      }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.getSystemHosts();
+    expect(spy).toHaveBeenCalledWith('/api/v1/system/hosts');
+    expect(res.hosts[0].instance).toBe('core');
+    expect(res.hosts[0].disks[0].mount).toBe('root');
+  });
+
+  it('fetches a host metric range for an instance with the range params', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        instance: 'edge-1',
+        cpu_pct: [{ t: 1, v: 10 }],
+        load1: [],
+        load5: [],
+        load15: [],
+        mem_used_bytes: [],
+        mem_total_bytes: [],
+        disks: [],
+      }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.getHostMetricRange('edge-1', { from: 100, to: 200, step: 30 });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/system/hosts/edge-1/metrics/range?from=100&to=200&step=30',
+    );
+    expect(res.instance).toBe('edge-1');
+    expect(res.cpu_pct[0].v).toBe(10);
+  });
+
   it('deletes a poller via DELETE to its id (url-encoded)', async () => {
     const spy = vi
       .fn()

@@ -49,8 +49,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, IfIndex, NodeId, NodeState, Permission,
-    ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
+    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, IfIndex, NodeId, NodeState,
+    Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -108,11 +108,17 @@ const DEFAULT_RANGE_SECS: i64 = 3600;
 /// Default range step when `step` is omitted (seconds).
 const DEFAULT_STEP_SECS: u64 = 60;
 
+/// Core's own latest host-resource sample (self-observability), refreshed by the collector task in
+/// `main`. Read by `GET /api/v1/system/hosts`; `None` until the first sample (or in skeleton mode).
+pub type CoreHostSample = Arc<std::sync::Mutex<Option<HostSample>>>;
+
 /// Shared API state: the metric store, the node inventory source, and the alert engine.
 #[derive(Clone)]
 pub struct ApiState {
     /// TSDB read/write seam.
     pub store: Arc<dyn MetricStore>,
+    /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
+    pub host_sample: CoreHostSample,
     /// Inventory read seam.
     pub nodes: Arc<dyn NodeListing>,
     /// Alert engine (active alerts + live event stream).
@@ -281,6 +287,13 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/pollers", get(list_pollers))
         .route("/api/v1/pollers/:id", delete(delete_poller))
         .route("/api/v1/system-health", get(system_health))
+        // Host self-observability: current CPU/load/mem/disk of core + each poller, and the trend
+        // series behind the System Health "Host resources" charts.
+        .route("/api/v1/system/hosts", get(system_hosts))
+        .route(
+            "/api/v1/system/hosts/:instance/metrics/range",
+            get(host_metric_range),
+        )
         .route("/api/v1/version", get(version))
         .route("/api/v1/stream/alerts", get(stream_alerts))
         .route(
@@ -1503,6 +1516,13 @@ struct PollerInfo {
     working_set_specs: u32,
     /// Poll results core has consumed from it since core started.
     results_total: u64,
+    /// Current host CPU utilization % (0–100) from its latest heartbeat; `null` when the poller is
+    /// offline or on an N-1 build without host telemetry.
+    cpu_pct: Option<f64>,
+    /// Current host memory-used % (0–100); `null` when unavailable.
+    mem_used_pct: Option<f64>,
+    /// Highest watched-filesystem used % (0–100); `null` when unavailable.
+    disk_used_pct: Option<f64>,
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
@@ -1583,6 +1603,14 @@ fn build_pollers_response(
                 working_set_nodes: lv.map_or(0, |v| v.working_set_nodes),
                 working_set_specs: lv.map_or(0, |v| v.working_set_specs),
                 results_total: lv.map_or(0, |v| v.results_total),
+                // Host telemetry from the live registry only (the durable row carries none).
+                cpu_pct: lv.and_then(|v| v.host.as_ref()).map(|h| h.cpu_pct),
+                mem_used_pct: lv
+                    .and_then(|v| v.host.as_ref())
+                    .and_then(HostSample::mem_used_pct),
+                disk_used_pct: lv
+                    .and_then(|v| v.host.as_ref())
+                    .and_then(HostSample::primary_disk_used_pct),
             }
         })
         .collect();
@@ -1815,6 +1843,217 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         postgres,
         tsdb,
         bus,
+    })
+    .into_response()
+}
+
+// ── Host self-observability: CPU/load/mem/disk of core + each poller ──────────
+
+/// One self-monitored host in `GET /api/v1/system/hosts`: current resource values for the core
+/// process's host (`role="core"`) or a poller's host (`role="poller"`). Secret-free — an
+/// `instance` is `core` or an already-sanitized poller id, and `mount` labels are configured
+/// aliases, never raw device paths.
+#[derive(Serialize)]
+struct HostInfo {
+    /// `core` or the poller id.
+    instance: String,
+    /// `"core"` or `"poller"`.
+    role: &'static str,
+    /// Pool the poller serves; `null` for core.
+    pool: Option<String>,
+    /// Whether the source is currently reporting (core is always online; a poller within its
+    /// heartbeat window).
+    online: bool,
+    /// Current CPU utilization % (0–100); `null` when no sample yet.
+    cpu_pct: Option<f64>,
+    /// Current 1-minute load average; `null` when no sample / unavailable on the platform.
+    load1: Option<f64>,
+    /// Memory in use, bytes; `null` when no sample.
+    mem_used_bytes: Option<u64>,
+    /// Total physical memory, bytes; `null` when no sample.
+    mem_total_bytes: Option<u64>,
+    /// Memory-used %, derived; `null` when total is unknown.
+    mem_used_pct: Option<f64>,
+    /// Highest watched-filesystem used %, for at-a-glance columns; `null` when none has a capacity.
+    disk_used_pct: Option<f64>,
+    /// Current per-watched-filesystem usage.
+    disks: Vec<DiskUsage>,
+}
+
+/// The `GET /api/v1/system/hosts` body: core plus every poller that reports host telemetry.
+#[derive(Serialize)]
+struct SystemHostsResponse {
+    hosts: Vec<HostInfo>,
+}
+
+/// Build a [`HostInfo`] from an optional sample (absent ⇒ all-`null` metrics but the row still
+/// lists, so the instance selector shows the host even before its first sample).
+fn host_info(
+    instance: &str,
+    role: &'static str,
+    pool: Option<String>,
+    online: bool,
+    s: Option<&HostSample>,
+) -> HostInfo {
+    HostInfo {
+        instance: instance.to_owned(),
+        role,
+        pool,
+        online,
+        cpu_pct: s.map(|s| s.cpu_pct),
+        load1: s.map(|s| s.load1),
+        mem_used_bytes: s.map(|s| s.mem_used_bytes),
+        mem_total_bytes: s.map(|s| s.mem_total_bytes),
+        mem_used_pct: s.and_then(HostSample::mem_used_pct),
+        disk_used_pct: s.and_then(HostSample::primary_disk_used_pct),
+        disks: s.map(|s| s.disks.clone()).unwrap_or_default(),
+    }
+}
+
+/// `GET /api/v1/system/hosts` — current host resources for core and every poller reporting
+/// telemetry. `View`-gated and secret-free (like the other fleet views). Always returns core (it is
+/// answering the request); pollers come from the live registry, so skeleton mode returns just core.
+async fn system_hosts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let mut hosts = Vec::new();
+    let core = st.host_sample.lock().ok().and_then(|g| g.clone());
+    hosts.push(host_info("core", "core", None, true, core.as_ref()));
+    if let Some(admin) = st.admin.as_ref() {
+        for v in admin.coordinator.poller_views(Instant::now()) {
+            if let Some(h) = v.host.as_ref() {
+                hosts.push(host_info(
+                    &v.id,
+                    "poller",
+                    Some(v.pool.clone()),
+                    v.online,
+                    Some(h),
+                ));
+            }
+        }
+    }
+    Json(SystemHostsResponse { hosts }).into_response()
+}
+
+/// The watched-filesystem mounts for one instance, or `None` if the instance is unknown (⇒ 404).
+/// `core` is always valid (empty mounts until its first sample); a poller is valid iff it is in the
+/// live registry. Bounds the `instance`/`mount` values that reach a PromQL selector to known ones.
+fn host_disk_mounts(st: &ApiState, instance: &str) -> Option<Vec<String>> {
+    if instance == "core" {
+        let mounts = st
+            .host_sample
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .map(|s| s.disks.iter().map(|d| d.mount.clone()).collect())
+            .unwrap_or_default();
+        return Some(mounts);
+    }
+    let admin = st.admin.as_ref()?;
+    let view = admin
+        .coordinator
+        .poller_views(Instant::now())
+        .into_iter()
+        .find(|v| v.id == instance)?;
+    Some(
+        view.host
+            .map(|h| h.disks.into_iter().map(|d| d.mount).collect())
+            .unwrap_or_default(),
+    )
+}
+
+/// Query params for the host-metrics range endpoint (all optional; same defaults as node ranges).
+#[derive(Deserialize)]
+struct HostRangeQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
+}
+
+/// A per-mount filesystem trend: used vs. size over the window (the frontend derives % or shows a
+/// bare-bytes trend when `size` is all zero, e.g. the `database` size proxy).
+#[derive(Serialize)]
+struct HostDiskRange {
+    mount: String,
+    used_bytes: Vec<MetricPoint>,
+    size_bytes: Vec<MetricPoint>,
+}
+
+/// The `GET /api/v1/system/hosts/:instance/metrics/range` body — the scalar host trends plus a
+/// per-mount filesystem trend, all over one window. One round trip per instance/range change.
+#[derive(Serialize)]
+struct HostMetricRange {
+    instance: String,
+    cpu_pct: Vec<MetricPoint>,
+    load1: Vec<MetricPoint>,
+    load5: Vec<MetricPoint>,
+    load15: Vec<MetricPoint>,
+    mem_used_bytes: Vec<MetricPoint>,
+    mem_total_bytes: Vec<MetricPoint>,
+    disks: Vec<HostDiskRange>,
+}
+
+/// `GET /api/v1/system/hosts/:instance/metrics/range` — host CPU/load/mem/disk trends for one
+/// instance (`core` or a poller id) over `[from,to]` at `step`. `View`-gated; the `instance` is
+/// validated against the known set before any selector is built.
+async fn host_metric_range(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(instance): Path<String>,
+    Query(q): Query<HostRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(mounts) = host_disk_mounts(&st, &instance) else {
+        return not_found("host_not_found", format!("unknown instance {instance:?}"));
+    };
+    let to = q.to.unwrap_or_else(now_unix_s);
+    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
+    let step = q.step.unwrap_or(DEFAULT_STEP_SECS).max(1);
+    let store = &st.store;
+    let cpu_pct = store
+        .host_metric_range(&instance, "cpu_pct", from, to, step)
+        .await;
+    let load1 = store
+        .host_metric_range(&instance, "load1", from, to, step)
+        .await;
+    let load5 = store
+        .host_metric_range(&instance, "load5", from, to, step)
+        .await;
+    let load15 = store
+        .host_metric_range(&instance, "load15", from, to, step)
+        .await;
+    let mem_used_bytes = store
+        .host_metric_range(&instance, "mem_used_bytes", from, to, step)
+        .await;
+    let mem_total_bytes = store
+        .host_metric_range(&instance, "mem_total_bytes", from, to, step)
+        .await;
+    let mut disks = Vec::with_capacity(mounts.len());
+    for mount in mounts {
+        let used_bytes = store
+            .host_disk_range(&instance, "fs_used_bytes", &mount, from, to, step)
+            .await;
+        let size_bytes = store
+            .host_disk_range(&instance, "fs_size_bytes", &mount, from, to, step)
+            .await;
+        disks.push(HostDiskRange {
+            mount,
+            used_bytes,
+            size_bytes,
+        });
+    }
+    Json(HostMetricRange {
+        instance,
+        cpu_pct,
+        load1,
+        load5,
+        load15,
+        mem_used_bytes,
+        mem_total_bytes,
+        disks,
     })
     .into_response()
 }
@@ -7966,6 +8205,7 @@ mod tests {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
+            host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions: Arc::new(SessionStore::new()),
             history: None,
@@ -7984,6 +8224,7 @@ mod tests {
             store,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
+            host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions,
             history: None,
@@ -8004,6 +8245,7 @@ mod tests {
             store: Arc::new(InMemorySink::default()),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
+            host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions,
             history: None,
@@ -9378,6 +9620,7 @@ mod tests {
             working_set_specs: 9,
             inflight: 0,
             results_total: 42,
+            host: None,
         }
     }
 
@@ -9442,6 +9685,37 @@ mod tests {
             "a not-yet-persisted poller has no timestamp"
         );
         assert_eq!(p3.first_seen, None);
+    }
+
+    #[test]
+    fn build_pollers_response_maps_host_columns_from_live_sample() {
+        let mut online = live_view("p1", "default", true);
+        online.host = Some(HostSample {
+            cpu_pct: 40.0,
+            mem_used_bytes: 3,
+            mem_total_bytes: 4,
+            disks: vec![DiskUsage {
+                mount: "root".into(),
+                used_bytes: 60,
+                size_bytes: 100,
+            }],
+            ..Default::default()
+        });
+        let resp =
+            build_pollers_response(Vec::new(), vec![online], std::collections::HashMap::new());
+        let p1 = &resp.pollers[0];
+        assert_eq!(p1.cpu_pct, Some(40.0));
+        assert_eq!(p1.mem_used_pct, Some(75.0));
+        assert_eq!(p1.disk_used_pct, Some(60.0));
+
+        // A poller with no host sample (offline / N-1) exposes null host columns.
+        let resp = build_pollers_response(
+            Vec::new(),
+            vec![live_view("p2", "default", true)],
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(resp.pollers[0].cpu_pct, None);
+        assert_eq!(resp.pollers[0].disk_used_pct, None);
     }
 
     #[test]

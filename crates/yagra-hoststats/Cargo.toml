@@ -1,0 +1,17 @@
+[package]
+name = "yagra-hoststats"
+description = "Yagra-hoststats — host self-metrics collector (CPU/load/memory/disk) for self-observability."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+sysinfo = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

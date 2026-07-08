@@ -59,6 +59,8 @@ import type {
   PollerHealth,
   PollersResponse,
   SystemHealth,
+  SystemHostsResponse,
+  HostMetricRange,
   VersionInfo,
   ProfileSummary,
   ProfileInput,
@@ -709,6 +711,24 @@ export const api = {
 
   /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
   getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),
+
+  /** Current host resources (CPU/load/mem/disk) for core + every poller reporting telemetry.
+   *  Powers the System Health "Host resources" instance selector + the Pollers table columns. */
+  getSystemHosts: (): Promise<SystemHostsResponse> => request('/system/hosts'),
+
+  /** Host CPU/load/mem/disk trends for one instance (`core` or a poller id) over a window. */
+  getHostMetricRange: (
+    instance: string,
+    opts?: { from?: number; to?: number; step?: number },
+  ): Promise<HostMetricRange> => {
+    const params = new URLSearchParams();
+    if (opts?.from != null) params.set('from', String(opts.from));
+    if (opts?.to != null) params.set('to', String(opts.to));
+    if (opts?.step != null) params.set('step', String(opts.step));
+    const qs = params.toString();
+    const path = `/system/hosts/${encodeURIComponent(instance)}/metrics/range`;
+    return request(qs ? `${path}?${qs}` : path);
+  },
 
   /** Running core/API version (for Settings ▸ About). Public — no auth required. */
   getVersion: (): Promise<VersionInfo> => request('/version'),

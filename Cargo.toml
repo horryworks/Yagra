@@ -19,6 +19,7 @@
 resolver = "2"
 members = [
     "crates/yagra-common",
+    "crates/yagra-hoststats",
     "crates/yagra-telemetry",
     "crates/yagra-secrets",
     "crates/yagra-transport",
@@ -72,6 +73,13 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rand = "0.8"
 # Machine hostname for poller identity default (ADR-009) — tiny, cross-platform, no unsafe of ours.
 hostname = "0.4"
+# Host self-metrics (self-observability): CPU/load/memory of the core & poller hosts. Cross-platform
+# so `cargo run` still works on the Windows dev box. Only yagra-hoststats (pulled by core + poller)
+# depends on it, keeping the heavy collector out of the shared/bus/alert crates.
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+# statvfs(2) for exact per-path filesystem capacity on the Linux container target (yagra-hoststats,
+# unix-only) — reliable for bind-mounted data volumes where sysinfo's disk listing is flaky.
+libc = "0.2"
 # Email notifications (SMTP, async/rustls — no native TLS, no NASM)
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 # Serialization / types

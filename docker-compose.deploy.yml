@@ -49,6 +49,10 @@ services:
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
+      # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
+      # `metrics` = the VictoriaMetrics data volume (mounted read-only below). Database growth is
+      # tracked via pg_database_size instead (the pgdata dir is 0700 and can't be stat'd).
+      YAGRA_DISK_WATCH_PATHS: ${YAGRA_DISK_WATCH_PATHS:-/=root,/hostfs/vm=metrics}
       # Local-auth admin password seeded on first start. Left empty by default: core then
       # generates a one-time random admin password and prints it once in its logs
       # (`docker compose logs core`). Set YAGRA_ADMIN_PASSWORD in .env to choose your own.
@@ -72,6 +76,9 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - kekdata:/kek:ro
+      # Read-only view of the metrics data volume so core can statvfs its backing disk for the
+      # Host-resources "metrics" trend (capacity only — core never writes here).
+      - vmdata:/hostfs/vm:ro
     ports:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped

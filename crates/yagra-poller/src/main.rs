@@ -182,7 +182,9 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    // Heartbeat (ADR-009): liveness + telemetry every HEARTBEAT_SECS.
+    // Heartbeat (ADR-009): liveness + telemetry every HEARTBEAT_SECS. The host collector rides the
+    // beat so this poller's CPU/load/mem/disk reach core even across NAT/FW (self-observability).
+    let host_collector = Arc::new(yagra_hoststats::HostCollector::from_env());
     tokio::spawn(run_heartbeat_loop(
         bus.clone(),
         identity.id.clone(),
@@ -193,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
         results_total.clone(),
         inflight.clone(),
         listener_labels,
+        host_collector,
     ));
 
     // Local scheduler: every 500ms, drain due specs into a bounded channel feeding the worker loop.
@@ -316,7 +319,8 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
 
 /// Publish a liveness + telemetry heartbeat every [`HEARTBEAT_SECS`] (ADR-009). Echoes the working
 /// set's epoch/last_seq so core can spot a stale/gapped poller, plus node/spec/inflight/result
-/// counts and the bound listeners. Never logs or carries a secret.
+/// counts, the bound listeners, and a host-resource sample (CPU/load/mem/disk). Never logs or
+/// carries a secret.
 #[allow(clippy::too_many_arguments)]
 async fn run_heartbeat_loop<B>(
     bus: Arc<B>,
@@ -328,6 +332,7 @@ async fn run_heartbeat_loop<B>(
     results_total: Arc<AtomicU64>,
     inflight: Arc<AtomicU64>,
     listeners: Vec<String>,
+    host_collector: Arc<yagra_hoststats::HostCollector>,
 ) where
     B: SyncBus + 'static,
 {
@@ -354,6 +359,7 @@ async fn run_heartbeat_loop<B>(
             inflight: u32::try_from(inflight.load(Ordering::Relaxed)).unwrap_or(u32::MAX),
             results_total: results_total.load(Ordering::Relaxed),
             listeners: listeners.clone(),
+            host: Some(host_collector.sample()),
         };
         if let Err(e) = bus.publish_heartbeat(hb).await {
             tracing::warn!(error = %e, "failed to publish heartbeat");

@@ -21,6 +21,7 @@ yagra-discovery = { path = "../yagra-discovery" }
 yagra-secrets = { path = "../yagra-secrets" }
 yagra-transport = { path = "../yagra-transport" }
 yagra-telemetry = { path = "../yagra-telemetry" }
+yagra-hoststats = { path = "../yagra-hoststats" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }

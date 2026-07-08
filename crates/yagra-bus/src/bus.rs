@@ -294,6 +294,7 @@ mod tests {
             inflight: 0,
             results_total: 0,
             listeners: Vec::new(),
+            host: None,
         };
         SyncBus::publish_heartbeat(&bus, hb.clone()).await.unwrap();
 

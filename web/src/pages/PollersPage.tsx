@@ -21,7 +21,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
-import { formatCount } from '../lib/format';
+import { formatCount, formatUtil } from '../lib/format';
 import {
   buildPollerEnv,
   isValidPollerToken,
@@ -33,7 +33,7 @@ import {
 } from '../lib/pollers';
 import './PollersPage.css';
 
-const COLS = '1.3fr 140px 118px 100px 168px 90px 116px 64px';
+const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 112px 58px';
 const REFRESH_MS = 10_000;
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -301,6 +301,9 @@ export function PollersPage() {
                 <div className="ytable-h">Version</div>
                 <div className="ytable-h">Working set</div>
                 <div className="ytable-h right">Results</div>
+                <div className="ytable-h right">CPU</div>
+                <div className="ytable-h right">Mem</div>
+                <div className="ytable-h right">Disk</div>
                 <div className="ytable-h">Last seen</div>
                 <div className="ytable-h right">Actions</div>
               </div>
@@ -335,6 +338,9 @@ export function PollersPage() {
                         {workingSetLabel(p.working_set_nodes, p.working_set_specs, online)}
                       </div>
                       <div className="ytable-cell right mono">{formatCount(p.results_total)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.cpu_pct)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct)}</div>
                       <div className="ytable-cell">{lastSeenLabel(p.last_seen, online)}</div>
                       <div className="ytable-cell right">
                         {authed && !online && (
