@@ -19,9 +19,36 @@ import enFormat from './locales/en/format.json';
 import enSettings from './locales/en/settings.json';
 import enAuth from './locales/en/auth.json';
 import enAlerts from './locales/en/alerts.json';
+import enNodes from './locales/en/nodes.json';
+import enMonitoring from './locales/en/monitoring.json';
+import enDashboard from './locales/en/dashboard.json';
+import enAlertsConfig from './locales/en/alertsConfig.json';
+import enSuppression from './locales/en/suppression.json';
+import enTopology from './locales/en/topology.json';
+import enReports from './locales/en/reports.json';
+import enTroubleshoot from './locales/en/troubleshoot.json';
+import enAccess from './locales/en/access.json';
+import enSystem from './locales/en/system.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
-export const NAMESPACES = ['common', 'nav', 'format', 'settings', 'auth', 'alerts'] as const;
+export const NAMESPACES = [
+  'common',
+  'nav',
+  'format',
+  'settings',
+  'auth',
+  'alerts',
+  'nodes',
+  'monitoring',
+  'dashboard',
+  'alertsConfig',
+  'suppression',
+  'topology',
+  'reports',
+  'troubleshoot',
+  'access',
+  'system',
+] as const;
 
 void i18n
   // Non-English resources are fetched on demand via dynamic import → Vite code-splits each
@@ -48,6 +75,16 @@ void i18n
         settings: enSettings,
         auth: enAuth,
         alerts: enAlerts,
+        nodes: enNodes,
+        monitoring: enMonitoring,
+        dashboard: enDashboard,
+        alertsConfig: enAlertsConfig,
+        suppression: enSuppression,
+        topology: enTopology,
+        reports: enReports,
+        troubleshoot: enTroubleshoot,
+        access: enAccess,
+        system: enSystem,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages

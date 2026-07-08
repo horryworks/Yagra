@@ -5,6 +5,7 @@
 // filter, popover/roving-key pattern, and SearchInput.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../ui/TableToolbar';
 import { useScopeData } from '../../troubleshoot/useScopeData';
 import { filterNodes } from '../../troubleshoot/scope';
@@ -31,11 +32,12 @@ export function NodePicker({
   value,
   valueLabel,
   onChange,
-  placeholder = 'All nodes',
+  placeholder,
   id,
   className,
   exclude,
 }: Props) {
+  const { t } = useTranslation();
   const { nodes, nodesLoaded, loadNodes } = useScopeData();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -103,7 +105,7 @@ export function NodePicker({
     }
   };
 
-  const triggerLabel = value ? (valueLabel ?? value) : placeholder;
+  const triggerLabel = value ? (valueLabel ?? value) : (placeholder ?? t('nav:nodes.all'));
 
   return (
     <div className={['nodepick', className].filter(Boolean).join(' ')} ref={ref}>
@@ -119,7 +121,7 @@ export function NodePicker({
           <span className={value ? 'nodepick-label' : 'nodepick-label muted'}>{triggerLabel}</span>
         </button>
         {value ? (
-          <button type="button" className="nodepick-clear" onClick={clear} aria-label="Clear node filter">
+          <button type="button" className="nodepick-clear" onClick={clear} aria-label={t('nodePicker.clear')}>
             ×
           </button>
         ) : (
@@ -139,15 +141,15 @@ export function NodePicker({
                   setQuery(v);
                   setActive(0);
                 }}
-                placeholder="Search nodes by name or address…"
-                ariaLabel="Search nodes"
+                placeholder={t('nodePicker.searchPlaceholder')}
+                ariaLabel={t('nodePicker.searchAria')}
               />
             </div>
-            <div className="nodepick-list" role="listbox" aria-label="Nodes">
+            <div className="nodepick-list" role="listbox" aria-label={t('nodePicker.listAria')}>
               {!nodesLoaded ? (
-                <div className="nodepick-empty">Loading nodes…</div>
+                <div className="nodepick-empty">{t('nodePicker.loading')}</div>
               ) : shown.length === 0 ? (
-                <div className="nodepick-empty">No matching nodes.</div>
+                <div className="nodepick-empty">{t('nodePicker.noMatch')}</div>
               ) : (
                 shown.map((n, i) => (
                   <button
@@ -172,7 +174,7 @@ export function NodePicker({
               )}
               {nodesLoaded && filtered.length > MAX_RESULTS && (
                 <div className="nodepick-empty">
-                  +{filtered.length - MAX_RESULTS} more — keep typing to narrow
+                  {t('nodePicker.more', { count: filtered.length - MAX_RESULTS })}
                 </div>
               )}
             </div>

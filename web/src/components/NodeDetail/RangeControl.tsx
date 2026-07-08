@@ -8,6 +8,7 @@
 // interval slides the window); absolute ranges hold fixed bounds.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CalendarIcon } from '../ui/icons';
 import './RangeControl.css';
 
@@ -112,6 +113,7 @@ interface Props {
 }
 
 export function RangeControl({ value, onChange }: Props) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [draftFrom, setDraftFrom] = useState('');
   const [draftTo, setDraftTo] = useState('');
@@ -163,7 +165,7 @@ export function RangeControl({ value, onChange }: Props) {
 
   return (
     <div className="rc" ref={ref}>
-      <div className="rc-seg" role="group" aria-label="Time range">
+      <div className="rc-seg" role="group" aria-label={t('range.timeRange')}>
         {RANGES.map((r) => {
           const active = value.kind === 'relative' && value.secs === r.secs;
           return (
@@ -183,9 +185,9 @@ export function RangeControl({ value, onChange }: Props) {
       <button
         type="button"
         className={`rc-cal${value.kind === 'absolute' ? ' active' : ''}`}
-        aria-label="Custom range"
+        aria-label={t('range.custom')}
         aria-expanded={open}
-        title="Custom range"
+        title={t('range.custom')}
         onClick={togglePopover}
       >
         <CalendarIcon className="rc-cal-icon" width={14} height={14} />
@@ -195,9 +197,9 @@ export function RangeControl({ value, onChange }: Props) {
       </button>
 
       {open && (
-        <div className="rc-pop" role="dialog" aria-label="Custom time range">
+        <div className="rc-pop" role="dialog" aria-label={t('range.custom')}>
           <div className="rc-pop-sec">
-            <div className="rc-pop-label">Quick ranges</div>
+            <div className="rc-pop-label">{t('range.quick')}</div>
             <div className="rc-chips">
               {QUICK_CHIPS.map((c) => {
                 const active = value.kind === 'relative' && value.secs === c.secs;
@@ -216,7 +218,7 @@ export function RangeControl({ value, onChange }: Props) {
           </div>
 
           <label className="rc-field">
-            <span className="rc-field-label">From</span>
+            <span className="rc-field-label">{t('range.from')}</span>
             <input
               className="rc-input"
               type="datetime-local"
@@ -225,7 +227,7 @@ export function RangeControl({ value, onChange }: Props) {
             />
           </label>
           <label className="rc-field">
-            <span className="rc-field-label">To</span>
+            <span className="rc-field-label">{t('range.to')}</span>
             <input
               className="rc-input"
               type="datetime-local"
@@ -236,7 +238,7 @@ export function RangeControl({ value, onChange }: Props) {
 
           <div className="rc-pop-foot">
             <button type="button" className="rc-btn" onClick={() => setOpen(false)}>
-              Cancel
+              {t('actions.cancel')}
             </button>
             <button
               type="button"
@@ -244,7 +246,7 @@ export function RangeControl({ value, onChange }: Props) {
               disabled={!applyEnabled}
               onClick={apply}
             >
-              Apply
+              {t('actions.apply')}
             </button>
           </div>
         </div>
