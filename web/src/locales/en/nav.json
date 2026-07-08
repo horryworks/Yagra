@@ -98,6 +98,11 @@
     "breadcrumb": "Breadcrumb",
     "comingSoonBadge": "Coming soon",
     "comingSoonThisScreen": "This screen",
-    "comingSoonText": "{{label}} is part of the planned information architecture. Its screen will appear here once the backing API lands — the navigation entry is kept so the structure stays stable. Check back in a future release."
+    "comingSoonText": "{{label}} is part of the planned information architecture. Its screen will appear here once the backing API lands — the navigation entry is kept so the structure stays stable. Check back in a future release.",
+    "userMenu": "User menu",
+    "signedInAs": "Signed in · {{role}}",
+    "notSignedIn": "Not signed in",
+    "logOut": "Log out",
+    "signIn": "Sign in"
   }
 }

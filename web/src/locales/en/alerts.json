@@ -1,0 +1,70 @@
+{
+  "active": {
+    "card": "Active",
+    "note": "{{count}} active · triage view (ack & escalation are handled in your external tool)",
+    "empty": "No active alerts.",
+    "mute": "Mute",
+    "muteHint": "Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now",
+    "openExternal": "Open external",
+    "openExternalHint": "No external routing integration is configured yet (PagerDuty / JSM)"
+  },
+  "row": {
+    "flapping": "flapping",
+    "acked": "acked"
+  },
+  "acked": {
+    "title": "Acknowledged in {{source}} by {{by}}{{note}} (read-only, mirrored from your external tool)",
+    "note": " — {{note}}"
+  },
+  "history": {
+    "note": "Append-only alert lifecycle: each row is a fire or clear transition.",
+    "empty": "No alert history yet.",
+    "transitions": "transitions",
+    "transitionsLoaded": "transitions loaded",
+    "cols": {
+      "severity": "Severity",
+      "node": "Node",
+      "what": "What",
+      "state": "State",
+      "event": "Event",
+      "acked": "Acked",
+      "when": "When"
+    },
+    "phase": {
+      "fired": "fired",
+      "cleared": "cleared"
+    }
+  },
+  "events": {
+    "note": "Received syslog / SNMP-trap / webhook events. Unmatched events are kept for 24h to help author rules; matched events follow the alert-history retention.",
+    "empty": "No events received yet.",
+    "events": "events",
+    "eventsLoaded": "events loaded",
+    "searchPlaceholder": "Search source or message…",
+    "searchAria": "Search events",
+    "filters": {
+      "allKinds": "All kinds",
+      "allEvents": "All events",
+      "matched": "Matched a rule",
+      "unmatched": "Unmatched"
+    }
+  },
+  "eventLog": {
+    "openInEvents": "Open in Events",
+    "emptyNode": "No events received from this node yet.",
+    "cols": {
+      "kind": "Kind",
+      "source": "Source",
+      "message": "Message",
+      "result": "Result",
+      "when": "When"
+    },
+    "action": {
+      "fired": "fired",
+      "refreshed": "refreshed",
+      "cleared": "cleared",
+      "suppressed": "suppressed",
+      "info": "info"
+    }
+  }
+}

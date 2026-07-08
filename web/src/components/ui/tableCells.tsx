@@ -3,6 +3,7 @@
 // secrets, copyable mono ids, HTTP status, method chips, two-line timestamps, monograms.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   formatExactTime,
   httpStatusLabel,
@@ -15,8 +16,9 @@ import { CopyIcon, LockIcon } from './icons';
 
 /** Sealed-secret indicator — secret values are never shown or returned by the API. */
 export function SealedSecret() {
+  const { t } = useTranslation();
   return (
-    <span className="yt-sealed" title="Encrypted at rest — never displayed">
+    <span className="yt-sealed" title={t('sealed')}>
       <LockIcon />
       <span className="yt-dots">••••••</span>
     </span>
@@ -25,6 +27,7 @@ export function SealedSecret() {
 
 /** Mono id, truncated, with a copy button that appears on row hover and flashes "Copied". */
 export function CopyableId({ id }: { id: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard?.writeText(id);
@@ -36,7 +39,7 @@ export function CopyableId({ id }: { id: string }) {
       <span className="yt-copy-id">{id}</span>
       <IconButton
         className="yt-copy-btn"
-        title={copied ? 'Copied' : 'Copy id'}
+        title={copied ? t('copy.copied') : t('copy.copyId')}
         onClick={copy}
       >
         <CopyIcon />

@@ -7,6 +7,7 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useTranslation } from 'react-i18next';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -45,6 +46,7 @@ export function DataTable<T>({
   empty,
   loading,
 }: Props<T>) {
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
 
@@ -73,7 +75,7 @@ export function DataTable<T>({
       </div>
       <div className="dt-scroll scroll-y" ref={scrollRef}>
         {rows.length === 0 ? (
-          <div className="dt-empty">{loading ? 'Loading…' : (empty ?? 'No rows.')}</div>
+          <div className="dt-empty">{loading ? t('loading') : (empty ?? t('noRows'))}</div>
         ) : (
           <div className="dt-body" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {

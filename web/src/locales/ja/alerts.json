@@ -1,0 +1,70 @@
+{
+  "active": {
+    "card": "アクティブ",
+    "note": "{{count}} 件アクティブ · トリアージビュー（ACK とエスカレーションは外部ツールで処理されます）",
+    "empty": "アクティブなアラートはありません。",
+    "mute": "ミュート",
+    "muteHint": "アラート単位のクイックミュートは近日対応 — 当面は アラート ▸ ミュート をご利用ください",
+    "openExternal": "外部で開く",
+    "openExternalHint": "外部ルーティング連携（PagerDuty / JSM）はまだ設定されていません"
+  },
+  "row": {
+    "flapping": "フラッピング",
+    "acked": "ACK済み"
+  },
+  "acked": {
+    "title": "{{source}} で {{by}} が確認{{note}}（読み取り専用・外部ツールから反映）",
+    "note": " — {{note}}"
+  },
+  "history": {
+    "note": "追記専用のアラートライフサイクル：各行は発生または解消の遷移です。",
+    "empty": "アラート履歴はまだありません。",
+    "transitions": "件の遷移",
+    "transitionsLoaded": "件の遷移を読み込み",
+    "cols": {
+      "severity": "重大度",
+      "node": "ノード",
+      "what": "内容",
+      "state": "状態",
+      "event": "イベント",
+      "acked": "ACK",
+      "when": "日時"
+    },
+    "phase": {
+      "fired": "発生",
+      "cleared": "解消"
+    }
+  },
+  "events": {
+    "note": "受信した syslog / SNMPトラップ / Webhook イベント。未マッチのイベントはルール作成のため24時間保持され、マッチしたイベントはアラート履歴の保持期間に従います。",
+    "empty": "受信したイベントはまだありません。",
+    "events": "件のイベント",
+    "eventsLoaded": "件のイベントを読み込み",
+    "searchPlaceholder": "送信元またはメッセージを検索…",
+    "searchAria": "イベントを検索",
+    "filters": {
+      "allKinds": "すべての種別",
+      "allEvents": "すべてのイベント",
+      "matched": "ルールにマッチ",
+      "unmatched": "未マッチ"
+    }
+  },
+  "eventLog": {
+    "openInEvents": "イベントで開く",
+    "emptyNode": "このノードから受信したイベントはまだありません。",
+    "cols": {
+      "kind": "種別",
+      "source": "送信元",
+      "message": "メッセージ",
+      "result": "結果",
+      "when": "日時"
+    },
+    "action": {
+      "fired": "発生",
+      "refreshed": "更新",
+      "cleared": "解消",
+      "suppressed": "抑制",
+      "info": "情報"
+    }
+  }
+}

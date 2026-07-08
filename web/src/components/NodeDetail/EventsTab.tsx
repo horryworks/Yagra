@@ -4,6 +4,7 @@
 
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
 import { ResultCount } from '../ui/TableToolbar';
@@ -12,24 +13,31 @@ import { useEventLog } from '../EventLog/useEventLog';
 import { eventColumns } from '../EventLog/eventColumns';
 
 export function EventsTab({ node }: { node: NodeDetail }) {
+  const { t } = useTranslation('alerts');
   const { nodeName } = useEntityNames();
   const { rows, loading, exhausted, loadMore } = useEventLog({ node_id: node.id });
-  const columns = useMemo(() => eventColumns(nodeName, { showSource: false }), [nodeName]);
+  const columns = useMemo(
+    () => eventColumns(nodeName, t, { showSource: false }),
+    [nodeName, t],
+  );
 
   return (
     <div className="nd-ev">
       <div className="nd-ev-head">
         <Link className="nd-ev-open" to={`/alerts/events?node_id=${encodeURIComponent(node.id)}`}>
-          Open in Events →
+          {t('eventLog.openInEvents')} →
         </Link>
-        <ResultCount shown={rows.length} noun={exhausted ? 'events' : 'events loaded'} />
+        <ResultCount
+          shown={rows.length}
+          noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
+        />
       </div>
       <DataTable
         rows={rows}
         columns={columns}
         rowKey={(r) => r.id}
         onReachEnd={loadMore}
-        empty="No events received from this node yet."
+        empty={t('eventLog.emptyNode')}
         loading={loading}
       />
     </div>

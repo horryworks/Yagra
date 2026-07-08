@@ -4,6 +4,7 @@
 // empty set renders just the neutral track. Status is conveyed by color + the title tooltip and is
 // always paired with text counts elsewhere (legend / count pill), so it is not color-alone.
 
+import { useTranslation } from 'react-i18next';
 import type { NodeSummary } from '../../types/api';
 import { stateColorVar, stateLabel } from '../../lib/format';
 import { STATE_ORDER, tallyStates } from '../../lib/nodeTree';
@@ -15,9 +16,10 @@ interface Props {
 }
 
 export function HealthBar({ nodes, className }: Props) {
+  const { t } = useTranslation();
   const { counts, total } = tallyStates(nodes);
   const segments = STATE_ORDER.filter((s) => counts[s] > 0);
-  const title = segments.map((s) => `${counts[s]} ${stateLabel(s)}`).join(' · ') || 'No nodes';
+  const title = segments.map((s) => `${counts[s]} ${stateLabel(s)}`).join(' · ') || t('healthbar.noNodes');
   return (
     <span className={['healthbar', className].filter(Boolean).join(' ')} title={title}>
       {total > 0 &&

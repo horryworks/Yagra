@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import type { EventKind } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/EntityName';
@@ -22,6 +23,7 @@ type KindFilter = '' | EventKind;
 type MatchedFilter = '' | 'matched' | 'unmatched';
 
 export function EventsPage() {
+  const { t } = useTranslation('alerts');
   const [searchParams, setSearchParams] = useSearchParams();
   const nodeId = readNodeIdParam(searchParams);
   const { nodeName } = useEntityNames();
@@ -43,7 +45,7 @@ export function EventsPage() {
     search: debouncedSearch || undefined,
   });
 
-  const columns = useMemo(() => eventColumns(nodeName), [nodeName]);
+  const columns = useMemo(() => eventColumns(nodeName, t), [nodeName, t]);
 
   const setNode = (node: { id: string; name: string } | null) => {
     const params = new URLSearchParams(searchParams);
@@ -54,43 +56,46 @@ export function EventsPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title="Events"
-        trail={[{ label: 'Alerts' }, { label: 'Events' }]}
-        note="Received syslog / SNMP-trap / webhook events. Unmatched events are kept for 24h to help author rules; matched events follow the alert-history retention."
+        title={t('nav:alerts.events')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.events') }]}
+        note={t('events.note')}
       />
       <TableToolbar>
         <Select value={kind} onChange={(e) => setKind(e.target.value as KindFilter)}>
-          <option value="">All kinds</option>
+          <option value="">{t('events.filters.allKinds')}</option>
           <option value="syslog">syslog</option>
           <option value="trap">trap</option>
           <option value="webhook">webhook</option>
         </Select>
         <Select value={matched} onChange={(e) => setMatched(e.target.value as MatchedFilter)}>
-          <option value="">All events</option>
-          <option value="matched">Matched a rule</option>
-          <option value="unmatched">Unmatched</option>
+          <option value="">{t('events.filters.allEvents')}</option>
+          <option value="matched">{t('events.filters.matched')}</option>
+          <option value="unmatched">{t('events.filters.unmatched')}</option>
         </Select>
         <NodePicker
           value={nodeId}
           valueLabel={nodeId ? nodeName(nodeId) : undefined}
           onChange={setNode}
-          placeholder="All nodes"
+          placeholder={t('nav:nodes.all')}
         />
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search source or message…"
-          ariaLabel="Search events"
+          placeholder={t('events.searchPlaceholder')}
+          ariaLabel={t('events.searchAria')}
         />
         <TableSpacer />
-        <ResultCount shown={rows.length} noun={exhausted ? 'events' : 'events loaded'} />
+        <ResultCount
+          shown={rows.length}
+          noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
+        />
       </TableToolbar>
       <DataTable
         rows={rows}
         columns={columns}
         rowKey={(r) => r.id}
         onReachEnd={loadMore}
-        empty="No events received yet."
+        empty={t('events.empty')}
         loading={loading}
       />
     </div>

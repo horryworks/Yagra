@@ -5,6 +5,7 @@
 // once here so every list reuses the same treatment instead of hand-rolling per-page resolvers.
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import type { NodeGroup, NodeSummary, ProfileSummary, ScopeLevel } from '../../types/api';
 import { IconButton } from './IconButton';
@@ -67,6 +68,7 @@ export function EntityName({ name, id }: { name: string; id?: string }) {
 }
 
 function EntityNameResolved({ name, id }: { name: string; id: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard?.writeText(id);
@@ -78,7 +80,7 @@ function EntityNameResolved({ name, id }: { name: string; id: string }) {
       <span className="yt-entity-name">{name}</span>
       <IconButton
         className="yt-entity-copy"
-        title={copied ? 'Copied' : 'Copy id'}
+        title={copied ? t('copy.copied') : t('copy.copyId')}
         onClick={copy}
       >
         <CopyIcon />

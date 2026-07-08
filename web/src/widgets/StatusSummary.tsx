@@ -3,6 +3,7 @@
 // coarse state (ok when a recent RTT exists, else unknown); richer states light up as the
 // alert/threshold engine feeds back.
 
+import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../lib/format';
 import type { NodeState, NodeSummary } from '../types/api';
 import './StatusSummary.css';
@@ -16,6 +17,7 @@ export function StatusSummary({
   nodes: NodeSummary[];
   loading?: boolean;
 }) {
+  const { t } = useTranslation();
   const counts = nodes.reduce<Record<string, number>>((acc, n) => {
     acc[n.state] = (acc[n.state] ?? 0) + 1;
     return acc;
@@ -26,11 +28,13 @@ export function StatusSummary({
     <div className="statussummary">
       <div className="statussummary-total">
         <div className="statussummary-num">{nodes.length}</div>
-        <div className="statussummary-cap">nodes</div>
+        <div className="statussummary-cap">{t('noun.node', { count: nodes.length })}</div>
       </div>
       <div className="statussummary-grid">
         {present.length === 0 && (
-          <span className="muted">{loading ? 'Loading nodes…' : 'No nodes yet.'}</span>
+          <span className="muted">
+            {loading ? t('statusSummary.loading') : t('statusSummary.empty')}
+          </span>
         )}
         {present.map((s) => (
           <div className="statussummary-item" key={s}>
