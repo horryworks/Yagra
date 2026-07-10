@@ -46,7 +46,13 @@
       "allKinds": "すべての種別",
       "allEvents": "すべてのイベント",
       "matched": "ルールにマッチ",
-      "unmatched": "未マッチ"
+      "unmatched": "未マッチ",
+      "regexLabel": ".*",
+      "regexAria": "メッセージを正規表現で検索",
+      "searchPlaceholderRegex": "メッセージを正規表現で検索…",
+      "from": "開始",
+      "to": "終了",
+      "clearRange": "期間をクリア"
     }
   },
   "eventLog": {

@@ -14,8 +14,15 @@ export interface EventLogFilter {
   node_id?: string;
   /** Already resolved to a boolean (the UI string ↔ boolean mapping stays at the call site). */
   matched?: boolean;
-  /** Free-text substring matched server-side against source (node name / IP) or message. */
+  /** Free-text search. Substring over source (node name / IP) or message, or — when `regex` is
+   *  set — a regular expression matched against the message only. */
   search?: string;
+  /** Interpret `search` as a regular expression (message-only) rather than a substring. */
+  regex?: boolean;
+  /** Time-range lower bound (inclusive, RFC 3339), or undefined for unbounded. */
+  start?: string;
+  /** Time-range upper bound (inclusive, RFC 3339), or undefined for unbounded. */
+  end?: string;
 }
 
 export interface EventLog {
@@ -27,7 +34,15 @@ export interface EventLog {
   reload: () => void;
 }
 
-export function useEventLog({ kind, node_id, matched, search }: EventLogFilter): EventLog {
+export function useEventLog({
+  kind,
+  node_id,
+  matched,
+  search,
+  regex,
+  start,
+  end,
+}: EventLogFilter): EventLog {
   const [rows, setRows] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
@@ -42,8 +57,11 @@ export function useEventLog({ kind, node_id, matched, search }: EventLogFilter):
       ...(node_id ? { node_id } : {}),
       ...(matched != null ? { matched } : {}),
       ...(search ? { q: search } : {}),
+      ...(search && regex ? { regex: true } : {}),
+      ...(start ? { start } : {}),
+      ...(end ? { end } : {}),
     }),
-    [kind, node_id, matched, search],
+    [kind, node_id, matched, search, regex, start, end],
   );
 
   // Reload from the top whenever a filter changes (or reload() bumps the nonce).

@@ -974,8 +974,15 @@ export const api = {
     kind?: EventKind;
     node_id?: string;
     matched?: boolean;
-    /** Free-text substring matched against source (node name / IP) or message. */
+    /** Free-text substring matched against source (node name / IP) or message. With `regex`
+     *  set, it is instead a regular expression matched against the message only. */
     q?: string;
+    /** Interpret `q` as a regular expression (message-only) rather than a substring. */
+    regex?: boolean;
+    /** Time-range lower bound (inclusive, RFC 3339). Distinct from `before` (the paging cursor). */
+    start?: string;
+    /** Time-range upper bound (inclusive, RFC 3339). */
+    end?: string;
   }): Promise<EventRow[]> => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set('limit', String(opts.limit));
@@ -984,6 +991,9 @@ export const api = {
     if (opts?.node_id) params.set('node_id', opts.node_id);
     if (opts?.matched != null) params.set('matched', String(opts.matched));
     if (opts?.q) params.set('q', opts.q);
+    if (opts?.regex) params.set('regex', 'true');
+    if (opts?.start) params.set('start', opts.start);
+    if (opts?.end) params.set('end', opts.end);
     const qs = params.toString();
     return request(qs ? `/events?${qs}` : '/events');
   },

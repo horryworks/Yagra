@@ -1,0 +1,77 @@
+/* Event-log filter controls (kind/matched/node selects come from Field/NodePicker; this styles the
+   search+regex group and the From/To time-range group). Tokens only, per ui-conventions. */
+
+.event-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Regex toggle — mirrors the RangeControl segment look (brand fill when active). */
+.event-regex-toggle {
+  height: 28px;
+  min-width: 30px;
+  padding: 0 9px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    color var(--transition),
+    border-color var(--transition);
+}
+
+.event-regex-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.event-regex-toggle.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-mark);
+}
+
+/* From/To time-range group. */
+.event-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.event-range-input {
+  height: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-range-sep {
+  color: var(--text-tertiary);
+}
+
+.event-range-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    color var(--transition);
+}
+
+.event-range-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}

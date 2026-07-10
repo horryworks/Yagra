@@ -150,6 +150,12 @@ fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64)
     if let Some(before) = filter.before {
         clauses.push(format!("_time:<{}", fmt_vl_time_dt(before)));
     }
+    if let Some(since) = filter.since {
+        clauses.push(format!("_time:>={}", fmt_vl_time_dt(since)));
+    }
+    if let Some(until) = filter.until {
+        clauses.push(format!("_time:<={}", fmt_vl_time_dt(until)));
+    }
     if let Some(kind) = &filter.kind {
         clauses.push(format!("kind:={}", logsql_quote(kind)));
     }
@@ -163,19 +169,25 @@ fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64)
         ));
     }
     if let Some(term) = &filter.search {
-        let mut ors = vec![
-            format!("_msg:{}", logsql_quote(term)),
-            format!("source_ip:{}", logsql_quote(term)),
-        ];
-        if !name_node_ids.is_empty() {
-            let ids = name_node_ids
-                .iter()
-                .map(|i| logsql_quote(&i.to_string()))
-                .collect::<Vec<_>>()
-                .join(",");
-            ors.push(format!("node_id:in({ids})"));
+        if filter.regex {
+            // Regex search is message-only (`~` is LogsQL's regexp operator). Node-name/IP
+            // fan-out stays a substring-mode feature; the API skips name resolution here.
+            clauses.push(format!("_msg:~{}", logsql_quote(term)));
+        } else {
+            let mut ors = vec![
+                format!("_msg:{}", logsql_quote(term)),
+                format!("source_ip:{}", logsql_quote(term)),
+            ];
+            if !name_node_ids.is_empty() {
+                let ids = name_node_ids
+                    .iter()
+                    .map(|i| logsql_quote(&i.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                ors.push(format!("node_id:in({ids})"));
+            }
+            clauses.push(format!("({})", ors.join(" OR ")));
         }
-        clauses.push(format!("({})", ors.join(" OR ")));
     }
     let filter_part = if clauses.is_empty() {
         "*".to_owned()
@@ -327,9 +339,19 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
     let m = &r.msg;
+    let ts = DateTime::<Utc>::from_timestamp_millis(m.at_unix_ms).unwrap_or_else(Utc::now);
     if let Some(before) = f.before {
-        let ts = DateTime::<Utc>::from_timestamp_millis(m.at_unix_ms).unwrap_or_else(Utc::now);
         if ts >= before {
+            return false;
+        }
+    }
+    if let Some(since) = f.since {
+        if ts < since {
+            return false;
+        }
+    }
+    if let Some(until) = f.until {
+        if ts > until {
             return false;
         }
     }
@@ -349,15 +371,24 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) ->
         }
     }
     if let Some(term) = &f.search {
-        let t = term.to_lowercase();
-        let hit_msg = m.message.to_lowercase().contains(&t);
-        let hit_ip = m
-            .source_ip
-            .map(|ip| ip.to_string().to_lowercase().contains(&t))
-            .unwrap_or(false);
-        let hit_name = r.node_id.is_some_and(|n| name_node_ids.contains(&n));
-        if !(hit_msg || hit_ip || hit_name) {
-            return false;
+        if f.regex {
+            // Message-only regex (mirrors the LogsQL `_msg:~` path). A pattern that fails to
+            // compile matches nothing (the API rejects it at the edge before it reaches here).
+            match regex::Regex::new(term) {
+                Ok(re) if re.is_match(&m.message) => {}
+                _ => return false,
+            }
+        } else {
+            let t = term.to_lowercase();
+            let hit_msg = m.message.to_lowercase().contains(&t);
+            let hit_ip = m
+                .source_ip
+                .map(|ip| ip.to_string().to_lowercase().contains(&t))
+                .unwrap_or(false);
+            let hit_name = r.node_id.is_some_and(|n| name_node_ids.contains(&n));
+            if !(hit_msg || hit_ip || hit_name) {
+                return false;
+            }
         }
     }
     true
@@ -460,16 +491,27 @@ mod tests {
         let before = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
             .unwrap()
             .with_timezone(&Utc);
+        let since = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let until = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let filter = EventFilter {
             before: Some(before),
+            since: Some(since),
+            until: Some(until),
             kind: Some("syslog".into()),
             node_id: Some(node),
             matched: Some(true),
             search: Some("link down".into()),
+            regex: false,
         };
         let name_ids = [Uuid::from_u128(9)];
         let q = build_search_logsql(&filter, &name_ids, 100);
         assert!(q.contains("_time:<2024-01-02T03:04:05.000Z"));
+        assert!(q.contains("_time:>=2024-01-01T00:00:00.000Z"));
+        assert!(q.contains("_time:<=2024-01-02T00:00:00.000Z"));
         assert!(q.contains("kind:=\"syslog\""));
         assert!(q.contains(&format!("node_id:=\"{node}\"")));
         assert!(q.contains("matched:=\"true\""));
@@ -477,6 +519,20 @@ mod tests {
         assert!(q.contains("source_ip:\"link down\""));
         assert!(q.contains(&format!("node_id:in(\"{}\")", Uuid::from_u128(9))));
         assert!(q.ends_with("| sort by (_time) desc | limit 100"));
+    }
+
+    #[test]
+    fn build_logsql_regex_search_is_message_only() {
+        let filter = EventFilter {
+            search: Some("^%LINK-3".into()),
+            regex: true,
+            ..EventFilter::default()
+        };
+        // Even with resolved name ids, regex mode restricts to the message field.
+        let q = build_search_logsql(&filter, &[Uuid::from_u128(9)], 100);
+        assert!(q.contains("_msg:~\"^%LINK-3\""));
+        assert!(!q.contains("source_ip:"));
+        assert!(!q.contains("node_id:in("));
     }
 
     #[test]
@@ -566,5 +622,60 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn in_memory_time_range_bounds() {
+        let store = InMemoryLogStore::default();
+        store
+            .ingest_batch(&[
+                record(Uuid::from_u128(1), "first", 1_000, "none"),
+                record(Uuid::from_u128(2), "second", 2_000, "none"),
+                record(Uuid::from_u128(3), "third", 3_000, "none"),
+            ])
+            .await;
+        let at = |ms: i64| DateTime::<Utc>::from_timestamp_millis(ms).unwrap();
+
+        // since only: keep 2_000 and 3_000.
+        let f = EventFilter {
+            since: Some(at(1_500)),
+            ..EventFilter::default()
+        };
+        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+
+        // until only: keep 1_000 and 2_000.
+        let f = EventFilter {
+            until: Some(at(2_500)),
+            ..EventFilter::default()
+        };
+        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+
+        // both bounds: only the 2_000 record falls inside [1_500, 2_500].
+        let f = EventFilter {
+            since: Some(at(1_500)),
+            until: Some(at(2_500)),
+            ..EventFilter::default()
+        };
+        let rows = store.search(&f, &[], 100).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message, "second");
+    }
+
+    #[tokio::test]
+    async fn in_memory_regex_search_matches_message() {
+        let store = InMemoryLogStore::default();
+        store
+            .ingest_batch(&[
+                record(Uuid::from_u128(1), "link down ge-0/0/1", 1_000, "fired"),
+                record(Uuid::from_u128(2), "config changed", 2_000, "none"),
+                record(Uuid::from_u128(3), "link up ge-0/0/1", 3_000, "cleared"),
+            ])
+            .await;
+        let f = EventFilter {
+            search: Some("^link (up|down)".into()),
+            regex: true,
+            ..EventFilter::default()
+        };
+        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
     }
 }

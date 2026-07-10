@@ -46,7 +46,13 @@
       "allKinds": "All kinds",
       "allEvents": "All events",
       "matched": "Matched a rule",
-      "unmatched": "Unmatched"
+      "unmatched": "Unmatched",
+      "regexLabel": ".*",
+      "regexAria": "Search message by regular expression",
+      "searchPlaceholderRegex": "Regex over message…",
+      "from": "From",
+      "to": "To",
+      "clearRange": "Clear time range"
     }
   },
   "eventLog": {

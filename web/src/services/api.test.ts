@@ -794,6 +794,18 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/events?q=link+down');
     await api.listEvents({ q: '' });
     expect(spy).toHaveBeenLastCalledWith('/api/v1/events');
+    // Regex mode and the time-range bounds ride along; false/absent are omitted.
+    await api.listEvents({ q: '^%LINK', regex: true });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/events?q=%5E%25LINK&regex=true');
+    await api.listEvents({ q: 'x', regex: false });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/events?q=x');
+    await api.listEvents({
+      start: '2024-01-01T00:00:00.000Z',
+      end: '2024-01-02T00:00:00.000Z',
+    });
+    expect(spy).toHaveBeenLastCalledWith(
+      '/api/v1/events?start=2024-01-01T00%3A00%3A00.000Z&end=2024-01-02T00%3A00%3A00.000Z',
+    );
   });
 
   it('creates a PagerDuty notification channel with a tagged config', async () => {

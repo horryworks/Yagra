@@ -181,12 +181,21 @@ pub enum TokenVerify {
 /// Filters for the events list.
 #[derive(Debug, Default)]
 pub struct EventFilter {
+    /// Keyset pagination cursor (exclusive upper bound). Distinct from `until` (a user-facing
+    /// range end); when both are set the effective upper bound is their min.
     pub before: Option<DateTime<Utc>>,
+    /// User-facing time-range lower bound (inclusive), or `None` for unbounded.
+    pub since: Option<DateTime<Utc>>,
+    /// User-facing time-range upper bound (inclusive), or `None` for unbounded.
+    pub until: Option<DateTime<Utc>>,
     pub kind: Option<String>,
     pub node_id: Option<Uuid>,
     pub matched: Option<bool>,
-    /// Case-insensitive substring matched against source (node name / IP) or message.
+    /// Case-insensitive substring matched against source (node name / IP) or message. When
+    /// `regex` is set, `search` is instead a regular expression matched against the message only.
     pub search: Option<String>,
+    /// Interpret `search` as a regular expression (message-only) rather than a substring.
+    pub regex: bool,
 }
 
 fn generate_token() -> String {
@@ -483,20 +492,26 @@ impl EventRepo {
                     e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
              FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
              WHERE ($1::timestamptz IS NULL OR e.recorded_at < $1) \
-               AND ($2::text IS NULL OR e.kind = $2) \
-               AND ($3::uuid IS NULL OR e.node_id = $3) \
-               AND ($4::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $4) \
-               AND ($5::text IS NULL \
-                    OR e.message ILIKE '%' || $5 || '%' \
-                    OR host(e.source_ip) ILIKE '%' || $5 || '%' \
-                    OR n.name ILIKE '%' || $5 || '%') \
-             ORDER BY e.recorded_at DESC LIMIT $6",
+               AND ($2::timestamptz IS NULL OR e.recorded_at >= $2) \
+               AND ($3::timestamptz IS NULL OR e.recorded_at <= $3) \
+               AND ($4::text IS NULL OR e.kind = $4) \
+               AND ($5::uuid IS NULL OR e.node_id = $5) \
+               AND ($6::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $6) \
+               AND ($7::text IS NULL \
+                    OR ($8::boolean = FALSE AND (e.message ILIKE '%' || $7 || '%' \
+                                                 OR host(e.source_ip) ILIKE '%' || $7 || '%' \
+                                                 OR n.name ILIKE '%' || $7 || '%')) \
+                    OR ($8::boolean = TRUE AND e.message ~* $7)) \
+             ORDER BY e.recorded_at DESC LIMIT $9",
         )
         .bind(filter.before)
+        .bind(filter.since)
+        .bind(filter.until)
         .bind(filter.kind.as_deref())
         .bind(filter.node_id)
         .bind(filter.matched)
         .bind(filter.search.as_deref())
+        .bind(filter.regex)
         .bind(limit.clamp(1, 500))
         .fetch_all(&self.pool)
         .await?;

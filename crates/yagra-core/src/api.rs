@@ -6834,12 +6834,19 @@ async fn test_event_rule(
 #[derive(Deserialize)]
 struct EventsQuery {
     before: Option<String>,
+    /// Time-range lower bound (inclusive, RFC 3339). Distinct from `before` (the paging cursor).
+    start: Option<String>,
+    /// Time-range upper bound (inclusive, RFC 3339).
+    end: Option<String>,
     limit: Option<i64>,
     kind: Option<String>,
     node_id: Option<Uuid>,
     matched: Option<bool>,
-    /// Free-text substring matched against source (node name / IP) or message.
+    /// Free-text substring matched against source (node name / IP) or message. With `regex`,
+    /// it is instead a regular expression matched against the message only.
     q: Option<String>,
+    /// Interpret `q` as a regular expression (message-only) rather than a substring.
+    regex: Option<bool>,
 }
 
 /// Normalize the free-text event filter at the API edge (input-validation rule):
@@ -6861,15 +6868,47 @@ async fn list_events(
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
+    fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    }
     let before = match q.before.as_deref() {
         None => None,
-        Some(s) => match chrono::DateTime::parse_from_rfc3339(s) {
-            Ok(t) => Some(t.with_timezone(&chrono::Utc)),
-            Err(_) => {
+        Some(s) => match parse_rfc3339(s) {
+            Some(t) => Some(t),
+            None => {
                 return error_response(
                     StatusCode::BAD_REQUEST,
                     "invalid_cursor",
                     "before must be an RFC 3339 timestamp".to_owned(),
+                );
+            }
+        },
+    };
+    // User-facing time-range bounds (inclusive), independent of the `before` paging cursor.
+    let since = match q.start.as_deref() {
+        None => None,
+        Some(s) => match parse_rfc3339(s) {
+            Some(t) => Some(t),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filter",
+                    "start must be an RFC 3339 timestamp".to_owned(),
+                );
+            }
+        },
+    };
+    let until = match q.end.as_deref() {
+        None => None,
+        Some(s) => match parse_rfc3339(s) {
+            Some(t) => Some(t),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filter",
+                    "end must be an RFC 3339 timestamp".to_owned(),
                 );
             }
         },
@@ -6883,26 +6922,45 @@ async fn list_events(
             );
         }
     }
+    let regex = q.regex.unwrap_or(false);
+    let search = normalize_event_search(q.q.as_deref());
+    // Validate a regex pattern at the edge (size limit / ReDoS guard, shared with rule compilation)
+    // so a malformed or pathological pattern never reaches the store.
+    if regex {
+        if let Some(term) = search.as_deref() {
+            if let Err(e) = crate::events::compile_matcher("regex", term) {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filter",
+                    format!("invalid regular expression: {e}"),
+                );
+            }
+        }
+    }
     let filter = crate::events::EventFilter {
         before,
+        since,
+        until,
         kind: q.kind,
         node_id: q.node_id,
         matched: q.matched,
-        search: normalize_event_search(q.q.as_deref()),
+        search,
+        regex,
     };
     let limit = q.limit.unwrap_or(100);
     // When the log store is enabled (ADR-024) it is the search source of record (it holds the full
     // firehose); PostgreSQL keeps only alert-linked rows. Free-text node-name search still works by
     // resolving the term to node ids here and passing them as a filter (the name never enters the
-    // log store — ADR-011 query-time join). Without a log store, fall back to the PostgreSQL path.
+    // log store — ADR-011 query-time join). Regex search is message-only, so it skips name
+    // resolution. Without a log store, fall back to the PostgreSQL path.
     let rows = if let Some(logs) = st.logs.as_ref() {
-        let name_node_ids = match filter.search.as_deref() {
-            Some(term) => admin
+        let name_node_ids = match (filter.regex, filter.search.as_deref()) {
+            (false, Some(term)) => admin
                 .repo
                 .node_ids_by_name_like(term, 50)
                 .await
                 .unwrap_or_default(),
-            None => Vec::new(),
+            _ => Vec::new(),
         };
         logs.search(&filter, &name_node_ids, limit).await
     } else {
