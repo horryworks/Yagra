@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary, DiscoveryCandidate, ProfileSummary } from '../types/api';
@@ -34,6 +35,7 @@ interface RowState {
 }
 
 export function DiscoveryPage() {
+  const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
@@ -96,9 +98,7 @@ export function DiscoveryPage() {
     setImportError(null);
     const targets = expandTargets(targetSpec);
     if (targets.length === 0) {
-      setError(
-        'Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.',
-      );
+      setError(t('discovery.err.badTargets'));
       return;
     }
     setCandidates([]);
@@ -109,12 +109,12 @@ export function DiscoveryPage() {
       .startDiscoveryScan({ targets, credential_ids: selectedCredIds })
       .then(({ scan_id }) => {
         setScanId(scan_id);
-        setNote(`Scanning ${targets.length} addresses…`);
+        setNote(t('discovery.msg.scanningCount', { count: targets.length }));
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = setInterval(() => poll(scan_id), 2000);
         poll(scan_id);
       })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to start scan')));
+      .catch((e: unknown) => setError(errMsg(e, t('discovery.err.startScan'))));
   };
 
   const poll = (id: string) => {
@@ -125,14 +125,14 @@ export function DiscoveryPage() {
         seedRows(s.candidates);
         if (s.done) {
           setDone(true);
-          setNote(`Scan complete — ${s.candidates.length} device(s) found.`);
+          setNote(t('discovery.msg.scanComplete', { count: s.candidates.length }));
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
           }
         } else {
-          const at = s.scanning ? ` — now at ${s.scanning}` : '';
-          setNote(`Scanning… ${s.probed}/${s.total} addresses probed${at}`);
+          const at = s.scanning ? t('discovery.msg.nowAt', { addr: s.scanning }) : '';
+          setNote(t('discovery.msg.scanningProgress', { probed: s.probed, total: s.total }) + at);
         }
       })
       .catch(() => undefined);
@@ -158,13 +158,13 @@ export function DiscoveryPage() {
         };
       });
     if (nodes.length === 0) {
-      setImportError('Select at least one device to import.');
+      setImportError(t('discovery.err.selectOne'));
       return;
     }
     api
       .importDiscovered(nodes)
       .then(({ created }) => {
-        setImportNote(`Imported ${created} node(s) — they will start polling shortly.`);
+        setImportNote(t('discovery.msg.imported', { count: created }));
         // Mark the imported rows and clear their selection (no double-import).
         setImported((cur) => {
           const next = { ...cur };
@@ -177,7 +177,7 @@ export function DiscoveryPage() {
           return next;
         });
       })
-      .catch((e: unknown) => setImportError(errMsg(e, 'failed to import')));
+      .catch((e: unknown) => setImportError(errMsg(e, t('discovery.err.import'))));
   };
 
   const selectedCount = candidates.filter(
@@ -187,18 +187,18 @@ export function DiscoveryPage() {
   return (
     <div>
       <PageHeader
-        title="Discovery"
-        trail={[{ label: 'Nodes' }, { label: 'Discovery' }]}
-        note="Sweep a subnet for live + SNMP devices, then import the ones you want."
+        title={t('nav:nodes.discovery')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.discovery') }]}
+        note={t('discovery.note')}
       />
 
-      <Card title="Scan a subnet">
+      <Card title={t('discovery.scanTitle')}>
         {authed ? (
           <>
             <div className="disco-form form-row">
               <TextInput
                 className="mono"
-                placeholder="CIDR, range or list (e.g. 192.168.1.0/24, 10.0.0.5, 192.168.1.10-20)"
+                placeholder={t('discovery.targetPlaceholder')}
                 value={targetSpec}
                 onChange={(e) => setTargetSpec(e.target.value)}
               />
@@ -209,37 +209,41 @@ export function DiscoveryPage() {
                 disabled={!!scanId && !done}
               />
               <Button variant="primary" onClick={startScan} disabled={!!scanId && !done}>
-                {scanId && !done ? 'Scanning…' : 'Scan'}
+                {scanId && !done ? t('discovery.scanning') : t('discovery.scan')}
               </Button>
             </div>
             <p className="disco-target-hint">
-              Examples: <span className="mono">192.168.1.0/24</span> ·{' '}
-              <span className="mono">10.0.0.5</span> ·{' '}
-              <span className="mono">192.168.1.10-20</span> ·{' '}
-              <span className="mono">192.168.1.10-192.168.1.20</span> — comma-separate for multiple.
+              <Trans
+                t={t}
+                i18nKey="discovery.examplesHint"
+                components={{ c: <span className="mono" /> }}
+              />
             </p>
             <p className="disco-creds-link">
-              Discovery uses your stored credentials.{' '}
-              <Link to="/settings/credentials">Manage credentials →</Link>
+              <Trans
+                t={t}
+                i18nKey="discovery.credsLink"
+                components={{ lnk: <Link to="/settings/credentials" /> }}
+              />
             </p>
           </>
         ) : (
-          <p className="muted">Sign in as an admin to run discovery.</p>
+          <p className="muted">{t('discovery.signIn')}</p>
         )}
         {error && <p className="form-error">{error}</p>}
         {note && <p className="muted">{note}</p>}
       </Card>
 
       {candidates.length > 0 && (
-        <Card title="Discovered devices" className="disco-results-card">
+        <Card title={t('discovery.resultsTitle')} className="disco-results-card">
           <div className="disco-table">
             <div className="disco-head">
               <div className="disco-h" />
-              <div className="disco-h">Address</div>
-              <div className="disco-h">Identity</div>
-              <div className="disco-h">Name</div>
-              <div className="disco-h">Profile</div>
-              <div className="disco-h">Credential</div>
+              <div className="disco-h">{t('discovery.cols.address')}</div>
+              <div className="disco-h">{t('discovery.cols.identity')}</div>
+              <div className="disco-h">{t('discovery.cols.name')}</div>
+              <div className="disco-h">{t('discovery.cols.profile')}</div>
+              <div className="disco-h">{t('discovery.cols.credential')}</div>
             </div>
             {candidates.map((c) => {
               const r = rowState[c.address];
@@ -256,11 +260,11 @@ export function DiscoveryPage() {
                   <span className="mono">
                     {c.address}{' '}
                     {isImported ? (
-                      <Badge tone="up">imported</Badge>
+                      <Badge tone="up">{t('discovery.badge.imported')}</Badge>
                     ) : c.reachable ? (
-                      <Badge tone="up">ping</Badge>
+                      <Badge tone="up">{t('discovery.badge.ping')}</Badge>
                     ) : (
-                      <span className="muted">no ping</span>
+                      <span className="muted">{t('discovery.badge.noPing')}</span>
                     )}
                   </span>
                   <span className="disco-identity">
@@ -270,7 +274,7 @@ export function DiscoveryPage() {
                         {c.sysdescr}
                       </span>
                     ) : (
-                      <span className="muted">no SNMP</span>
+                      <span className="muted">{t('discovery.noSnmp')}</span>
                     )}
                     {(c.vendor || c.model) && (
                       <span className="disco-makermodel">
@@ -278,7 +282,7 @@ export function DiscoveryPage() {
                       </span>
                     )}
                     {c.sysobjectid && (
-                      <span className="muted mono disco-sysoid" title="sysObjectID">
+                      <span className="muted mono disco-sysoid" title={t('discovery.sysObjectIdTitle')}>
                         {c.sysobjectid}
                       </span>
                     )}
@@ -291,7 +295,7 @@ export function DiscoveryPage() {
                     value={r.profile_id}
                     onChange={(e) => patchRow(c.address, { profile_id: e.target.value })}
                   >
-                    <option value="">(none)</option>
+                    <option value="">{t('discovery.none')}</option>
                     {profiles.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
@@ -302,11 +306,11 @@ export function DiscoveryPage() {
                     value={r.credential_id}
                     onChange={(e) => patchRow(c.address, { credential_id: e.target.value })}
                   >
-                    <option value="">(none)</option>
+                    <option value="">{t('discovery.none')}</option>
                     {creds.map((cr) => (
                       <option key={cr.id} value={cr.id}>
                         {cr.name}
-                        {cr.id === c.matched_credential_id ? ' ✓ matched' : ''}
+                        {cr.id === c.matched_credential_id ? t('discovery.matchedSuffix') : ''}
                       </option>
                     ))}
                   </Select>
@@ -319,7 +323,9 @@ export function DiscoveryPage() {
               {importNote && <span className="disco-import-ok">✓ {importNote}</span>}
               {importError && <span className="disco-import-err">{importError}</span>}
               <Button variant="primary" onClick={importSelected} disabled={selectedCount === 0}>
-                Import {selectedCount > 0 ? `${selectedCount} ` : ''}selected
+                {selectedCount > 0
+                  ? t('discovery.importSelectedCount', { count: selectedCount })
+                  : t('discovery.importSelectedNone')}
               </Button>
             </div>
           )}

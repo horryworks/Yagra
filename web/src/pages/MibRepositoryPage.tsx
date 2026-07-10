@@ -7,6 +7,7 @@
 // shared `.ytable`. Add and delete go through modals (focused-editing / destructive-consent).
 
 import { useCallback, useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
@@ -30,6 +31,7 @@ const COLS = '1.4fr 2fr 1fr 1fr 92px';
 
 /** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
 function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation('monitoring');
   const [metricName, setMetricName] = useState('');
   const [oid, setOid] = useState('');
   const [collection, setCollection] = useState<CollectionKind>('scalar');
@@ -57,69 +59,69 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add entry'));
+        setError(errMsg(e, t('mib.err.add')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add catalog entry"
+      title={t('mib.addTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            Add entry
+            {t('mib.addEntry')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Metric name</label>
+        <label className="modal-field-label">{t('mib.modal.metricName')}</label>
         <TextInput
-          placeholder="metric_name"
+          placeholder={t('mib.modal.metricNamePlaceholder')}
           value={metricName}
           onChange={(e) => setMetricName(e.target.value)}
           autoFocus
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">OID</label>
+        <label className="modal-field-label">{t('mib.modal.oid')}</label>
         <TextInput
           className="mono"
-          placeholder="OID (e.g. 1.3.6.1.2.1.1.3.0)"
+          placeholder={t('mib.modal.oidPlaceholder')}
           value={oid}
           onChange={(e) => setOid(e.target.value)}
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Collection</label>
+        <label className="modal-field-label">{t('mib.modal.collection')}</label>
         <Select
           value={collection}
           onChange={(e) => setCollection(e.target.value as CollectionKind)}
         >
-          <option value="scalar">scalar</option>
-          <option value="table">table</option>
+          <option value="scalar">{t('enum.scalar')}</option>
+          <option value="table">{t('enum.table')}</option>
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Metric kind</label>
+        <label className="modal-field-label">{t('mib.modal.metricKind')}</label>
         <Select value={metricKind} onChange={(e) => setMetricKind(e.target.value as MetricKind)}>
-          <option value="gauge">gauge</option>
-          <option value="counter">counter</option>
+          <option value="gauge">{t('enum.gauge')}</option>
+          <option value="counter">{t('enum.counter')}</option>
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Vendor</label>
+        <label className="modal-field-label">{t('mib.modal.vendor')}</label>
         <TextInput
-          placeholder="vendor (optional)"
+          placeholder={t('mib.modal.vendorPlaceholder')}
           value={vendor}
           onChange={(e) => setVendor(e.target.value)}
         />
-        <span className="modal-hint">Leave blank for a standard (non-vendor) OID.</span>
+        <span className="modal-hint">{t('mib.modal.vendorHint')}</span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -136,6 +138,7 @@ function DeleteMibEntryModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -146,29 +149,33 @@ function DeleteMibEntryModal({
       .deleteMibEntry(entry.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete entry'));
+        setError(errMsg(e, t('mib.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete catalog entry"
+      title={t('mib.deleteTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete catalog entry <strong>{entry.metric_name}</strong>? Collections referencing it by
-        name will no longer resolve from the catalog. This cannot be undone.
+        <Trans
+          t={t}
+          i18nKey="mib.delete.confirm"
+          values={{ name: entry.metric_name }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -176,6 +183,7 @@ function DeleteMibEntryModal({
 }
 
 export function MibRepositoryPage() {
+  const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   const [query, setQuery] = useState('');
@@ -198,21 +206,21 @@ export function MibRepositoryPage() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(() => load(query), 200);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => load(query), 200);
+    return () => clearTimeout(timer);
   }, [load, query]);
 
   return (
     <div>
       <PageHeader
-        title="MIB repository"
-        trail={[{ label: 'Nodes' }, { label: 'MIB repository' }]}
-        note="A curated OID catalog. Pick metrics by name in the collection editor instead of typing OIDs."
+        title={t('nav:nodes.mib')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.mib') }]}
+        note={t('mib.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">The MIB catalog is unavailable in skeleton mode.</p>
+          <p className="muted">{t('mib.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -220,14 +228,14 @@ export function MibRepositoryPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search metric / OID / vendor…"
-              ariaLabel="Search MIB catalog"
+              placeholder={t('mib.searchPlaceholder')}
+              ariaLabel={t('mib.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="entries" />
+            <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add entry
+                + {t('mib.addEntry')}
               </Button>
             )}
           </TableToolbar>
@@ -235,19 +243,19 @@ export function MibRepositoryPage() {
           <div className="ytable">
             <div className="ytable-scroll">
               <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">Metric</div>
-                <div className="ytable-h">OID</div>
-                <div className="ytable-h">Type</div>
-                <div className="ytable-h">Vendor</div>
-                <div className="ytable-h right">Actions</div>
+                <div className="ytable-h">{t('mib.cols.metric')}</div>
+                <div className="ytable-h">{t('mib.cols.oid')}</div>
+                <div className="ytable-h">{t('mib.cols.type')}</div>
+                <div className="ytable-h">{t('mib.cols.vendor')}</div>
+                <div className="ytable-h right">{t('shared.colActions')}</div>
               </div>
 
               {rows.length === 0 ? (
                 <div className="yt-empty">
                   <p className="yt-empty-title">
-                    {loading ? 'Loading…' : 'No catalog entries match'}
+                    {loading ? t('common:loading') : t('mib.empty.noMatch')}
                   </p>
-                  {!loading && <p className="yt-empty-sub">Try a different search.</p>}
+                  {!loading && <p className="yt-empty-sub">{t('shared.trySearch')}</p>}
                 </div>
               ) : (
                 rows.map((e) => (
@@ -261,13 +269,13 @@ export function MibRepositoryPage() {
                       {e.vendor ? (
                         <Badge tone="neutral">{e.vendor}</Badge>
                       ) : (
-                        <span className="muted">standard</span>
+                        <span className="muted">{t('mib.standard')}</span>
                       )}
                     </div>
                     <div className="ytable-cell right">
                       {authed && (
                         <span className="ytable-actions">
-                          <IconButton title="Delete" danger onClick={() => setDeleting(e)}>
+                          <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(e)}>
                             <TrashIcon />
                           </IconButton>
                         </span>

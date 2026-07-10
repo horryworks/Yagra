@@ -72,6 +72,11 @@ export function severityRank(severity: Severity): number {
   return { info: 0, warning: 1, critical: 2 }[severity];
 }
 
+/** Localized human label for an alert severity (parallels `stateLabel`). */
+export function severityLabel(severity: Severity): string {
+  return i18n.t(`format:severity.${severity}`);
+}
+
 /** Format a Unix-ms timestamp as a local date-time string in the active interface language's
  *  locale (pass `locale` to override). Zone is always the browser's local zone. */
 export function formatTimestamp(unixMs: number, locale: string = intlLocale(i18n.language)): string {

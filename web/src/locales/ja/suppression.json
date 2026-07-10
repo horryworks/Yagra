@@ -1,0 +1,123 @@
+{
+  "maintenance": {
+    "note": "計画作業：対象ノードは maintenance 状態になり、アラートを発生させず、SLA から除外されます。通知のみを停止する（状態・SLA は変更なし）場合は <mutesLink>ミュート</mutesLink> をご利用ください。",
+    "unavailable": "メンテナンス管理はスケルトンモードでは利用できません。",
+    "add": "+ ウィンドウを追加",
+    "cols": {
+      "status": "状態",
+      "name": "名前",
+      "scope": "スコープ",
+      "range": "期間",
+      "actions": "操作"
+    },
+    "empty": {
+      "title": "メンテナンスウィンドウはありません",
+      "sub": "計画作業をスケジュールすると、対象ノードはアラートを発生させません。"
+    },
+    "status": {
+      "disabled": "無効",
+      "active": "アクティブ",
+      "ended": "終了",
+      "scheduled": "予定"
+    },
+    "scope": {
+      "group": "グループ",
+      "groupTag": "グループ（タグ）",
+      "node": "ノード",
+      "profile": "プロファイル"
+    },
+    "actions": {
+      "enable": "有効化",
+      "disable": "無効化"
+    },
+    "err": {
+      "delete": "ウィンドウの削除に失敗しました",
+      "update": "ウィンドウの更新に失敗しました"
+    },
+    "delete": {
+      "title": "メンテナンスウィンドウを削除",
+      "confirm": "メンテナンスウィンドウ <b>{{name}}</b> を削除しますか？この操作は元に戻せません。"
+    }
+  },
+  "maintenanceForm": {
+    "title": "メンテナンスウィンドウを追加",
+    "submit": "ウィンドウを追加",
+    "defaultName": "メンテナンス — {{name}}",
+    "name": "名前",
+    "namePlaceholder": "例：コアスイッチのファームウェア更新",
+    "scope": "スコープ",
+    "scopeLevel": "スコープレベル",
+    "lockedNode": "ノード",
+    "lockedGroup": "フォルダグループ",
+    "inclSubgroups": "（サブグループを含む）",
+    "level": {
+      "node": "ノード",
+      "groupId": "フォルダグループ",
+      "profile": "デバイスプロファイル"
+    },
+    "pickNode": "（ノードを選択）",
+    "pickProfile": "（プロファイルを選択）",
+    "pickGroup": "（グループを選択）",
+    "groupHint": "グループとそのすべてのサブグループを対象にします。",
+    "tzHint": "「開始」「終了」は {{tz}}（ブラウザのローカルタイム）で入力し、UTC で保存されます。",
+    "err": {
+      "add": "ウィンドウの追加に失敗しました"
+    }
+  },
+  "mutes": {
+    "note": "ノード（または特定のチェック）の通知を指定時刻まで停止します — アラートは発生し続け、ノードの状態・SLA には影響しません。計画作業には <maintenanceLink>メンテナンスウィンドウ</maintenanceLink> をご利用ください。",
+    "unavailable": "ミュート管理はスケルトンモードでは利用できません。",
+    "add": "+ ミュートを追加",
+    "resultNoun": "アクティブなミュート",
+    "cols": {
+      "target": "対象",
+      "metric": "メトリクス",
+      "until": "期限",
+      "reason": "理由",
+      "actions": "操作"
+    },
+    "empty": {
+      "title": "アクティブなミュートはありません",
+      "sub": "ノード（または特定のチェック）を指定時刻まで停止し、通知を抑制します。"
+    },
+    "badge": {
+      "group": "グループ",
+      "subgroups": "サブグループを含む",
+      "allMetrics": "すべてのメトリクス"
+    },
+    "err": {
+      "lift": "ミュートの解除に失敗しました"
+    },
+    "lift": {
+      "title": "ミュートを解除",
+      "confirmMetric": "<b>{{target}}</b> のミュート（<m>{{metric}}</m>）を解除しますか？通知はただちに再開されます。",
+      "confirmAll": "<b>{{target}}</b> のミュート（すべてのメトリクス）を解除しますか？通知はただちに再開されます。"
+    }
+  },
+  "muteForm": {
+    "title": "ミュートを追加",
+    "submit": "ミュートを追加",
+    "scope": "スコープ",
+    "lockedNode": "ノード",
+    "lockedGroup": "フォルダグループ",
+    "inclSubgroups": "（サブグループを含む）",
+    "kind": {
+      "node": "ノード",
+      "group": "フォルダグループ"
+    },
+    "entityNode": "ノード",
+    "entityGroup": "グループ",
+    "pickNode": "（ノードを選択）",
+    "pickGroup": "（グループを選択）",
+    "groupHint": "グループとそのサブグループ配下のすべてのノードを停止します。",
+    "metric": "メトリクス",
+    "metricPlaceholder": "メトリクス（空欄でノード全体）",
+    "until": "期限",
+    "tzHint": "{{tz}}（ブラウザのローカルタイム）で入力し、UTC で保存されます。",
+    "reason": "理由",
+    "reasonPlaceholder": "理由（任意）",
+    "err": {
+      "add": "ミュートの追加に失敗しました"
+    }
+  }
+}

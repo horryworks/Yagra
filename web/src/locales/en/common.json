@@ -1,5 +1,43 @@
 {
   "loading": "Loading…",
+  "noRows": "No rows.",
+  "copy": {
+    "copied": "Copied",
+    "copyId": "Copy id"
+  },
+  "form": {
+    "required": "Required"
+  },
+  "sealed": "Encrypted at rest — never displayed",
+  "healthbar": {
+    "noNodes": "No nodes"
+  },
+  "statusSummary": {
+    "loading": "Loading nodes…",
+    "empty": "No nodes yet."
+  },
+  "nodePicker": {
+    "clear": "Clear node filter",
+    "searchPlaceholder": "Search nodes by name or address…",
+    "searchAria": "Search nodes",
+    "loading": "Loading nodes…",
+    "noMatch": "No matching nodes.",
+    "listAria": "Nodes",
+    "more": "+{{count}} more — keep typing to narrow"
+  },
+  "range": {
+    "timeRange": "Time range",
+    "custom": "Custom range",
+    "quick": "Quick ranges",
+    "from": "From",
+    "to": "To"
+  },
+  "credPicker": {
+    "placeholder": "Select stored credentials…",
+    "remove": "Remove {{name}}",
+    "empty": "No stored SNMP credentials yet.",
+    "manage": "Manage credentials"
+  },
   "actions": {
     "save": "Save",
     "cancel": "Cancel",

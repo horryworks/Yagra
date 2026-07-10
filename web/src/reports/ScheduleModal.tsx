@@ -2,6 +2,7 @@
 // backend computes next_run_at in UTC). Weekly adds a weekday picker; monthly a day-of-month.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
@@ -22,6 +23,7 @@ function timeValue(hour: number, minute: number): string {
 }
 
 export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props) {
+  const { t } = useTranslation('reports');
   const [definitionId, setDefinitionId] = useState(
     schedule?.definition_id ?? definitions[0]?.id ?? '',
   );
@@ -37,14 +39,14 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
 
   async function save() {
     if (!definitionId) {
-      setError('Choose a report.');
+      setError(t('schedule.err.chooseReport'));
       return;
     }
     const [h, m] = time.split(':');
     const at_hour = Number(h);
     const at_minute = Number(m);
     if (!Number.isFinite(at_hour) || !Number.isFinite(at_minute)) {
-      setError('Enter a valid time.');
+      setError(t('schedule.err.invalidTime'));
       return;
     }
     setSaving(true);
@@ -63,20 +65,20 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       else await api.createReportSchedule(body);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to save the schedule.');
+      setError(e instanceof ApiError ? e.message : t('schedule.err.saveFailed'));
       setSaving(false);
     }
   }
 
   return (
     <Modal
-      title={schedule ? 'Edit schedule' : 'New schedule'}
+      title={schedule ? t('schedule.editTitle') : t('schedule.newTitle')}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t('common:actions.cancel')}</Button>
           <Button variant="primary" disabled={saving} onClick={save}>
-            {saving ? 'Saving…' : 'Save schedule'}
+            {saving ? t('schedule.saving') : t('schedule.save')}
           </Button>
         </>
       }
@@ -84,7 +86,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       <div className="rb">
         <label className="rb-field">
           <span>
-            Report <RequiredMark />
+            {t('schedule.report')} <RequiredMark />
           </span>
           <Select value={definitionId} onChange={(e) => setDefinitionId(e.target.value)}>
             {definitions.map((d) => (
@@ -96,24 +98,24 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
         </label>
 
         <label className="rb-field">
-          <span>Frequency</span>
+          <span>{t('schedule.frequency')}</span>
           <Select
             value={frequency}
             onChange={(e) => setFrequency(e.target.value as ReportFrequency)}
           >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
+            <option value="daily">{t('schedule.freq.daily')}</option>
+            <option value="weekly">{t('schedule.freq.weekly')}</option>
+            <option value="monthly">{t('schedule.freq.monthly')}</option>
           </Select>
         </label>
 
         {frequency === 'weekly' && (
           <label className="rb-field">
-            <span>Day of week</span>
+            <span>{t('schedule.dayOfWeek')}</span>
             <Select value={String(dayOfWeek)} onChange={(e) => setDayOfWeek(Number(e.target.value))}>
               {WEEKDAY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.label}
+                  {t(o.labelKey)}
                 </option>
               ))}
             </Select>
@@ -122,7 +124,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
 
         {frequency === 'monthly' && (
           <label className="rb-field">
-            <span>Day of month (1–28)</span>
+            <span>{t('schedule.dayOfMonth')}</span>
             <Select
               value={String(dayOfMonth)}
               onChange={(e) => setDayOfMonth(Number(e.target.value))}
@@ -137,7 +139,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
         )}
 
         <label className="rb-field">
-          <span>Time (UTC)</span>
+          <span>{t('schedule.timeUtc')}</span>
           <input
             className="field"
             type="time"
@@ -148,7 +150,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
 
         <label className="rb-check">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <span>Enabled</span>
+          <span>{t('schedule.enabled')}</span>
         </label>
 
         {error && <FieldHint error>{error}</FieldHint>}

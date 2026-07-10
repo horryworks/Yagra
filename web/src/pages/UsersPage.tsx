@@ -6,6 +6,7 @@
 // errors and reverts. Passwords are write-only — the API never returns a hash.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Role, UserSummary } from '../types/api';
@@ -23,17 +24,14 @@ import './UsersPage.css';
 
 const ROLES: Role[] = ['viewer', 'operator', 'admin'];
 const MIN_PW = 8;
-const SEGMENTS: [string, string][] = [
-  ['all', 'All'],
-  ['admin', 'Admins'],
-  ['operator', 'Operators'],
-  ['viewer', 'Viewers'],
-];
+// Role filter segments. The filter key drives the query; the label is resolved with `t` in render.
+const SEGMENTS = ['all', 'admin', 'operator', 'viewer'] as const;
 
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
 export function UsersPage() {
+  const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<UserSummary[]>([]);
   const [me, setMe] = useState<string | null>(null);
@@ -75,7 +73,7 @@ export function UsersPage() {
       .setUserRole(id, next)
       .then(load)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to change role'));
+        setError(errMsg(e, t('users.err.changeRole')));
         load(); // revert the optimistic-looking select to the server's truth
       });
   };
@@ -85,7 +83,7 @@ export function UsersPage() {
     api
       .setUserEnabled(u.id, !u.enabled)
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to change account status')));
+      .catch((e: unknown) => setError(errMsg(e, t('users.err.changeStatus'))));
   };
 
   const list = useMemo(() => {
@@ -100,18 +98,18 @@ export function UsersPage() {
   return (
     <div>
       <PageHeader
-        title="Users"
-        trail={[{ label: 'Settings' }, { label: 'Users' }]}
-        note="Local accounts for the northbound API. Roles: viewer (read-only), operator (ack/maintenance), admin (full control)."
+        title={t('nav:settings.users')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.users') }]}
+        note={t('users.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">User management is unavailable in skeleton mode (no database).</p>
+          <p className="muted">{t('users.unavailable')}</p>
         </Card>
       ) : forbidden ? (
         <Card>
-          <p className="muted">Managing users requires an admin account.</p>
+          <p className="muted">{t('users.forbidden')}</p>
         </Card>
       ) : (
         <>
@@ -119,25 +117,29 @@ export function UsersPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search username…"
-              ariaLabel="Search users"
+              placeholder={t('users.searchPlaceholder')}
+              ariaLabel={t('users.searchAria')}
             />
-            <div className="segmented" role="group" aria-label="Filter by role">
-              {SEGMENTS.map(([key, label]) => (
+            <div className="segmented" role="group" aria-label={t('users.filterAria')}>
+              {SEGMENTS.map((key) => (
                 <button
                   key={key}
                   className={roleFilter === key ? 'on' : ''}
                   onClick={() => setRoleFilter(key)}
                 >
-                  {label}
+                  {t(`users.filter.${key}`)}
                 </button>
               ))}
             </div>
             <TableSpacer />
-            <ResultCount shown={list.length} total={rows.length} noun="users" />
+            <ResultCount
+              shown={list.length}
+              total={rows.length}
+              noun={t('common:noun.user', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add user
+                + {t('users.actions.addUser')}
               </Button>
             )}
           </TableToolbar>
@@ -147,7 +149,11 @@ export function UsersPage() {
           <div className="identity-list">
             {list.length === 0 ? (
               <div className="il-empty">
-                {loading ? 'Loading…' : rows.length === 0 ? 'No users yet.' : 'No users match.'}
+                {loading
+                  ? t('common:loading')
+                  : rows.length === 0
+                    ? t('users.empty.none')
+                    : t('users.empty.filtered')}
               </div>
             ) : (
               list.map((u) => {
@@ -158,16 +164,18 @@ export function UsersPage() {
                     <div className="il-id">
                       <div className="il-line1">
                         <span className="il-name">{u.username}</span>
-                        {me === u.username && <span className="you-pill">You</span>}
+                        {me === u.username && <span className="you-pill">{t('users.you')}</span>}
                         <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
                           <span className="yt-status-dot" />
-                          {u.enabled ? 'Active' : 'Disabled'}
+                          {u.enabled ? t('users.status.active') : t('users.status.disabled')}
                         </span>
                       </div>
                       <div className="il-line2">
-                        <span>Created {dateOnly(u.created_at)}</span>
+                        <span>{t('users.created', { date: dateOnly(u.created_at) })}</span>
                         <span className="il-meta-sep">·</span>
-                        <span title={u.last_login_at ?? undefined}>Last login {last}</span>
+                        <span title={u.last_login_at ?? undefined}>
+                          {t('users.lastLogin', { time: last })}
+                        </span>
                       </div>
                     </div>
                     <div className="il-right">
@@ -176,29 +184,29 @@ export function UsersPage() {
                           className={`role-select role-${u.role}`}
                           value={u.role}
                           onChange={(e) => changeRole(u.id, e.target.value as Role)}
-                          aria-label={`Role for ${u.username}`}
+                          aria-label={t('users.roleFor', { name: u.username })}
                         >
                           {ROLES.map((r) => (
                             <option key={r} value={r}>
-                              {r}
+                              {t(`role.${r}`)}
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <span className="muted">{u.role}</span>
+                        <span className="muted">{t(`role.${u.role}`)}</span>
                       )}
                       {authed && (
                         <div className="il-actions">
                           <IconButton
-                            title={u.enabled ? 'Disable account' : 'Enable account'}
+                            title={u.enabled ? t('users.action.disable') : t('users.action.enable')}
                             onClick={() => toggleEnabled(u)}
                           >
                             <PowerIcon />
                           </IconButton>
-                          <IconButton title="Change password" onClick={() => setPwUser(u)}>
+                          <IconButton title={t('users.action.changePassword')} onClick={() => setPwUser(u)}>
                             <KeyIcon />
                           </IconButton>
-                          <IconButton title="Delete user" danger onClick={() => setDelUser(u)}>
+                          <IconButton title={t('users.action.delete')} danger onClick={() => setDelUser(u)}>
                             <TrashIcon />
                           </IconButton>
                         </div>
@@ -240,6 +248,7 @@ export function UsersPage() {
 
 /** Create a new account (focused-editing modal). */
 function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { t } = useTranslation('access');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('viewer');
@@ -255,29 +264,29 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       .createUser({ username: username.trim(), password, role })
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to create user'));
+        setError(errMsg(e, t('users.err.create')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add user"
+      title={t('users.actions.addUser')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            Add user
+            {t('users.actions.addUser')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">
-          Username <RequiredMark />
+          {t('users.field.username')} <RequiredMark />
         </label>
         <TextInput
           value={username}
@@ -288,7 +297,7 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       </div>
       <div className="modal-field">
         <label className="modal-field-label">
-          Password (min {MIN_PW} chars) <RequiredMark />
+          {t('users.field.password', { min: MIN_PW })} <RequiredMark />
         </label>
         <TextInput
           type="password"
@@ -298,11 +307,11 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Role</label>
+        <label className="modal-field-label">{t('users.field.role')}</label>
         <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
           {ROLES.map((r) => (
             <option key={r} value={r}>
-              {r}
+              {t(`role.${r}`)}
             </option>
           ))}
         </Select>
@@ -322,6 +331,7 @@ function ChangePasswordModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('access');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -338,28 +348,28 @@ function ChangePasswordModal({
       .setUserPassword(user.id, password)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to change password'));
+        setError(errMsg(e, t('users.err.changePw')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={`Change password — ${user.username}`}
+      title={t('users.changePw.title', { name: user.username })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">New password (min {MIN_PW} chars)</label>
+        <label className="modal-field-label">{t('users.changePw.newPassword', { min: MIN_PW })}</label>
         <TextInput
           type="password"
           value={password}
@@ -369,7 +379,7 @@ function ChangePasswordModal({
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Confirm new password</label>
+        <label className="modal-field-label">{t('users.changePw.confirm')}</label>
         <TextInput
           type="password"
           value={confirm}
@@ -377,7 +387,7 @@ function ChangePasswordModal({
           autoComplete="new-password"
         />
       </div>
-      {mismatch && <p className="form-error">passwords do not match</p>}
+      {mismatch && <p className="form-error">{t('users.changePw.mismatch')}</p>}
       {error && <p className="form-error">{error}</p>}
     </Modal>
   );
@@ -393,6 +403,7 @@ function DeleteUserModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('access');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -403,29 +414,33 @@ function DeleteUserModal({
       .deleteUser(user.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete user'));
+        setError(errMsg(e, t('users.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete user"
+      title={t('users.delete.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete user <strong>{user.username}</strong>? Their audit-log entries remain for the
-        record, but the account cannot be recovered.
+        <Trans
+          t={t}
+          i18nKey="users.delete.confirm"
+          values={{ name: user.username }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>

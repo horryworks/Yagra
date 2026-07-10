@@ -6,6 +6,7 @@
 // tree, so we lay it out ourselves (no graph-lib dependency) — see components/TopologyMap.
 
 import { useMemo } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -31,6 +32,7 @@ const LEGEND_ORDER: NodeState[] = [
 ];
 
 export function TopologyMapPage() {
+  const { t } = useTranslation('topology');
   const { data, loading, error } = usePolled(() => api.getTopology(), []);
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const layout = useMemo(() => layoutTopology(nodes), [nodes]);
@@ -43,33 +45,32 @@ export function TopologyMapPage() {
 
   const note =
     layout.isolatedCount > 0
-      ? `${layout.nodes.length} linked · ${layout.isolatedCount} unlinked (no dependencies, not shown)`
-      : 'Dependency graph — parent → child links, colored by live status.';
+      ? t('map.note.linked', { linked: layout.nodes.length, unlinked: layout.isolatedCount })
+      : t('map.note.default');
 
   function body() {
     if (error) return <Card><p className="muted">{error}</p></Card>;
-    if (loading && !data) return <Card><p className="muted">Loading topology…</p></Card>;
+    if (loading && !data) return <Card><p className="muted">{t('map.loading')}</p></Card>;
     if (nodes.length === 0)
-      return <Card><p className="muted">No nodes in the inventory yet.</p></Card>;
+      return <Card><p className="muted">{t('map.emptyInventory')}</p></Card>;
     if (layout.nodes.length === 0)
       return (
         <Card>
           <p className="muted">
-            No dependency links defined yet. Set a node&apos;s upstream on the{' '}
-            <Link to="/topology/dependency">Dependencies</Link> page (or a node&apos;s
-            &ldquo;Dependency…&rdquo; action) to build the map. {layout.isolatedCount} node
-            {layout.isolatedCount === 1 ? '' : 's'} in the inventory.
+            <Trans
+              t={t}
+              i18nKey="map.noLinks"
+              count={layout.isolatedCount}
+              values={{ count: layout.isolatedCount }}
+              components={{ depLink: <Link to="/topology/dependency" /> }}
+            />
           </p>
         </Card>
       );
     if (layout.nodes.length > MAP_CAP)
       return (
         <Card>
-          <p className="muted">
-            This topology has {layout.nodes.length} linked nodes — too many to render as a legible
-            map. Drill in from a specific node&apos;s detail page, or use the dependency widget on
-            the dashboard.
-          </p>
+          <p className="muted">{t('map.tooMany', { count: layout.nodes.length })}</p>
         </Card>
       );
     return (
@@ -82,12 +83,12 @@ export function TopologyMapPage() {
   return (
     <div className="topomap-page">
       <PageHeader
-        title="Network map"
-        trail={[{ label: 'Topology' }, { label: 'Network map' }]}
+        title={t('nav:topology.map')}
+        trail={[{ label: t('nav:sections.topology') }, { label: t('nav:topology.map') }]}
         note={note}
       />
       {(presentStates.length > 0 || anySuppressed) && (
-        <div className="topomap-legend" aria-label="Legend">
+        <div className="topomap-legend" aria-label={t('map.legend')}>
           {presentStates.map((s) => (
             <span className="topomap-legend-item" key={s}>
               <span className="topomap-legend-dot" style={{ background: stateColorVar(s) }} />
@@ -97,7 +98,7 @@ export function TopologyMapPage() {
           {anySuppressed && (
             <span className="topomap-legend-item">
               <span className="topomap-legend-line" />
-              Suppressed (upstream cause)
+              {t('map.suppressed')}
             </span>
           )}
         </div>

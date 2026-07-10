@@ -2,6 +2,7 @@
 // throughput moved vs ~5 min ago (signed delta, bits/sec), rendered with DeltaBars. Delta is a
 // series channel (not a node status): spikes use series-4 (amber-brown), drops series-5 (crimson).
 
+import { useTranslation } from 'react-i18next';
 import { MetricChart } from '../../components/MetricChart/MetricChart';
 import { formatBps, formatSi } from '../../lib/format';
 import { api } from '../../services/api';
@@ -34,17 +35,19 @@ function toRows(data: InterfaceTopEntry[] | null): DeltaRow[] {
 }
 
 export function TrafficSpikesWidget() {
+  const { t } = useTranslation('dashboard');
   const { data, loading, error } = usePolled(() => api.getInterfaceDelta('up', { limit: 6 }), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
-  return <DeltaBars rows={toRows(data)} color="var(--series-4)" empty="No traffic spikes." />;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
+  return <DeltaBars rows={toRows(data)} color="var(--series-4)" empty={t('widgets.trafficSpikes.empty')} />;
 }
 
 export function TrafficDropsWidget() {
+  const { t } = useTranslation('dashboard');
   const { data, loading, error } = usePolled(() => api.getInterfaceDelta('down', { limit: 6 }), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
-  return <DeltaBars rows={toRows(data)} color="var(--series-5)" empty="No traffic drops." />;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
+  return <DeltaBars rows={toRows(data)} color="var(--series-5)" empty={t('widgets.trafficDrops.empty')} />;
 }
 
 // In / Out series colors for the throughput chart (canvas exemption — uPlot can't read vars).
@@ -52,11 +55,12 @@ const IN_COLOR = '#4f8cff';
 const OUT_COLOR = '#34d399';
 
 export function AggregateThroughputWidget() {
+  const { t } = useTranslation('dashboard');
   const { data, loading, error } = usePolled(() => api.getThroughputRange(), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   const ts = data?.timestamps ?? [];
-  if (ts.length === 0) return <p className="muted">No throughput data yet…</p>;
+  if (ts.length === 0) return <p className="muted">{t('widgets.throughput.empty')}</p>;
   return (
     <MetricChart
       title=""
@@ -65,20 +69,22 @@ export function AggregateThroughputWidget() {
       yFormat={(v) => formatSi(v)}
       legendFormat={(v) => formatBps(v)}
       series={[
-        { label: 'In', values: data?.in_bps ?? [], color: IN_COLOR },
-        { label: 'Out', values: data?.out_bps ?? [], color: OUT_COLOR },
+        { label: t('widgets.throughput.in'), values: data?.in_bps ?? [], color: IN_COLOR },
+        { label: t('widgets.throughput.out'), values: data?.out_bps ?? [], color: OUT_COLOR },
       ]}
     />
   );
 }
 
 export function InterfaceHeatmapWidget() {
+  const { t } = useTranslation('dashboard');
   const { data, loading, error } = usePolled(() => api.getInterfaceHeatmap({ limit: 8 }), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   const links = data?.links ?? [];
   const ts = data?.timestamps ?? [];
-  if (links.length === 0 || ts.length === 0) return <p className="muted">No interface traffic yet…</p>;
+  if (links.length === 0 || ts.length === 0)
+    return <p className="muted">{t('widgets.interfaceTraffic.empty')}</p>;
   return (
     <Heatmap
       rowLabels={links}

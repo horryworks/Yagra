@@ -1,0 +1,206 @@
+{
+  "role": {
+    "viewer": "Viewer",
+    "operator": "Operator",
+    "admin": "Admin"
+  },
+  "cred": {
+    "note": "Encrypted at rest. Secret values are never displayed or returned by the API.",
+    "unavailable": "Credential management is unavailable in skeleton mode (no secret store).",
+    "searchPlaceholder": "Search name or id…",
+    "searchAria": "Search credentials",
+    "filterAria": "Filter by type",
+    "filter": {
+      "allTypes": "All types",
+      "snmp_v2c": "SNMP v2c",
+      "snmp_v3": "SNMP v3",
+      "api_token": "API token"
+    },
+    "kind": {
+      "snmp_v2c": "SNMP v2c (community)",
+      "snmp_v3": "SNMP v3 (user/password)",
+      "api_token": "API token",
+      "meraki_api": "Cisco Meraki API key"
+    },
+    "cols": {
+      "name": "Name",
+      "type": "Type",
+      "secret": "Secret",
+      "usedBy": "Used by",
+      "credentialId": "Credential ID",
+      "actions": "Actions"
+    },
+    "usage": {
+      "unused": "Unused",
+      "count_one": "{{count}} node",
+      "count_other": "{{count}} nodes"
+    },
+    "empty": {
+      "none": "No credentials yet",
+      "filtered": "No credentials match",
+      "noneSub": "Add an SNMP community, SNMPv3 USM, or API token.",
+      "filteredSub": "Try a different search or filter."
+    },
+    "field": {
+      "name": "Name",
+      "type": "Type",
+      "secret": "Secret"
+    },
+    "v3": {
+      "usmUser": "USM user",
+      "usmUserPlaceholder": "usm-user",
+      "securityLevel": "Security level",
+      "authProtocol": "Auth protocol",
+      "authPassphrase": "Auth passphrase",
+      "privacyProtocol": "Privacy protocol",
+      "privacyPassphrase": "Privacy passphrase"
+    },
+    "add": {
+      "title": "Add credential",
+      "namePlaceholder": "e.g. core-rtr-usm",
+      "secretPlaceholder": {
+        "apiToken": "Bearer token",
+        "community": "Community string"
+      },
+      "secretHint": "Sent over the encrypted-at-rest endpoint and sealed server-side. It is never shown again."
+    },
+    "edit": {
+      "title": "Edit credential",
+      "replaceSecret": "Replace secret",
+      "replaceHint": "the stored secret stays unless you re-enter it.",
+      "newSecret": "New secret"
+    },
+    "delete": {
+      "title": "Delete credential",
+      "confirm": "Delete credential <strong>{{name}}</strong>?",
+      "inUse": "{{usage}} reference it — they will lose this binding.",
+      "unused": "It is unused.",
+      "irreversible": "This cannot be undone."
+    },
+    "err": {
+      "add": "failed to add credential",
+      "update": "failed to update",
+      "delete": "failed to delete"
+    }
+  },
+  "users": {
+    "note": "Local accounts for the northbound API. Roles: viewer (read-only), operator (ack/maintenance), admin (full control).",
+    "unavailable": "User management is unavailable in skeleton mode (no database).",
+    "forbidden": "Managing users requires an admin account.",
+    "searchPlaceholder": "Search username…",
+    "searchAria": "Search users",
+    "filterAria": "Filter by role",
+    "filter": {
+      "all": "All",
+      "admin": "Admins",
+      "operator": "Operators",
+      "viewer": "Viewers"
+    },
+    "you": "You",
+    "status": {
+      "active": "Active",
+      "disabled": "Disabled"
+    },
+    "created": "Created {{date}}",
+    "lastLogin": "Last login {{time}}",
+    "roleFor": "Role for {{name}}",
+    "empty": {
+      "none": "No users yet.",
+      "filtered": "No users match."
+    },
+    "actions": {
+      "addUser": "Add user"
+    },
+    "action": {
+      "enable": "Enable account",
+      "disable": "Disable account",
+      "changePassword": "Change password",
+      "delete": "Delete user"
+    },
+    "field": {
+      "username": "Username",
+      "password": "Password (min {{min}} chars)",
+      "role": "Role"
+    },
+    "changePw": {
+      "title": "Change password — {{name}}",
+      "newPassword": "New password (min {{min}} chars)",
+      "confirm": "Confirm new password",
+      "mismatch": "passwords do not match"
+    },
+    "delete": {
+      "title": "Delete user",
+      "confirm": "Delete user <strong>{{name}}</strong>? Their audit-log entries remain for the record, but the account cannot be recovered."
+    },
+    "err": {
+      "changeRole": "failed to change role",
+      "changeStatus": "failed to change account status",
+      "create": "failed to create user",
+      "delete": "failed to delete user",
+      "changePw": "failed to change password"
+    }
+  },
+  "roles": {
+    "note": "What each role can do. The matrix is derived from the privileges the API enforces.",
+    "section": {
+      "roles": "Roles"
+    },
+    "builtin": "built-in",
+    "matrixTitle": "Privilege matrix",
+    "privilege": "Privilege",
+    "granted": {
+      "title": "{{role}} can {{privilege}}"
+    },
+    "denied": {
+      "title": "{{role}} cannot {{privilege}}"
+    },
+    "sr": {
+      "granted": "granted",
+      "notGranted": "not granted"
+    },
+    "customNote": "Built-in roles are fixed. Custom roles (operator-defined privilege sets) are planned — they will appear here as additional columns once configurable.",
+    "err": {
+      "load": "failed to load roles"
+    }
+  },
+  "audit": {
+    "note": "Every configuration change and login event: who, what, when. Read-only · immutable · 365-day retention.",
+    "signInPrompt": "Sign in as an admin to view the audit log.",
+    "searchPlaceholder": "Search user or path…",
+    "searchAria": "Search audit log",
+    "filterActionAria": "Filter by action",
+    "filterStatusAria": "Filter by status",
+    "signIn": "SIGN IN",
+    "filter": {
+      "allActions": "All actions",
+      "signIn": "Sign in",
+      "allStatus": "All status",
+      "success": "Success (2xx)",
+      "clientError": "Client error (4xx)",
+      "serverError": "Server error (5xx)"
+    },
+    "range": {
+      "all": "All time",
+      "last24h": "Last 24h",
+      "last7d": "Last 7 days",
+      "last30d": "Last 30 days"
+    },
+    "cols": {
+      "time": "Time",
+      "user": "User",
+      "action": "Action",
+      "status": "Status"
+    },
+    "entry_one": "entry",
+    "entry_other": "entries",
+    "export": "Export",
+    "empty": {
+      "none": "No audit entries yet",
+      "filtered": "No matching entries — adjust the filters or time range."
+    },
+    "err": {
+      "load": "failed to load the audit log",
+      "loadMore": "failed to load more"
+    }
+  }
+}

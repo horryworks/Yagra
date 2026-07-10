@@ -1,0 +1,234 @@
+{
+  "pollers": {
+    "note": "The distributed poller fleet. Each pool's nodes are polled by the pollers registered to it; a pool with no live poller goes unmonitored.",
+    "unavailable": "Poller management is unavailable in skeleton mode.",
+    "registerButton": "Register poller",
+    "noLivePoller": "No live poller",
+    "mode": {
+      "workingSet": "Working set",
+      "legacy": "Legacy"
+    },
+    "pool": {
+      "livePoller_one": "live poller",
+      "livePoller_other": "live pollers"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline"
+    },
+    "lastSeen": {
+      "live": "Live"
+    },
+    "workingSet": {
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} nodes",
+      "specs_one": "{{count}} spec",
+      "specs_other": "{{count}} specs"
+    },
+    "cols": {
+      "poller": "Poller",
+      "pool": "Pool",
+      "status": "Status",
+      "version": "Version",
+      "workingSet": "Working set",
+      "results": "Results",
+      "cpu": "CPU",
+      "mem": "Mem",
+      "disk": "Disk",
+      "lastSeen": "Last seen",
+      "actions": "Actions"
+    },
+    "empty": {
+      "title": "No pollers yet",
+      "sub": "Pollers appear here once they connect to the bus and send a heartbeat. Use <b>Register poller</b> for the remote-site setup snippet."
+    },
+    "remove": {
+      "title": "Remove poller",
+      "confirmText": "Remove poller <code>{{id}}</code> from the inventory? If it reconnects it will re-register automatically."
+    },
+    "register": {
+      "title": "Register a poller",
+      "done": "Done",
+      "intro": "Run a poller container at the remote site; it connects outbound to the central NATS bus. Fill in its identity below, then drop the generated <env>.env</env> next to <file>docker-compose.poller.yml</file> and bring it up.",
+      "invalidToken": "Use letters, digits, dash or underscore only.",
+      "copy": "Copy",
+      "snippetEmpty": "Enter a valid ID, pool and bus URL to generate the snippet.",
+      "fields": {
+        "id": {
+          "label": "Poller ID",
+          "hint": "Stable, unique per poller."
+        },
+        "pool": {
+          "label": "Pool",
+          "hint": "Nodes assigned to this pool are polled here."
+        },
+        "busUrl": {
+          "label": "Bus URL",
+          "hint": "Include the poller credentials; a TLS URL is required off-site."
+        },
+        "caFile": {
+          "label": "CA file path (optional)",
+          "hint": "Only when the bus cert is signed by a private CA."
+        },
+        "env": {
+          "label": ".env for docker-compose.poller.yml"
+        },
+        "bringUp": {
+          "label": "Bring it up"
+        }
+      }
+    },
+    "err": {
+      "remove": "failed to remove poller"
+    }
+  },
+  "health": {
+    "note": "Yagra's own health: the poll loop, its backing services, fleet data coverage, and host resources.",
+    "reachable": "Reachable",
+    "unreachable": "Unreachable",
+    "noHistory": "No history yet…",
+    "core": "Core",
+    "hostResources": "Host resources",
+    "instanceAria": "Instance",
+    "offlineSuffix": " (offline)",
+    "deps": {
+      "postgres": "PostgreSQL",
+      "tsdb": "VictoriaMetrics (TSDB)",
+      "bus": "NATS bus"
+    },
+    "cards": {
+      "pollLoop": "Poll-loop health",
+      "dependency": "Dependency health",
+      "dataCoverage": "Data coverage"
+    },
+    "metric": {
+      "cpu": "CPU",
+      "loadAverage": "Load average",
+      "memory": "Memory",
+      "disk": "Disk · {{mount}}"
+    }
+  },
+  "settings": {
+    "note": "System-wide monitoring defaults. Per-profile overrides take precedence over these.",
+    "saved": "Saved.",
+    "signInHint": "Sign in with a config-management role to change this.",
+    "polling": {
+      "title": "Polling",
+      "intervalName": "Default polling interval",
+      "intervalHelp": "How often each node is polled, unless its Device profile sets its own interval. {{min}}–{{max}} seconds.",
+      "intervalAria": "Default polling interval in seconds",
+      "seconds": "seconds"
+    },
+    "err": {
+      "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
+      "save": "failed to save setting"
+    }
+  },
+  "integrations": {
+    "note": "Connect external systems monitored through a vendor cloud API.",
+    "unavailable": "Integrations are unavailable in skeleton mode (no store).",
+    "status": {
+      "checking": "Checking…",
+      "unavailable": "Unavailable",
+      "notConfigured": "Not configured",
+      "pollingPaused": "Connected · polling paused",
+      "connected_one": "Connected · {{count}} org",
+      "connected_other": "Connected · {{count}} orgs"
+    },
+    "meraki": {
+      "desc": "Read-only Dashboard API monitoring — availability, uplinks, and traffic across your Meraki organizations."
+    },
+    "more": {
+      "name": "More integrations",
+      "desc": "Additional vendor and notification integrations will appear here in a future release."
+    }
+  },
+  "meraki": {
+    "name": "Cisco Meraki",
+    "note": "Read-only Dashboard API monitoring.",
+    "tiersPrefix": "tiers:",
+    "tiersNone": "none",
+    "tier": {
+      "availability": "Availability",
+      "uplink": "Uplink",
+      "traffic": "Traffic"
+    },
+    "regions": {
+      "global": "Global (api.meraki.com)",
+      "canada": "Canada (api.meraki.ca)",
+      "china": "China (api.meraki.cn)",
+      "usGov": "US Gov (api.gov-meraki.com)"
+    },
+    "polling": {
+      "title": "Meraki polling",
+      "enabled": "Polling enabled",
+      "paused": "Polling paused (kill switch engaged)",
+      "hint": "Global safeguard — instantly halt all Meraki Dashboard API polling fleet-wide, without deleting any organization config."
+    },
+    "orgs": {
+      "title": "Organizations",
+      "add": "+ Add organization",
+      "empty": "No Meraki organizations yet. Add one to start monitoring.",
+      "orgId": "org {{id}}",
+      "stateEnabled": "enabled",
+      "statePaused": "paused"
+    },
+    "org": {
+      "import": "Import devices",
+      "networks": "Networks",
+      "cadence": "Cadence",
+      "pause": "Pause",
+      "resume": "Resume"
+    },
+    "addOrg": {
+      "title": "Add Meraki organization",
+      "find": "Find organizations",
+      "add_one": "Add {{count}} organization",
+      "add_other": "Add {{count}} organizations",
+      "region": "Region",
+      "apiKeyLabel": "API key (read-only)",
+      "apiKeyPlaceholder": "Meraki Dashboard API key",
+      "apiKeyHint": "Use a <b>read-only</b> Dashboard API key. It is sealed (encrypted at rest) and never shown again. Yagra only ever issues read-only GET calls to Meraki.",
+      "selectHint": "Select the organizations to monitor. All share this one API key.",
+      "noOrgs": "This key can't access any organizations."
+    },
+    "networks": {
+      "title": "Network scope — {{name}}",
+      "hint": "Only monitored networks are collected. Un-checking a network stops narrowing API calls to it (existing device nodes are untouched — remove them to stop monitoring a device).",
+      "empty": "No networks yet — run “Import devices” to enumerate the org first."
+    },
+    "cadence": {
+      "title": "Cadence — {{name}}",
+      "enabledTiers": "Enabled tiers",
+      "availabilityInterval": "Availability interval (s)",
+      "uplinkInterval": "Uplink interval (s)",
+      "trafficInterval": "Traffic interval (s)",
+      "inventoryInterval": "Inventory interval (s)",
+      "rateBudget": "Rate budget (req/s)",
+      "rateBudgetHint": "Conservative — kept well under the org API cap so the customer keeps headroom."
+    },
+    "delete": {
+      "title": "Delete organization",
+      "confirmText": "Delete <b>{{name}}</b>? Its imported device nodes, network scope, and HostTree groups are removed. Metric history in the TSDB is left. This cannot be undone."
+    },
+    "import": {
+      "title": "Import devices — {{name}}",
+      "importBtn_one": "Import {{count}} device",
+      "importBtn_other": "Import {{count}} devices",
+      "enumerating": "Enumerating organization…",
+      "noData": "No data.",
+      "allImported": "No new devices to import — every device this key can see is already monitored.",
+      "err": {
+        "enumerate": "failed to enumerate the organization",
+        "import": "failed to import devices"
+      }
+    },
+    "err": {
+      "discover": "failed to reach the Meraki API",
+      "addOrgs": "failed to add organizations",
+      "loadNetworks": "failed to load networks",
+      "saveScope": "failed to save network scope",
+      "saveCadence": "failed to save cadence"
+    }
+  }
+}

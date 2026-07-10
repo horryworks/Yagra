@@ -3,6 +3,7 @@
 // per ui-conventions interactive states.
 
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import { useTranslation } from 'react-i18next';
 import './Field.css';
 
 export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
@@ -12,8 +13,9 @@ export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputE
 /** Required-field marker: a red asterisk that also announces "required" to assistive tech.
  *  Use next to the label text of a mandatory field so it's obvious before submit. */
 export function RequiredMark() {
+  const { t } = useTranslation();
   return (
-    <abbr className="form-req" title="Required" aria-label="required">
+    <abbr className="form-req" title={t('form.required')} aria-label={t('form.required')}>
       *
     </abbr>
   );

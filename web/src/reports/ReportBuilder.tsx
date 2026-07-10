@@ -4,6 +4,7 @@
 // form state (save-on-submit), not an autosave store — a template is committed explicitly.
 
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) {
+  const { t } = useTranslation('reports');
   const initial = useMemo(
     () => (definition ? sanitizeSpec(definition.spec) : null),
     [definition],
@@ -85,11 +87,11 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
   async function save() {
     const trimmed = name.trim();
     if (!trimmed) {
-      setError('A report name is required.');
+      setError(t('builder.err.nameRequired'));
       return;
     }
     if (sections.length === 0) {
-      setError('Add at least one section.');
+      setError(t('builder.err.noSections'));
       return;
     }
     setSaving(true);
@@ -104,20 +106,20 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
       else await api.createReportDefinition(body);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to save the report.');
+      setError(e instanceof ApiError ? e.message : t('builder.err.saveFailed'));
       setSaving(false);
     }
   }
 
   return (
     <Modal
-      title={definition ? 'Edit report' : 'New report'}
+      title={definition ? t('builder.editTitle') : t('builder.newTitle')}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t('common:actions.cancel')}</Button>
           <Button variant="primary" disabled={saving} onClick={save}>
-            {saving ? 'Saving…' : 'Save report'}
+            {saving ? t('builder.saving') : t('builder.save')}
           </Button>
         </>
       }
@@ -125,43 +127,43 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
       <div className="rb">
         <label className="rb-field">
           <span>
-            Name <RequiredMark />
+            {t('builder.name')} <RequiredMark />
           </span>
           <TextInput
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Weekly availability report"
+            placeholder={t('builder.namePlaceholder')}
             autoFocus
           />
         </label>
 
         <label className="rb-field">
-          <span>Description</span>
+          <span>{t('builder.description')}</span>
           <TextInput
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Optional summary of what this report covers"
+            placeholder={t('builder.descriptionPlaceholder')}
           />
         </label>
 
         <label className="rb-field">
-          <span>Time window</span>
+          <span>{t('builder.timeWindow')}</span>
           <Select
             value={String(rangeSecs)}
             onChange={(e) => setRangeSecs(Number(e.target.value))}
           >
             {RANGE_OPTIONS.map((o) => (
               <option key={o.secs} value={o.secs}>
-                {o.label}
+                {t(o.labelKey)}
               </option>
             ))}
           </Select>
         </label>
 
         <div className="rb-sections-head">
-          <span>Sections ({sections.length})</span>
+          <span>{t('builder.sectionsCount', { count: sections.length })}</span>
           <Button variant="ghost" onClick={() => setShowCatalog((v) => !v)}>
-            {showCatalog ? 'Hide catalog' : 'Add section'}
+            {showCatalog ? t('builder.hideCatalog') : t('builder.addSection')}
           </Button>
         </div>
 
@@ -177,7 +179,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                       <div className="rb-cat-item-blurb">{d.blurb}</div>
                     </div>
                     <Button variant="ghost" onClick={() => addSection(d)}>
-                      Add
+                      {t('common:actions.add')}
                     </Button>
                   </div>
                 ))}
@@ -188,7 +190,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
 
         <div className="rb-sections">
           {sections.length === 0 && (
-            <div className="rb-empty">No sections yet — add one from the catalog above.</div>
+            <div className="rb-empty">{t('builder.noSections')}</div>
           )}
           {sections.map((sec, i) => {
             const def = defByKind.get(sec.kind);
@@ -199,7 +201,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                   <div className="rp-actions">
                     <button
                       className="rb-icon"
-                      aria-label="Move up"
+                      aria-label={t('builder.moveUp')}
                       disabled={i === 0}
                       onClick={() => moveSection(i, -1)}
                     >
@@ -207,7 +209,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                     </button>
                     <button
                       className="rb-icon"
-                      aria-label="Move down"
+                      aria-label={t('builder.moveDown')}
                       disabled={i === sections.length - 1}
                       onClick={() => moveSection(i, 1)}
                     >
@@ -215,7 +217,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                     </button>
                     <button
                       className="rb-icon"
-                      aria-label="Remove section"
+                      aria-label={t('builder.removeSection')}
                       onClick={() => removeSection(i)}
                     >
                       ×

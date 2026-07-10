@@ -5,18 +5,17 @@
 // clearly-labelled "Run on all nodes" quick path. Past results show in the Analysis runs panel.
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { METHODS, type Tool } from './data';
 import { useTroubleshootStore } from './store';
 import { defaultAnalysisInput } from './scope';
 
 function DepthPips({ depth }: { depth: number }) {
+  const { t } = useTranslation('troubleshoot');
+  const label = t('toolCard.depthTitle', { depth });
   return (
-    <span
-      className="ts-depth"
-      title={`Compute depth ${depth} of 5`}
-      aria-label={`Compute depth ${depth} of 5`}
-    >
+    <span className="ts-depth" title={label} aria-label={label}>
       {[1, 2, 3, 4, 5].map((i) => (
         <span key={i} className={i <= depth ? 'ts-depth-pip on' : 'ts-depth-pip'} />
       ))}
@@ -25,6 +24,7 @@ function DepthPips({ depth }: { depth: number }) {
 }
 
 export function ToolCard({ tool }: { tool: Tool }) {
+  const { t } = useTranslation('troubleshoot');
   const openDrawer = useTroubleshootStore((s) => s.openDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
@@ -57,13 +57,13 @@ export function ToolCard({ tool }: { tool: Tool }) {
   const quickRunAll = async () => {
     setMenuOpen(false);
     try {
-      const job = await createJob(defaultAnalysisInput(tool.id));
+      const job = await createJob(defaultAnalysisInput(tool.id, t));
       showToast(
-        `${tool.name} started on all nodes — running in background.`,
+        t('toolCard.toast.startedAll', { name: t(tool.name) }),
         tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
       );
     } catch {
-      showToast('Could not start the analysis.');
+      showToast(t('toast.startFailed'));
     }
   };
 
@@ -72,23 +72,23 @@ export function ToolCard({ tool }: { tool: Tool }) {
       <div className="ts-tool-top">
         <div className="ts-tool-mono">{tool.mono}</div>
         <div className="ts-tool-titles">
-          <span className="ts-tool-name">{tool.name}</span>
+          <span className="ts-tool-name">{t(tool.name)}</span>
           <span className="ts-tool-method">
             <span className="ts-tool-method-dot" style={{ background: method.color }} />
-            {method.label}
+            {t(method.label)}
           </span>
         </div>
       </div>
-      <p className="ts-tool-desc">{tool.desc}</p>
+      <p className="ts-tool-desc">{t(tool.desc)}</p>
       <div className="ts-tool-reveal">
-        <b>Surfaces</b> {tool.reveal}
+        <b>{t('toolCard.surfaces')}</b> {t(tool.reveal)}
       </div>
       <div className="ts-tool-meta">
         <span className="ts-tool-cost">
           <span className="ts-tool-cost-glyph" aria-hidden>
             ◷
           </span>
-          {tool.est}
+          {t(tool.est)}
         </span>
         <DepthPips depth={tool.depth} />
         <div className="ts-tool-actions">
@@ -101,14 +101,14 @@ export function ToolCard({ tool }: { tool: Tool }) {
                 configure();
               }}
             >
-              Run
+              {t('actions.run')}
             </Button>
             <Button
               variant="primary"
               className="btn-sm ts-run-caret"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              aria-label="More run options"
+              aria-label={t('toolCard.moreOptions')}
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen((o) => !o);
@@ -127,7 +127,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
                     configure();
                   }}
                 >
-                  Configure &amp; run…
+                  {t('toolCard.configureRun')}
                 </button>
                 <button
                   type="button"
@@ -138,7 +138,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
                     void quickRunAll();
                   }}
                 >
-                  Run on all nodes
+                  {t('toolCard.runAll')}
                 </button>
               </div>
             )}

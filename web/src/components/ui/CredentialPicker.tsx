@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import type { CredentialSummary } from '../../types/api';
 import './CredentialPicker.css';
 
@@ -19,6 +20,7 @@ interface CredentialPickerProps {
 }
 
 export function CredentialPicker({ options, selected, onChange, disabled }: CredentialPickerProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -48,7 +50,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
         onClick={() => !disabled && setOpen((o) => !o)}
       >
         {chosen.length === 0 ? (
-          <span className="cred-picker-placeholder">Select stored credentials…</span>
+          <span className="cred-picker-placeholder">{t('credPicker.placeholder')}</span>
         ) : (
           <span className="cred-picker-chips">
             {chosen.map((c) => (
@@ -59,7 +61,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
                   className="cred-chip-x"
                   role="button"
                   tabIndex={-1}
-                  aria-label={`Remove ${c.name}`}
+                  aria-label={t('credPicker.remove', { name: c.name })}
                   onClick={(e) => {
                     e.stopPropagation();
                     remove(c.id);
@@ -79,7 +81,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
       {open && (
         <div className="cred-picker-pop" role="listbox">
           {options.length === 0 ? (
-            <div className="cred-picker-empty">No stored SNMP credentials yet.</div>
+            <div className="cred-picker-empty">{t('credPicker.empty')}</div>
           ) : (
             <div className="cred-picker-list">
               {options.map((o) => {
@@ -104,7 +106,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
             </div>
           )}
           <Link className="cred-picker-manage" to="/settings/credentials">
-            Manage credentials →
+            {t('credPicker.manage')} →
           </Link>
         </div>
       )}

@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
@@ -28,6 +29,7 @@ import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, PowerIcon } from '../components/ui/icons';
+import { severityLabel } from '../lib/format';
 import './RoutingPage.css';
 
 const errMsg = (e: unknown, fallback: string) =>
@@ -44,15 +46,17 @@ const RULE_COLS = '1.4fr 130px 1fr 130px 96px';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation('alertsConfig');
   return (
     <span className={enabled ? 'yt-status enabled' : 'yt-status disabled'}>
       <span className="yt-status-dot" />
-      {enabled ? 'Enabled' : 'Disabled'}
+      {enabled ? t('status.enabled') : t('status.disabled')}
     </span>
   );
 }
 
 export function RoutingPage() {
+  const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
@@ -81,11 +85,11 @@ export function RoutingPage() {
     return (
       <div>
         <PageHeader
-          title="Notification routing"
-          trail={[{ label: 'Alerts' }, { label: 'Notification routing' }]}
+          title={t('nav:alerts.routing')}
+          trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
         />
         <Card>
-          <p className="muted">Notification routing is unavailable in skeleton mode.</p>
+          <p className="muted">{t('routing.unavailable')}</p>
         </Card>
       </div>
     );
@@ -94,9 +98,9 @@ export function RoutingPage() {
   return (
     <div>
       <PageHeader
-        title="Notification routing"
-        trail={[{ label: 'Alerts' }, { label: 'Notification routing' }]}
-        note="Channels are where alerts go; rules pick which alerts (by severity) reach which channels."
+        title={t('nav:alerts.routing')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
+        note={t('routing.note')}
       />
       {error && <p className="form-error routing-error">{error}</p>}
       <ChannelsSection
@@ -133,6 +137,7 @@ function ChannelsSection({
   onChange: () => void;
   onError: (m: string) => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<NotificationChannel | null>(null);
 
@@ -140,32 +145,34 @@ function ChannelsSection({
     api
       .setNotificationChannelEnabled(c.id, !c.enabled)
       .then(onChange)
-      .catch((e: unknown) => onError(errMsg(e, 'failed to update')));
+      .catch((e: unknown) => onError(errMsg(e, t('routing.err.update'))));
 
   return (
     <section>
       <div className="table-toolbar">
-        <h2 className="table-section-title">Notification channels</h2>
+        <h2 className="table-section-title">{t('routing.channels.title')}</h2>
         <TableSpacer />
-        <ResultCount shown={channels.length} noun="channels" />
+        <ResultCount shown={channels.length} noun={t('noun.channel', { count: channels.length })} />
         {authed && (
           <Button variant="primary" onClick={() => setAdding(true)}>
-            + Add channel
+            {t('routing.channels.add')}
           </Button>
         )}
       </div>
 
       <div className="ytable channels-table">
         <div className="ytable-head" style={{ gridTemplateColumns: CHANNEL_COLS }}>
-          <div className="ytable-h">Name</div>
-          <div className="ytable-h">Kind</div>
-          <div className="ytable-h">Status</div>
-          <div className="ytable-h right">Actions</div>
+          <div className="ytable-h">{t('routing.channels.cols.name')}</div>
+          <div className="ytable-h">{t('routing.channels.cols.kind')}</div>
+          <div className="ytable-h">{t('routing.channels.cols.status')}</div>
+          <div className="ytable-h right">{t('routing.channels.cols.actions')}</div>
         </div>
         {channels.length === 0 ? (
           <div className="yt-empty">
-            <p className="yt-empty-title">{loading ? 'Loading…' : 'No channels yet'}</p>
-            {!loading && <p className="yt-empty-sub">Add a webhook or email destination.</p>}
+            <p className="yt-empty-title">
+              {loading ? t('common:loading') : t('routing.channels.empty')}
+            </p>
+            {!loading && <p className="yt-empty-sub">{t('routing.channels.emptySub')}</p>}
           </div>
         ) : (
           channels.map((c) => (
@@ -187,12 +194,16 @@ function ChannelsSection({
                 {authed && (
                   <span className="ytable-actions">
                     <IconButton
-                      title={c.enabled ? 'Disable channel' : 'Enable channel'}
+                      title={c.enabled ? t('routing.channels.disable') : t('routing.channels.enable')}
                       onClick={() => toggle(c)}
                     >
                       <PowerIcon />
                     </IconButton>
-                    <IconButton title="Delete channel" danger onClick={() => setDeleting(c)}>
+                    <IconButton
+                      title={t('routing.channels.delete')}
+                      danger
+                      onClick={() => setDeleting(c)}
+                    >
                       <TrashIcon />
                     </IconButton>
                   </span>
@@ -215,12 +226,14 @@ function ChannelsSection({
       )}
       {deleting && (
         <ConfirmDeleteModal
-          title="Delete channel"
+          title={t('routing.channels.delete')}
           body={
-            <>
-              Delete channel <strong>{deleting.name}</strong>? Rules that target it will no longer
-              reach this destination.
-            </>
+            <Trans
+              t={t}
+              i18nKey="routing.channels.deleteBody"
+              values={{ name: deleting.name }}
+              components={{ strong: <strong /> }}
+            />
           }
           run={() => api.deleteNotificationChannel(deleting.id)}
           onClose={() => setDeleting(null)}
@@ -243,6 +256,7 @@ function AddChannelModal({
   onDone: () => void;
   onError: (m: string) => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<ChannelKind>('webhook');
   const [url, setUrl] = useState('');
@@ -292,32 +306,32 @@ function AddChannelModal({
       .createNotificationChannel({ name: name.trim(), config: buildConfig() })
       .then(onDone)
       .catch((e: unknown) => {
-        onError(errMsg(e, 'failed to add channel'));
+        onError(errMsg(e, t('routing.err.addChannel')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add notification channel"
+      title={t('routing.channelModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!canAdd || busy}>
-            Add channel
+            {t('routing.channelModal.add')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('routing.channelModal.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Kind</label>
+        <label className="modal-field-label">{t('routing.channelModal.kind')}</label>
         <Select value={kind} onChange={(e) => setKind(e.target.value as ChannelKind)}>
           <option value="webhook">webhook</option>
           <option value="email">email</option>
@@ -327,28 +341,28 @@ function AddChannelModal({
       </div>
       {kind === 'webhook' && (
         <div className="modal-field">
-          <label className="modal-field-label">Webhook URL</label>
+          <label className="modal-field-label">{t('routing.channelModal.webhookUrl')}</label>
           <TextInput
             className="mono"
             placeholder="https://hooks.example/…"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
-          <span className="modal-hint">The URL is sealed server-side and never returned.</span>
+          <span className="modal-hint">{t('routing.channelModal.webhookSealed')}</span>
         </div>
       )}
       {kind === 'email' && (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">SMTP host</label>
+            <label className="modal-field-label">{t('routing.channelModal.smtpHost')}</label>
             <TextInput value={host} onChange={(e) => setHost(e.target.value)} />
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">From</label>
+            <label className="modal-field-label">{t('routing.channelModal.from')}</label>
             <TextInput value={from} onChange={(e) => setFrom(e.target.value)} />
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">To</label>
+            <label className="modal-field-label">{t('routing.channelModal.to')}</label>
             <TextInput value={to} onChange={(e) => setTo(e.target.value)} />
           </div>
         </>
@@ -356,23 +370,20 @@ function AddChannelModal({
       {kind === 'pagerduty' && (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">Integration routing key</label>
+            <label className="modal-field-label">{t('routing.channelModal.routingKey')}</label>
             <TextInput
               className="mono"
               placeholder="R0XXXXXXXXXXXXXXXXXXXXXXXXX"
               value={routingKey}
               onChange={(e) => setRoutingKey(e.target.value)}
             />
-            <span className="modal-hint">
-              Events API v2 key — sealed server-side and never returned. Fires trigger/resolve
-              correlated by a stable dedup key.
-            </span>
+            <span className="modal-hint">{t('routing.channelModal.routingKeyHint')}</span>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">Region</label>
+            <label className="modal-field-label">{t('routing.channelModal.region')}</label>
             <Select value={pdRegion} onChange={(e) => setPdRegion(e.target.value as 'us' | 'eu')}>
-              <option value="us">US (events.pagerduty.com)</option>
-              <option value="eu">EU (events.eu.pagerduty.com)</option>
+              <option value="us">{t('routing.channelModal.regionUs')}</option>
+              <option value="eu">{t('routing.channelModal.regionEu')}</option>
             </Select>
           </div>
         </>
@@ -380,24 +391,22 @@ function AddChannelModal({
       {kind === 'jsm' && (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">API URL</label>
+            <label className="modal-field-label">{t('routing.channelModal.apiUrl')}</label>
             <TextInput
               className="mono"
               value={jsmUrl}
               onChange={(e) => setJsmUrl(e.target.value)}
             />
-            <span className="modal-hint">
-              JSM Alerts / Opsgenie integration base (api.atlassian.com or api.opsgenie.com).
-            </span>
+            <span className="modal-hint">{t('routing.channelModal.jsmUrlHint')}</span>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">API key (GenieKey)</label>
+            <label className="modal-field-label">{t('routing.channelModal.apiKey')}</label>
             <TextInput
               className="mono"
               value={jsmKey}
               onChange={(e) => setJsmKey(e.target.value)}
             />
-            <span className="modal-hint">Sealed server-side and never returned.</span>
+            <span className="modal-hint">{t('routing.channelModal.sealed')}</span>
           </div>
         </>
       )}
@@ -422,6 +431,7 @@ function RulesSection({
   onChange: () => void;
   onError: (m: string) => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<RoutingRule | null>(null);
 
@@ -431,37 +441,35 @@ function RulesSection({
     api
       .setRoutingRuleEnabled(r.id, !r.enabled)
       .then(onChange)
-      .catch((e: unknown) => onError(errMsg(e, 'failed to update')));
+      .catch((e: unknown) => onError(errMsg(e, t('routing.err.update'))));
 
   return (
     <section className="routing-rules-section">
       <div className="table-toolbar">
-        <h2 className="table-section-title">Routing rules</h2>
+        <h2 className="table-section-title">{t('routing.rules.title')}</h2>
         <TableSpacer />
-        <ResultCount shown={rules.length} noun="rules" />
+        <ResultCount shown={rules.length} noun={t('common:noun.rule', { count: rules.length })} />
         {authed && (
           <Button variant="primary" onClick={() => setAdding(true)} disabled={channels.length === 0}>
-            + Add rule
+            {t('routing.rules.add')}
           </Button>
         )}
       </div>
 
       <div className="ytable rules-table">
         <div className="ytable-head" style={{ gridTemplateColumns: RULE_COLS }}>
-          <div className="ytable-h">Name</div>
-          <div className="ytable-h">Severity</div>
-          <div className="ytable-h">Channels</div>
-          <div className="ytable-h">Status</div>
-          <div className="ytable-h right">Actions</div>
+          <div className="ytable-h">{t('routing.rules.cols.name')}</div>
+          <div className="ytable-h">{t('routing.rules.cols.severity')}</div>
+          <div className="ytable-h">{t('routing.rules.cols.channels')}</div>
+          <div className="ytable-h">{t('routing.rules.cols.status')}</div>
+          <div className="ytable-h right">{t('routing.rules.cols.actions')}</div>
         </div>
         {rules.length === 0 ? (
           <div className="yt-empty">
-            <p className="yt-empty-title">{loading ? 'Loading…' : 'No routing rules'}</p>
-            {!loading && (
-              <p className="yt-empty-sub">
-                Without a rule, alerts only use the env default route.
-              </p>
-            )}
+            <p className="yt-empty-title">
+              {loading ? t('common:loading') : t('routing.rules.empty')}
+            </p>
+            {!loading && <p className="yt-empty-sub">{t('routing.rules.emptySub')}</p>}
           </div>
         ) : (
           rules.map((r) => (
@@ -475,12 +483,12 @@ function RulesSection({
               </div>
               <div className="ytable-cell">
                 <Badge tone={r.severity ? SEVERITY_TONE[r.severity] : 'neutral'}>
-                  {r.severity ?? 'any'}
+                  {r.severity ? severityLabel(r.severity) : t('routing.rules.any')}
                 </Badge>
               </div>
               <div className="ytable-cell ellipsis">
                 <span className="muted">
-                  {r.channel_ids.map(channelName).join(', ') || '(no channels)'}
+                  {r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels')}
                 </span>
               </div>
               <div className="ytable-cell">
@@ -490,12 +498,16 @@ function RulesSection({
                 {authed && (
                   <span className="ytable-actions">
                     <IconButton
-                      title={r.enabled ? 'Disable rule' : 'Enable rule'}
+                      title={r.enabled ? t('routing.rules.disable') : t('routing.rules.enable')}
                       onClick={() => toggle(r)}
                     >
                       <PowerIcon />
                     </IconButton>
-                    <IconButton title="Delete rule" danger onClick={() => setDeleting(r)}>
+                    <IconButton
+                      title={t('routing.rules.delete')}
+                      danger
+                      onClick={() => setDeleting(r)}
+                    >
                       <TrashIcon />
                     </IconButton>
                   </span>
@@ -519,12 +531,14 @@ function RulesSection({
       )}
       {deleting && (
         <ConfirmDeleteModal
-          title="Delete routing rule"
+          title={t('routing.rules.deleteTitle')}
           body={
-            <>
-              Delete rule <strong>{deleting.name}</strong>? Matching alerts will fall back to the
-              env default route.
-            </>
+            <Trans
+              t={t}
+              i18nKey="routing.rules.deleteBody"
+              values={{ name: deleting.name }}
+              components={{ strong: <strong /> }}
+            />
           }
           run={() => api.deleteRoutingRule(deleting.id)}
           onClose={() => setDeleting(null)}
@@ -549,6 +563,7 @@ function AddRuleModal({
   onDone: () => void;
   onError: (m: string) => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
   const [severity, setSeverity] = useState<'' | Severity>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -575,41 +590,41 @@ function AddRuleModal({
       })
       .then(onDone)
       .catch((e: unknown) => {
-        onError(errMsg(e, 'failed to add rule'));
+        onError(errMsg(e, t('routing.err.addRule')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add routing rule"
+      title={t('routing.ruleModal.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!canAdd || busy}>
-            Add rule
+            {t('routing.ruleModal.add')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('routing.ruleModal.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Severity</label>
+        <label className="modal-field-label">{t('routing.ruleModal.severity')}</label>
         <Select value={severity} onChange={(e) => setSeverity(e.target.value as '' | Severity)}>
-          <option value="">any severity</option>
-          <option value="critical">critical</option>
-          <option value="warning">warning</option>
-          <option value="info">info</option>
+          <option value="">{t('routing.ruleModal.anySeverity')}</option>
+          <option value="critical">{severityLabel('critical')}</option>
+          <option value="warning">{severityLabel('warning')}</option>
+          <option value="info">{severityLabel('info')}</option>
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Channels</label>
+        <label className="modal-field-label">{t('routing.ruleModal.channels')}</label>
         <div className="routing-picks">
           {channels.map((c) => (
             <label key={c.id} className="routing-pick">
@@ -638,6 +653,7 @@ function ConfirmDeleteModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('alertsConfig');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -647,7 +663,7 @@ function ConfirmDeleteModal({
     run()
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete'));
+        setError(errMsg(e, t('routing.err.delete')));
         setBusy(false);
       });
   };
@@ -659,10 +675,10 @@ function ConfirmDeleteModal({
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }

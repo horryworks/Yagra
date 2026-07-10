@@ -5,17 +5,16 @@
 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useTranslation } from 'react-i18next';
 import { Card } from '../components/ui/Card';
 import { Select } from '../components/ui/Field';
 import { useLayoutStoreContext } from './LayoutStoreContext';
 import { getDefinition } from './registry';
-import type { Span, WidgetInstance, WidgetSettings } from './types';
+import type { WidgetInstance, WidgetSettings } from './types';
 import './WidgetFrame.css';
 
-/** Friendly width labels for the span selector. */
-const SPAN_LABEL: Record<Span, string> = { 4: '⅓ width', 6: '½ width', 8: '⅔ width', 12: 'Full width' };
-
 export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; editing: boolean }) {
+  const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
   const setSpan = useStore((s) => s.setSpan);
   const removeWidget = useStore((s) => s.removeWidget);
@@ -37,12 +36,12 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         <Select
           value={String(instance.span)}
           onChange={(e) => setSpan(instance.instanceId, Number(e.target.value))}
-          aria-label="Widget width"
-          title="Widget width"
+          aria-label={t('widgetFrame.width')}
+          title={t('widgetFrame.width')}
         >
           {def.allowedSpans.map((s) => (
             <option key={s} value={s}>
-              {SPAN_LABEL[s]}
+              {t(`widgetFrame.span.${s}`)}
             </option>
           ))}
         </Select>
@@ -51,16 +50,16 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         type="button"
         className="widgetframe-remove"
         onClick={() => removeWidget(instance.instanceId)}
-        aria-label={`Remove ${def.title}`}
-        title="Remove"
+        aria-label={t('widgetFrame.remove', { name: t(def.title) })}
+        title={t('common:actions.remove')}
       >
         ×
       </button>
       <button
         type="button"
         className="widgetframe-handle"
-        aria-label={`Drag ${def.title} to reorder`}
-        title="Drag to reorder"
+        aria-label={t('widgetFrame.drag', { name: t(def.title) })}
+        title={t('widgetFrame.dragTitle')}
         {...attributes}
         {...listeners}
       >
@@ -84,7 +83,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         .filter(Boolean)
         .join(' ')}
     >
-      <Card title={def.title} actions={actions}>
+      <Card title={t(def.title)} actions={actions}>
         <Body instance={instance} setSettings={setSettings} />
       </Card>
     </div>

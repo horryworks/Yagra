@@ -3,6 +3,7 @@
 // devices' networks are set in scope; only imported serials are ever polled (scope at fan-out).
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { MerakiCandidate, MerakiOrg } from '../../types/api';
 import { Modal } from '../ui/Modal';
@@ -21,6 +22,7 @@ export function MerakiImportModal({
   onClose: () => void;
   onImported: () => void;
 }) {
+  const { t } = useTranslation('system');
   const [candidates, setCandidates] = useState<MerakiCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +36,9 @@ export function MerakiImportModal({
         setCandidates(res.devices);
         setSelected(new Set(res.devices.map((d) => d.serial)));
       })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to enumerate the organization')))
+      .catch((e: unknown) => setError(errMsg(e, t('meraki.import.err.enumerate'))))
       .finally(() => setBusy(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org.id]);
 
   // Group candidates by network for a scannable, per-site layout.
@@ -79,36 +82,34 @@ export function MerakiImportModal({
       .importMerakiDevices({ org_uuid: org.id, monitored_network_ids, devices })
       .then(() => onImported())
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to import devices'));
+        setError(errMsg(e, t('meraki.import.err.import')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={`Import devices — ${org.name}`}
+      title={t('meraki.import.title', { name: org.name })}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button
             variant="primary"
             onClick={doImport}
             disabled={busy || selected.size === 0 || !candidates}
           >
-            Import {selected.size} device{selected.size === 1 ? '' : 's'}
+            {t('meraki.import.importBtn', { count: selected.size })}
           </Button>
         </>
       }
     >
       {candidates === null ? (
-        <p className="muted">{busy ? 'Enumerating organization…' : 'No data.'}</p>
+        <p className="muted">{busy ? t('meraki.import.enumerating') : t('meraki.import.noData')}</p>
       ) : candidates.length === 0 ? (
-        <p className="muted">
-          No new devices to import — every device this key can see is already monitored.
-        </p>
+        <p className="muted">{t('meraki.import.allImported')}</p>
       ) : (
         <div className="meraki-import-list">
           {byNetwork.map(([netId, g]) => {

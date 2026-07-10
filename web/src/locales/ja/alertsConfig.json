@@ -1,0 +1,265 @@
+{
+  "status": {
+    "enabled": "有効",
+    "disabled": "無効"
+  },
+  "noun": {
+    "channel_other": "チャネル",
+    "source_other": "ソース"
+  },
+  "routing": {
+    "unavailable": "通知ルーティングはスケルトンモードでは利用できません。",
+    "note": "チャネルはアラートの送信先、ルールはどのアラート（重大度別）をどのチャネルに届けるかを決めます。",
+    "channels": {
+      "title": "通知チャネル",
+      "add": "+ チャネルを追加",
+      "cols": {
+        "name": "名前",
+        "kind": "種別",
+        "status": "状態",
+        "actions": "操作"
+      },
+      "empty": "チャネルはまだありません",
+      "emptySub": "webhook またはメールの送信先を追加します。",
+      "enable": "チャネルを有効化",
+      "disable": "チャネルを無効化",
+      "delete": "チャネルを削除",
+      "deleteBody": "チャネル <strong>{{name}}</strong> を削除しますか？このチャネルを対象とするルールは、この送信先に届かなくなります。"
+    },
+    "rules": {
+      "title": "ルーティングルール",
+      "add": "+ ルールを追加",
+      "cols": {
+        "name": "名前",
+        "severity": "重大度",
+        "channels": "チャネル",
+        "status": "状態",
+        "actions": "操作"
+      },
+      "empty": "ルーティングルールがありません",
+      "emptySub": "ルールがない場合、アラートは環境変数のデフォルトルートのみを使用します。",
+      "any": "すべて",
+      "noChannels": "（チャネルなし）",
+      "enable": "ルールを有効化",
+      "disable": "ルールを無効化",
+      "delete": "ルールを削除",
+      "deleteTitle": "ルーティングルールを削除",
+      "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？該当するアラートは環境変数のデフォルトルートにフォールバックします。"
+    },
+    "channelModal": {
+      "title": "通知チャネルを追加",
+      "name": "名前",
+      "kind": "種別",
+      "add": "チャネルを追加",
+      "webhookUrl": "Webhook URL",
+      "webhookSealed": "URL はサーバー側で封印され、返却されることはありません。",
+      "smtpHost": "SMTP ホスト",
+      "from": "送信元",
+      "to": "宛先",
+      "routingKey": "インテグレーションルーティングキー",
+      "routingKeyHint": "Events API v2 キー — サーバー側で封印され、返却されません。発火/解決は安定した重複排除キーで相関付けられます。",
+      "region": "リージョン",
+      "regionUs": "US (events.pagerduty.com)",
+      "regionEu": "EU (events.eu.pagerduty.com)",
+      "apiUrl": "API URL",
+      "jsmUrlHint": "JSM Alerts / Opsgenie インテグレーションのベース URL（api.atlassian.com または api.opsgenie.com）。",
+      "apiKey": "API キー (GenieKey)",
+      "sealed": "サーバー側で封印され、返却されません。"
+    },
+    "ruleModal": {
+      "title": "ルーティングルールを追加",
+      "name": "名前",
+      "severity": "重大度",
+      "anySeverity": "すべての重大度",
+      "channels": "チャネル",
+      "add": "ルールを追加"
+    },
+    "err": {
+      "update": "更新に失敗しました",
+      "addChannel": "チャネルの追加に失敗しました",
+      "addRule": "ルールの追加に失敗しました",
+      "delete": "削除に失敗しました"
+    }
+  },
+  "thresholds": {
+    "note": "階層的オーバーライド: プロファイル → グループ → ノード。最も具体的なスコープが優先されます。",
+    "explainer": "ICMP 死活監視（ノードの up/down）は自動でアラートを発報します — ルールは不要です。ここでのルールはメトリクスのしきい値を追加します。各ルールは一致するポーリングサンプルごとにライブで評価され、最も具体的なスコープが優先されます。警告/重大の境界値と dwell（確定前の連続サンプル数、フラッピング抑制）はルールごとに設定します。",
+    "unavailable": "しきい値管理はスケルトンモードでは利用できません。",
+    "add": "+ ルールを追加",
+    "cols": {
+      "scope": "スコープ",
+      "metric": "メトリクス",
+      "direction": "方向",
+      "bounds": "境界値",
+      "dwell": "Dwell",
+      "actions": "操作"
+    },
+    "empty": "しきい値ルールがまだありません",
+    "emptySub": "プロファイル・グループ・ノードにスコープしたメトリクスしきい値を追加します。",
+    "warnShort": "W",
+    "critShort": "C",
+    "dwellValue": "dwell {{n}}",
+    "delete": "削除",
+    "scopeLevel": {
+      "profile": "プロファイル",
+      "group": "グループ",
+      "node": "ノード"
+    },
+    "direction": {
+      "above": "上回る",
+      "below": "下回る"
+    },
+    "addModal": {
+      "title": "しきい値ルールを追加",
+      "scopeLevel": "スコープレベル",
+      "scopeId": "スコープ ID",
+      "scopeIdPlaceholder": {
+        "profile": "プロファイル ID",
+        "group": "グループタグ値",
+        "node": "ノード ID"
+      },
+      "scopeIdNoun": {
+        "profile": "デバイスプロファイル ID",
+        "group": "グループタグ値（例: サイト名）",
+        "node": "ノード ID"
+      },
+      "scopeIdHint": "このルールが対象とする{{noun}}。",
+      "metric": "メトリクス",
+      "metricPlaceholder": "メトリクス（例: icmp_rtt_ms）",
+      "direction": "方向",
+      "boundsDwell": "境界値と dwell",
+      "warnPlaceholder": "警告",
+      "critPlaceholder": "重大",
+      "dwellPlaceholder": "dwell",
+      "dwellTitle": "Dwell: アラート発報前に境界を超えている必要がある連続読み取り回数",
+      "boundsHint": "警告 / 重大 / dwell は任意です。dwell はアラート発報前に境界を超える必要がある連続読み取り回数で、値を大きくするとフラッピング（急な on/off の繰り返し）を抑制します。",
+      "add": "ルールを追加"
+    },
+    "deleteModal": {
+      "title": "しきい値ルールを削除",
+      "body": "<mono>{{metric}}</mono> の <strong>{{level}}</strong> ルール（対象: <mono>{{scope}}</mono>）を削除しますか？この操作は取り消せません。"
+    },
+    "err": {
+      "add": "追加に失敗しました",
+      "delete": "削除に失敗しました"
+    }
+  },
+  "eventRules": {
+    "note": "受信した syslog / SNMP-trap / webhook イベントを（部分一致または正規表現で）マッチさせてアラートを発報します。info 重大度のルールは、アラートせずにマッチを記録します。",
+    "unavailable": "イベントルールはこのモードでは利用できません（メタデータストアなし）。",
+    "searchPlaceholder": "名前・パターン・重大度で検索…",
+    "searchAria": "イベントルールを検索",
+    "add": "+ ルールを追加",
+    "cols": {
+      "name": "名前",
+      "severity": "重大度",
+      "pattern": "パターン",
+      "scope": "スコープ",
+      "status": "状態",
+      "actions": "操作"
+    },
+    "empty": "イベントルールがありません",
+    "emptyMatch": "一致するルールがありません",
+    "emptySub": "マッチしたイベントをアラートに変換するルールを追加します。",
+    "emptyMatchSub": "別のキーワードで検索してください。",
+    "any": "すべて",
+    "clear": "clear",
+    "matchKind": {
+      "substring": "部分一致",
+      "regex": "正規表現"
+    },
+    "enable": "ルールを有効化",
+    "disable": "ルールを無効化",
+    "edit": "ルールを編集",
+    "delete": "ルールを削除",
+    "modal": {
+      "addTitle": "イベントルールを追加",
+      "editTitle": "イベントルールを編集",
+      "name": "名前",
+      "matchKind": "マッチ種別",
+      "severity": "重大度",
+      "severityInfo": "{{label}} — 記録のみ",
+      "pattern": "パターン",
+      "patternHint": "マッチは大文字小文字を区別します。区別せずマッチさせるには正規表現で (?i) を使用します。",
+      "clearPattern": "クリアパターン",
+      "clearPatternHint": "任意 — これにマッチするメッセージはアラートを解決します（例: link-up が link-down を解除）。",
+      "sourceKind": "ソース種別",
+      "webhookSource": "Webhook ソース",
+      "autoClose": "自動クローズ (秒)",
+      "fireAfter": "N 回で発報",
+      "within": "以内 (秒)",
+      "enabled": "有効",
+      "test": "サンプルでテスト",
+      "samplePlaceholder": "サンプルのイベントメッセージを貼り付け…",
+      "testBtn": "テスト",
+      "add": "ルールを追加"
+    },
+    "test": {
+      "error": "エラー: {{msg}}",
+      "clearMatched": "クリアパターンに一致 → 解決されます",
+      "matched": "一致 → 発報されます",
+      "noMatch": "一致なし",
+      "failed": "テストに失敗しました"
+    },
+    "deleteModal": {
+      "title": "イベントルールを削除",
+      "body": "ルール <strong>{{name}}</strong> を削除しますか？発報済みのアクティブなアラートは TTL で自動クローズされます。これは今後のマッチを停止するだけです。"
+    },
+    "err": {
+      "update": "ルールの更新に失敗しました",
+      "save": "ルールの保存に失敗しました",
+      "delete": "ルールの削除に失敗しました"
+    }
+  },
+  "eventSources": {
+    "note": "イベントを Yagra に POST する Webhook 送信元です。各ソースはベアラートークンを持ち、作成/ローテーション時に一度だけ表示されます。送信元の設定に保存してください。",
+    "unavailable": "イベントソースはこのモードでは利用できません（メタデータストアなし）。",
+    "searchPlaceholder": "ソースを検索…",
+    "searchAria": "イベントソースを検索",
+    "add": "+ ソースを追加",
+    "cols": {
+      "name": "名前",
+      "kind": "種別",
+      "status": "状態",
+      "actions": "操作"
+    },
+    "empty": "イベントソースがありません",
+    "emptyMatch": "一致するソースがありません",
+    "emptySub": "HTTP 経由でイベントを受信する webhook ソースを追加します。",
+    "rotate": "トークンをローテーション",
+    "enable": "ソースを有効化",
+    "disable": "ソースを無効化",
+    "edit": "ソースを編集",
+    "delete": "ソースを削除",
+    "addModal": {
+      "title": "Webhook ソースを追加",
+      "name": "名前",
+      "namePlaceholder": "例: Grafana alerts",
+      "hint": "ベアラートークンが生成され、作成後に一度だけ表示されます。",
+      "create": "作成"
+    },
+    "editModal": {
+      "title": "Webhook ソースを編集",
+      "name": "名前"
+    },
+    "deleteModal": {
+      "title": "Webhook ソースを削除",
+      "body": "ソース <strong>{{name}}</strong> を削除しますか？そのトークンは直ちに無効になり、このソースにスコープされたルールも削除されます。"
+    },
+    "token": {
+      "title": "Webhook トークン — 一度だけ表示",
+      "sendAs": "今すぐこのトークンをコピーしてください — ハッシュとしてのみ保存され、二度と表示できません。次のように送信します:",
+      "label": "トークン",
+      "url": "取り込み URL",
+      "copy": "コピー",
+      "done": "完了"
+    },
+    "err": {
+      "update": "ソースの更新に失敗しました",
+      "rotate": "トークンのローテーションに失敗しました",
+      "add": "ソースの追加に失敗しました",
+      "save": "ソースの保存に失敗しました",
+      "delete": "ソースの削除に失敗しました"
+    }
+  }
+}

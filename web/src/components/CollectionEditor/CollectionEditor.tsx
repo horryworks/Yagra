@@ -5,6 +5,7 @@
 // shows what's explicitly configured at this scope.
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError, type CollectionItemInput } from '../../services/api';
 import type {
   CollectionKind,
@@ -32,6 +33,7 @@ export function CollectionEditor({
   scopeId: string;
   canEdit: boolean;
 }) {
+  const { t } = useTranslation('monitoring');
   const [items, setItems] = useState<StoredCollectionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +56,9 @@ export function CollectionEditor({
       setItems(list);
       setError(null);
     })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to load metrics')))
+      .catch((e: unknown) => setError(errMsg(e, t('editor.err.load'))))
       .finally(() => setLoading(false));
-  }, [scope, scopeId]);
+  }, [scope, scopeId, t]);
 
   useEffect(() => {
     load();
@@ -65,13 +67,13 @@ export function CollectionEditor({
   // Debounced catalog search while the picker is open.
   useEffect(() => {
     if (!picking) return;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api
         .listMibCatalog(pickQuery.trim() || undefined)
         .then(setPicks)
         .catch(() => setPicks([]));
     }, 200);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [picking, pickQuery]);
 
   const pick = (e: MibCatalogEntry) => {
@@ -103,7 +105,7 @@ export function CollectionEditor({
       setOid('');
       load();
     })
-      .catch((e: unknown) => setError(errMsg(e, 'failed to add metric')))
+      .catch((e: unknown) => setError(errMsg(e, t('editor.err.add'))))
       .finally(() => setBusy(false));
   };
 
@@ -112,7 +114,7 @@ export function CollectionEditor({
       scope === 'template'
         ? api.deleteTemplateItem(scopeId, id)
         : api.deleteCollectionItem(id);
-    p.then(load).catch((e: unknown) => setError(errMsg(e, 'failed to delete metric')));
+    p.then(load).catch((e: unknown) => setError(errMsg(e, t('editor.err.delete'))));
   };
 
   return (
@@ -120,37 +122,37 @@ export function CollectionEditor({
       {canEdit && (
         <div className="ce-add form-row">
           <TextInput
-            placeholder="metric_name (e.g. cpu_util)"
+            placeholder={t('editor.metricNamePlaceholder')}
             value={metricName}
             onChange={(e) => setMetricName(e.target.value)}
           />
           <TextInput
             className="mono"
-            placeholder="OID (e.g. 1.3.6.1.2.1.1.3.0)"
+            placeholder={t('editor.oidPlaceholder')}
             value={oid}
             onChange={(e) => setOid(e.target.value)}
           />
           <Select
             value={collection}
             onChange={(e) => setCollection(e.target.value as CollectionKind)}
-            aria-label="Collection kind"
+            aria-label={t('editor.collectionKindAria')}
           >
-            <option value="scalar">scalar</option>
-            <option value="table">table (per-interface)</option>
+            <option value="scalar">{t('enum.scalar')}</option>
+            <option value="table">{t('enum.tablePerInterface')}</option>
           </Select>
           <Select
             value={metricKind}
             onChange={(e) => setMetricKind(e.target.value as MetricKind)}
-            aria-label="Metric kind"
+            aria-label={t('editor.metricKindAria')}
           >
-            <option value="gauge">gauge</option>
-            <option value="counter">counter</option>
+            <option value="gauge">{t('enum.gauge')}</option>
+            <option value="counter">{t('enum.counter')}</option>
           </Select>
           <Button variant="ghost" onClick={() => setPicking((p) => !p)}>
-            {picking ? 'Close catalog' : 'Browse catalog'}
+            {picking ? t('editor.closeCatalog') : t('editor.browseCatalog')}
           </Button>
           <Button variant="primary" onClick={add} disabled={!valid || busy}>
-            Add metric
+            {t('editor.addMetric')}
           </Button>
         </div>
       )}
@@ -158,12 +160,12 @@ export function CollectionEditor({
         <div className="ce-picker">
           <TextInput
             className="ce-picker-search"
-            placeholder="Search the MIB catalog by name / OID / vendor…"
+            placeholder={t('editor.pickerSearchPlaceholder')}
             value={pickQuery}
             onChange={(e) => setPickQuery(e.target.value)}
           />
           {picks.length === 0 ? (
-            <p className="muted">No catalog entries match.</p>
+            <p className="muted">{t('editor.noCatalogMatch')}</p>
           ) : (
             <div className="ce-picker-list">
               {picks.slice(0, 30).map((e) => (
@@ -184,19 +186,19 @@ export function CollectionEditor({
       {items.length === 0 ? (
         <p className="muted">
           {loading
-            ? 'Loading…'
+            ? t('common:loading')
             : scope === 'template'
-              ? 'No metrics in this set yet.'
-              : "No node-level metrics. The profile's metric sets / built-in defaults still apply."}
+              ? t('editor.emptyTemplate')
+              : t('editor.emptyNode')}
         </p>
       ) : (
         <div className="ytable ce-table">
           <div className="ytable-head">
-            <div className="ytable-h">Metric</div>
-            <div className="ytable-h">OID</div>
-            <div className="ytable-h">Type</div>
-            <div className="ytable-h">Kind</div>
-            <div className="ytable-h right">Actions</div>
+            <div className="ytable-h">{t('editor.cols.metric')}</div>
+            <div className="ytable-h">{t('editor.cols.oid')}</div>
+            <div className="ytable-h">{t('editor.cols.type')}</div>
+            <div className="ytable-h">{t('editor.cols.kind')}</div>
+            <div className="ytable-h right">{t('shared.colActions')}</div>
           </div>
           {items.map((it) => (
             <div className="ytable-row" key={it.id}>
@@ -207,7 +209,7 @@ export function CollectionEditor({
               <div className="ytable-cell right ce-actions">
                 {canEdit && (
                   <span className="ytable-actions">
-                    <IconButton title="Delete metric" danger onClick={() => remove(it.id)}>
+                    <IconButton title={t('editor.deleteMetric')} danger onClick={() => remove(it.id)}>
                       <TrashIcon />
                     </IconButton>
                   </span>

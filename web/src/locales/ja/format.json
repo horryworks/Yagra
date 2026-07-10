@@ -7,6 +7,11 @@
     "unknown": "不明",
     "maintenance": "メンテナンス"
   },
+  "severity": {
+    "critical": "重大",
+    "warning": "警告",
+    "info": "情報"
+  },
   "relative": {
     "never": "なし",
     "justNow": "たった今",

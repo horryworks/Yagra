@@ -7,6 +7,7 @@
 // Add and delete both go through modals; enable/disable is an immediate row action.
 
 import { useCallback, useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -37,11 +38,12 @@ const fmtTime = (iso: string) =>
     minute: '2-digit',
   });
 
-function windowStatus(w: MaintenanceWindow): { label: string; tone: 'info' | 'neutral' } {
-  if (!w.enabled) return { label: 'disabled', tone: 'neutral' };
-  if (w.active) return { label: 'active', tone: 'info' };
-  if (new Date(w.ends_at).getTime() < Date.now()) return { label: 'ended', tone: 'neutral' };
-  return { label: 'scheduled', tone: 'neutral' };
+/** Language-agnostic status key + badge tone; the label is resolved at the call site. */
+function windowStatus(w: MaintenanceWindow): { labelKey: string; tone: 'info' | 'neutral' } {
+  if (!w.enabled) return { labelKey: 'disabled', tone: 'neutral' };
+  if (w.active) return { labelKey: 'active', tone: 'info' };
+  if (new Date(w.ends_at).getTime() < Date.now()) return { labelKey: 'ended', tone: 'neutral' };
+  return { labelKey: 'scheduled', tone: 'neutral' };
 }
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
@@ -54,6 +56,7 @@ function DeleteWindowModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('suppression');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -64,28 +67,33 @@ function DeleteWindowModal({
       .deleteMaintenanceWindow(win.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete window'));
+        setError(errMsg(e, t('maintenance.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete maintenance window"
+      title={t('maintenance.delete.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete maintenance window <strong>{win.name}</strong>? This cannot be undone.
+        <Trans
+          t={t}
+          i18nKey="maintenance.delete.confirm"
+          values={{ name: win.name }}
+          components={{ b: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -93,6 +101,7 @@ function DeleteWindowModal({
 }
 
 export function MaintenancePage() {
+  const { t } = useTranslation('suppression');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
@@ -128,15 +137,16 @@ export function MaintenancePage() {
     api
       .setMaintenanceWindowEnabled(id, enabled)
       .then(load)
-      .catch((e: unknown) => setError(errMsg(e, 'failed to update window')));
+      .catch((e: unknown) => setError(errMsg(e, t('maintenance.err.update'))));
 
   // Short badge for the scope level: `group_id` is a folder group, plain `group` the legacy tag.
-  const scopeBadge = (w: MaintenanceWindow): string =>
-    w.scope_level === 'group_id'
-      ? 'group'
-      : w.scope_level === 'group'
-        ? 'group (tag)'
-        : w.scope_level;
+  const scopeBadge = (w: MaintenanceWindow): string => {
+    if (w.scope_level === 'group_id') return t('maintenance.scope.group');
+    if (w.scope_level === 'group') return t('maintenance.scope.groupTag');
+    if (w.scope_level === 'node') return t('maintenance.scope.node');
+    if (w.scope_level === 'profile') return t('maintenance.scope.profile');
+    return w.scope_level;
+  };
 
   // Human label for a scope id (node/profile/folder-group names resolved when known).
   const scopeLabel = (w: MaintenanceWindow): string => {
@@ -152,29 +162,29 @@ export function MaintenancePage() {
   return (
     <div>
       <PageHeader
-        title="Maintenance windows"
-        trail={[{ label: 'Alerts' }, { label: 'Maintenance windows' }]}
+        title={t('nav:alerts.maintenance')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.maintenance') }]}
         note={
-          <>
-            Planned work: covered nodes enter the maintenance state, raise no alerts, and are
-            excluded from SLA. To silence notifications only (state and SLA unchanged), use{' '}
-            <Link to="/alerts/mutes">Mutes</Link>.
-          </>
+          <Trans
+            t={t}
+            i18nKey="maintenance.note"
+            components={{ mutesLink: <Link to="/alerts/mutes" /> }}
+          />
         }
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">Maintenance management is unavailable in skeleton mode.</p>
+          <p className="muted">{t('maintenance.unavailable')}</p>
         </Card>
       ) : (
         <>
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={rows.length} noun="windows" />
+            <ResultCount shown={rows.length} noun={t('common:noun.window', { count: rows.length })} />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add window
+                {t('maintenance.add')}
               </Button>
             )}
           </TableToolbar>
@@ -183,22 +193,20 @@ export function MaintenancePage() {
 
           <div className="ytable">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Status</div>
-              <div className="ytable-h">Name</div>
-              <div className="ytable-h">Scope</div>
-              <div className="ytable-h">Range</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('maintenance.cols.status')}</div>
+              <div className="ytable-h">{t('maintenance.cols.name')}</div>
+              <div className="ytable-h">{t('maintenance.cols.scope')}</div>
+              <div className="ytable-h">{t('maintenance.cols.range')}</div>
+              <div className="ytable-h right">{t('maintenance.cols.actions')}</div>
             </div>
 
             {rows.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
-                  {loading ? 'Loading…' : 'No maintenance windows'}
+                  {loading ? t('common:loading') : t('maintenance.empty.title')}
                 </p>
                 {!loading && (
-                  <p className="yt-empty-sub">
-                    Schedule planned work so covered nodes raise no alerts.
-                  </p>
+                  <p className="yt-empty-sub">{t('maintenance.empty.sub')}</p>
                 )}
               </div>
             ) : (
@@ -207,7 +215,7 @@ export function MaintenancePage() {
                 return (
                   <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={w.id}>
                     <div className="ytable-cell">
-                      <Badge tone={status.tone}>{status.label}</Badge>
+                      <Badge tone={status.tone}>{t(`maintenance.status.${status.labelKey}`)}</Badge>
                     </div>
                     <div className="ytable-cell">
                       <span className="yt-name-txt">{w.name}</span>
@@ -225,12 +233,12 @@ export function MaintenancePage() {
                       {authed && (
                         <span className="ytable-actions">
                           <IconButton
-                            title={w.enabled ? 'Disable' : 'Enable'}
+                            title={w.enabled ? t('maintenance.actions.disable') : t('maintenance.actions.enable')}
                             onClick={() => setEnabled(w.id, !w.enabled)}
                           >
                             <PowerIcon />
                           </IconButton>
-                          <IconButton title="Delete" danger onClick={() => setDeleting(w)}>
+                          <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(w)}>
                             <TrashIcon />
                           </IconButton>
                         </span>

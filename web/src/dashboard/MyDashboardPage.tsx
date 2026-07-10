@@ -5,6 +5,7 @@
 // keyboard) in edit mode; widgets keep their declared 12-col span.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   DndContext,
   KeyboardSensor,
@@ -31,6 +32,7 @@ import { WidgetFrame } from './WidgetFrame';
 import './MyDashboardPage.css';
 
 export function MyDashboardPage() {
+  const { t } = useTranslation('dashboard');
   // One SSE subscription for the whole board (alert widgets read the shared store).
   useAlertStream();
 
@@ -78,24 +80,24 @@ export function MyDashboardPage() {
 
   const actions = editing ? (
     <>
-      <Button onClick={() => setCatalogOpen(true)}>Add widget</Button>
+      <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
       <Button variant="ghost" onClick={() => setConfirmReset(true)}>
-        Reset
+        {t('common:actions.reset')}
       </Button>
       <Button variant="primary" onClick={() => setEditing(false)}>
-        Done
+        {t('actions.done')}
       </Button>
     </>
   ) : (
-    <Button onClick={() => setEditing(true)}>Customize</Button>
+    <Button onClick={() => setEditing(true)}>{t('actions.customize')}</Button>
   );
 
   return (
     <LayoutStoreProvider store={useLayoutStore}>
       <div>
         <PageHeader
-          title="My dashboard"
-          trail={[{ label: 'Dashboard' }, { label: 'My dashboard' }]}
+          title={t('nav:dashboard.my')}
+          trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.my') }]}
           actions={actions}
         />
 
@@ -103,7 +105,7 @@ export function MyDashboardPage() {
           <div className="mydash-save-error" role="alert">
             <span>{saveError}</span>
             <Button variant="ghost" onClick={dismissSaveError}>
-              Dismiss
+              {t('actions.dismiss')}
             </Button>
           </div>
         )}
@@ -113,17 +115,17 @@ export function MyDashboardPage() {
         {status === 'loading' && widgets.length === 0 ? (
           loadSlow ? (
             <div className="mydash-empty">
-              <p className="muted">Loading your dashboard is taking longer than expected.</p>
+              <p className="muted">{t('my.loadSlow')}</p>
               <Button variant="primary" onClick={() => void load()}>
-                Retry
+                {t('common:actions.retry')}
               </Button>
             </div>
           ) : (
-            <p className="muted">Loading your dashboard…</p>
+            <p className="muted">{t('my.loading')}</p>
           )
         ) : widgets.length === 0 ? (
           <div className="mydash-empty">
-            <p className="muted">This board is empty.</p>
+            <p className="muted">{t('my.empty')}</p>
             <Button
               variant="primary"
               onClick={() => {
@@ -131,7 +133,7 @@ export function MyDashboardPage() {
                 setCatalogOpen(true);
               }}
             >
-              Add your first widget
+              {t('my.addFirst')}
             </Button>
           </div>
         ) : (
@@ -153,11 +155,11 @@ export function MyDashboardPage() {
 
         {confirmReset && (
           <Modal
-            title="Reset board?"
+            title={t('my.resetTitle')}
             onClose={() => setConfirmReset(false)}
             footer={
               <>
-                <Button onClick={() => setConfirmReset(false)}>Cancel</Button>
+                <Button onClick={() => setConfirmReset(false)}>{t('common:actions.cancel')}</Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -165,12 +167,12 @@ export function MyDashboardPage() {
                     setConfirmReset(false);
                   }}
                 >
-                  Reset to default
+                  {t('actions.resetToDefault')}
                 </Button>
               </>
             }
           >
-            <p>This replaces this board’s widgets with the default set. It can’t be undone.</p>
+            <p>{t('my.resetBody')}</p>
           </Modal>
         )}
       </div>

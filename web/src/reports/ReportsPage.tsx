@@ -4,6 +4,7 @@
 // non-admins; the server enforces it too).
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -31,19 +32,21 @@ type Tab = 'saved' | 'templates' | 'schedules';
 
 /** Status chip for a run (live progress while generating). */
 function RunStatus({ run }: { run: ReportRun }) {
+  const { t } = useTranslation('reports');
   switch (run.state) {
     case 'running':
-      return <Badge tone="info">Generating {run.pct}%</Badge>;
+      return <Badge tone="info">{t('run.status.generating', { pct: run.pct })}</Badge>;
     case 'queued':
-      return <Badge tone="info">Queued</Badge>;
+      return <Badge tone="info">{t('run.status.queued')}</Badge>;
     case 'succeeded':
-      return <Badge tone="up">Ready</Badge>;
+      return <Badge tone="up">{t('run.status.ready')}</Badge>;
     default:
-      return <Badge tone="critical">Failed</Badge>;
+      return <Badge tone="critical">{t('run.status.failed')}</Badge>;
   }
 }
 
 export function ReportsPage() {
+  const { t } = useTranslation('reports');
   const role = useAuthStore((s) => s.role);
   const isAdmin = role === 'admin';
   const [tab, setTab] = useState<Tab>('saved');
@@ -104,36 +107,36 @@ export function ReportsPage() {
   }
 
   async function deleteDefinition(def: ReportDefinition) {
-    if (!window.confirm(`Delete report template "${def.name}"? Saved runs are kept.`)) return;
+    if (!window.confirm(t('confirm.deleteTemplate', { name: def.name }))) return;
     await api.deleteReportDefinition(def.id).catch(() => undefined);
     reloadDefs();
   }
 
   async function deleteRun(run: ReportRun) {
-    if (!window.confirm(`Delete saved report "${run.name}"?`)) return;
+    if (!window.confirm(t('confirm.deleteRun', { name: run.name }))) return;
     await api.deleteReportRun(run.id).catch(() => undefined);
     removeRun(run.id);
   }
 
   async function deleteSchedule(s: ReportSchedule) {
-    if (!window.confirm(`Delete the schedule for "${s.definition_name}"?`)) return;
+    if (!window.confirm(t('confirm.deleteSchedule', { name: s.definition_name }))) return;
     await api.deleteReportSchedule(s.id).catch(() => undefined);
     reloadScheds();
   }
 
   // ── Column sets ──
   const runColumns: Column<ReportRun>[] = [
-    { key: 'name', header: 'Report', width: '1.6fr', render: (r) => r.name },
-    { key: 'status', header: 'Status', width: '160px', render: (r) => <RunStatus run={r} /> },
+    { key: 'name', header: t('runs.cols.report'), width: '1.6fr', render: (r) => r.name },
+    { key: 'status', header: t('runs.cols.status'), width: '160px', render: (r) => <RunStatus run={r} /> },
     {
       key: 'trigger',
-      header: 'Trigger',
+      header: t('runs.cols.trigger'),
       width: '110px',
-      render: (r) => <span className="muted">{r.trigger}</span>,
+      render: (r) => <span className="muted">{t(`trigger.${r.trigger}`)}</span>,
     },
     {
       key: 'when',
-      header: 'Generated',
+      header: t('runs.cols.generated'),
       width: '1fr',
       render: (r) => <span className="muted">{formatTimestamp(r.created_ms)}</span>,
     },
@@ -145,11 +148,11 @@ export function ReportsPage() {
       render: (r) => (
         <div className="rp-actions" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setViewerRunId(r.id)}>
-            View
+            {t('runs.view')}
           </Button>
           {isAdmin && (
             <Button variant="ghost" onClick={() => deleteRun(r)}>
-              Delete
+              {t('common:actions.delete')}
             </Button>
           )}
         </div>
@@ -158,16 +161,16 @@ export function ReportsPage() {
   ];
 
   const defColumns: Column<ReportDefinition>[] = [
-    { key: 'name', header: 'Template', width: '1.6fr', render: (d) => d.name },
+    { key: 'name', header: t('defs.cols.template'), width: '1.6fr', render: (d) => d.name },
     {
       key: 'sections',
-      header: 'Sections',
+      header: t('defs.cols.sections'),
       width: '110px',
       render: (d) => <span className="muted">{d.spec?.sections?.length ?? 0}</span>,
     },
     {
       key: 'updated',
-      header: 'Updated',
+      header: t('defs.cols.updated'),
       width: '1fr',
       render: (d) => <span className="muted">{formatTimestamp(d.updated_ms)}</span>,
     },
@@ -180,17 +183,17 @@ export function ReportsPage() {
         <div className="rp-actions">
           {isAdmin && (
             <Button variant="primary" disabled={busy === d.id} onClick={() => runNow(d)}>
-              {busy === d.id ? 'Running…' : 'Run now'}
+              {busy === d.id ? t('defs.running') : t('defs.runNow')}
             </Button>
           )}
           {isAdmin && (
             <Button variant="ghost" onClick={() => setBuilderFor(d)}>
-              Edit
+              {t('common:actions.edit')}
             </Button>
           )}
           {isAdmin && (
             <Button variant="ghost" onClick={() => deleteDefinition(d)}>
-              Delete
+              {t('common:actions.delete')}
             </Button>
           )}
         </div>
@@ -199,20 +202,24 @@ export function ReportsPage() {
   ];
 
   const schedColumns: Column<ReportSchedule>[] = [
-    { key: 'name', header: 'Report', width: '1.4fr', render: (s) => s.definition_name },
-    { key: 'cadence', header: 'Cadence', width: '1.4fr', render: (s) => cadenceLabel(s) },
+    { key: 'name', header: t('scheds.cols.report'), width: '1.4fr', render: (s) => s.definition_name },
+    { key: 'cadence', header: t('scheds.cols.cadence'), width: '1.4fr', render: (s) => cadenceLabel(t, s) },
     {
       key: 'next',
-      header: 'Next run',
+      header: t('scheds.cols.nextRun'),
       width: '1fr',
       render: (s) => <span className="muted">{formatTimestamp(s.next_run_ms)}</span>,
     },
     {
       key: 'enabled',
-      header: 'State',
+      header: t('scheds.cols.state'),
       width: '110px',
       render: (s) =>
-        s.enabled ? <Badge tone="up">Enabled</Badge> : <Badge tone="neutral">Paused</Badge>,
+        s.enabled ? (
+          <Badge tone="up">{t('scheds.enabled')}</Badge>
+        ) : (
+          <Badge tone="neutral">{t('scheds.paused')}</Badge>
+        ),
     },
     {
       key: 'actions',
@@ -223,10 +230,10 @@ export function ReportsPage() {
         isAdmin ? (
           <div className="rp-actions">
             <Button variant="ghost" onClick={() => setScheduleFor(s)}>
-              Edit
+              {t('common:actions.edit')}
             </Button>
             <Button variant="ghost" onClick={() => deleteSchedule(s)}>
-              Delete
+              {t('common:actions.delete')}
             </Button>
           </div>
         ) : (
@@ -236,30 +243,30 @@ export function ReportsPage() {
   ];
 
   const tabs: { key: Tab; label: string; count: number }[] = [
-    { key: 'saved', label: 'Saved reports', count: runs.length },
-    { key: 'templates', label: 'Templates', count: definitions.length },
-    { key: 'schedules', label: 'Schedules', count: schedules.length },
+    { key: 'saved', label: t('tabs.saved'), count: runs.length },
+    { key: 'templates', label: t('tabs.templates'), count: definitions.length },
+    { key: 'schedules', label: t('tabs.schedules'), count: schedules.length },
   ];
 
   return (
     <div className="page-fill">
       <PageHeader
-        title="Reports"
-        trail={[{ label: 'Dashboard' }, { label: 'Reports' }]}
-        note="Build customizable reports, run them on a schedule, and save the results."
+        title={t('nav:dashboard.reports')}
+        trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.reports') }]}
+        note={t('page.note')}
       />
 
       <div className="rp-tabs" role="tablist">
-        {tabs.map((t) => (
+        {tabs.map((tb) => (
           <button
-            key={t.key}
+            key={tb.key}
             role="tab"
-            aria-selected={tab === t.key}
-            className={tab === t.key ? 'rp-tab active' : 'rp-tab'}
-            onClick={() => setTab(t.key)}
+            aria-selected={tab === tb.key}
+            className={tab === tb.key ? 'rp-tab active' : 'rp-tab'}
+            onClick={() => setTab(tb.key)}
           >
-            {t.label}
-            <span className="rp-tab-count">{t.count}</span>
+            {tb.label}
+            <span className="rp-tab-count">{tb.count}</span>
           </button>
         ))}
       </div>
@@ -268,14 +275,14 @@ export function ReportsPage() {
         <>
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={runs.length} noun="saved reports" />
+            <ResultCount shown={runs.length} noun={t('noun.savedReport', { count: runs.length })} />
           </TableToolbar>
           <DataTable
             rows={runs}
             columns={runColumns}
             rowKey={(r) => r.id}
             onRowClick={(r) => setViewerRunId(r.id)}
-            empty="No reports generated yet. Run a template to create one."
+            empty={t('runs.empty')}
             loading={!runsLoaded}
           />
         </>
@@ -285,10 +292,13 @@ export function ReportsPage() {
         <>
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={definitions.length} noun="templates" />
+            <ResultCount
+              shown={definitions.length}
+              noun={t('common:noun.template', { count: definitions.length })}
+            />
             {isAdmin && (
               <Button variant="primary" onClick={() => setBuilderFor('new')}>
-                New report
+                {t('defs.newReport')}
               </Button>
             )}
           </TableToolbar>
@@ -296,11 +306,7 @@ export function ReportsPage() {
             rows={definitions}
             columns={defColumns}
             rowKey={(d) => d.id}
-            empty={
-              isAdmin
-                ? 'No report templates yet. Click "New report" to build one.'
-                : 'No report templates yet.'
-            }
+            empty={isAdmin ? t('defs.emptyAdmin') : t('defs.empty')}
             loading={defs.loading && definitions.length === 0}
           />
         </>
@@ -310,14 +316,17 @@ export function ReportsPage() {
         <>
           <TableToolbar>
             <TableSpacer />
-            <ResultCount shown={schedules.length} noun="schedules" />
+            <ResultCount
+              shown={schedules.length}
+              noun={t('noun.schedule', { count: schedules.length })}
+            />
             {isAdmin && (
               <Button
                 variant="primary"
                 disabled={definitions.length === 0}
                 onClick={() => setScheduleFor('new')}
               >
-                New schedule
+                {t('scheds.newSchedule')}
               </Button>
             )}
           </TableToolbar>
@@ -325,11 +334,7 @@ export function ReportsPage() {
             rows={schedules}
             columns={schedColumns}
             rowKey={(s) => s.id}
-            empty={
-              definitions.length === 0
-                ? 'Create a report template first, then schedule it.'
-                : 'No schedules yet.'
-            }
+            empty={definitions.length === 0 ? t('scheds.emptyNoDefs') : t('scheds.empty')}
             loading={scheds.loading && schedules.length === 0}
           />
         </>

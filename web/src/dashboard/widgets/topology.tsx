@@ -3,6 +3,7 @@
 // engine has attributed an upstream root cause — a muted "← caused by <name>" so downstream
 // alerts read as collapsed under the cause. Data: GET /api/v1/topology (parent links + live state).
 
+import { useTranslation } from 'react-i18next';
 import { StatusDot } from '../../components/ui/StatusDot';
 import { api } from '../../services/api';
 import { usePolled } from '../usePolled';
@@ -21,12 +22,13 @@ function TreeRow({
   depth: number;
   names: Map<string, string>;
 }) {
+  const { t } = useTranslation('dashboard');
   // Don't silently drop the subtree at the depth backstop — show why it stopped.
   if (depth > MAX_DEPTH) {
     return (
       <li className="topo-item">
         <div className="topo-row" style={{ paddingLeft: `${depth * 16}px` }}>
-          <span className="topo-name muted">… depth limit reached (possible dependency cycle)</span>
+          <span className="topo-name muted">{t('widgets.dependency.depthLimit')}</span>
         </div>
       </li>
     );
@@ -51,11 +53,12 @@ function TreeRow({
 }
 
 export function DependencyWidget() {
+  const { t } = useTranslation('dashboard');
   const { data, loading, error } = usePolled(() => api.getTopology(), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   const nodes = data?.nodes ?? [];
-  if (nodes.length === 0) return <p className="muted">No nodes in the inventory.</p>;
+  if (nodes.length === 0) return <p className="muted">{t('widgets.dependency.empty')}</p>;
   const names = new Map(nodes.map((n) => [n.id, n.name]));
   const forest = buildForest(nodes);
   // A flat inventory (no parent links) still renders — just a single-level list.

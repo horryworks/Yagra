@@ -1,5 +1,43 @@
 {
   "loading": "読み込み中…",
+  "noRows": "データがありません。",
+  "copy": {
+    "copied": "コピーしました",
+    "copyId": "IDをコピー"
+  },
+  "form": {
+    "required": "必須"
+  },
+  "sealed": "保存時に暗号化 — 表示されません",
+  "healthbar": {
+    "noNodes": "ノードなし"
+  },
+  "statusSummary": {
+    "loading": "ノードを読み込み中…",
+    "empty": "ノードはまだありません。"
+  },
+  "nodePicker": {
+    "clear": "ノードフィルタをクリア",
+    "searchPlaceholder": "名前またはアドレスでノードを検索…",
+    "searchAria": "ノードを検索",
+    "loading": "ノードを読み込み中…",
+    "noMatch": "一致するノードがありません。",
+    "listAria": "ノード",
+    "more": "他 {{count}} 件 — 入力して絞り込み"
+  },
+  "range": {
+    "timeRange": "期間",
+    "custom": "カスタム期間",
+    "quick": "クイック選択",
+    "from": "開始",
+    "to": "終了"
+  },
+  "credPicker": {
+    "placeholder": "保存済み認証情報を選択…",
+    "remove": "{{name}} を削除",
+    "empty": "保存済みのSNMP認証情報がありません。",
+    "manage": "認証情報を管理"
+  },
   "actions": {
     "save": "保存",
     "cancel": "キャンセル",

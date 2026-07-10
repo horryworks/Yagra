@@ -1,0 +1,353 @@
+{
+  "actions": {
+    "customize": "Customize",
+    "done": "Done",
+    "addWidget": "Add widget",
+    "dismiss": "Dismiss",
+    "resetToDefault": "Reset to default"
+  },
+  "my": {
+    "loadSlow": "Loading your dashboard is taking longer than expected.",
+    "loading": "Loading your dashboard…",
+    "empty": "This board is empty.",
+    "addFirst": "Add your first widget",
+    "resetTitle": "Reset board?",
+    "resetBody": "This replaces this board’s widgets with the default set. It can’t be undone."
+  },
+  "shared": {
+    "adminOnly": "Only admins can customize the shared dashboard",
+    "editingWarning": "Editing the shared dashboard — changes are visible to all users.",
+    "loadSlow": "Loading the shared dashboard is taking longer than expected.",
+    "loading": "Loading the shared dashboard…",
+    "empty": "The shared dashboard has no widgets yet.",
+    "confirmEditTitle": "Customize the shared dashboard?",
+    "confirmEditConfirm": "Customize for everyone",
+    "confirmEditBody": "Changes you make here apply to <strong>every user</strong> — everyone’s Shared Dashboard updates. Continue?",
+    "resetTitle": "Reset shared dashboard?",
+    "resetBody": "This replaces the shared dashboard’s widgets with the default set — for all users. It can’t be undone."
+  },
+  "save": {
+    "expired": "Your session expired — sign in again to save dashboard changes.",
+    "forbidden": "You don’t have permission to change the shared dashboard.",
+    "failed": "Couldn’t save your dashboard changes. They’ll be retried on your next edit."
+  },
+  "boardTabs": {
+    "nameAria": "Board name",
+    "rename": "Rename {{name}}",
+    "renameTitle": "Rename board",
+    "remove": "Remove {{name}}",
+    "removeLastTitle": "A dashboard needs at least one board",
+    "removeTitle": "Remove board",
+    "addBoard": "Add board",
+    "addBoardTitle": "Add a board",
+    "removeConfirmTitle": "Remove board?",
+    "removeConfirm": "Remove board",
+    "removeBody": "Remove “{{name}}” and its widgets? This can’t be undone."
+  },
+  "widgetFrame": {
+    "span": {
+      "4": "⅓ width",
+      "6": "½ width",
+      "8": "⅔ width",
+      "12": "Full width"
+    },
+    "width": "Widget width",
+    "remove": "Remove {{name}}",
+    "dragTitle": "Drag to reorder",
+    "drag": "Drag {{name}} to reorder"
+  },
+  "catalog": {
+    "title": "Add a widget",
+    "plannedHint": "Planned — the data backend for this widget is not available yet",
+    "backing": {
+      "live": "Live",
+      "rollup": "Rollup",
+      "new": "Planned"
+    }
+  },
+  "registry": {
+    "sections": {
+      "fleet": "Fleet status",
+      "alerts": "Alerts",
+      "performance": "Performance hotspots",
+      "sites": "Sites & topology",
+      "capacity": "Capacity & traffic",
+      "monitoring": "Monitoring health"
+    },
+    "widgets": {
+      "status-summary": {
+        "title": "Status summary",
+        "blurb": "Total node count + breakdown by state."
+      },
+      "health-ring": {
+        "title": "Health ring",
+        "blurb": "Donut of healthy / warning / critical with % healthy."
+      },
+      "nodes-down": {
+        "title": "Nodes down",
+        "blurb": "Big-number tile: nodes currently critical or unreachable."
+      },
+      "fleet-health-timeline": {
+        "title": "Fleet health timeline",
+        "blurb": "Down / warning / unknown node counts over the last 24h."
+      },
+      "recent-state-changes": {
+        "title": "Recent state changes",
+        "blurb": "Latest up/down transitions (fires + recoveries)."
+      },
+      "active-alerts": {
+        "title": "Active alerts",
+        "blurb": "Worst-first live feed of firing alerts."
+      },
+      "alert-volume": {
+        "title": "Alert volume",
+        "blurb": "Alerts opened per hour over the last 24h."
+      },
+      "severity-mix": {
+        "title": "Severity mix",
+        "blurb": "Donut of active alerts by severity."
+      },
+      "flapping-watchlist": {
+        "title": "Flapping watchlist",
+        "blurb": "Checks toggling repeatedly (flapping flag)."
+      },
+      "top-alerting-nodes": {
+        "title": "Top alerting nodes",
+        "blurb": "Nodes generating the most alerts (chronic offenders)."
+      },
+      "alert-calendar": {
+        "title": "Alert calendar",
+        "blurb": "Hour × weekday heatmap of alert volume (7 days)."
+      },
+      "top-rtt": {
+        "title": "Top ICMP RTT",
+        "blurb": "Highest-latency nodes (now or 1h peak)."
+      },
+      "top-cpu": {
+        "title": "Top CPU",
+        "blurb": "Nodes with the highest CPU usage % (vendor-reported)."
+      },
+      "top-memory": {
+        "title": "Top memory",
+        "blurb": "Nodes with the highest memory usage % (vendor-reported)."
+      },
+      "busiest-interfaces": {
+        "title": "Busiest interfaces",
+        "blurb": "Highest-throughput links, utilization % where speed is known."
+      },
+      "most-interface-errors": {
+        "title": "Most interface errors",
+        "blurb": "Links shedding the most errors/sec (in+out)."
+      },
+      "top-talkers": {
+        "title": "Top talkers",
+        "blurb": "Interfaces moving the most bits now (in+out)."
+      },
+      "aggregate-throughput": {
+        "title": "Aggregate throughput",
+        "blurb": "Sum of all interface traffic, in + out (bits/sec), over 24h."
+      },
+      "interface-heatmap": {
+        "title": "Interface utilization heatmap",
+        "blurb": "Busiest links × time, shaded by throughput."
+      },
+      "traffic-spikes": {
+        "title": "Traffic spikes",
+        "blurb": "Interfaces whose throughput jumped most vs 5m ago."
+      },
+      "traffic-drops": {
+        "title": "Traffic drops",
+        "blurb": "Interfaces whose throughput fell most vs 5m ago (possible outage)."
+      },
+      "site-matrix": {
+        "title": "Site health matrix",
+        "blurb": "A tile per node-group: worst member state + up/total."
+      },
+      "region-rollup": {
+        "title": "Region rollup",
+        "blurb": "Percent healthy per top-level group."
+      },
+      "geo-map": {
+        "title": "Geo map",
+        "blurb": "Sites plotted by coordinates, pin colored by worst state."
+      },
+      "dependency-view": {
+        "title": "Dependency / root cause",
+        "blurb": "Parent→child dependency tree showing the upstream node blamed as root cause."
+      },
+      "maintenance": {
+        "title": "Maintenance windows",
+        "blurb": "What’s suppressed now + upcoming windows."
+      },
+      "poller-health": {
+        "title": "Poller & collection health",
+        "blurb": "Last poll run, jobs per run, results collected."
+      },
+      "discovery-queue": {
+        "title": "Discovery queue",
+        "blurb": "Recently discovered, unclassified devices."
+      },
+      "data-coverage": {
+        "title": "Data coverage",
+        "blurb": "Gauge: % of nodes returning fresh data (blind-spot detector)."
+      },
+      "stale-data": {
+        "title": "Stale data watchlist",
+        "blurb": "Nodes whose last sample is overdue (silent failures)."
+      },
+      "audit": {
+        "title": "Recent changes",
+        "blurb": "Latest config/admin actions (audit log; admin-only)."
+      }
+    }
+  },
+  "widgets": {
+    "loadingNodes": "Loading nodes…",
+    "noNodes": "No nodes yet.",
+    "healthRing": {
+      "healthy": "Healthy",
+      "healthyPct": "% healthy"
+    },
+    "nodesDown": {
+      "caption": "nodes down"
+    },
+    "fleetTimeline": {
+      "empty": "No history yet — state snapshots accrue every 5 minutes.",
+      "down": "Down"
+    },
+    "activeAlerts": {
+      "empty": "No active alerts. All monitored nodes are healthy.",
+      "viewAll": "View all"
+    },
+    "severityMix": {
+      "empty": "No active alerts.",
+      "active": "active"
+    },
+    "flapping": {
+      "empty": "No flapping checks. State is stable."
+    },
+    "alertVolume": {
+      "empty": "No alerts opened in the last 24h.",
+      "aria": "alerts opened per hour over the last 24 hours",
+      "opened_one": "{{count}} opened",
+      "opened_other": "{{count}} opened"
+    },
+    "topAlerting": {
+      "empty": "No alerts recorded yet."
+    },
+    "alertCalendar": {
+      "empty": "No alerts in the last 7 days.",
+      "cell_one": "{{row}} {{hour}}:00 — {{count}} alert",
+      "cell_other": "{{row}} {{hour}}:00 — {{count}} alerts",
+      "dow": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      }
+    },
+    "recentChanges": {
+      "empty": "No recent state changes.",
+      "recovered": "recovered"
+    },
+    "topAgg": {
+      "windowAria": "Metric window",
+      "windowTitle": "Current value vs 1-hour peak",
+      "current": "Current",
+      "peak1h": "1h peak"
+    },
+    "topRtt": {
+      "empty": "No RTT data yet…"
+    },
+    "topCpu": {
+      "empty": "No CPU data yet…"
+    },
+    "topMemory": {
+      "empty": "No memory data yet…"
+    },
+    "interfaceTraffic": {
+      "empty": "No interface traffic yet…"
+    },
+    "mostErrors": {
+      "empty": "No interface errors. 🎉"
+    },
+    "trafficSpikes": {
+      "empty": "No traffic spikes."
+    },
+    "trafficDrops": {
+      "empty": "No traffic drops."
+    },
+    "throughput": {
+      "empty": "No throughput data yet…",
+      "in": "In",
+      "out": "Out"
+    },
+    "siteMatrix": {
+      "error": "Couldn’t load site health.",
+      "empty": "No grouped nodes yet."
+    },
+    "regionRollup": {
+      "error": "Couldn’t load region rollup.",
+      "empty": "No top-level groups with members yet."
+    },
+    "geoMap": {
+      "error": "Couldn’t load the map.",
+      "empty": "No geo-located sites. Set coordinates on a group to plot it.",
+      "aria": "sites positioned by coordinates, colored by worst state",
+      "pinTitle_one": "{{name}}: {{state}} ({{count}} node)",
+      "pinTitle_other": "{{name}}: {{state}} ({{count}} nodes)"
+    },
+    "maintenance": {
+      "empty": "Nothing in maintenance now or scheduled.",
+      "active": "Active",
+      "upcoming": "Upcoming",
+      "ends": "ends {{time}}"
+    },
+    "dataCoverage": {
+      "freshPct": "% fresh",
+      "nodes": "{{fresh}}/{{total}} nodes"
+    },
+    "staleData": {
+      "empty": "All nodes are reporting fresh data. 🎉",
+      "noRecent": "no recent data"
+    },
+    "pollerHealth": {
+      "never": "never",
+      "lastRun": "last poll run",
+      "jobsPerRun": "jobs per run",
+      "results": "results collected"
+    },
+    "discovery": {
+      "empty": "No pending discoveries. Run a scan from Nodes → Discovery.",
+      "unclassified": "unclassified"
+    },
+    "audit": {
+      "forbidden": "Recent changes require an admin role to view.",
+      "empty": "No recent changes."
+    },
+    "dependency": {
+      "empty": "No nodes in the inventory.",
+      "depthLimit": "… depth limit reached (possible dependency cycle)"
+    }
+  },
+  "primitives": {
+    "donut": {
+      "aria": "distribution"
+    },
+    "rankedBars": {
+      "empty": "No data yet…"
+    },
+    "deltaBars": {
+      "empty": "No change yet…"
+    },
+    "heatmap": {
+      "noData": "no data"
+    }
+  },
+  "err": {
+    "requestFailed": "request failed"
+  }
+}

@@ -11,6 +11,7 @@
 // unchanged shape. Widget mutations target the active board; board actions add/remove/rename/switch.
 
 import { create } from 'zustand';
+import i18n from '../i18n';
 import { ApiError, api, getToken } from '../services/api';
 import {
   addBoard,
@@ -106,12 +107,14 @@ export function createLayoutStore(config: LayoutStoreConfig) {
           .catch((e: unknown) => {
             // Don't swallow the failure: otherwise edits look saved but vanish on the next load.
             // 401 ⇒ session expired; 403 ⇒ not permitted (shared board, non-admin); else transient.
+            // Resolve via the global i18n instance (like lib/format) so the message follows the
+            // active language without threading a hook through this store.
             const msg =
               e instanceof ApiError && e.status === 401
-                ? 'Your session expired — sign in again to save dashboard changes.'
+                ? i18n.t('dashboard:save.expired')
                 : e instanceof ApiError && e.status === 403
-                  ? "You don't have permission to change the shared dashboard."
-                  : "Couldn't save your dashboard changes. They'll be retried on your next edit.";
+                  ? i18n.t('dashboard:save.forbidden')
+                  : i18n.t('dashboard:save.failed');
             set({ saveError: msg });
           });
       }, SAVE_DEBOUNCE_MS);

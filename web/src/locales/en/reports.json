@@ -1,0 +1,145 @@
+{
+  "page": {
+    "note": "Build customizable reports, run them on a schedule, and save the results."
+  },
+  "tabs": {
+    "saved": "Saved reports",
+    "templates": "Templates",
+    "schedules": "Schedules"
+  },
+  "noun": {
+    "savedReport_one": "saved report",
+    "savedReport_other": "saved reports",
+    "schedule_one": "schedule",
+    "schedule_other": "schedules"
+  },
+  "trigger": {
+    "manual": "Manual",
+    "scheduled": "Scheduled"
+  },
+  "run": {
+    "status": {
+      "generating": "Generating {{pct}}%",
+      "queued": "Queued",
+      "ready": "Ready",
+      "failed": "Failed"
+    }
+  },
+  "runs": {
+    "cols": {
+      "report": "Report",
+      "status": "Status",
+      "trigger": "Trigger",
+      "generated": "Generated"
+    },
+    "view": "View",
+    "empty": "No reports generated yet. Run a template to create one."
+  },
+  "defs": {
+    "cols": {
+      "template": "Template",
+      "sections": "Sections",
+      "updated": "Updated"
+    },
+    "runNow": "Run now",
+    "running": "Running…",
+    "newReport": "New report",
+    "empty": "No report templates yet.",
+    "emptyAdmin": "No report templates yet. Click \"New report\" to build one."
+  },
+  "scheds": {
+    "cols": {
+      "report": "Report",
+      "cadence": "Cadence",
+      "nextRun": "Next run",
+      "state": "State"
+    },
+    "enabled": "Enabled",
+    "paused": "Paused",
+    "newSchedule": "New schedule",
+    "empty": "No schedules yet.",
+    "emptyNoDefs": "Create a report template first, then schedule it."
+  },
+  "confirm": {
+    "deleteTemplate": "Delete report template \"{{name}}\"? Saved runs are kept.",
+    "deleteRun": "Delete saved report \"{{name}}\"?",
+    "deleteSchedule": "Delete the schedule for \"{{name}}\"?"
+  },
+  "builder": {
+    "newTitle": "New report",
+    "editTitle": "Edit report",
+    "save": "Save report",
+    "saving": "Saving…",
+    "name": "Name",
+    "namePlaceholder": "e.g. Weekly availability report",
+    "description": "Description",
+    "descriptionPlaceholder": "Optional summary of what this report covers",
+    "timeWindow": "Time window",
+    "sectionsCount_one": "Sections ({{count}})",
+    "sectionsCount_other": "Sections ({{count}})",
+    "addSection": "Add section",
+    "hideCatalog": "Hide catalog",
+    "noSections": "No sections yet — add one from the catalog above.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "removeSection": "Remove section",
+    "range": {
+      "h24": "Last 24 hours",
+      "d7": "Last 7 days",
+      "d30": "Last 30 days",
+      "d90": "Last 90 days"
+    },
+    "err": {
+      "nameRequired": "A report name is required.",
+      "noSections": "Add at least one section.",
+      "saveFailed": "Failed to save the report."
+    }
+  },
+  "viewer": {
+    "fallbackTitle": "Report",
+    "print": "Print",
+    "generating": "Generating report… {{pct}}%",
+    "failed": "Failed",
+    "genFailed": "Report generation failed.",
+    "err": {
+      "loadFailed": "Failed to load the report.",
+      "exportFailed": "Failed to export {{format}}."
+    }
+  },
+  "schedule": {
+    "newTitle": "New schedule",
+    "editTitle": "Edit schedule",
+    "save": "Save schedule",
+    "saving": "Saving…",
+    "report": "Report",
+    "frequency": "Frequency",
+    "dayOfWeek": "Day of week",
+    "dayOfMonth": "Day of month (1–28)",
+    "timeUtc": "Time (UTC)",
+    "enabled": "Enabled",
+    "freq": {
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "err": {
+      "chooseReport": "Choose a report.",
+      "invalidTime": "Enter a valid time.",
+      "saveFailed": "Failed to save the schedule."
+    }
+  },
+  "weekday": {
+    "sun": "Sunday",
+    "mon": "Monday",
+    "tue": "Tuesday",
+    "wed": "Wednesday",
+    "thu": "Thursday",
+    "fri": "Friday",
+    "sat": "Saturday"
+  },
+  "cadence": {
+    "daily": "Daily · {{time}}",
+    "weekly": "Weekly · {{day}} {{time}}",
+    "monthly": "Monthly · day {{day}} {{time}}"
+  }
+}

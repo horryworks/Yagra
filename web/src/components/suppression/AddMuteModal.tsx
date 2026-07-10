@@ -4,6 +4,7 @@
 // fixed to that node/group; otherwise it's chosen here.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { Modal } from '../ui/Modal';
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: Props) {
+  const { t } = useTranslation('suppression');
   const locked = !!initialScope;
   const [scopeKind, setScopeKind] = useState<'node' | 'group'>(initialScope?.kind ?? 'node');
   const [scopeId, setScopeId] = useState(initialScope?.id ?? '');
@@ -60,39 +62,42 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add mute'));
+        setError(errMsg(e, t('muteForm.err.add')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add mute"
+      title={t('muteForm.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            Add mute
+            {t('muteForm.submit')}
           </Button>
         </>
       }
     >
       {locked ? (
         <div className="modal-field">
-          <label className="modal-field-label">Scope</label>
+          <label className="modal-field-label">{t('muteForm.scope')}</label>
           <p className="modal-hint">
-            {initialScope?.kind === 'group' ? 'Folder group' : 'Node'}:{' '}
+            {initialScope?.kind === 'group'
+              ? t('muteForm.lockedGroup')
+              : t('muteForm.lockedNode')}
+            :{' '}
             <strong>{initialScope?.name}</strong>
-            {initialScope?.kind === 'group' && ' (incl. subgroups)'}
+            {initialScope?.kind === 'group' && t('muteForm.inclSubgroups')}
           </p>
         </div>
       ) : (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">Scope</label>
+            <label className="modal-field-label">{t('muteForm.scope')}</label>
             <Select
               value={scopeKind}
               onChange={(e) => {
@@ -100,15 +105,17 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
                 setScopeId('');
               }}
             >
-              <option value="node">node</option>
-              <option value="group">folder group</option>
+              <option value="node">{t('muteForm.kind.node')}</option>
+              <option value="group">{t('muteForm.kind.group')}</option>
             </Select>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">{scopeKind === 'group' ? 'Group' : 'Node'}</label>
+            <label className="modal-field-label">
+              {scopeKind === 'group' ? t('muteForm.entityGroup') : t('muteForm.entityNode')}
+            </label>
             {scopeKind === 'node' ? (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)} autoFocus>
-                <option value="">(pick a node)</option>
+                <option value="">{t('muteForm.pickNode')}</option>
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
                     {n.name}
@@ -117,7 +124,7 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
               </Select>
             ) : (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)} autoFocus>
-                <option value="">(pick a group)</option>
+                <option value="">{t('muteForm.pickGroup')}</option>
                 {groupItems.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.label}
@@ -126,7 +133,7 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
               </Select>
             )}
             {scopeKind === 'group' && (
-              <span className="modal-hint">Silences every node under the group and its subgroups.</span>
+              <span className="modal-hint">{t('muteForm.groupHint')}</span>
             )}
           </div>
         </>
@@ -135,10 +142,10 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
       {/* Per-metric mute only applies to a single node — a group mute silences everything. */}
       {scopeKind === 'node' && (
         <div className="modal-field">
-          <label className="modal-field-label">Metric</label>
+          <label className="modal-field-label">{t('muteForm.metric')}</label>
           <TextInput
             className="mono"
-            placeholder="metric (empty = whole node)"
+            placeholder={t('muteForm.metricPlaceholder')}
             list="mute-check-presets"
             value={check}
             onChange={(e) => setCheck(e.target.value)}
@@ -151,14 +158,14 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
         </div>
       )}
       <div className="modal-field">
-        <label className="modal-field-label">Until</label>
+        <label className="modal-field-label">{t('muteForm.until')}</label>
         <TextInput type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
-        <span className="modal-hint">In {TZ} (your browser’s local time) and stored as UTC.</span>
+        <span className="modal-hint">{t('muteForm.tzHint', { tz: TZ })}</span>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Reason</label>
+        <label className="modal-field-label">{t('muteForm.reason')}</label>
         <TextInput
-          placeholder="reason (optional)"
+          placeholder={t('muteForm.reasonPlaceholder')}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />

@@ -9,6 +9,7 @@
 // Collection-template attachment checklist. Add/edit via modal, delete via confirm modal.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate, ProfileInput, ProfileSummary } from '../types/api';
@@ -28,6 +29,7 @@ const COLS = '1.8fr 1fr 120px 130px 96px';
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function ProfilesPage() {
+  const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
@@ -63,12 +65,12 @@ export function ProfilesPage() {
     const q = query.trim().toLowerCase();
     if (q === '') return rows;
     return rows.filter((p) =>
-      [p.name, p.vendor ?? '', categoryLabel(p.category)]
+      [p.name, p.vendor ?? '', categoryLabel(p.category, t)]
         .join(' ')
         .toLowerCase()
         .includes(q),
     );
-  }, [rows, query]);
+  }, [rows, query, t]);
 
   // Group the filtered rows by category, in the canonical display order; trailing "Other"
   // bucket catches any unknown token so nothing is silently hidden.
@@ -83,26 +85,24 @@ export function ProfilesPage() {
     const out: { token: string; label: string; items: ProfileSummary[] }[] = [];
     for (const token of order) {
       const items = byCat.get(token);
-      if (items && items.length) out.push({ token, label: categoryLabel(token), items });
+      if (items && items.length) out.push({ token, label: categoryLabel(token, t), items });
     }
     const other = byCat.get('__other');
-    if (other && other.length) out.push({ token: '__other', label: 'Other', items: other });
+    if (other && other.length) out.push({ token: '__other', label: t('profiles.otherGroup'), items: other });
     return out;
-  }, [filtered]);
+  }, [filtered, t]);
 
   return (
     <div>
       <PageHeader
-        title="Device profiles"
-        trail={[{ label: 'Nodes' }, { label: 'Device profiles' }]}
-        note="Device-class buckets (role × vendor). Attach Metric sets here; nodes inherit them via their profile."
+        title={t('nav:nodes.profiles')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.profiles') }]}
+        note={t('profiles.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">
-            Profile management is unavailable in skeleton mode (no metadata store).
-          </p>
+          <p className="muted">{t('profiles.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -110,37 +110,43 @@ export function ProfilesPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search name, vendor or role…"
-              ariaLabel="Search profiles"
+              placeholder={t('profiles.searchPlaceholder')}
+              ariaLabel={t('profiles.searchAria')}
             />
             <TableSpacer />
-            <ResultCount shown={filtered.length} total={rows.length} noun="profiles" />
+            <ResultCount
+              shown={filtered.length}
+              total={rows.length}
+              noun={t('common:noun.profile', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add profile
+                + {t('profiles.addProfile')}
               </Button>
             )}
           </TableToolbar>
 
           <div className="ytable profiles-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">Name</div>
-              <div className="ytable-h">Vendor</div>
-              <div className="ytable-h">Poll interval</div>
-              <div className="ytable-h">Metric sets</div>
-              <div className="ytable-h right">Actions</div>
+              <div className="ytable-h">{t('profiles.cols.name')}</div>
+              <div className="ytable-h">{t('profiles.cols.vendor')}</div>
+              <div className="ytable-h">{t('profiles.cols.pollInterval')}</div>
+              <div className="ytable-h">{t('profiles.cols.metricSets')}</div>
+              <div className="ytable-h right">{t('shared.colActions')}</div>
             </div>
 
             {filtered.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
-                  {loading ? 'Loading…' : rows.length === 0 ? 'No profiles yet' : 'No profiles match'}
+                  {loading
+                    ? t('common:loading')
+                    : rows.length === 0
+                      ? t('profiles.empty.none')
+                      : t('profiles.empty.noMatch')}
                 </p>
                 {!loading && (
                   <p className="yt-empty-sub">
-                    {rows.length === 0
-                      ? 'Add a device-class profile (e.g. “Cisco Catalyst switch”).'
-                      : 'Try a different search.'}
+                    {rows.length === 0 ? t('profiles.empty.noneSub') : t('shared.trySearch')}
                   </p>
                 )}
               </div>
@@ -166,7 +172,7 @@ export function ProfilesPage() {
                             {p.poll_interval_secs ? (
                               `${p.poll_interval_secs}s`
                             ) : (
-                              <span className="muted">default</span>
+                              <span className="muted">{t('profiles.defaultInterval')}</span>
                             )}
                           </div>
                           <div className="ytable-cell">
@@ -176,17 +182,17 @@ export function ProfilesPage() {
                                 setOpenTemplates((cur) => (cur === p.id ? null : p.id))
                               }
                             >
-                              {open ? 'Hide sets' : 'Metric sets'}
+                              {open ? t('profiles.hideSets') : t('profiles.cols.metricSets')}
                             </Button>
                           </div>
                           <div className="ytable-cell right">
                             {authed && (
                               <span className="ytable-actions">
-                                <IconButton title="Edit profile" onClick={() => setEditing(p)}>
+                                <IconButton title={t('profiles.editProfile')} onClick={() => setEditing(p)}>
                                   <EditIcon />
                                 </IconButton>
                                 <IconButton
-                                  title="Delete profile"
+                                  title={t('profiles.deleteProfile')}
                                   danger
                                   onClick={() => setDeleting(p)}
                                 >
@@ -262,6 +268,7 @@ function ProfileModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [name, setName] = useState(profile?.name ?? '');
   const [category, setCategory] = useState(profile?.category ?? 'generic-snmp');
   const [vendor, setVendor] = useState(profile?.vendor ?? '');
@@ -277,7 +284,7 @@ function ProfileModal({
     if (trimmedInterval !== '') {
       const n = Number(trimmedInterval);
       if (!Number.isInteger(n) || n < 10 || n > 3600) {
-        setError('Poll interval must be a whole number of seconds between 10 and 3600.');
+        setError(t('profiles.err.pollInterval'));
         return;
       }
     }
@@ -294,32 +301,32 @@ function ProfileModal({
         ? api.updateProfile(profile.id, body)
         : api.createProfile(body).then(() => undefined);
     call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, 'failed to save profile'));
+      setError(errMsg(e, t('profiles.err.save')));
       setBusy(false);
     });
   };
 
   return (
     <Modal
-      title={mode === 'edit' ? 'Edit device profile' : 'Add device profile'}
+      title={mode === 'edit' ? t('profiles.modal.editTitle') : t('profiles.modal.addTitle')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            {mode === 'edit' ? 'Save' : 'Add profile'}
+            {mode === 'edit' ? t('common:actions.save') : t('profiles.addProfile')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">
-          Name <RequiredMark />
+          {t('profiles.cols.name')} <RequiredMark />
         </label>
         <TextInput
-          placeholder="e.g. Cisco Catalyst switch"
+          placeholder={t('profiles.modal.namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
@@ -327,36 +334,33 @@ function ProfileModal({
       </div>
       <div className="modal-field-row">
         <div className="modal-field">
-          <label className="modal-field-label">Role</label>
+          <label className="modal-field-label">{t('profiles.modal.role')}</label>
           <Select value={category} onChange={(e) => setCategory(e.target.value)}>
             {PROFILE_CATEGORIES.map((c) => (
               <option key={c.token} value={c.token}>
-                {c.label}
+                {t(c.labelKey)}
               </option>
             ))}
           </Select>
         </div>
         <div className="modal-field">
-          <label className="modal-field-label">Vendor</label>
+          <label className="modal-field-label">{t('profiles.cols.vendor')}</label>
           <TextInput
-            placeholder="optional"
+            placeholder={t('shared.optional')}
             value={vendor}
             onChange={(e) => setVendor(e.target.value)}
           />
         </div>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Poll interval (seconds)</label>
+        <label className="modal-field-label">{t('profiles.modal.pollInterval')}</label>
         <TextInput
-          placeholder="leave blank to use the system default"
+          placeholder={t('profiles.modal.pollIntervalPlaceholder')}
           value={pollInterval}
           onChange={(e) => setPollInterval(e.target.value)}
           inputMode="numeric"
         />
-        <span className="modal-hint">
-          Overrides the system default for nodes using this profile. 10–3600 seconds; leave blank
-          to inherit the default.
-        </span>
+        <span className="modal-hint">{t('profiles.modal.pollIntervalHint')}</span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -373,6 +377,7 @@ function DeleteProfileModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('monitoring');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -383,29 +388,33 @@ function DeleteProfileModal({
       .deleteProfile(profile.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete profile'));
+        setError(errMsg(e, t('profiles.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete profile"
+      title={t('profiles.deleteProfile')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete profile <strong>{profile.name}</strong>? Nodes using it keep running but lose this
-        class's collection defaults.
+        <Trans
+          t={t}
+          i18nKey="profiles.delete.confirm"
+          values={{ name: profile.name }}
+          components={{ strong: <strong /> }}
+        />
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -423,6 +432,7 @@ function ProfileTemplates({
   templates: CollectionTemplate[];
   canEdit: boolean;
 }) {
+  const { t } = useTranslation('monitoring');
   const [attached, setAttached] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -430,9 +440,9 @@ function ProfileTemplates({
   useEffect(() => {
     api
       .listProfileTemplates(profileId)
-      .then((list) => setAttached(new Set(list.map((t) => t.id))))
-      .catch((e: unknown) => setError(errMsg(e, 'failed to load attached templates')));
-  }, [profileId]);
+      .then((list) => setAttached(new Set(list.map((tmpl) => tmpl.id))))
+      .catch((e: unknown) => setError(errMsg(e, t('profiles.err.loadTemplates'))));
+  }, [profileId, t]);
 
   const toggle = (id: string) => {
     const next = new Set(attached);
@@ -443,27 +453,27 @@ function ProfileTemplates({
     setError(null);
     api
       .setProfileTemplates(profileId, [...next])
-      .catch((e: unknown) => setError(errMsg(e, 'failed to save templates')))
+      .catch((e: unknown) => setError(errMsg(e, t('profiles.err.saveTemplates'))))
       .finally(() => setBusy(false));
   };
 
   if (templates.length === 0) {
-    return <p className="muted">No metric sets exist yet. Create some first.</p>;
+    return <p className="muted">{t('profiles.templates.empty')}</p>;
   }
   return (
     <div className="profile-templates">
-      {templates.map((t) => (
-        <label key={t.id} className="profile-template-row">
+      {templates.map((tmpl) => (
+        <label key={tmpl.id} className="profile-template-row">
           <input
             type="checkbox"
-            checked={attached.has(t.id)}
+            checked={attached.has(tmpl.id)}
             disabled={!canEdit || busy}
-            onChange={() => toggle(t.id)}
+            onChange={() => toggle(tmpl.id)}
           />
-          <span className="profile-template-name">{t.name}</span>
+          <span className="profile-template-name">{tmpl.name}</span>
           <span className="muted profile-template-meta">
-            {t.description ? `${t.description} · ` : ''}
-            {t.item_count} metrics
+            {tmpl.description ? `${tmpl.description} · ` : ''}
+            {t('shared.metricsCount', { count: tmpl.item_count })}
           </span>
         </label>
       ))}

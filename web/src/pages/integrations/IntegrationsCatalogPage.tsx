@@ -6,6 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api, ApiError } from '../../services/api';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
@@ -17,17 +19,17 @@ type MerakiStatus =
   | { kind: 'not-configured' }
   | { kind: 'connected'; orgs: number; pollingOn: boolean };
 
-function merakiStatusLabel(s: MerakiStatus): string {
+function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
   switch (s.kind) {
     case 'loading':
-      return 'Checking…';
+      return t('integrations.status.checking');
     case 'unavailable':
-      return 'Unavailable';
+      return t('integrations.status.unavailable');
     case 'not-configured':
-      return 'Not configured';
+      return t('integrations.status.notConfigured');
     case 'connected':
-      if (!s.pollingOn) return 'Connected · polling paused';
-      return `Connected · ${s.orgs} org${s.orgs === 1 ? '' : 's'}`;
+      if (!s.pollingOn) return t('integrations.status.pollingPaused');
+      return t('integrations.status.connected', { count: s.orgs });
   }
 }
 
@@ -39,6 +41,7 @@ function merakiStatusTone(s: MerakiStatus): string {
 }
 
 export function IntegrationsCatalogPage() {
+  const { t } = useTranslation('system');
   const [meraki, setMeraki] = useState<MerakiStatus>({ kind: 'loading' });
 
   useEffect(() => {
@@ -68,39 +71,34 @@ export function IntegrationsCatalogPage() {
   return (
     <div>
       <PageHeader
-        title="Integrations"
-        trail={[{ label: 'Settings' }, { label: 'Integrations' }]}
-        note="Connect external systems monitored through a vendor cloud API."
+        title={t('nav:settings.integrations')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.integrations') }]}
+        note={t('integrations.note')}
       />
 
       <div className="integrations-grid">
         <Link className="integration-card" to="/settings/integrations/meraki">
           <div className="integration-card-head">
-            <span className="integration-card-name">Cisco Meraki</span>
+            <span className="integration-card-name">{t('meraki.name')}</span>
             <span className={`integration-chip ${merakiStatusTone(meraki)}`}>
-              {merakiStatusLabel(meraki)}
+              {merakiStatusLabel(meraki, t)}
             </span>
           </div>
-          <p className="integration-card-desc">
-            Read-only Dashboard API monitoring — availability, uplinks, and traffic across your
-            Meraki organizations.
-          </p>
+          <p className="integration-card-desc">{t('integrations.meraki.desc')}</p>
         </Link>
 
         <div className="integration-card is-placeholder" aria-disabled="true">
           <div className="integration-card-head">
-            <span className="integration-card-name">More integrations</span>
-            <span className="integration-chip idle">Coming soon</span>
+            <span className="integration-card-name">{t('integrations.more.name')}</span>
+            <span className="integration-chip idle">{t('nav:shell.comingSoonBadge')}</span>
           </div>
-          <p className="integration-card-desc">
-            Additional vendor and notification integrations will appear here in a future release.
-          </p>
+          <p className="integration-card-desc">{t('integrations.more.desc')}</p>
         </div>
       </div>
 
       {meraki.kind === 'unavailable' && (
         <Card>
-          <p className="muted">Integrations are unavailable in skeleton mode (no store).</p>
+          <p className="muted">{t('integrations.unavailable')}</p>
         </Card>
       )}
     </div>

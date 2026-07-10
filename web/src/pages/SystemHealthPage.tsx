@@ -9,6 +9,8 @@
 // future distributed-poller configuration.
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -35,12 +37,13 @@ const PCT_RANGE: [number, number] = [0, 100];
 
 /** One backing dependency as a name + detail + reachability badge. */
 function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | undefined }) {
+  const { t } = useTranslation('system');
   return (
     <li className="dep-row">
       <span className="dep-name">{name}</span>
       <span className="dep-detail muted">{dep?.detail ?? '—'}</span>
       <Badge tone={dep?.reachable ? 'up' : 'critical'}>
-        {dep?.reachable ? 'Reachable' : 'Unreachable'}
+        {dep?.reachable ? t('health.reachable') : t('health.unreachable')}
       </Badge>
     </li>
   );
@@ -49,14 +52,15 @@ function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | un
 /** Backing-service reachability (PostgreSQL / TSDB / bus). Bus is an indirect signal inferred from
  *  poll-loop activity — the row detail spells that out. */
 function DependencyHealthCard() {
+  const { t } = useTranslation('system');
   const { data, loading, error } = usePolled(() => api.getSystemHealth(), []);
   if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">Loading…</p>;
+  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   return (
     <ul className="dep-list">
-      <DependencyRow name="PostgreSQL" dep={data?.postgres} />
-      <DependencyRow name="VictoriaMetrics (TSDB)" dep={data?.tsdb} />
-      <DependencyRow name="NATS bus" dep={data?.bus} />
+      <DependencyRow name={t('health.deps.postgres')} dep={data?.postgres} />
+      <DependencyRow name={t('health.deps.tsdb')} dep={data?.tsdb} />
+      <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
     </ul>
   );
 }
@@ -84,9 +88,10 @@ function pctSeries(
   return { timestamps, values };
 }
 
-/** Human label for an instance in the selector: "Core" or the poller id (with its pool). */
-function instanceLabel(h: HostInfo): string {
-  if (h.role === 'core') return 'Core';
+/** Human label for an instance in the selector: "Core" or the poller id (with its pool). `t` is
+ *  threaded from the caller so the "Core" label follows the active language. */
+function instanceLabel(h: HostInfo, t: TFunction): string {
+  if (h.role === 'core') return t('health.core');
   return h.pool ? `${h.instance} · ${h.pool}` : h.instance;
 }
 
@@ -113,6 +118,7 @@ function HostMetricCard({
   legendFormat?: (v: number) => string;
   win: [number, number] | null;
 }) {
+  const { t } = useTranslation('system');
   const hasData = timestamps.length > 0;
   return (
     <div className="host-metric">
@@ -132,7 +138,7 @@ function HostMetricCard({
           xRange={win ?? undefined}
         />
       ) : (
-        <p className="muted host-metric-empty">No history yet…</p>
+        <p className="muted host-metric-empty">{t('health.noHistory')}</p>
       )}
     </div>
   );
@@ -152,6 +158,7 @@ function diskHeadline(current: DiskUsage | undefined): string {
 /** Host resources for the selected instance: an instance selector (Core + each poller) + a shared
  *  range picker, then CPU %, load average, memory %, and a disk card per watched filesystem. */
 function HostResourcesCard() {
+  const { t } = useTranslation('system');
   const [hosts, setHosts] = useState<HostInfo[]>([]);
   const [instance, setInstance] = useState('core');
   const [data, setData] = useState<HostMetricRange | null>(null);
@@ -231,19 +238,19 @@ function HostResourcesCard() {
   return (
     <div className="host-resources">
       <div className="host-head">
-        <span className="host-title">Host resources</span>
+        <span className="host-title">{t('health.hostResources')}</span>
         <div className="host-controls">
           <select
             className="host-select"
             value={instance}
             onChange={(e) => setInstance(e.target.value)}
-            aria-label="Instance"
+            aria-label={t('health.instanceAria')}
           >
-            {options.length === 0 && <option value="core">Core</option>}
+            {options.length === 0 && <option value="core">{t('health.core')}</option>}
             {options.map((h) => (
               <option key={h.instance} value={h.instance}>
-                {instanceLabel(h)}
-                {h.role === 'poller' && !h.online ? ' (offline)' : ''}
+                {instanceLabel(h, t)}
+                {h.role === 'poller' && !h.online ? t('health.offlineSuffix') : ''}
               </option>
             ))}
           </select>
@@ -253,7 +260,7 @@ function HostResourcesCard() {
 
       <div className="host-metrics">
         <HostMetricCard
-          label="CPU"
+          label={t('health.metric.cpu')}
           value={formatUtil(current?.cpu_pct ?? null)}
           timestamps={cpu.timestamps}
           values={cpu.values}
@@ -262,7 +269,7 @@ function HostResourcesCard() {
           win={win}
         />
         <HostMetricCard
-          label="Load average"
+          label={t('health.metric.loadAverage')}
           value={current?.load1 != null ? current.load1.toFixed(2) : '—'}
           timestamps={loadChart.timestamps}
           series={loadChart.series}
@@ -271,7 +278,7 @@ function HostResourcesCard() {
           win={win}
         />
         <HostMetricCard
-          label="Memory"
+          label={t('health.metric.memory')}
           value={memHeadline}
           timestamps={mem.timestamps}
           values={mem.values}
@@ -286,7 +293,7 @@ function HostResourcesCard() {
           return (
             <HostMetricCard
               key={d.mount}
-              label={`Disk · ${d.mount}`}
+              label={t('health.metric.disk', { mount: d.mount })}
               value={diskHeadline(dcur)}
               timestamps={chart.timestamps}
               values={chart.values}
@@ -303,21 +310,22 @@ function HostResourcesCard() {
 }
 
 export function SystemHealthPage() {
+  const { t } = useTranslation('system');
   return (
     <div>
       <PageHeader
-        title="System health"
-        trail={[{ label: 'Settings' }, { label: 'System health' }]}
-        note="Yagra's own health: the poll loop, its backing services, fleet data coverage, and host resources."
+        title={t('nav:settings.systemHealth')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.systemHealth') }]}
+        note={t('health.note')}
       />
       <div className="system-health-grid">
-        <Card title="Poll-loop health">
+        <Card title={t('health.cards.pollLoop')}>
           <PollerHealthWidget />
         </Card>
-        <Card title="Dependency health">
+        <Card title={t('health.cards.dependency')}>
           <DependencyHealthCard />
         </Card>
-        <Card title="Data coverage">
+        <Card title={t('health.cards.dataCoverage')}>
           <DataCoverageWidget />
         </Card>
       </div>

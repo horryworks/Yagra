@@ -6,6 +6,7 @@
 // tag-group windows still list and resolve.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type {
   MaintenanceScopeLevel,
@@ -47,8 +48,11 @@ export function AddMaintenanceWindowModal({
   onClose,
   onSaved,
 }: Props) {
+  const { t } = useTranslation('suppression');
   const locked = !!initialScope;
-  const [name, setName] = useState(initialScope ? `Maintenance — ${initialScope.name}` : '');
+  const [name, setName] = useState(
+    initialScope ? t('maintenanceForm.defaultName', { name: initialScope.name }) : '',
+  );
   const [scope, setScope] = useState<CreateScope>(
     initialScope ? (initialScope.kind === 'group' ? 'group_id' : 'node') : 'node',
   );
@@ -78,30 +82,30 @@ export function AddMaintenanceWindowModal({
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add window'));
+        setError(errMsg(e, t('maintenanceForm.err.add')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add maintenance window"
+      title={t('maintenanceForm.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            Add window
+            {t('maintenanceForm.submit')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('maintenanceForm.name')}</label>
         <TextInput
-          placeholder="e.g. core switch firmware"
+          placeholder={t('maintenanceForm.namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
@@ -110,17 +114,20 @@ export function AddMaintenanceWindowModal({
 
       {locked ? (
         <div className="modal-field">
-          <label className="modal-field-label">Scope</label>
+          <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
           <p className="modal-hint">
-            {initialScope?.kind === 'group' ? 'Folder group' : 'Node'}:{' '}
+            {initialScope?.kind === 'group'
+              ? t('maintenanceForm.lockedGroup')
+              : t('maintenanceForm.lockedNode')}
+            :{' '}
             <strong>{initialScope?.name}</strong>
-            {initialScope?.kind === 'group' && ' (incl. subgroups)'}
+            {initialScope?.kind === 'group' && t('maintenanceForm.inclSubgroups')}
           </p>
         </div>
       ) : (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">Scope level</label>
+            <label className="modal-field-label">{t('maintenanceForm.scopeLevel')}</label>
             <Select
               value={scope}
               onChange={(e) => {
@@ -128,16 +135,18 @@ export function AddMaintenanceWindowModal({
                 setScopeId('');
               }}
             >
-              <option value="node">node</option>
-              <option value="group_id">folder group</option>
-              {profiles.length > 0 && <option value="profile">device profile</option>}
+              <option value="node">{t('maintenanceForm.level.node')}</option>
+              <option value="group_id">{t('maintenanceForm.level.groupId')}</option>
+              {profiles.length > 0 && (
+                <option value="profile">{t('maintenanceForm.level.profile')}</option>
+              )}
             </Select>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">Scope</label>
+            <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
             {scope === 'node' ? (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">(pick a node)</option>
+                <option value="">{t('maintenanceForm.pickNode')}</option>
                 {nodes.map((n) => (
                   <option key={n.id} value={n.id}>
                     {n.name}
@@ -146,7 +155,7 @@ export function AddMaintenanceWindowModal({
               </Select>
             ) : scope === 'profile' ? (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">(pick a profile)</option>
+                <option value="">{t('maintenanceForm.pickProfile')}</option>
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -155,7 +164,7 @@ export function AddMaintenanceWindowModal({
               </Select>
             ) : (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">(pick a group)</option>
+                <option value="">{t('maintenanceForm.pickGroup')}</option>
                 {groupItems.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.label}
@@ -164,14 +173,14 @@ export function AddMaintenanceWindowModal({
               </Select>
             )}
             {scope === 'group_id' && (
-              <span className="modal-hint">Covers the group and all its subgroups.</span>
+              <span className="modal-hint">{t('maintenanceForm.groupHint')}</span>
             )}
           </div>
         </>
       )}
 
       <div className="modal-field">
-        <label className="modal-field-label">From</label>
+        <label className="modal-field-label">{t('common:range.from')}</label>
         <TextInput
           type="datetime-local"
           value={startsAt}
@@ -179,11 +188,9 @@ export function AddMaintenanceWindowModal({
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">To</label>
+        <label className="modal-field-label">{t('common:range.to')}</label>
         <TextInput type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
-        <span className="modal-hint">
-          “From”/“To” are in {TZ} (your browser’s local time) and are stored as UTC.
-        </span>
+        <span className="modal-hint">{t('maintenanceForm.tzHint', { tz: TZ })}</span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>

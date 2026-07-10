@@ -6,6 +6,7 @@
 // so those columns are intentionally omitted rather than faked.
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { relativeTime, scalarDisplay } from '../../lib/format';
 import type { CollectionTemplate, NodeDetail } from '../../types/api';
@@ -31,6 +32,7 @@ const agoSec = (sec: number | null): string =>
   sec == null ? '—' : relativeTime(new Date(sec * 1000).toISOString());
 
 export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: boolean }) {
+  const { t } = useTranslation('nodes');
   const [data, setData] = useState<Loaded | null>(null);
 
   useEffect(() => {
@@ -97,30 +99,30 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         <div>
           <div className="nd-coll-status-t">
             {state === 'ok'
-              ? 'Collecting normally'
+              ? t('collection.statusOk')
               : state === 'failing'
-                ? 'Collection failing'
-                : 'ICMP-only node'}
+                ? t('collection.statusFailing')
+                : t('collection.statusNone')}
           </div>
           <div className="nd-coll-status-s">
             {state === 'ok'
-              ? `${data?.sets.length ?? 0} set${(data?.sets.length ?? 0) === 1 ? '' : 's'} active · polling on schedule`
+              ? t('collection.setsActive', { count: data?.sets.length ?? 0 })
               : state === 'failing'
-                ? 'No recent SNMP values — the device may be unreachable or denying SNMP'
-                : 'No SNMP credential bound; only ICMP availability is collected'}
+                ? t('collection.subFailing')
+                : t('collection.subNone')}
           </div>
         </div>
         <div className="nd-coll-status-r">
           <div>
-            <div className="nd-coll-stat-k">Profile</div>
+            <div className="nd-coll-stat-k">{t('collection.profile')}</div>
             <div className="nd-coll-stat-v">{data?.profileName ?? '—'}</div>
           </div>
           <div>
-            <div className="nd-coll-stat-k">Credential</div>
+            <div className="nd-coll-stat-k">{t('collection.credential')}</div>
             <div className="nd-coll-stat-v">{data?.credentialName ?? '—'}</div>
           </div>
           <div>
-            <div className="nd-coll-stat-k">Last poll</div>
+            <div className="nd-coll-stat-k">{t('collection.lastPoll')}</div>
             <div className="nd-coll-stat-v">{agoSec(data?.lastPollSec ?? null)}</div>
           </div>
         </div>
@@ -128,7 +130,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
 
       {data && data.sets.length > 0 && (
         <section>
-          <div className="nd-section-t">Metric sets</div>
+          <div className="nd-section-t">{t('nav:nodes.metricSets')}</div>
           <div className="nd-coll-sets">
             {data.sets.map((s) => (
               <div className="nd-coll-set" key={s.id}>
@@ -136,7 +138,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
                 <div>
                   <div className="nd-coll-set-name mono">{s.name}</div>
                   <div className="nd-coll-set-meta">
-                    {s.item_count} metric{s.item_count === 1 ? '' : 's'}
+                    {t('collection.metricCount', { count: s.item_count })}
                   </div>
                 </div>
               </div>
@@ -147,12 +149,12 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
 
       {data && data.scalars.length > 0 && (
         <section>
-          <div className="nd-section-t">Latest values</div>
+          <div className="nd-section-t">{t('collection.latestValues')}</div>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
-              <div className="nd-coll-mh">Metric</div>
-              <div className="nd-coll-mh right">Last value</div>
-              <div className="nd-coll-mh right">Updated</div>
+              <div className="nd-coll-mh">{t('collection.colMetric')}</div>
+              <div className="nd-coll-mh right">{t('collection.colLastValue')}</div>
+              <div className="nd-coll-mh right">{t('collection.colUpdated')}</div>
             </div>
             {data.scalars.map((m) => (
               <div className="nd-coll-mrow" key={m.name}>
@@ -166,11 +168,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
       )}
 
       <section>
-        <div className="nd-section-t">Node metrics</div>
-        <p className="nd-muted nd-coll-editnote">
-          SNMP metrics polled from this node. Node-level entries override the device profile; with
-          none set, the profile / built-in defaults apply.
-        </p>
+        <div className="nd-section-t">{t('collection.nodeMetrics')}</div>
+        <p className="nd-muted nd-coll-editnote">{t('collection.editNote')}</p>
         <CollectionEditor scope="node" scopeId={node.id} canEdit={canEdit} />
       </section>
     </div>

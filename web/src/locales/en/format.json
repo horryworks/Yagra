@@ -7,6 +7,11 @@
     "unknown": "Unknown",
     "maintenance": "Maintenance"
   },
+  "severity": {
+    "critical": "Critical",
+    "warning": "Warning",
+    "info": "Info"
+  },
   "relative": {
     "never": "Never",
     "justNow": "just now",

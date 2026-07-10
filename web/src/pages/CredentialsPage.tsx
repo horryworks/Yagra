@@ -11,6 +11,8 @@
 // intact unless the operator opts to replace it (then kind + secret are re-entered and re-sealed).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary } from '../types/api';
@@ -32,12 +34,14 @@ const V3_LEVELS = ['authpriv', 'auth', 'noauth'] as const;
 const V3_AUTH_PROTOCOLS = ['sha', 'sha224', 'sha256', 'sha384', 'sha512', 'md5'];
 const V3_PRIV_PROTOCOLS = ['aes', 'aes192', 'aes256', 'des'];
 
-const KIND_META: Record<string, { label: string; Icon: ComponentType }> = {
-  snmp_v2c: { label: 'SNMP v2c (community)', Icon: HashIcon },
-  snmp_v3: { label: 'SNMP v3 (user/password)', Icon: ShieldIcon },
-  api_token: { label: 'API token', Icon: KeyIcon },
+// Kind → { i18n label key, icon }. The label is resolved with `t` at the call site (never at
+// module load) so it follows the active language.
+const KIND_META: Record<string, { labelKey: string; Icon: ComponentType }> = {
+  snmp_v2c: { labelKey: 'cred.kind.snmp_v2c', Icon: HashIcon },
+  snmp_v3: { labelKey: 'cred.kind.snmp_v3', Icon: ShieldIcon },
+  api_token: { labelKey: 'cred.kind.api_token', Icon: KeyIcon },
   // Meraki keys are created via Settings ▸ Integrations; shown here read-only.
-  meraki_api: { label: 'Cisco Meraki API key', Icon: KeyIcon },
+  meraki_api: { labelKey: 'cred.kind.meraki_api', Icon: KeyIcon },
 };
 
 const COLS = '1.7fr 150px 130px 110px 1fr 92px';
@@ -45,9 +49,13 @@ const COLS = '1.7fr 150px 130px 110px 1fr 92px';
 const errMsg = (e: unknown, fallback: string) =>
   e instanceof ApiError ? e.message : fallback;
 
-const kindLabel = (kind: string) => KIND_META[kind]?.label ?? kind;
+const kindLabel = (kind: string, t: TFunction) => {
+  const meta = KIND_META[kind];
+  return meta ? t(meta.labelKey) : kind;
+};
 
-const usageLabel = (n: number) => (n === 0 ? 'Unused' : `${n} ${n === 1 ? 'node' : 'nodes'}`);
+const usageLabel = (n: number, t: TFunction) =>
+  n === 0 ? t('cred.usage.unused') : t('cred.usage.count', { count: n });
 
 /** SNMPv3 (USM) structured form state — shared by the add and edit modals. */
 interface V3State {
@@ -89,22 +97,23 @@ const buildV3Secret = (v: V3State): string => {
 
 /** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
 function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) => void }) {
+  const { t } = useTranslation('access');
   const needsAuth = value.level !== 'noauth';
   const needsPriv = value.level === 'authpriv';
   const set = (patch: Partial<V3State>) => onChange({ ...value, ...patch });
   return (
     <>
       <div className="modal-field">
-        <label className="modal-field-label">USM user</label>
+        <label className="modal-field-label">{t('cred.v3.usmUser')}</label>
         <TextInput
           className="mono"
-          placeholder="usm-user"
+          placeholder={t('cred.v3.usmUserPlaceholder')}
           value={value.user}
           onChange={(e) => set({ user: e.target.value })}
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Security level</label>
+        <label className="modal-field-label">{t('cred.v3.securityLevel')}</label>
         <Select
           value={value.level}
           onChange={(e) => set({ level: e.target.value as (typeof V3_LEVELS)[number] })}
@@ -119,7 +128,7 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
       {needsAuth && (
         <div className="cred-v3-pair">
           <div className="modal-field">
-            <label className="modal-field-label">Auth protocol</label>
+            <label className="modal-field-label">{t('cred.v3.authProtocol')}</label>
             <Select value={value.authProto} onChange={(e) => set({ authProto: e.target.value })}>
               {V3_AUTH_PROTOCOLS.map((p) => (
                 <option key={p} value={p}>
@@ -129,7 +138,7 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
             </Select>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">Auth passphrase</label>
+            <label className="modal-field-label">{t('cred.v3.authPassphrase')}</label>
             <TextInput
               className="mono"
               type="password"
@@ -143,7 +152,7 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
       {needsPriv && (
         <div className="cred-v3-pair">
           <div className="modal-field">
-            <label className="modal-field-label">Privacy protocol</label>
+            <label className="modal-field-label">{t('cred.v3.privacyProtocol')}</label>
             <Select value={value.privProto} onChange={(e) => set({ privProto: e.target.value })}>
               {V3_PRIV_PROTOCOLS.map((p) => (
                 <option key={p} value={p}>
@@ -153,7 +162,7 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
             </Select>
           </div>
           <div className="modal-field">
-            <label className="modal-field-label">Privacy passphrase</label>
+            <label className="modal-field-label">{t('cred.v3.privacyPassphrase')}</label>
             <TextInput
               className="mono"
               type="password"
@@ -170,6 +179,7 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
 
 /** Create a credential (type-driven focused-editing modal). */
 function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation('access');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<Kind>('snmp_v2c');
   const [secret, setSecret] = useState('');
@@ -191,41 +201,41 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to add credential'));
+        setError(errMsg(e, t('cred.err.add')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Add credential"
+      title={t('cred.add.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            Add credential
+            {t('cred.add.title')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('cred.field.name')}</label>
         <TextInput
-          placeholder="e.g. core-rtr-usm"
+          placeholder={t('cred.add.namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">Type</label>
+        <label className="modal-field-label">{t('cred.field.type')}</label>
         <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
           {KINDS.map((k) => (
             <option key={k} value={k}>
-              {kindLabel(k)}
+              {kindLabel(k, t)}
             </option>
           ))}
         </Select>
@@ -234,18 +244,20 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
         <V3Fields value={v3} onChange={setV3} />
       ) : (
         <div className="modal-field">
-          <label className="modal-field-label">Secret</label>
+          <label className="modal-field-label">{t('cred.field.secret')}</label>
           <TextInput
             className="mono"
             type="password"
-            placeholder={kind === 'api_token' ? 'Bearer token' : 'Community string'}
+            placeholder={
+              kind === 'api_token'
+                ? t('cred.add.secretPlaceholder.apiToken')
+                : t('cred.add.secretPlaceholder.community')
+            }
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
             autoComplete="new-password"
           />
-          <span className="modal-hint">
-            Sent over the encrypted-at-rest endpoint and sealed server-side. It is never shown again.
-          </span>
+          <span className="modal-hint">{t('cred.add.secretHint')}</span>
         </div>
       )}
       {error && <p className="form-error">{error}</p>}
@@ -263,6 +275,7 @@ function EditCredentialModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation('access');
   const [name, setName] = useState(cred.name);
   const [replace, setReplace] = useState(false);
   const [kind, setKind] = useState<Kind>((cred.kind as Kind) ?? 'snmp_v2c');
@@ -288,43 +301,43 @@ function EditCredentialModal({
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to update'));
+        setError(errMsg(e, t('cred.err.update')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Edit credential"
+      title={t('cred.edit.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={save} disabled={!ready || busy}>
-            Save
+            {t('common:actions.save')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
-        <label className="modal-field-label">Name</label>
+        <label className="modal-field-label">{t('cred.field.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
       <label className="cred-replace">
         <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
-        <span>Replace secret</span>
-        <span className="muted">— the stored secret stays unless you re-enter it.</span>
+        <span>{t('cred.edit.replaceSecret')}</span>
+        <span className="muted">— {t('cred.edit.replaceHint')}</span>
       </label>
       {replace && (
         <>
           <div className="modal-field">
-            <label className="modal-field-label">Type</label>
+            <label className="modal-field-label">{t('cred.field.type')}</label>
             <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {kindLabel(k)}
+                  {kindLabel(k, t)}
                 </option>
               ))}
             </Select>
@@ -333,7 +346,7 @@ function EditCredentialModal({
             <V3Fields value={v3} onChange={setV3} />
           ) : (
             <div className="modal-field">
-              <label className="modal-field-label">New secret</label>
+              <label className="modal-field-label">{t('cred.edit.newSecret')}</label>
               <TextInput
                 className="mono"
                 type="password"
@@ -360,6 +373,7 @@ function DeleteCredentialModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation('access');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -370,32 +384,37 @@ function DeleteCredentialModal({
       .deleteCredential(cred.id)
       .then(onDone)
       .catch((e: unknown) => {
-        setError(errMsg(e, 'failed to delete'));
+        setError(errMsg(e, t('cred.err.delete')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title="Delete credential"
+      title={t('cred.delete.title')}
       onClose={onClose}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common:actions.cancel')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy}>
-            Delete
+            {t('common:actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">
-        Delete credential <strong>{cred.name}</strong>?
+        <Trans
+          t={t}
+          i18nKey="cred.delete.confirm"
+          values={{ name: cred.name }}
+          components={{ strong: <strong /> }}
+        />{' '}
         {cred.used_by > 0
-          ? ` ${usageLabel(cred.used_by)} reference it — they will lose this binding.`
-          : ' It is unused.'}{' '}
-        This cannot be undone.
+          ? t('cred.delete.inUse', { usage: usageLabel(cred.used_by, t) })
+          : t('cred.delete.unused')}{' '}
+        {t('cred.delete.irreversible')}
       </p>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -405,6 +424,7 @@ function DeleteCredentialModal({
 type SortKey = 'name' | 'used_by';
 
 export function CredentialsPage() {
+  const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [query, setQuery] = useState('');
@@ -456,16 +476,14 @@ export function CredentialsPage() {
   return (
     <div>
       <PageHeader
-        title="Credentials & secrets"
-        trail={[{ label: 'Settings' }, { label: 'Credentials & secrets' }]}
-        note="Encrypted at rest. Secret values are never displayed or returned by the API."
+        title={t('nav:settings.credentials')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.credentials') }]}
+        note={t('cred.note')}
       />
 
       {unavailable ? (
         <Card>
-          <p className="muted">
-            Credential management is unavailable in skeleton mode (no secret store).
-          </p>
+          <p className="muted">{t('cred.unavailable')}</p>
         </Card>
       ) : (
         <>
@@ -473,24 +491,28 @@ export function CredentialsPage() {
             <SearchInput
               value={query}
               onChange={setQuery}
-              placeholder="Search name or id…"
-              ariaLabel="Search credentials"
+              placeholder={t('cred.searchPlaceholder')}
+              ariaLabel={t('cred.searchAria')}
             />
             <Select
               value={kindFilter}
               onChange={(e) => setKindFilter(e.target.value)}
-              aria-label="Filter by type"
+              aria-label={t('cred.filterAria')}
             >
-              <option value="all">All types</option>
-              <option value="snmp_v2c">SNMP v2c</option>
-              <option value="snmp_v3">SNMP v3</option>
-              <option value="api_token">API token</option>
+              <option value="all">{t('cred.filter.allTypes')}</option>
+              <option value="snmp_v2c">{t('cred.filter.snmp_v2c')}</option>
+              <option value="snmp_v3">{t('cred.filter.snmp_v3')}</option>
+              <option value="api_token">{t('cred.filter.api_token')}</option>
             </Select>
             <TableSpacer />
-            <ResultCount shown={list.length} total={rows.length} noun="credentials" />
+            <ResultCount
+              shown={list.length}
+              total={rows.length}
+              noun={t('common:noun.credential', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
-                + Add credential
+                + {t('cred.add.title')}
               </Button>
             )}
           </TableToolbar>
@@ -499,27 +521,29 @@ export function CredentialsPage() {
             <div className="ytable-scroll">
               <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
                 <div className="ytable-h sortable" onClick={() => toggleSort('name')}>
-                  Name {arrow('name')}
+                  {t('cred.cols.name')} {arrow('name')}
                 </div>
-                <div className="ytable-h">Type</div>
-                <div className="ytable-h">Secret</div>
+                <div className="ytable-h">{t('cred.cols.type')}</div>
+                <div className="ytable-h">{t('cred.cols.secret')}</div>
                 <div className="ytable-h sortable" onClick={() => toggleSort('used_by')}>
-                  Used by {arrow('used_by')}
+                  {t('cred.cols.usedBy')} {arrow('used_by')}
                 </div>
-                <div className="ytable-h">Credential ID</div>
-                <div className="ytable-h right">Actions</div>
+                <div className="ytable-h">{t('cred.cols.credentialId')}</div>
+                <div className="ytable-h right">{t('cred.cols.actions')}</div>
               </div>
 
               {list.length === 0 ? (
                 <div className="yt-empty">
                   <p className="yt-empty-title">
-                    {loading ? 'Loading…' : rows.length === 0 ? 'No credentials yet' : 'No credentials match'}
+                    {loading
+                      ? t('common:loading')
+                      : rows.length === 0
+                        ? t('cred.empty.none')
+                        : t('cred.empty.filtered')}
                   </p>
                   {!loading && (
                     <p className="yt-empty-sub">
-                      {rows.length === 0
-                        ? 'Add an SNMP community, SNMPv3 USM, or API token.'
-                        : 'Try a different search or filter.'}
+                      {rows.length === 0 ? t('cred.empty.noneSub') : t('cred.empty.filteredSub')}
                     </p>
                   )}
                 </div>
@@ -530,7 +554,7 @@ export function CredentialsPage() {
                     <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={c.id}>
                       <div className="ytable-cell">
                         <span className="yt-name">
-                          <span className="yt-typeicon" title={kindLabel(c.kind)}>
+                          <span className="yt-typeicon" title={kindLabel(c.kind, t)}>
                             <Icon />
                           </span>
                           <span className="yt-name-txt">{c.name}</span>
@@ -539,7 +563,7 @@ export function CredentialsPage() {
                       <div className="ytable-cell">
                         <span className="yt-chip">
                           <Icon />
-                          {kindLabel(c.kind)}
+                          {kindLabel(c.kind, t)}
                         </span>
                       </div>
                       <div className="ytable-cell">
@@ -547,7 +571,7 @@ export function CredentialsPage() {
                       </div>
                       <div className="ytable-cell">
                         <span className={c.used_by === 0 ? 'yt-usage zero' : 'yt-usage'}>
-                          {usageLabel(c.used_by)}
+                          {usageLabel(c.used_by, t)}
                         </span>
                       </div>
                       <div className="ytable-cell">
@@ -556,10 +580,10 @@ export function CredentialsPage() {
                       <div className="ytable-cell right">
                         {authed && (
                           <span className="ytable-actions">
-                            <IconButton title="Edit" onClick={() => setEditing(c)}>
+                            <IconButton title={t('common:actions.edit')} onClick={() => setEditing(c)}>
                               <EditIcon />
                             </IconButton>
-                            <IconButton title="Delete" danger onClick={() => setDeleting(c)}>
+                            <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(c)}>
                               <TrashIcon />
                             </IconButton>
                           </span>
