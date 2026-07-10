@@ -17,6 +17,11 @@ export const PALETTE = ['#4f8cff', '#34d399', '#f59e0b', '#ef4444'];
 export const SERIES_IN = PALETTE[0];
 export const SERIES_OUT = PALETTE[1];
 
+// First-paint estimate of uPlot's title+legend chrome height (px) in `fill` mode, before the real
+// elements exist to measure. Corrected to the exact measured value immediately after construction.
+const FILL_CHROME_ESTIMATE = 28;
+const MIN_PLOT_HEIGHT = 40;
+
 export interface ChartSeries {
   label: string;
   /** Y values aligned to `timestamps`; `null` renders a gap. */
@@ -123,7 +128,9 @@ export function MetricChart({
     const opts: uPlot.Options = {
       title,
       width: el.clientWidth || 460,
-      height: fill ? el.clientHeight || height : height,
+      height: fill
+        ? Math.max(MIN_PLOT_HEIGHT, (el.clientHeight || height) - FILL_CHROME_ESTIMATE)
+        : height,
       axes: [axis, yAxis],
       // Force a fixed Y range (e.g. 0–100% gauges) and/or X window (pin to the requested time
       // range) when asked; otherwise uPlot auto-fits the respective axis to the data.
@@ -198,16 +205,35 @@ export function MetricChart({
     const plot = new uPlot(opts, data, el);
     plotRef.current = plot;
 
-    // Track the container size so the chart fills the pane (and reflows on layout change). Width
-    // always tracks; height tracks too in `fill` mode (a resizable dashboard cell), else stays fixed.
-    const ro = new ResizeObserver(() => {
+    // Resize the plot to its pane. Width always tracks the container; height tracks too in `fill`
+    // mode (a resizable dashboard cell). CRITICAL: in fill mode the plot height must be the pane
+    // height MINUS uPlot's own title+legend chrome — those render as extra DOM below the plot, so
+    // sizing the plot to the full pane makes `.uplot` taller than the pane, card-body shows a
+    // scrollbar, the scrollbar shrinks the pane, and the ResizeObserver oscillates (flickering
+    // scrollbar + doubled baseline). Deferring to rAF also avoids the synchronous RO loop.
+    let raf = 0;
+    const chromeHeight = () => {
+      const title = el.querySelector<HTMLElement>('.u-title');
+      const legend = el.querySelector<HTMLElement>('.u-legend');
+      return (title?.offsetHeight ?? 0) + (legend?.offsetHeight ?? 0);
+    };
+    const applySize = () => {
       const w = el.clientWidth;
-      const h = fill ? el.clientHeight : height;
-      if (w > 0 && h > 0) plot.setSize({ width: w, height: h });
+      if (w <= 0) return;
+      const h = fill ? Math.max(MIN_PLOT_HEIGHT, el.clientHeight - chromeHeight()) : height;
+      plot.setSize({ width: w, height: h });
+    };
+    // Correct the first-paint estimate now that the real chrome elements are in the DOM.
+    if (fill) applySize();
+
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(applySize);
     });
     ro.observe(el);
 
     return () => {
+      cancelAnimationFrame(raf);
       ro.disconnect();
       plot.destroy();
       plotRef.current = null;

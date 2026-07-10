@@ -20,9 +20,12 @@
 }
 
 /* Fill mode (dashboard widgets in a resizable cell): the chart wrapper fills its pane so uPlot's
-   ResizeObserver can size the canvas to the available height, not a fixed px. */
+   ResizeObserver can size the canvas to the available height, not a fixed px. `overflow: hidden`
+   is insurance — the plot is sized to the pane minus its title/legend chrome, but clipping any
+   subpixel remainder here stops it reaching the scrolling card-body and re-triggering the RO. */
 .metricchart-fill {
   width: 100%;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
