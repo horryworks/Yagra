@@ -66,7 +66,7 @@ export function AggregateThroughputWidget() {
     <MetricChart
       title=""
       timestamps={ts}
-      height={180}
+      fill
       yFormat={(v) => formatSi(v)}
       legendFormat={(v) => formatBps(v)}
       series={[

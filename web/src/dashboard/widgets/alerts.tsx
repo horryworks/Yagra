@@ -25,7 +25,8 @@ const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => (h % 6 === 0 ? String(h
 
 export function ActiveAlertsWidget() {
   const { t } = useTranslation('dashboard');
-  return <AlertRows limit={8} empty={t('widgets.activeAlerts.empty')} />;
+  // Show a generous count; the card-body scrolls when the cell is short and fills when it's tall.
+  return <AlertRows limit={20} empty={t('widgets.activeAlerts.empty')} />;
 }
 
 /** View-mode header action for the active-alerts widget: jump to the full triage screen. */
@@ -131,7 +132,7 @@ export function AlertCalendarWidget() {
 
 export function RecentStateChangesWidget() {
   const { t } = useTranslation('dashboard');
-  const { data, loading, error } = usePolled(() => api.getAlertTransitions(12), []);
+  const { data, loading, error } = usePolled(() => api.getAlertTransitions(30), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   if ((data ?? []).length === 0) return <p className="muted">{t('widgets.recentChanges.empty')}</p>;

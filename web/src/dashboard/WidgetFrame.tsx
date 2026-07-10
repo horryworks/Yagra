@@ -1,67 +1,53 @@
-// One placed widget: a Card whose chrome the frame owns. In view mode the card shows the
-// widget's own header actions (a selector, a "View all" link); in edit mode it shows the
-// customize controls — a width selector, a remove (×), and a drag handle (dnd-kit). The grid
-// span comes from the instance and maps to a `.mydash-span-N` class.
+// One placed widget: a Card whose chrome the frame owns. In view mode the card shows the widget's
+// own header actions (a selector, a "View all" link); in edit mode it shows a remove (×) and a
+// dnd-kit move handle (⠿) in the header, plus a bottom-right **resize grip** that drags width +
+// height together, snapping to the widget's allowed span/rowSpan steps. The grid size comes from
+// the instance (or, mid-drag, the live `preview`) and maps to `.mydash-span-N` / `.mydash-rowspan-N`
+// classes on the cell.
 
+import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../components/ui/Card';
-import { Select } from '../components/ui/Field';
 import { useLayoutStoreContext } from './LayoutStoreContext';
 import { getDefinition } from './registry';
-import type { WidgetInstance, WidgetSettings } from './types';
+import { useResizeHandle } from './useResizeHandle';
+import type { WidgetDefinition, WidgetInstance, WidgetSettings } from './types';
 import './WidgetFrame.css';
+
+// Placeholder definition so `useResizeHandle` can be called before the (rare) unknown-type early
+// return — keeps hook order stable. Empty allowed-lists mean it produces no resizing.
+const EMPTY_DEF = { allowedSpans: [], allowedRowSpans: [] } as unknown as WidgetDefinition;
 
 export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; editing: boolean }) {
   const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
-  const setSpan = useStore((s) => s.setSpan);
-  const setRowSpan = useStore((s) => s.setRowSpan);
+  const setSize = useStore((s) => s.setSize);
   const removeWidget = useStore((s) => s.removeWidget);
   const setSettingsAction = useStore((s) => s.setSettings);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: instance.instanceId,
     disabled: !editing,
   });
+  const [gripFocused, setGripFocused] = useState(false);
 
   const def = getDefinition(instance.type);
+  // Hooks must run unconditionally, so resolve the resize hook before the (rare) unknown-type bail.
+  const { handleProps, preview } = useResizeHandle(instance, def ?? EMPTY_DEF, setSize);
   if (!def) return null;
+
   const Body = def.Component;
   const Actions = def.Actions;
-  const rowSpan = instance.rowSpan ?? 1;
   const setSettings = (patch: WidgetSettings) => setSettingsAction(instance.instanceId, patch);
+
+  // Effective size = live drag preview if any, else the persisted instance.
+  const span = preview?.span ?? instance.span;
+  const rowSpan = preview?.rowSpan ?? instance.rowSpan ?? 1;
+  const resizable = def.allowedSpans.length > 1 || (def.allowedRowSpans?.length ?? 0) > 1;
 
   const actions = editing ? (
     <span className="widgetframe-edit">
-      {def.allowedSpans.length > 1 && (
-        <Select
-          value={String(instance.span)}
-          onChange={(e) => setSpan(instance.instanceId, Number(e.target.value))}
-          aria-label={t('widgetFrame.width')}
-          title={t('widgetFrame.width')}
-        >
-          {def.allowedSpans.map((s) => (
-            <option key={s} value={s}>
-              {t(`widgetFrame.span.${s}`)}
-            </option>
-          ))}
-        </Select>
-      )}
-      {def.allowedRowSpans && def.allowedRowSpans.length > 1 && (
-        <Select
-          value={String(rowSpan)}
-          onChange={(e) => setRowSpan(instance.instanceId, Number(e.target.value))}
-          aria-label={t('widgetFrame.height')}
-          title={t('widgetFrame.height')}
-        >
-          {def.allowedRowSpans.map((r) => (
-            <option key={r} value={r}>
-              {t(`widgetFrame.rowSpan.${r}`)}
-            </option>
-          ))}
-        </Select>
-      )}
       <button
         type="button"
         className="widgetframe-remove"
@@ -92,10 +78,11 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={[
         'mydash-cell',
-        `mydash-span-${instance.span}`,
+        `mydash-span-${span}`,
         `mydash-rowspan-${rowSpan}`,
         isDragging ? 'is-dragging' : '',
         editing ? 'is-editing' : '',
+        preview ? 'is-resizing' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -103,6 +90,30 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       <Card title={t(def.title)} actions={actions}>
         <Body instance={instance} setSettings={setSettings} />
       </Card>
+
+      {editing && !isDragging && resizable && (
+        <button
+          type="button"
+          className="widgetframe-resize"
+          aria-label={t('widgetFrame.resize', { name: t(def.title) })}
+          title={t('widgetFrame.resizeHint')}
+          onFocus={() => setGripFocused(true)}
+          onBlur={() => setGripFocused(false)}
+          {...handleProps}
+        >
+          <span aria-hidden="true">⤡</span>
+        </button>
+      )}
+      {preview && (
+        <span className="widgetframe-readout" aria-hidden="true">
+          {t('widgetFrame.sizeReadout', { w: span, h: rowSpan })}
+        </span>
+      )}
+      {editing && resizable && (
+        <span className="widgetframe-sr" aria-live="polite">
+          {preview || gripFocused ? t('widgetFrame.sizeAnnounce', { w: span, h: rowSpan }) : ''}
+        </span>
+      )}
     </div>
   );
 }

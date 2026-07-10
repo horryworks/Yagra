@@ -1,12 +1,13 @@
 /* Shared layout for the dashboard widget family (the small board widgets share a visual
    language — compact lists, mini bars, tiles). Primitives carry their own CSS. */
 
-/* Vertical bar strip (alert volume / 24h). */
+/* Vertical bar strip (alert volume / 24h). Fills the pane height (min 120px) so a taller cell gives
+   taller bars — see the `.mydash-cell .card-body > .vbars` fill rule in WidgetFrame.css. */
 .vbars {
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 120px;
+  min-height: 120px;
   padding-top: 4px;
 }
 
@@ -138,11 +139,12 @@
   color: var(--text-tertiary);
 }
 
-/* Geo scatter (dependency-free; no basemap) — pins positioned by normalized lon/lat. */
+/* Geo scatter (dependency-free; no basemap) — pins positioned by normalized lon/lat. Fills the pane
+   height (min 200px) so a taller cell spreads the pins out — see the fill rule in WidgetFrame.css. */
 .geo {
   position: relative;
   width: 100%;
-  height: 220px;
+  min-height: 200px;
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
   overflow: hidden;

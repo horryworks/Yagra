@@ -14,9 +14,8 @@ import {
   sanitizeLayout,
   sanitizeWidgets,
   setBoardWidgets,
-  setRowSpanById,
   setSettingsById,
-  setSpanById,
+  setSizeById,
   type RegistryView,
 } from './layout';
 import type { Board, WidgetInstance } from './types';
@@ -229,27 +228,27 @@ describe('list mutators', () => {
     expect(reorderByIds(base, ['a2', 'a1']).map((w) => w.instanceId)).toEqual(['a2', 'a1', 'a3']);
   });
 
-  it('sets a span (clamped to the type) and merges settings', () => {
+  it('setSizeById clamps span + rowSpan together and drops a standard height', () => {
     const base = [inst('a1', 'a', 4)];
-    expect(setSpanById(base, 'a1', 99, reg)[0].span).toBe(6); // clamped
+    // span clamps to 6 (a allows [4,6]); rowSpan clamps to 2 (a allows [1,2])
+    const sized = setSizeById(base, 'a1', 99, 9, reg);
+    expect(sized[0].span).toBe(6);
+    expect(sized[0].rowSpan).toBe(2);
+    // back to standard height drops the rowSpan field entirely (absence = standard)
+    const standard = setSizeById(sized, 'a1', 4, 1, reg);
+    expect(standard[0].span).toBe(4);
+    expect(standard[0].rowSpan).toBeUndefined();
+    expect('rowSpan' in standard[0]).toBe(false);
+    // a fixed-height type (b allows only rowSpan 1) can never gain a taller row span
+    expect(setSizeById([inst('b1', 'b', 12)], 'b1', 12, 3, reg)[0].rowSpan).toBeUndefined();
+  });
+
+  it('merges settings', () => {
+    const base = [inst('a1', 'a', 4)];
     const withSettings = setSettingsById(base, 'a1', { agg: 'max_1h' });
     expect(withSettings[0].settings).toEqual({ agg: 'max_1h' });
     const merged = setSettingsById(withSettings, 'a1', { nodeId: 'n1' });
     expect(merged[0].settings).toEqual({ agg: 'max_1h', nodeId: 'n1' });
-  });
-
-  it('sets a row span (clamped) and drops the field when back to standard', () => {
-    const base = [inst('a1', 'a', 4)];
-    const tall = setRowSpanById(base, 'a1', 2, reg);
-    expect(tall[0].rowSpan).toBe(2);
-    // above the allowed range ⇒ snapped to the nearest (a allows [1,2])
-    expect(setRowSpanById(base, 'a1', 9, reg)[0].rowSpan).toBe(2);
-    // back to standard removes the field entirely (absence = standard height)
-    const standard = setRowSpanById(tall, 'a1', 1, reg);
-    expect(standard[0].rowSpan).toBeUndefined();
-    expect('rowSpan' in standard[0]).toBe(false);
-    // a fixed-height type can never gain a taller row span
-    expect(setRowSpanById([inst('b1', 'b', 12)], 'b1', 2, reg)[0].rowSpan).toBeUndefined();
   });
 
   it('counts instances of a type (for maxInstances)', () => {

@@ -1,7 +1,8 @@
 .mydash-cell {
+  position: relative; /* anchors the bottom-right resize grip + readout */
   min-width: 0;
-  /* Column so the Card fills the cell — matters when a rowspan floors the cell taller than its
-     content (the Card then stretches instead of leaving a gap under it). */
+  min-height: 0;
+  /* Column so the Card fills the (now fixed-height) cell instead of leaving a gap under it. */
   display: flex;
   flex-direction: column;
 }
@@ -11,16 +12,43 @@
   min-height: 0;
 }
 
-/* Stepped widget height (opt-in per widget via `allowedRowSpans`). rowspan-1 is the natural
-   content height (no floor); 2/3 set a minimum of N row steps (+ the gaps a real N-row span would
-   include). Content taller than the floor still grows the cell, and `align-items: start` keeps
-   shorter neighbours in the same grid row at their own height. */
-.mydash-rowspan-2 {
-  min-height: calc(var(--mydash-row) * 2 + var(--mydash-gap));
+/* The card body fills the card and scrolls when content exceeds the fixed cell height (a cell is
+   exactly rowspan × --mydash-row tall). Scoped to dashboard cells so other Card users are
+   unaffected. Per-widget "use the height" tuning lives in widgets.css / the primitive CSS. */
+.mydash-cell .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
+/* Widgets that should consume the pane height when the cell is resized taller: the chart wrapper,
+   the alert-volume bar strip, and the geo scatter all fill (their own CSS scales the content). */
+.mydash-cell .card-body > .metricchart-fill,
+.mydash-cell .card-body > .vbars,
+.mydash-cell .card-body > .geo {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Intrinsically small widgets (donut, gauge, KPI, stat strip) can't scale to arbitrary height, so
+   center them in the extra space — a taller cell reads as intentional, not top-stuck with a gap. */
+.mydash-cell .card-body > .donut,
+.mydash-cell .card-body > .gauge,
+.mydash-cell .card-body > .kpitile,
+.mydash-cell .card-body > .statstrip {
+  margin-block: auto;
+}
+
+/* Stepped widget height: a real grid-row span over the fixed-height auto rows (replaces the old
+   min-height floor). rowspan-1 is one row; 2/3 span that many rows + the gaps between them. */
+.mydash-rowspan-1 {
+  grid-row: span 1;
+}
+.mydash-rowspan-2 {
+  grid-row: span 2;
+}
 .mydash-rowspan-3 {
-  min-height: calc(var(--mydash-row) * 3 + var(--mydash-gap) * 2);
+  grid-row: span 3;
 }
 
 /* Edit-mode affordances live in the card's actions slot. */
@@ -71,4 +99,79 @@
   /* The dragged tile floats above its neighbours. */
   z-index: 2;
   opacity: 0.9;
+}
+
+/* Bottom-right resize grip (edit mode). Drags width + height together, snapping to the widget's
+   allowed steps; arrow keys resize for keyboard users. */
+.widgetframe-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: nwse-resize;
+  opacity: 0.55;
+  touch-action: none; /* pointer-driven resize — suppress scroll/zoom gestures on the grip */
+  transition: color var(--transition), opacity var(--transition), border-color var(--transition);
+}
+
+.widgetframe-resize:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.widgetframe-resize:focus-visible {
+  opacity: 1;
+  outline: none;
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+/* Live size readout shown while dragging (e.g. "6 × 2"). */
+.widgetframe-readout {
+  position: absolute;
+  right: 6px;
+  bottom: 24px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* While resizing, lift the cell and outline it so its live preview reads clearly over neighbours. */
+.mydash-cell.is-resizing {
+  z-index: 2;
+}
+.mydash-cell.is-resizing .card {
+  outline: var(--border-width) solid var(--accent-color);
+  outline-offset: -1px;
+}
+
+/* Visually-hidden live region announcing the size to screen readers during resize. */
+.widgetframe-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }

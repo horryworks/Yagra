@@ -25,9 +25,8 @@ import {
   reorderByIds,
   sanitizeLayout,
   setBoardWidgets,
-  setRowSpanById,
   setSettingsById,
-  setSpanById,
+  setSizeById,
 } from './layout';
 import { defaultLayout, getDefinition, registryView } from './registry';
 import type { Board, DashboardLayout, WidgetInstance, WidgetSettings } from './types';
@@ -63,18 +62,24 @@ export interface LayoutStore {
   status: LayoutStatus;
   /** A human-readable message when the last persist failed, else null. */
   saveError: string | null;
-  /** Customize mode: shows per-widget drag/remove/span controls + the catalog picker. */
+  /** Customize mode: shows per-widget drag/remove/resize controls + the catalog picker. */
   editing: boolean;
   load: () => Promise<void>;
   dismissSaveError: () => void;
+  /** Enter/leave edit mode. Entering snapshots the current boards so {@link cancelEditing} can
+   *  revert; leaving with `false` (Done) keeps the live-saved changes. */
   setEditing: (on: boolean) => void;
+  /** Discard everything changed since entering edit mode: restore the entry snapshot (and persist
+   *  it, undoing the intermediate debounced saves) and leave edit mode. */
+  cancelEditing: () => void;
+  /** True when the board differs from the edit-entry snapshot (drives the Cancel confirm). */
+  isDirty: () => boolean;
   // Widget actions — operate on the active board.
   addWidget: (type: string) => void;
   removeWidget: (instanceId: string) => void;
   move: (from: number, to: number) => void;
   reorder: (orderedIds: string[]) => void;
-  setSpan: (instanceId: string, span: number) => void;
-  setRowSpan: (instanceId: string, rowSpan: number) => void;
+  setSize: (instanceId: string, span: number, rowSpan: number) => void;
   setSettings: (instanceId: string, patch: WidgetSettings) => void;
   resetToDefault: () => void;
   // Board actions.
@@ -93,8 +98,19 @@ export interface LayoutStoreConfig {
 
 /** Build an independent layout store. Each instance owns its own debounce timer (declared in the
  *  closure) so two boards never clobber each other's saves. */
+/** Full deep copy of a boards array (widgets + settings), so the edit snapshot can't share mutable
+ *  references with live state. The layout is small and JSON-serializable (it's persisted as JSON),
+ *  so a JSON round-trip is the simplest guaranteed-deep clone. */
+function cloneBoards(boards: Board[]): Board[] {
+  return JSON.parse(JSON.stringify(boards)) as Board[];
+}
+
 export function createLayoutStore(config: LayoutStoreConfig) {
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Snapshot of `boards` taken when edit mode is entered; null outside an edit session. Cancel
+  // restores it. Kept in the closure (like saveTimer) rather than store state — it's edit-session
+  // scratch, not something the UI subscribes to.
+  let editSnapshot: Board[] | null = null;
 
   return create<LayoutStore>((set, get) => {
     /** Persist the current boards after a short quiet period (coalesces rapid edits into one save).
@@ -173,7 +189,36 @@ export function createLayoutStore(config: LayoutStoreConfig) {
         }
       },
 
-      setEditing: (on) => set({ editing: on }),
+      setEditing: (on) => {
+        if (on) {
+          // Snapshot for a possible Cancel. Entering edit mode isn't itself a change → no save.
+          editSnapshot = cloneBoards(get().boards);
+        } else {
+          // Done: keep the live-saved changes; drop the snapshot.
+          editSnapshot = null;
+        }
+        set({ editing: on });
+      },
+
+      cancelEditing: () => {
+        const snap = editSnapshot;
+        editSnapshot = null;
+        // No snapshot (shouldn't happen) ⇒ just leave edit mode without touching the layout.
+        if (!snap) {
+          set({ editing: false });
+          return;
+        }
+        // Restore + persist the snapshot. commit() clears any pending debounced save and schedules
+        // the restore, so the final write wins over intermediate mid-edit saves.
+        const activeBoardId = snap.some((b) => b.id === get().activeBoardId)
+          ? get().activeBoardId
+          : snap[0].id;
+        commit(cloneBoards(snap), activeBoardId);
+        set({ editing: false });
+      },
+
+      isDirty: () =>
+        editSnapshot != null && JSON.stringify(editSnapshot) !== JSON.stringify(get().boards),
 
       addWidget: (type) => {
         const def = getDefinition(type);
@@ -191,11 +236,8 @@ export function createLayoutStore(config: LayoutStoreConfig) {
 
       reorder: (orderedIds) => applyWidgets(reorderByIds(get().widgets, orderedIds)),
 
-      setSpan: (instanceId, span) =>
-        applyWidgets(setSpanById(get().widgets, instanceId, span, registryView)),
-
-      setRowSpan: (instanceId, rowSpan) =>
-        applyWidgets(setRowSpanById(get().widgets, instanceId, rowSpan, registryView)),
+      setSize: (instanceId, span, rowSpan) =>
+        applyWidgets(setSizeById(get().widgets, instanceId, span, rowSpan, registryView)),
 
       setSettings: (instanceId, patch) =>
         applyWidgets(setSettingsById(get().widgets, instanceId, patch)),

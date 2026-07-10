@@ -35,7 +35,7 @@ vi.mock('../services/api', () => ({
 
 import { useLayoutStore, useSharedLayoutStore } from './layoutStore';
 import { DASHBOARD_VERSION, sanitizeLayout } from './layout';
-import { defaultLayout, registryView } from './registry';
+import { defaultLayout, getDefinition, registryView } from './registry';
 
 const firstType = defaultLayout().boards[0].widgets[0].type;
 const defaultWidgets = () => defaultLayout().boards[0].widgets;
@@ -141,6 +141,50 @@ describe('useLayoutStore widget mutations', () => {
     useLayoutStore.setState({ saveError: 'something failed' });
     useLayoutStore.getState().dismissSaveError();
     expect(useLayoutStore.getState().saveError).toBeNull();
+  });
+});
+
+describe('useLayoutStore edit session (snapshot / cancel / resize)', () => {
+  it('cancelEditing restores the pre-edit snapshot and persists the restore', async () => {
+    const s = useLayoutStore.getState();
+    s.setEditing(true); // snapshots the (empty) board
+    s.addWidget(firstType);
+    expect(useLayoutStore.getState().widgets).toHaveLength(1);
+    expect(useLayoutStore.getState().isDirty()).toBe(true);
+
+    useLayoutStore.getState().cancelEditing();
+    const after = useLayoutStore.getState();
+    expect(after.editing).toBe(false);
+    expect(after.widgets).toHaveLength(0); // reverted to the snapshot
+    expect(after.isDirty()).toBe(false); // snapshot cleared on leave
+
+    // The restore is persisted (so the intermediate add's debounced save is undone).
+    await vi.advanceTimersByTimeAsync(800);
+    expect(putDashboard).toHaveBeenCalled();
+    expect(putDashboard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ boards: [expect.objectContaining({ widgets: [] })] }),
+    );
+  });
+
+  it('Done (setEditing false) keeps the changes and clears the snapshot', () => {
+    const s = useLayoutStore.getState();
+    s.setEditing(true);
+    s.addWidget(firstType);
+    useLayoutStore.getState().setEditing(false);
+    const after = useLayoutStore.getState();
+    expect(after.widgets).toHaveLength(1); // kept
+    expect(after.isDirty()).toBe(false); // no active session
+  });
+
+  it('setSize clamps to the widget’s allowed span/rowSpan', () => {
+    useLayoutStore.getState().addWidget(firstType);
+    const id = useLayoutStore.getState().widgets[0].instanceId;
+    useLayoutStore.getState().setSize(id, 999, 999);
+    const w = useLayoutStore.getState().widgets[0];
+    const def = getDefinition(firstType)!;
+    expect(def.allowedSpans).toContain(w.span);
+    // rowSpan is present only when the widget allows a taller size and one was chosen.
+    if (w.rowSpan !== undefined) expect(def.allowedRowSpans).toContain(w.rowSpan);
   });
 });
 

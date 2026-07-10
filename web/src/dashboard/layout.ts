@@ -190,28 +190,20 @@ export function reorderByIds(widgets: WidgetInstance[], orderedIds: string[]): W
   return out;
 }
 
-/** Set the span of one instance, clamped to what its type allows. */
-export function setSpanById(
+/** Set both the width (span) and height (row span) of one instance in a single update, each clamped
+ *  to what its type allows. A standard height (1) drops the `rowSpan` field (see {@link withRowSpan})
+ *  so untouched/short widgets stay lean. Used by the corner drag-to-resize handle. */
+export function setSizeById(
   widgets: WidgetInstance[],
   instanceId: string,
   span: number,
-  reg: RegistryView,
-): WidgetInstance[] {
-  return widgets.map((w) =>
-    w.instanceId === instanceId ? { ...w, span: clampSpan(w.type, span, reg) } : w,
-  );
-}
-
-/** Set the height (row span) of one instance, clamped to what its type allows. A standard height
- *  drops the field (see {@link withRowSpan}). */
-export function setRowSpanById(
-  widgets: WidgetInstance[],
-  instanceId: string,
   rowSpan: number,
   reg: RegistryView,
 ): WidgetInstance[] {
   return widgets.map((w) =>
-    w.instanceId === instanceId ? withRowSpan(w, clampRowSpan(w.type, rowSpan, reg)) : w,
+    w.instanceId === instanceId
+      ? withRowSpan({ ...w, span: clampSpan(w.type, span, reg) }, clampRowSpan(w.type, rowSpan, reg))
+      : w,
   );
 }
 

@@ -47,14 +47,19 @@ export function SharedDashboardPage() {
   const dismissSaveError = useSharedLayoutStore((s) => s.dismissSaveError);
   const editing = useSharedLayoutStore((s) => s.editing);
   const setEditing = useSharedLayoutStore((s) => s.setEditing);
+  const cancelEditing = useSharedLayoutStore((s) => s.cancelEditing);
+  const isDirty = useSharedLayoutStore((s) => s.isDirty);
   const move = useSharedLayoutStore((s) => s.move);
   const load = useSharedLayoutStore((s) => s.load);
   const resetToDefault = useSharedLayoutStore((s) => s.resetToDefault);
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   // Warn before entering edit mode: changes here are global (apply to every user).
   const [confirmEdit, setConfirmEdit] = useState(false);
+  // True only while a reorder drag is in flight — disables dense packing so the sort stays linear.
+  const [reordering, setReordering] = useState(false);
   const [loadSlow, setLoadSlow] = useState(false);
 
   useEffect(() => {
@@ -76,6 +81,7 @@ export function SharedDashboardPage() {
   );
 
   const onDragEnd = (e: DragEndEvent) => {
+    setReordering(false);
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = widgets.map((w) => w.instanceId);
@@ -84,11 +90,20 @@ export function SharedDashboardPage() {
     if (from >= 0 && to >= 0) move(from, to);
   };
 
+  // Cancel = discard this session's edits. Confirm only when something actually changed.
+  const onCancel = () => {
+    if (isDirty()) setConfirmCancel(true);
+    else cancelEditing();
+  };
+
   const actions = editing ? (
     <>
       <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
       <Button variant="ghost" onClick={() => setConfirmReset(true)}>
         {t('common:actions.reset')}
+      </Button>
+      <Button variant="ghost" onClick={onCancel}>
+        {t('common:actions.cancel')}
       </Button>
       <Button variant="primary" onClick={() => setEditing(false)}>
         {t('actions.done')}
@@ -149,12 +164,18 @@ export function SharedDashboardPage() {
             )}
           </div>
         ) : (
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => setReordering(true)}
+            onDragEnd={onDragEnd}
+            onDragCancel={() => setReordering(false)}
+          >
             <SortableContext
               items={widgets.map((w) => w.instanceId)}
               strategy={rectSortingStrategy}
             >
-              <div className="mydash-grid">
+              <div className={`mydash-grid${reordering ? ' is-reordering' : ''}`}>
                 {widgets.map((w) => (
                   <WidgetFrame key={w.instanceId} instance={w} editing={editing} />
                 ))}
@@ -210,6 +231,29 @@ export function SharedDashboardPage() {
             }
           >
             <p>{t('shared.resetBody')}</p>
+          </Modal>
+        )}
+
+        {confirmCancel && (
+          <Modal
+            title={t('shared.cancelTitle')}
+            onClose={() => setConfirmCancel(false)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmCancel(false)}>{t('actions.keepEditing')}</Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    cancelEditing();
+                    setConfirmCancel(false);
+                  }}
+                >
+                  {t('actions.discard')}
+                </Button>
+              </>
+            }
+          >
+            <p>{t('shared.cancelBody')}</p>
           </Modal>
         )}
       </div>

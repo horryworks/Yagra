@@ -33,8 +33,12 @@ interface Props {
   values?: number[];
   /** Multiple series (takes precedence over `values`). */
   series?: ChartSeries[];
-  /** Chart height in px (default 220). */
+  /** Chart height in px (default 220). Ignored when `fill` is set. */
   height?: number;
+  /** Fill the container's height instead of using a fixed `height` — the chart tracks the pane's
+   *  height (as well as its width) via the ResizeObserver. Used by dashboard widgets whose cell can
+   *  be resized taller. The wrapper must have a definite height (a flex/grid child that stretches). */
+  fill?: boolean;
   /** Optional Y-axis tick formatter (e.g. SI suffixes so big numbers don't clip). */
   yFormat?: (v: number) => string;
   /** Fixed Y-axis `[min, max]`; omit to auto-fit the data (uPlot default). Bounded gauges like
@@ -62,6 +66,7 @@ export function MetricChart({
   values,
   series,
   height = 220,
+  fill = false,
   yFormat,
   yRange,
   xRange,
@@ -118,7 +123,7 @@ export function MetricChart({
     const opts: uPlot.Options = {
       title,
       width: el.clientWidth || 460,
-      height,
+      height: fill ? el.clientHeight || height : height,
       axes: [axis, yAxis],
       // Force a fixed Y range (e.g. 0–100% gauges) and/or X window (pin to the requested time
       // range) when asked; otherwise uPlot auto-fits the respective axis to the data.
@@ -193,10 +198,12 @@ export function MetricChart({
     const plot = new uPlot(opts, data, el);
     plotRef.current = plot;
 
-    // Track the container width so the chart fills the pane (and reflows on layout change).
+    // Track the container size so the chart fills the pane (and reflows on layout change). Width
+    // always tracks; height tracks too in `fill` mode (a resizable dashboard cell), else stays fixed.
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
-      if (w > 0) plot.setSize({ width: w, height });
+      const h = fill ? el.clientHeight : height;
+      if (w > 0 && h > 0) plot.setSize({ width: w, height: h });
     });
     ro.observe(el);
 
@@ -223,5 +230,5 @@ export function MetricChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timestamps, values, series, xRange, yRange, refKey, structKey]);
 
-  return <div ref={ref} />;
+  return <div ref={ref} className={fill ? 'metricchart-fill' : undefined} />;
 }

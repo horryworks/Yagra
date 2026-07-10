@@ -1,13 +1,22 @@
 /* 12-column responsive board. Each widget cell sets its column span via .mydash-span-N and its
-   (optional, stepped) height via .mydash-rowspan-N — both defined in WidgetFrame.css. `--mydash-row`
-   is the height of one step; a taller widget floors its height at N steps (+ the gaps between). */
+   height (stepped row span) via .mydash-rowspan-N — both defined in WidgetFrame.css. Rows are a
+   fixed `--mydash-row` tall (the invisible vertical snap unit), so `grid-row: span N` gives an
+   exact, gap-aligned height; `grid-auto-flow: dense` back-fills the holes a taller neighbour would
+   otherwise leave → gap-free tiling. Cells stretch to fill their row area (no `align-items:start`). */
 .mydash-grid {
   --mydash-gap: 18px;
   --mydash-row: 240px;
   display: grid;
   grid-template-columns: repeat(12, 1fr);
+  grid-auto-rows: var(--mydash-row);
+  grid-auto-flow: row dense;
   gap: var(--mydash-gap);
-  align-items: start;
+}
+
+/* Turn dense packing off while a reorder drag is in flight so the dnd-kit sort animation stays
+   linear (a back-filled hole makes the animation jump); packing re-tightens on drop. */
+.mydash-grid.is-reordering {
+  grid-auto-flow: row;
 }
 
 .mydash-span-4 {
@@ -40,16 +49,23 @@
   }
 }
 
-/* ≤720px: everything full width. */
+/* ≤720px: single column, natural heights (a fixed row unit would waste huge vertical space on a
+   phone). Row spans are dropped so each widget is just its content height, stacked. */
 @media (max-width: 720px) {
   .mydash-grid {
     grid-template-columns: 1fr;
+    grid-auto-rows: auto;
   }
   .mydash-span-4,
   .mydash-span-6,
   .mydash-span-8,
   .mydash-span-12 {
     grid-column: 1 / -1;
+  }
+  .mydash-rowspan-1,
+  .mydash-rowspan-2,
+  .mydash-rowspan-3 {
+    grid-row: auto;
   }
 }
 

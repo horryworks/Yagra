@@ -67,7 +67,7 @@ export function FleetHealthTimelineWidget() {
     <MetricChart
       title=""
       timestamps={ts}
-      height={180}
+      fill
       yFormat={(v) => String(Math.round(v))}
       series={[
         { label: t('widgets.fleetTimeline.down'), values: down, color: stateColorValue('critical') },

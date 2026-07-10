@@ -4,7 +4,9 @@
     "done": "Done",
     "addWidget": "Add widget",
     "dismiss": "Dismiss",
-    "resetToDefault": "Reset to default"
+    "resetToDefault": "Reset to default",
+    "keepEditing": "Keep editing",
+    "discard": "Discard changes"
   },
   "my": {
     "loadSlow": "Loading your dashboard is taking longer than expected.",
@@ -12,7 +14,9 @@
     "empty": "This board is empty.",
     "addFirst": "Add your first widget",
     "resetTitle": "Reset board?",
-    "resetBody": "This replaces this board’s widgets with the default set. It can’t be undone."
+    "resetBody": "This replaces this board’s widgets with the default set. It can’t be undone.",
+    "cancelTitle": "Discard changes?",
+    "cancelBody": "Discard the changes you made in this editing session? The board returns to how it was when you opened Customize."
   },
   "shared": {
     "adminOnly": "Only admins can customize the shared dashboard",
@@ -24,7 +28,9 @@
     "confirmEditConfirm": "Customize for everyone",
     "confirmEditBody": "Changes you make here apply to <strong>every user</strong> — everyone’s Shared Dashboard updates. Continue?",
     "resetTitle": "Reset shared dashboard?",
-    "resetBody": "This replaces the shared dashboard’s widgets with the default set — for all users. It can’t be undone."
+    "resetBody": "This replaces the shared dashboard’s widgets with the default set — for all users. It can’t be undone.",
+    "cancelTitle": "Discard changes?",
+    "cancelBody": "Discard the changes you made in this editing session? The shared dashboard returns to how it was when you opened Customize."
   },
   "save": {
     "expired": "Your session expired — sign in again to save dashboard changes.",
@@ -45,22 +51,13 @@
     "removeBody": "Remove “{{name}}” and its widgets? This can’t be undone."
   },
   "widgetFrame": {
-    "span": {
-      "4": "⅓ width",
-      "6": "½ width",
-      "8": "⅔ width",
-      "12": "Full width"
-    },
-    "width": "Widget width",
-    "rowSpan": {
-      "1": "Standard height",
-      "2": "Tall",
-      "3": "Extra tall"
-    },
-    "height": "Widget height",
     "remove": "Remove {{name}}",
     "dragTitle": "Drag to reorder",
-    "drag": "Drag {{name}} to reorder"
+    "drag": "Drag {{name}} to reorder",
+    "resize": "Resize {{name}}",
+    "resizeHint": "Drag to resize (arrow keys also work)",
+    "sizeReadout": "{{w}} × {{h}}",
+    "sizeAnnounce": "Width {{w}} of 12 columns, height {{h}} rows"
   },
   "catalog": {
     "title": "Add a widget",

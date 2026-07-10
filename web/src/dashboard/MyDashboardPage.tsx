@@ -42,12 +42,17 @@ export function MyDashboardPage() {
   const dismissSaveError = useLayoutStore((s) => s.dismissSaveError);
   const editing = useLayoutStore((s) => s.editing);
   const setEditing = useLayoutStore((s) => s.setEditing);
+  const cancelEditing = useLayoutStore((s) => s.cancelEditing);
+  const isDirty = useLayoutStore((s) => s.isDirty);
   const move = useLayoutStore((s) => s.move);
   const load = useLayoutStore((s) => s.load);
   const resetToDefault = useLayoutStore((s) => s.resetToDefault);
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  // True only while a reorder drag is in flight — disables dense packing so the sort stays linear.
+  const [reordering, setReordering] = useState(false);
   // If the load hangs (no response), don't spin forever — surface a retry after a grace period.
   const [loadSlow, setLoadSlow] = useState(false);
 
@@ -70,6 +75,7 @@ export function MyDashboardPage() {
   );
 
   const onDragEnd = (e: DragEndEvent) => {
+    setReordering(false);
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const ids = widgets.map((w) => w.instanceId);
@@ -78,11 +84,20 @@ export function MyDashboardPage() {
     if (from >= 0 && to >= 0) move(from, to);
   };
 
+  // Cancel = discard this session's edits. Confirm only when something actually changed.
+  const onCancel = () => {
+    if (isDirty()) setConfirmCancel(true);
+    else cancelEditing();
+  };
+
   const actions = editing ? (
     <>
       <Button onClick={() => setCatalogOpen(true)}>{t('actions.addWidget')}</Button>
       <Button variant="ghost" onClick={() => setConfirmReset(true)}>
         {t('common:actions.reset')}
+      </Button>
+      <Button variant="ghost" onClick={onCancel}>
+        {t('common:actions.cancel')}
       </Button>
       <Button variant="primary" onClick={() => setEditing(false)}>
         {t('actions.done')}
@@ -137,12 +152,18 @@ export function MyDashboardPage() {
             </Button>
           </div>
         ) : (
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => setReordering(true)}
+            onDragEnd={onDragEnd}
+            onDragCancel={() => setReordering(false)}
+          >
             <SortableContext
               items={widgets.map((w) => w.instanceId)}
               strategy={rectSortingStrategy}
             >
-              <div className="mydash-grid">
+              <div className={`mydash-grid${reordering ? ' is-reordering' : ''}`}>
                 {widgets.map((w) => (
                   <WidgetFrame key={w.instanceId} instance={w} editing={editing} />
                 ))}
@@ -173,6 +194,29 @@ export function MyDashboardPage() {
             }
           >
             <p>{t('my.resetBody')}</p>
+          </Modal>
+        )}
+
+        {confirmCancel && (
+          <Modal
+            title={t('my.cancelTitle')}
+            onClose={() => setConfirmCancel(false)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmCancel(false)}>{t('actions.keepEditing')}</Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    cancelEditing();
+                    setConfirmCancel(false);
+                  }}
+                >
+                  {t('actions.discard')}
+                </Button>
+              </>
+            }
+          >
+            <p>{t('my.cancelBody')}</p>
           </Modal>
         )}
       </div>
