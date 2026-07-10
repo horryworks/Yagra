@@ -6,14 +6,16 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.6.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
+> Status: **v0.1.7.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
-> branch sites, assigned by location affinity and failed over automatically. Every binary now
-> exports **OpenTelemetry traces** (opt-in) for end-to-end self-observability. The WebUI now
-> switches between **English and 日本語** on the fly, and **SNMPv3** nodes collect per-interface
-> metrics via a GETBULK table walk. HA stores remain a configuration step away, not a rewrite.
+> branch sites, assigned by location affinity and failed over automatically. Every binary exports
+> **OpenTelemetry traces** (opt-in) and now reports **host-resource trends** (CPU / load / memory /
+> disk) for the core and each poller in System Health, and shuts down gracefully on restart. The
+> WebUI switches between **English and 日本語** on the fly across most screens, and **SNMPv3** nodes
+> collect per-interface metrics via a GETBULK table walk. HA stores remain a configuration step
+> away, not a rewrite.
 
 ## Components
 

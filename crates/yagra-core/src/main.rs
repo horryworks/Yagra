@@ -46,6 +46,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
+
 use ack::AckRepo;
 use alerts::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
@@ -159,17 +161,22 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         scheduler_stats.clone(),
         Some(store.clone()),
     ));
+    // Graceful shutdown: one token fans SIGTERM/Ctrl-C out to every background loop below and the
+    // HTTP server, so a rolling upgrade drains in-flight work instead of being killed mid-write
+    // (ADR-017). `serve` (end of `run`) installs the signal handler that cancels this token.
+    let shutdown = CancellationToken::new();
+
     // Feed the registry: heartbeats (liveness/telemetry) and snapshot requests. Thin consumer loops
     // that end when the bus stream closes (shutdown), mirroring the other bus consumers.
     {
         let coordinator = coordinator.clone();
         let stream = Box::pin(bus.subscribe_heartbeats().await?);
-        tokio::spawn(coordinator.run_heartbeat_consumer(stream));
+        spawn_cancellable(&shutdown, coordinator.run_heartbeat_consumer(stream));
     }
     {
         let coordinator = coordinator.clone();
         let stream = Box::pin(bus.subscribe_sync_requests().await?);
-        tokio::spawn(coordinator.run_sync_request_consumer(stream));
+        spawn_cancellable(&shutdown, coordinator.run_sync_request_consumer(stream));
     }
 
     // Core self-observability (monitoring-conventions): sample core's own host every
@@ -180,30 +187,47 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let store = store.clone();
         let cache = core_host.clone();
         let pool = repo.pool().clone();
-        tokio::spawn(run_host_collector(store, cache, pool));
+        spawn_cancellable(&shutdown, run_host_collector(store, cache, pool));
+    }
+
+    // Notification delivery runs on its own task, fed by the result consumer over a bounded queue,
+    // so a slow/wedged vendor endpoint (retries, 10s timeouts, honored `Retry-After`) can never stall
+    // the poll-result ingest pipeline. Single consumer ⇒ deliveries stay ordered; a bounded channel
+    // ⇒ sustained overload applies backpressure rather than growing memory unbounded.
+    let (notify_tx, mut notify_rx) =
+        tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
+    {
+        let notifier = notifier.clone();
+        spawn_cancellable(&shutdown, async move {
+            while let Some(action) = notify_rx.recv().await {
+                notifier.handle(action).await;
+            }
+        });
     }
 
     {
         let store = store.clone();
         let alerts = alerts.clone();
-        let notifier = notifier.clone();
         let history = history.clone();
         let repo = repo.clone();
         let stats = scheduler_stats.clone();
         let meraki_inflight = meraki_inflight.clone();
         let coordinator = coordinator.clone();
         let results = Box::pin(bus.subscribe_results().await?);
-        tokio::spawn(consume_results(
-            results,
-            store,
-            alerts,
-            notifier,
-            history,
-            repo,
-            stats,
-            meraki_inflight,
-            coordinator,
-        ));
+        spawn_cancellable(
+            &shutdown,
+            consume_results(
+                results,
+                store,
+                alerts,
+                notify_tx,
+                history,
+                repo,
+                stats,
+                meraki_inflight,
+                coordinator,
+            ),
+        );
     }
 
     // Discovery: a runner that publishes sweep jobs + a consumer that folds results back in,
@@ -211,7 +235,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let discovery = Arc::new(DiscoveryRunner::new(bus.clone(), classifier.clone()));
     {
         let results = Box::pin(bus.subscribe_discovery_results().await?);
-        tokio::spawn(discovery.clone().run_consumer(results));
+        spawn_cancellable(&shutdown, discovery.clone().run_consumer(results));
     }
 
     // Passive events (Phase 2): syslog/traps arrive from pollers on `yagra.events`,
@@ -227,9 +251,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     event_engine.reload(&repo).await;
     {
         let stream = Box::pin(bus.subscribe_events().await?);
-        tokio::spawn(events::consume_events(stream, event_engine.clone()));
+        spawn_cancellable(
+            &shutdown,
+            events::consume_events(stream, event_engine.clone()),
+        );
     }
-    tokio::spawn(events::run_ttl_sweeper(event_engine.clone()));
+    spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
@@ -265,13 +292,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let stats = scheduler_stats.clone();
         let meraki_devices = meraki_devices.clone();
         let coordinator = coordinator.clone();
-        tokio::spawn(run_scheduler(
-            repo,
-            dispatcher,
-            stats,
-            meraki_devices,
-            coordinator,
-        ));
+        spawn_cancellable(
+            &shutdown,
+            run_scheduler(repo, dispatcher, stats, meraki_devices, coordinator),
+        );
     }
 
     // Meraki scheduler: one org-scoped collect per due tier, single-flighted per org so the shared
@@ -289,15 +313,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let bus = bus.clone();
         let inflight = meraki_inflight.clone();
         let sys = repo.clone();
-        tokio::spawn(run_meraki_scheduler(
-            orgs,
-            devices,
-            creds,
-            bus,
-            inflight,
-            sys,
-            meraki_pool,
-        ));
+        spawn_cancellable(
+            &shutdown,
+            run_meraki_scheduler(orgs, devices, creds, bus, inflight, sys, meraki_pool),
+        );
     }
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
@@ -317,7 +336,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let classifier = classifier.clone();
         let classification = classification.clone();
         let event_engine = event_engine.clone();
-        tokio::spawn(async move {
+        spawn_cancellable(&shutdown, async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 alerts.set_config(
@@ -342,7 +361,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let alerts = alerts.clone();
         let history = history.clone();
         let events_repo = events_repo.clone();
-        tokio::spawn(async move {
+        spawn_cancellable(&shutdown, async move {
             const SNAPSHOT_SECS: u64 = 300;
             const RETENTION_SECS: i64 = 90 * 86_400;
             loop {
@@ -382,7 +401,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let maintenance = maintenance.clone();
         let repo = repo.clone();
         let group_repo = group_repo.clone();
-        tokio::spawn(async move {
+        spawn_cancellable(&shutdown, async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 load_routing(&notifier, &notifications).await;
@@ -462,7 +481,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     ));
     {
         let reports = reports.clone();
-        tokio::spawn(run_report_scheduler(reports));
+        spawn_cancellable(&shutdown, run_report_scheduler(reports));
     }
 
     let admin = Some(Arc::new(AdminState {
@@ -507,7 +526,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         events: Some(event_engine),
         public_dashboard: cfg.public_dashboard,
     };
-    serve(state, &cfg.api_addr, metrics).await
+    serve(state, &cfg.api_addr, metrics, shutdown).await
 }
 
 /// Skeleton mode: serve the API over an in-memory sink seeded with one demo reading.
@@ -541,7 +560,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // dev dashboard would be unreachable. Auth gating applies in live mode.
         public_dashboard: true,
     };
-    serve(state, "0.0.0.0:8080", metrics).await
+    serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }
 
 /// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
@@ -593,7 +612,7 @@ async fn consume_results<S>(
     mut results: S,
     store: Arc<dyn MetricStore>,
     alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
+    notify_tx: tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
     history: Arc<AlertHistoryStore>,
     repo: Arc<NodeRepo>,
     stats: Arc<scheduler::SchedulerStats>,
@@ -616,7 +635,7 @@ async fn consume_results<S>(
             &result,
             &store,
             &alerts,
-            &notifier,
+            &notify_tx,
             &history,
             &repo,
             &stats,
@@ -639,7 +658,7 @@ async fn ingest_result(
     result: &PollResult,
     store: &Arc<dyn MetricStore>,
     alerts: &Arc<AlertManager>,
-    notifier: &Arc<Notifier>,
+    notify_tx: &tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>,
     history: &Arc<AlertHistoryStore>,
     repo: &Arc<NodeRepo>,
     stats: &Arc<scheduler::SchedulerStats>,
@@ -720,7 +739,12 @@ async fn ingest_result(
         if let Err(e) = recorded {
             tracing::warn!(error = %e, "failed to record alert history");
         }
-        notifier.handle(action).await;
+        // Hand delivery to the notification task (bounded queue) rather than awaiting the network
+        // send here — a slow vendor endpoint must not stall result ingest. A closed channel only
+        // happens at shutdown, so a send error is benign.
+        if notify_tx.send(action).await.is_err() {
+            tracing::debug!("notification channel closed (shutdown); dropping delivery");
+        }
     }
 }
 
@@ -816,18 +840,36 @@ async fn run_scheduler(
                 let mut working_set_pools: u64 = 0;
                 let mut legacy_pools: u64 = 0;
 
+                // Per-node working-set builds fan out with bounded concurrency: each resolves a
+                // node's URL/SNMP/collection config with a few DB round-trips, so at tens of
+                // thousands of nodes doing them strictly one-at-a-time would let the build alone
+                // exceed the poll interval. Bounded so the DB connection pool isn't overwhelmed.
+                const SWEEP_BUILD_CONCURRENCY: usize = 16;
+
                 for (pool, members) in groups {
                     if scheduler::pool_uses_working_set(&pool, &live) {
                         // Build the pool's whole desired working set and let the coordinator diff +
-                        // distribute it (snapshots/deltas). Not gated by `due()`.
-                        let mut desired = HashMap::new();
-                        for (node, secs) in &members {
-                            let specs = dispatcher.build_node_specs(node, *secs).await;
+                        // distribute it (snapshots/deltas). Not gated by `due()`. These nodes leave
+                        // the legacy `last_dispatched` map (a later legacy fallback re-polls at once).
+                        for (node, _secs) in &members {
                             last_dispatched.remove(&node.id.as_uuid());
-                            if !specs.is_empty() {
-                                desired.insert(node.id, specs);
-                            }
                         }
+                        // Own each item into the stream and clone the `Arc` per future so no borrow
+                        // crosses an `.await` (keeps the concurrent builds free of lifetime coupling).
+                        let desired: HashMap<_, _> =
+                            futures::stream::iter(members)
+                                .map(|(node, secs)| {
+                                    let dispatcher = dispatcher.clone();
+                                    async move {
+                                        (node.id, dispatcher.build_node_specs(&node, secs).await)
+                                    }
+                                })
+                                .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
+                                .filter_map(|(id, specs)| async move {
+                                    (!specs.is_empty()).then_some((id, specs))
+                                })
+                                .collect()
+                                .await;
                         coordinator.reconcile_pool(&pool, desired, now).await;
                         working_set_pools += 1;
                     } else {
@@ -840,7 +882,7 @@ async fn run_scheduler(
                                 continue;
                             }
                             last_dispatched.insert(id, now);
-                            for (job, kind) in dispatcher.build_node_jobs(node, *secs).await {
+                            for (job, kind) in dispatcher.build_scheduled_jobs(node, *secs).await {
                                 jobs_round += 1;
                                 let dispatcher = dispatcher.clone();
                                 let node_id = node.id;
@@ -1023,7 +1065,12 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
 }
 
 /// Bind and serve the northbound API plus the Prometheus `/metrics` endpoint.
-async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow::Result<()> {
+async fn serve(
+    state: ApiState,
+    addr: &str,
+    metrics: PrometheusHandle,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
     let app = api::router(state)
         .route(
             "/metrics",
@@ -1040,9 +1087,21 @@ async fn serve(state: ApiState, addr: &str, metrics: PrometheusHandle) -> anyhow
                 tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO),
             ),
         );
+    // Turn SIGTERM/Ctrl-C into cancellation of the shared token: the background loops stop and the
+    // server below leaves its accept loop, draining in-flight requests before returning (ADR-017).
+    {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown signal received — draining and stopping");
+            shutdown.cancel();
+        });
+    }
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "Yagra-core API listening on /api/v1 (+ /metrics)");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move { shutdown.cancelled().await })
+        .await?;
     Ok(())
 }
 

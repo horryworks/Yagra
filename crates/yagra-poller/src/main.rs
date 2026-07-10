@@ -39,6 +39,7 @@ use yagra_bus::{
     subjects, HeartbeatMsg, NatsBus, PollJob, SyncBus, SyncMsg, SyncRequest, BUS_SCHEMA_VERSION,
     HEARTBEAT_SECS,
 };
+use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
 /// How the poller identifies itself to core (ADR-009). `id` is already sanitized for use as a NATS
 /// subject token; `pool` is the (defaulted) pool it serves.
@@ -139,10 +140,23 @@ async fn main() -> anyhow::Result<()> {
     let results_total = Arc::new(AtomicU64::new(0));
     let inflight = Arc::new(AtomicU64::new(0));
 
+    // Graceful shutdown: SIGTERM/Ctrl-C cancels this token so the background loops stop and the
+    // worker loop below returns, instead of the process being hard-killed mid-poll (ADR-017 rolling
+    // upgrade). Install the signal handler once, up front.
+    let shutdown = CancellationToken::new();
+    {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown signal received — stopping poller");
+            shutdown.cancel();
+        });
+    }
+
     // Passive-event listeners (Phase 2): syslog / SNMP traps, enabled per site via env. They publish
     // EventMsgs on `yagra.events`; core does the rule matching. The returned labels advertise which
     // ones actually bound (heartbeat telemetry).
-    let listener_labels = spawn_event_listeners(&bus).await;
+    let listener_labels = spawn_event_listeners(&bus, &shutdown).await;
 
     // Discovery sweeps run alongside polling and need the same raw-socket ICMP + SNMP transport. A
     // new core publishes them pool-scoped; an old core (or poll-now path) uses the legacy subject —
@@ -156,7 +170,10 @@ async fn main() -> anyhow::Result<()> {
         let merged = Box::pin(futures::stream::select(legacy, pooled));
         let bus = bus.clone();
         let transport = transport.clone();
-        tokio::spawn(discovery::run_discovery_stream(merged, bus, transport));
+        spawn_cancellable(
+            &shutdown,
+            discovery::run_discovery_stream(merged, bus, transport),
+        );
     }
 
     // Working-set sync (ADR-020): subscribe FIRST, then request an initial snapshot so we can't miss
@@ -172,35 +189,41 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = bus.publish_sync_request(initial).await {
             tracing::warn!(error = %e, "failed to publish initial sync request");
         }
-        tokio::spawn(run_sync_loop(
-            sync_sub,
-            working_set.clone(),
-            bus.clone(),
-            identity.id.clone(),
-            identity.pool.clone(),
-            identity.incarnation,
-        ));
+        spawn_cancellable(
+            &shutdown,
+            run_sync_loop(
+                sync_sub,
+                working_set.clone(),
+                bus.clone(),
+                identity.id.clone(),
+                identity.pool.clone(),
+                identity.incarnation,
+            ),
+        );
     }
 
     // Heartbeat (ADR-009): liveness + telemetry every HEARTBEAT_SECS. The host collector rides the
     // beat so this poller's CPU/load/mem/disk reach core even across NAT/FW (self-observability).
     let host_collector = Arc::new(yagra_hoststats::HostCollector::from_env());
-    tokio::spawn(run_heartbeat_loop(
-        bus.clone(),
-        identity.id.clone(),
-        identity.pool.clone(),
-        identity.incarnation,
-        identity.version,
-        working_set.clone(),
-        results_total.clone(),
-        inflight.clone(),
-        listener_labels,
-        host_collector,
-    ));
+    spawn_cancellable(
+        &shutdown,
+        run_heartbeat_loop(
+            bus.clone(),
+            identity.id.clone(),
+            identity.pool.clone(),
+            identity.incarnation,
+            identity.version,
+            working_set.clone(),
+            results_total.clone(),
+            inflight.clone(),
+            listener_labels,
+            host_collector,
+        ),
+    );
 
     // Local scheduler: every 500ms, drain due specs into a bounded channel feeding the worker loop.
     let (jobs_tx, jobs_rx) = mpsc::channel::<PollJob>(256);
-    tokio::spawn(run_local_scheduler(working_set.clone(), jobs_tx));
+    spawn_cancellable(&shutdown, run_local_scheduler(working_set.clone(), jobs_tx));
 
     // Legacy / pool-scoped jobs: consume only this poller's pool (no more `yagra.jobs.*` wildcard)
     // so work stays local (ADR-009). Merge with the locally-scheduled jobs into one stream driving
@@ -220,17 +243,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Blocks for the process lifetime: the local scheduler keeps feeding this stream (so a bus blip
     // doesn't stop polling), so it only returns if both sources end (shutdown).
-    worker::run_stream(
-        unified,
-        bus,
-        transport,
-        limiter,
-        Some(poller_id),
-        results_total,
-        inflight,
-    )
-    .await;
-    tracing::warn!("job stream ended — poller shutting down");
+    tokio::select! {
+        _ = worker::run_stream(
+            unified,
+            bus,
+            transport,
+            limiter,
+            Some(poller_id),
+            results_total,
+            inflight,
+        ) => {
+            tracing::warn!("job stream ended — poller shutting down");
+        }
+        _ = shutdown.cancelled() => {
+            tracing::info!("shutdown signal — poller stopped");
+        }
+    }
     Ok(())
 }
 
@@ -374,7 +402,10 @@ async fn run_heartbeat_loop<B>(
 ///
 /// Pool tag: the event's `pool` stays the **raw** `YAGRA_POLLER_POOL` env option (unset ⇒ `None` ⇒
 /// stored NULL core-side), unchanged from before — only job subscription uses the defaulted pool.
-async fn spawn_event_listeners(bus: &Arc<yagra_bus::NatsBus>) -> Vec<String> {
+async fn spawn_event_listeners(
+    bus: &Arc<yagra_bus::NatsBus>,
+    shutdown: &CancellationToken,
+) -> Vec<String> {
     let syslog_bind = env_nonempty("YAGRA_SYSLOG_BIND");
     let trap_bind = env_nonempty("YAGRA_TRAP_BIND");
     if syslog_bind.is_none() && trap_bind.is_none() {
@@ -397,12 +428,15 @@ async fn spawn_event_listeners(bus: &Arc<yagra_bus::NatsBus>) -> Vec<String> {
             Ok(sock) => {
                 tracing::info!(%bind, per_source, global, "syslog listener enabled");
                 labels.push(format!("syslog:{bind}"));
-                tokio::spawn(listeners::run_syslog_listener(
-                    sock,
-                    bus.clone(),
-                    limiter.clone(),
-                    pool.clone(),
-                ));
+                spawn_cancellable(
+                    shutdown,
+                    listeners::run_syslog_listener(
+                        sock,
+                        bus.clone(),
+                        limiter.clone(),
+                        pool.clone(),
+                    ),
+                );
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind syslog listener"),
         }
@@ -415,13 +449,10 @@ async fn spawn_event_listeners(bus: &Arc<yagra_bus::NatsBus>) -> Vec<String> {
             Ok(sock) => {
                 tracing::info!(%bind, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
                 labels.push(format!("trap:{bind}"));
-                tokio::spawn(listeners::run_trap_listener(
-                    sock,
-                    bus.clone(),
-                    limiter,
-                    community,
-                    pool,
-                ));
+                spawn_cancellable(
+                    shutdown,
+                    listeners::run_trap_listener(sock, bus.clone(), limiter, community, pool),
+                );
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
         }

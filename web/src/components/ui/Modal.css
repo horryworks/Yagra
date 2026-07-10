@@ -39,7 +39,7 @@
   background: none;
   border: none;
   color: var(--text-secondary);
-  font-size: 18px;
+  font-size: var(--font-xl);
   line-height: 1;
   cursor: pointer;
   border-radius: var(--radius-sm);

@@ -1,5 +1,35 @@
 # Release Notes
 
+## v0.1.7
+
+**Host-resource trends, fuller localization, and a smoother large-fleet + upgrade experience** — System
+Health now charts CPU/load/memory/disk over time for the core and every poller, more of the WebUI is
+available in Japanese, and both the polling scheduler and shutdown behavior were hardened for scale and
+clean restarts.
+
+### New Features
+- **Host-resource trends in System Health** — the System Health page now charts **CPU, load, memory, and
+  disk** over time for the **core and each poller**, so you can watch resource pressure build up rather
+  than only seeing the current snapshot.
+
+### Improvements
+- **Fuller English / 日本語 localization** — the remaining WebUI areas — the application shell (top bar,
+  sidebar, breadcrumbs), alerts triage, the shared node picker and time-range controls, and the
+  remaining screens — are now localized, so switching to Japanese covers far more of the interface. Any
+  still-untranslated text falls back to English.
+- **Reorganized navigation** — the sidebar is grouped into **Monitor** and **Configure** sections with
+  clearer labels, and third-party **Integrations** are gathered into a catalog.
+- **Graceful shutdown** — the core and pollers now stop cleanly on `SIGTERM` / Ctrl-C (for example during
+  a `docker compose` restart or a rolling upgrade), draining in-flight work and in-flight API requests
+  instead of being terminated abruptly.
+- **Faster scheduling and ingest for large fleets** — the poll scheduler builds each pool's working set
+  concurrently, and notification delivery now runs off the result-ingest path, so a slow notification
+  endpoint can no longer stall metric ingestion — both help throughput at tens of thousands of nodes.
+
+### Bug Fixes
+- **UI sizing/style consistency** — corrected several WebUI text sizes and modal styles that referenced a
+  non-existent style token and rendered slightly larger than intended.
+
 ## v0.1.6
 
 **Multi-language WebUI + per-interface metrics on SNMPv3 nodes** — the interface can now be switched

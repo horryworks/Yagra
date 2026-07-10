@@ -3,7 +3,7 @@
 // series channel (not a node status): spikes use series-4 (amber-brown), drops series-5 (crimson).
 
 import { useTranslation } from 'react-i18next';
-import { MetricChart } from '../../components/MetricChart/MetricChart';
+import { MetricChart, SERIES_IN, SERIES_OUT } from '../../components/MetricChart/MetricChart';
 import { formatBps, formatSi } from '../../lib/format';
 import { api } from '../../services/api';
 import type { InterfaceTopEntry } from '../../types/api';
@@ -50,9 +50,10 @@ export function TrafficDropsWidget() {
   return <DeltaBars rows={toRows(data)} color="var(--series-5)" empty={t('widgets.trafficDrops.empty')} />;
 }
 
-// In / Out series colors for the throughput chart (canvas exemption — uPlot can't read vars).
-const IN_COLOR = '#4f8cff';
-const OUT_COLOR = '#34d399';
+// In / Out series colors come from the shared MetricChart palette (single source of truth;
+// canvas exemption — uPlot can't read CSS vars).
+const IN_COLOR = SERIES_IN;
+const OUT_COLOR = SERIES_OUT;
 
 export function AggregateThroughputWidget() {
   const { t } = useTranslation('dashboard');

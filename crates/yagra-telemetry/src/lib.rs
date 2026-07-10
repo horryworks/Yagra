@@ -177,9 +177,80 @@ pub fn set_span_parent(span: &tracing::Span, carrier: &HashMap<String, String>) 
     span.set_parent(parent);
 }
 
+// ── Graceful shutdown ─────────────────────────────────────────────────────────────────────────
+// Process-lifecycle coordination shared by every binary. One `CancellationToken` fans a
+// SIGTERM/Ctrl-C out to the background loops AND the HTTP server so a rolling upgrade drains
+// in-flight work instead of being hard-killed mid-write — the "no data loss on upgrade" contract
+// (ADR-017). Lives here because this is already the process-wide lifecycle crate.
+
+/// Re-exported so binaries share one cancellation type without each depending on `tokio-util`.
+pub use tokio_util::sync::CancellationToken;
+
+/// Await the process shutdown signal: SIGTERM (unix — what `docker stop` / Kubernetes send) or
+/// Ctrl-C (all platforms). Resolves once, when the first of the two arrives.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            // No SIGTERM handler available ⇒ this arm never resolves; fall back to Ctrl-C only.
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGTERM handler unavailable; Ctrl-C only");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Spawn a process-lifetime background task that stops promptly when `shutdown` fires. On cancel the
+/// task's future is dropped at its next `.await` — the right semantics for the best-effort
+/// scheduler / refresh / bus-consumer loops (durable writes are idempotent + expand-contract, so a
+/// dropped in-flight write is simply redone next round, ADR-017). Returns the `JoinHandle`.
+pub fn spawn_cancellable<F>(shutdown: &CancellationToken, fut: F) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let token = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = token.cancelled() => {}
+            _ = fut => {}
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shutdown contract: a task wrapped by [`spawn_cancellable`] stops promptly once the token
+    /// is cancelled, even when its inner future would otherwise run forever — this is what lets a
+    /// SIGTERM drain the background loops instead of hard-killing them.
+    #[tokio::test]
+    async fn spawn_cancellable_stops_on_cancel() {
+        let token = CancellationToken::new();
+        // Inner future never completes on its own; only cancellation can end the wrapper.
+        let handle = spawn_cancellable(&token, std::future::pending::<()>());
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("cancelled task must finish promptly")
+            .expect("wrapper task must not panic");
+    }
 
     /// With no propagator registered (export disabled — the default in tests) capturing the
     /// current context yields an empty carrier, and an empty carrier serializes to nothing / is a

@@ -127,7 +127,7 @@
   height: 100%;
   background: var(--accent-color);
   border-radius: 3px;
-  transition: width 0.4s ease;
+  transition: width 0.3s ease;
 }
 .ts-run-phase {
   font-size: var(--font-xs);
@@ -448,7 +448,7 @@
   border: none;
   background: none;
   color: var(--text-secondary);
-  font-size: 18px;
+  font-size: var(--font-xl);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }

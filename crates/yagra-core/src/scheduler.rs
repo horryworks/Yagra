@@ -357,8 +357,9 @@ impl PollDispatcher {
         interval_secs: u32,
     ) -> Vec<(PollJob, &'static str)> {
         // Meraki short-circuit: a node with a Meraki binding is polled by the org collector, so it
-        // emits no per-node ICMP/SNMP/HTTP job (guards the on-demand "poll now" path; the periodic
-        // scheduler already skips these nodes by preloading their ids).
+        // emits no per-node ICMP/SNMP/HTTP job. This guards the on-demand "poll now" path; the
+        // periodic scheduler already excludes these nodes (it preloads their ids) and calls
+        // `build_scheduled_jobs`, which skips this per-node lookup.
         match self.meraki_devices.get(node.id.as_uuid()).await {
             Ok(Some(_)) => return Vec::new(),
             Ok(None) => {}
@@ -366,6 +367,19 @@ impl PollDispatcher {
                 tracing::warn!(node = %node.id, error = %e, "meraki-device load failed; treating as non-Meraki node");
             }
         }
+        self.build_scheduled_jobs(node, interval_secs).await
+    }
+
+    /// A node's poll jobs **without** the Meraki-binding lookup — used by the periodic scheduler,
+    /// which already excludes Meraki nodes by preloading their ids, so re-querying `meraki_devices`
+    /// per node every sweep is wasted work (one JOIN per node per round at scale). The on-demand
+    /// "poll now" path keeps the guard via [`Self::build_node_jobs`]. A URL monitor gets a single
+    /// HTTP job; otherwise SNMP auth (decrypted in core) + collection set + the always-on ICMP.
+    pub async fn build_scheduled_jobs(
+        &self,
+        node: &Node,
+        interval_secs: u32,
+    ) -> Vec<(PollJob, &'static str)> {
         // URL monitor short-circuit: a node with a URL check is HTTP-only.
         match self.url_checks.get(node.id.as_uuid()).await {
             Ok(Some(cfg)) => return assemble_node_jobs(node, None, &[], Some(&cfg), interval_secs),
@@ -385,11 +399,12 @@ impl PollDispatcher {
     }
 
     /// The node's poll jobs as reusable working-set [`JobSpec`]s (ADR-020) — the distributed-pool
-    /// analogue of [`Self::build_node_jobs`], reusing its exact auth/collection resolution (zero
-    /// duplication). The per-dispatch `job_id` is dropped here; the poller stamps a fresh one each
-    /// time it schedules the spec locally.
+    /// analogue of [`Self::build_node_jobs`], built via [`Self::build_scheduled_jobs`] (Meraki nodes
+    /// are already excluded on the scheduler path, so the per-node Meraki lookup is skipped). The
+    /// per-dispatch `job_id` is dropped here; the poller stamps a fresh one each time it schedules
+    /// the spec locally.
     pub async fn build_node_specs(&self, node: &Node, interval_secs: u32) -> Vec<JobSpec> {
-        self.build_node_jobs(node, interval_secs)
+        self.build_scheduled_jobs(node, interval_secs)
             .await
             .iter()
             .map(|(job, _kind)| JobSpec::from_job(job))

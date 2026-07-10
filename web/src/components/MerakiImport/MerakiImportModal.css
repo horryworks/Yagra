@@ -9,8 +9,8 @@
 }
 
 .meraki-import-net {
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -20,7 +20,7 @@
   gap: 8px;
   padding: 8px 10px;
   background: var(--bg-tertiary);
-  font-weight: 600;
+  font-weight: var(--weight-medium);
   color: var(--text-primary);
   cursor: pointer;
 }
@@ -32,7 +32,7 @@
 
 .meraki-import-net-count {
   color: var(--text-tertiary);
-  font-size: calc(var(--font-size-base, 14px) - 2px);
+  font-size: var(--font-xs);
 }
 
 .meraki-import-dev {
@@ -42,7 +42,7 @@
   gap: 10px;
   padding: 6px 10px;
   cursor: pointer;
-  border-top: 1px solid var(--border-color);
+  border-top: var(--border-width) solid var(--border-color);
 }
 
 .meraki-import-dev:hover {
@@ -59,5 +59,5 @@
 .meraki-import-dev-meta,
 .meraki-import-dev-ip {
   color: var(--text-tertiary);
-  font-size: calc(var(--font-size-base, 14px) - 2px);
+  font-size: var(--font-xs);
 }

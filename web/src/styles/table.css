@@ -454,7 +454,7 @@
 .yt-avatar.lg {
   width: 38px;
   height: 38px;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .yt-avatar-txt {

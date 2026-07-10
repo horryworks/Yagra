@@ -15,3 +15,6 @@ tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
+# Process-lifecycle: SIGTERM/Ctrl-C handling + CancellationToken for coordinated graceful shutdown.
+tokio = { workspace = true }
+tokio-util = { workspace = true }

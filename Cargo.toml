@@ -33,7 +33,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -46,6 +46,8 @@ repository = "https://github.com/horryworks/Yagra"
 [workspace.dependencies]
 # Async runtime / web
 tokio = { version = "1", features = ["full"] }
+# Runtime utilities — CancellationToken for coordinated graceful shutdown (ADR-017 rolling upgrade).
+tokio-util = "0.7"
 axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }

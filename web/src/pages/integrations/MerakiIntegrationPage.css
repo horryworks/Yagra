@@ -55,11 +55,11 @@
 
 .meraki-org-id {
   color: var(--text-tertiary);
-  font-size: calc(var(--font-size-base, 14px) - 1px);
+  font-size: var(--font-sm);
 }
 
 .meraki-org-state {
-  font-size: calc(var(--font-size-base, 14px) - 2px);
+  font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -74,7 +74,7 @@
 
 .meraki-org-tiers {
   color: var(--text-secondary);
-  font-size: calc(var(--font-size-base, 14px) - 1px);
+  font-size: var(--font-sm);
 }
 
 .meraki-org-actions {
@@ -111,7 +111,7 @@
 
 .meraki-check-sub {
   color: var(--text-tertiary);
-  font-size: calc(var(--font-size-base, 14px) - 2px);
+  font-size: var(--font-xs);
 }
 
 .meraki-tier-row,
