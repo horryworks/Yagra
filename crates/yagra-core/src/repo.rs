@@ -577,6 +577,19 @@ impl NodeRepo {
             .collect()
     }
 
+    /// Node ids whose display name matches a case-insensitive substring, capped at `cap`. Lets the
+    /// event-log search (which runs against the log store, ADR-024) still find events by node name
+    /// without the name ever entering the log store: the API resolves the name → ids here and
+    /// passes them as a `node_id` filter (query-time join, ADR-011).
+    pub async fn node_ids_by_name_like(&self, term: &str, cap: i64) -> anyhow::Result<Vec<Uuid>> {
+        let rows = sqlx::query("SELECT id FROM nodes WHERE name ILIKE '%' || $1 || '%' LIMIT $2")
+            .bind(term)
+            .bind(cap.clamp(1, 200))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
+    }
+
     /// Address → node-id map for correlating passive events (syslog/trap source IPs) to
     /// inventory. Snapshotted by the event engine's periodic reload. If two nodes share an
     /// address the first row wins.

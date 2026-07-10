@@ -19,6 +19,7 @@ use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
 use crate::history::{AlertHistoryRow, AlertHistoryStore};
+use crate::logstore::LogStore;
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
@@ -117,6 +118,9 @@ pub type CoreHostSample = Arc<std::sync::Mutex<Option<HostSample>>>;
 pub struct ApiState {
     /// TSDB read/write seam.
     pub store: Arc<dyn MetricStore>,
+    /// Event log store (ADR-024). `Some` when VictoriaLogs is configured — then event search
+    /// reads from it and it holds the full firehose; `None` keeps events entirely in PostgreSQL.
+    pub logs: Option<Arc<dyn LogStore>>,
     /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
     pub host_sample: CoreHostSample,
     /// Inventory read seam.
@@ -1756,6 +1760,9 @@ struct SystemHealth {
     postgres: DependencyHealth,
     /// VictoriaMetrics (TSDB) — `/-/healthy`.
     tsdb: DependencyHealth,
+    /// VictoriaLogs (event log, ADR-024) — `/health`. Reported reachable when not configured
+    /// (events then live in PostgreSQL), so an unconfigured log store never degrades `overall`.
+    logs: DependencyHealth,
     /// NATS bus — inferred from a recent scheduler sweep (publish+consume working), not a direct ping.
     bus: DependencyHealth,
 }
@@ -1791,6 +1798,19 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
     let tsdb = DependencyHealth {
         reachable: st.store.healthy().await,
         detail: "VictoriaMetrics (TSDB)".to_owned(),
+    };
+
+    // Event log store (ADR-024): ping VictoriaLogs when configured. When unset, events live in
+    // PostgreSQL, so report reachable with a clarifying detail (never degrades `overall`).
+    let logs = match st.logs.as_ref() {
+        Some(log_store) => DependencyHealth {
+            reachable: log_store.healthy().await,
+            detail: "VictoriaLogs (event log)".to_owned(),
+        },
+        None => DependencyHealth {
+            reachable: true,
+            detail: "VictoriaLogs not configured (events in PostgreSQL)".to_owned(),
+        },
     };
 
     // PostgreSQL and the bus signal both depend on the live write side. In skeleton mode there is
@@ -1833,7 +1853,7 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         ),
     };
 
-    let overall = if postgres.reachable && tsdb.reachable && bus.reachable {
+    let overall = if postgres.reachable && tsdb.reachable && logs.reachable && bus.reachable {
         "ok"
     } else {
         "degraded"
@@ -1842,6 +1862,7 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         overall: overall.to_owned(),
         postgres,
         tsdb,
+        logs,
         bus,
     })
     .into_response()
@@ -6869,11 +6890,25 @@ async fn list_events(
         matched: q.matched,
         search: normalize_event_search(q.q.as_deref()),
     };
-    match admin
-        .events
-        .list_events(&filter, q.limit.unwrap_or(100))
-        .await
-    {
+    let limit = q.limit.unwrap_or(100);
+    // When the log store is enabled (ADR-024) it is the search source of record (it holds the full
+    // firehose); PostgreSQL keeps only alert-linked rows. Free-text node-name search still works by
+    // resolving the term to node ids here and passing them as a filter (the name never enters the
+    // log store — ADR-011 query-time join). Without a log store, fall back to the PostgreSQL path.
+    let rows = if let Some(logs) = st.logs.as_ref() {
+        let name_node_ids = match filter.search.as_deref() {
+            Some(term) => admin
+                .repo
+                .node_ids_by_name_like(term, 50)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        logs.search(&filter, &name_node_ids, limit).await
+    } else {
+        admin.events.list_events(&filter, limit).await
+    };
+    match rows {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "list events failed");
@@ -8203,6 +8238,7 @@ mod tests {
         // Public-dashboard mode: read endpoints are open (no token required).
         ApiState {
             store,
+            logs: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -8222,6 +8258,7 @@ mod tests {
         let token = sessions.issue(Principal::new(Role::Viewer, Scope::All), "viewer1");
         let state = ApiState {
             store,
+            logs: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -8243,6 +8280,7 @@ mod tests {
         let token = sessions.issue(Principal::new(role, Scope::All), "u1");
         let state = ApiState {
             store: Arc::new(InMemorySink::default()),
+            logs: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),

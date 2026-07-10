@@ -40,13 +40,13 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 4 つのスト�
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP トラップ受信（poller） | 任意 |
 | `9100` | — | （固定） | poller の Prometheus `/metrics` | ネイティブのみ |
 | `4222` | — | `YAGRA_NATS_PORT` | NATS バス | 内部。TLS+auth 時のみ公開（D） |
-| `5432` / `6379` / `8428` | — | — | PostgreSQL / Redis / VictoriaMetrics | 内部のみ |
+| `5432` / `6379` / `8428` / `9428` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs | 内部のみ |
 
 ---
 
 ## A — 単一ノード, Docker（ソースからビルド）<a id="a--単一ノード-docker-build"></a>
 
-開発・オールインワン用の構成。`docker-compose.yml` はイメージをローカルで**ビルド**し（タグ `:dev`）、core・poller・web と 4 ストアすべてを 1 ホストで動かします。
+開発・オールインワン用の構成。`docker-compose.yml` はイメージをローカルで**ビルド**し（タグ `:dev`）、core・poller・web と 5 ストアすべてを 1 ホストで動かします。
 
 ```bash
 git clone https://github.com/horryworks/Yagra.git
@@ -149,6 +149,7 @@ export YAGRA_DATABASE_URL="postgres://yagra:yagra@localhost:5432/yagra"
 export YAGRA_BUS_URL="nats://localhost:4222"
 export YAGRA_TSDB_URL="http://localhost:8428"
 export YAGRA_REDIS_URL="redis://localhost:6379"     # 任意
+export YAGRA_LOGS_URL="http://localhost:9428"       # 任意（ADR-024。未設定ならイベントは PostgreSQL のみ）
 export YAGRA_KEK_FILE="/etc/yagra/kek"
 export YAGRA_API_ADDR="0.0.0.0:8080"                # 既定値
 # export YAGRA_ADMIN_PASSWORD="choose-a-strong-password"   # 未設定なら一度限りのランダム値をログ出力

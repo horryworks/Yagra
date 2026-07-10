@@ -54,6 +54,11 @@ pub struct Config {
     /// absence only downgrades that mirror to a no-op (ADR-017), it never forces skeleton mode.
     /// Consumed by `run_live` to build the coordinator's [`crate::volatile::VolatileStore`].
     pub redis_url: Option<String>,
+    /// VictoriaLogs base URL for the passive-event log store (ADR-024, the 4th data class).
+    /// Optional and **independent of the live/skeleton decision** — when set, events are searched
+    /// from and written to VictoriaLogs (PostgreSQL then keeps only alert-linked rows); when unset,
+    /// events stay entirely in PostgreSQL (backward-compatible). Consumed by `run_live`.
+    pub logs_url: Option<String>,
 }
 
 impl Config {
@@ -73,6 +78,8 @@ impl Config {
             // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
             // affecting the live/skeleton gating above.
             redis_url: parse_optional(std::env::var("YAGRA_REDIS_URL").ok()),
+            // Optional, independent of live/skeleton: unset ⇒ events stay in PostgreSQL (ADR-024).
+            logs_url: parse_optional(std::env::var("YAGRA_LOGS_URL").ok()),
         })
     }
 }

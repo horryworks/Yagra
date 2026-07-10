@@ -680,6 +680,9 @@ export interface SystemHealth {
   overall: 'ok' | 'degraded';
   postgres: DependencyHealth;
   tsdb: DependencyHealth;
+  /** VictoriaLogs event log store (ADR-024). Reported reachable when not configured (events then
+   *  live in PostgreSQL), so an unconfigured log store never degrades `overall`. */
+  logs: DependencyHealth;
   bus: DependencyHealth;
 }
 

@@ -23,6 +23,7 @@ mod discovery;
 mod events;
 mod groups;
 mod history;
+mod logstore;
 mod maintenance;
 mod meraki;
 mod mib;
@@ -61,6 +62,7 @@ use dashboard::{DashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
+use logstore::{LogStore, VlStore};
 use maintenance::MaintenanceRepo;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
@@ -126,6 +128,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // TSDB + bus.
     let store: Arc<dyn MetricStore> = Arc::new(VmStore::new(cfg.tsdb_url.clone()));
     let bus = Arc::new(connect_bus(&cfg.bus_url).await?);
+
+    // Event log store (ADR-024, 4th data class). Optional: when a URL is set, passive events are
+    // searched from and written to VictoriaLogs and PostgreSQL keeps only alert-linked rows; when
+    // unset, events stay entirely in PostgreSQL (backward-compatible).
+    let logs: Option<Arc<dyn LogStore>> = cfg
+        .logs_url
+        .as_deref()
+        .map(|u| Arc::new(VlStore::new(u)) as Arc<dyn LogStore>);
+    if logs.is_some() {
+        tracing::info!("VictoriaLogs event log store enabled");
+    }
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
@@ -241,12 +254,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Passive events (Phase 2): syslog/traps arrive from pollers on `yagra.events`,
     // webhooks via the ingest endpoint. The engine matches rules and raises alerts
     // through the same alert/notify/history pipeline as poll results.
+    // Persistence is split off the matcher's hot path (ADR-024): the engine matches (in-memory,
+    // synchronous) and hands each event to the batch writer over a bounded channel, which fans it
+    // out to PostgreSQL and/or the log store. The writer takes the shutdown token directly (not
+    // `spawn_cancellable`) so it can do a best-effort final flush on cancel rather than being
+    // dropped mid-batch.
     let events_repo = Arc::new(events::EventRepo::new(repo.pool()));
+    let (persist_tx, persist_rx) =
+        tokio::sync::mpsc::channel::<events::PersistRecord>(events::PERSIST_CHANNEL_CAP);
     let event_engine = Arc::new(events::EventEngine::new(
         events_repo.clone(),
         alerts.clone(),
         notifier.clone(),
         history.clone(),
+        Some(persist_tx),
     ));
     event_engine.reload(&repo).await;
     {
@@ -257,6 +278,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         );
     }
     spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
+    tokio::spawn(events::run_persist_writer(
+        persist_rx,
+        events_repo.clone(),
+        logs.clone(),
+        shutdown.clone(),
+    ));
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
@@ -381,8 +408,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 if let Err(e) = history.prune_old(RETENTION_SECS).await {
                     tracing::warn!(error = %e, "prune alert history failed");
                 }
-                // Passive events: matched rows follow alert-history retention, unmatched
-                // (rule-authoring material) are pruned at 24h — see events.rs constants.
+                // Passive events in PostgreSQL: matched rows follow alert-history retention,
+                // unmatched (rule-authoring material) are pruned at 24h — see events.rs constants.
+                // When the log store is enabled (ADR-024) unmatched rows never land in PostgreSQL,
+                // so this pruning naturally trims PostgreSQL to the alert-linked subset; the log
+                // store keeps the full firehose under its own retention (`-retentionPeriod`).
                 if let Err(e) = events_repo.prune_old().await {
                     tracing::warn!(error = %e, "prune events failed");
                 }
@@ -516,6 +546,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
+        logs,
         host_sample: core_host,
         nodes,
         alerts,
@@ -548,6 +579,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     });
     let state = ApiState {
         store: sink,
+        logs: None,
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),

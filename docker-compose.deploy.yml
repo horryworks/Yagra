@@ -41,12 +41,16 @@ services:
       redis: { condition: service_started }
       nats: { condition: service_started }
       victoriametrics: { condition: service_started }
+      victorialogs: { condition: service_started }
       kek-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Event log store (ADR-024): passive events searched from + written to VictoriaLogs;
+      # PostgreSQL keeps only alert-linked rows. Unset to keep events entirely in PostgreSQL.
+      YAGRA_LOGS_URL: http://victorialogs:9428
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
@@ -175,7 +179,17 @@ services:
       - vmdata:/victoria-metrics-data
     restart: unless-stopped
 
+  # Event log store — VictoriaLogs (ADR-024): full passive-event firehose for full-text search,
+  # 30-day retention. The 90-day must-preserve subset is the alert-linked rows in PostgreSQL.
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
+    volumes:
+      - vldata:/victoria-logs-data
+    restart: unless-stopped
+
 volumes:
   pgdata:
   vmdata:
+  vldata:
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts

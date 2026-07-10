@@ -14,12 +14,16 @@ services:
       context: .
       dockerfile: docker/yagra-core.Dockerfile
     image: ghcr.io/horryworks/yagra-core:dev
-    depends_on: [postgres, redis, nats, victoriametrics]
+    depends_on: [postgres, redis, nats, victoriametrics, victorialogs]
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
       YAGRA_BUS_URL: nats://nats:4222
       YAGRA_TSDB_URL: http://victoriametrics:8428
+      # Event log store (ADR-024): passive events (syslog/trap/webhook) are searched from and
+      # written to VictoriaLogs; PostgreSQL then keeps only alert-linked rows. Unset this to keep
+      # events entirely in PostgreSQL (backward-compatible).
+      YAGRA_LOGS_URL: http://victorialogs:9428
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): filesystems core reports
       # capacity for. `root` = the container rootfs; `metrics` = the VictoriaMetrics data volume
       # (mounted read-only below) so the metrics-storage disk trend is visible. Database growth is
@@ -120,6 +124,17 @@ services:
       - vmdata:/victoria-metrics-data
     restart: unless-stopped
 
+  # Event log store — VictoriaLogs (ADR-024, the 4th data class). Holds the full passive-event
+  # firehose (syslog/trap/webhook) for full-text search; sibling to VictoriaMetrics (same ops
+  # model). Retention is 30 days (search/forensics window); the 90-day must-preserve subset is
+  # the alert-linked rows in PostgreSQL. Internal only (port 9428, no host mapping).
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
+    volumes:
+      - vldata:/victoria-logs-data
+    restart: unless-stopped
+
   # ── OpenTelemetry trace collector (optional; self-observability) ──
   # Off by default: only starts with `docker compose --profile tracing up`. Jaeger all-in-one
   # receives OTLP (HTTP :4318) from core/poller and renders traces at http://localhost:16686.
@@ -138,3 +153,4 @@ services:
 volumes:
   pgdata:
   vmdata:
+  vldata:

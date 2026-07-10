@@ -40,9 +40,11 @@ use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_bus::{EventKind, EventMsg};
 use yagra_common::{CheckId, NodeId, NodeState, Severity};
+use yagra_telemetry::CancellationToken;
 
 use crate::alerts::{check_id, AlertManager, Notifier, NotifyAction};
 use crate::history::AlertHistoryStore;
+use crate::logstore::LogStore;
 use crate::repo::NodeRepo;
 
 /// Identical-event burst dedup: a repeat of the same (kind, origin, message) within this
@@ -56,6 +58,13 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 pub const MATCHED_RETENTION_SECS: i64 = 90 * 86_400;
 /// Unmatched events exist for rule authoring only.
 pub const UNMATCHED_RETENTION_SECS: i64 = 86_400;
+/// Bounded queue between the (single) event matcher and the async batch persist writer. The event
+/// log is a best-effort observational tier (ADR-024): sustained overload sheds the newest event
+/// rather than blocking the matcher or growing memory unbounded.
+pub const PERSIST_CHANNEL_CAP: usize = 8192;
+/// Largest batch the persist writer flushes at once (well under Postgres' 65535-parameter ceiling
+/// at 16 columns/row).
+const PERSIST_BATCH_MAX: usize = 500;
 
 fn now_unix_ms() -> i64 {
     SystemTime::now()
@@ -131,6 +140,31 @@ pub struct EventRow {
     pub message: String,
     pub matched_rule_id: Option<Uuid>,
     pub action: String,
+}
+
+/// One received event queued for the async batch persist writer. Carries the raw [`EventMsg`] plus
+/// the correlation/planning outputs the matcher derived, so the writer can fan it out to
+/// PostgreSQL and/or the log store without re-deriving anything.
+#[derive(Debug, Clone)]
+pub struct PersistRecord {
+    pub msg: EventMsg,
+    pub node_id: Option<Uuid>,
+    pub source_id: Option<Uuid>,
+    pub matched_rule_id: Option<Uuid>,
+    pub action: &'static str,
+}
+
+impl PersistRecord {
+    /// Whether this row participated in the alert lifecycle. When the log store is enabled these
+    /// are the only rows still written to PostgreSQL (ADR-024 Contract) — the rest live in the log
+    /// store only.
+    #[must_use]
+    fn is_alert_linked(&self) -> bool {
+        matches!(
+            self.action,
+            "fired" | "refreshed" | "cleared" | "suppressed"
+        )
+    }
 }
 
 /// Outcome of verifying a webhook source's bearer token.
@@ -399,44 +433,42 @@ impl EventRepo {
 
     // ── Event log ──
 
-    /// Persist one received event (best-effort at the call site — a DB hiccup must not
-    /// stop alerting).
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_event(
-        &self,
-        msg: &EventMsg,
-        node_id: Option<Uuid>,
-        source_id: Option<Uuid>,
-        matched_rule_id: Option<Uuid>,
-        action: &str,
-    ) -> anyhow::Result<()> {
-        let varbinds = (!msg.varbinds.is_empty())
-            .then(|| serde_json::to_value(&msg.varbinds).unwrap_or(serde_json::Value::Null));
-        sqlx::query(
+    /// Persist a batch of received events in one multi-row INSERT (best-effort — the caller runs
+    /// off the matcher's hot path, and a DB hiccup must not stop alerting). Returns rows inserted.
+    pub async fn insert_events_batch(&self, records: &[&PersistRecord]) -> anyhow::Result<u64> {
+        if records.is_empty() {
+            return Ok(0);
+        }
+        let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO events (id, kind, at_unix_ms, source_ip, node_id, source_id, pool, \
              facility, syslog_severity, hostname, app_name, trap_oid, varbinds, message, \
-             matched_rule_id, action) \
-             VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
-        )
-        .bind(msg.event_id)
-        .bind(msg.kind.as_str())
-        .bind(msg.at_unix_ms)
-        .bind(msg.source_ip.map(|ip| ip.to_string()))
-        .bind(node_id)
-        .bind(source_id)
-        .bind(msg.pool.as_deref())
-        .bind(msg.facility.map(i16::from))
-        .bind(msg.syslog_severity.map(i16::from))
-        .bind(msg.hostname.as_deref())
-        .bind(msg.app_name.as_deref())
-        .bind(msg.trap_oid.as_deref())
-        .bind(varbinds)
-        .bind(&msg.message)
-        .bind(matched_rule_id)
-        .bind(action)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+             matched_rule_id, action) ",
+        );
+        qb.push_values(records.iter(), |mut b, r| {
+            let m = &r.msg;
+            let varbinds = (!m.varbinds.is_empty())
+                .then(|| serde_json::to_value(&m.varbinds).unwrap_or(serde_json::Value::Null));
+            b.push_bind(m.event_id)
+                .push_bind(m.kind.as_str())
+                .push_bind(m.at_unix_ms);
+            // `events.source_ip` is INET; bind the text form and cast (mirrors the `$n::inet` in
+            // the old single-row insert).
+            b.push_bind(m.source_ip.map(|ip| ip.to_string()))
+                .push_unseparated("::inet");
+            b.push_bind(r.node_id)
+                .push_bind(r.source_id)
+                .push_bind(m.pool.clone())
+                .push_bind(m.facility.map(i16::from))
+                .push_bind(m.syslog_severity.map(i16::from))
+                .push_bind(m.hostname.clone())
+                .push_bind(m.app_name.clone())
+                .push_bind(m.trap_oid.clone())
+                .push_bind(varbinds)
+                .push_bind(m.message.clone())
+                .push_bind(r.matched_rule_id)
+                .push_bind(r.action);
+        });
+        Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
 
     /// Keyset-paged event list, newest first (mirrors alert-history paging).
@@ -736,6 +768,9 @@ pub struct EventEngine {
     runtime: Mutex<Runtime>,
     /// Ingest token buckets per (already-verified) webhook source: (tokens, last-refill ms).
     ingest_rate: Mutex<HashMap<Uuid, (f64, i64)>>,
+    /// Non-blocking handoff to the async batch persist writer (ADR-024). `None` in unit tests that
+    /// exercise the pure planner only.
+    persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
 }
 
 impl EventEngine {
@@ -745,6 +780,7 @@ impl EventEngine {
         alerts: Arc<AlertManager>,
         notifier: Arc<Notifier>,
         history: Arc<AlertHistoryStore>,
+        persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
     ) -> Self {
         Self {
             repo,
@@ -754,6 +790,7 @@ impl EventEngine {
             snapshot: RwLock::new(Snapshot::default()),
             runtime: Mutex::new(Runtime::new()),
             ingest_rate: Mutex::new(HashMap::new()),
+            persist_tx,
         }
     }
 
@@ -851,29 +888,40 @@ impl EventEngine {
             },
         };
 
-        // Persist the event row (best-effort — a DB hiccup must not stop alerting).
-        if let Err(e) = self
-            .repo
-            .insert_event(
-                &msg,
-                node_id,
-                source.as_ref().map(|s| s.source_id),
-                planned.matched_rule,
-                if planned.row_action.is_empty() {
-                    "none"
-                } else {
-                    planned.row_action
-                },
-            )
-            .await
-        {
-            tracing::warn!(error = %e, kind = msg.kind.as_str(), "failed to persist event");
-        }
-
+        // Alert I/O first: raise/resolve + record history (the must-preserve record, synchronous).
         for (action, reason) in planned.actions {
             self.run_action(action, reason).await;
         }
         self.update_active_gauge();
+
+        // Hand the event to the async batch writer for best-effort persistence (search/forensics,
+        // ADR-024). Non-blocking: under sustained overload we shed the newest event rather than
+        // block the matcher — alerts already fired above, so a dropped persist never loses an alert.
+        if let Some(tx) = &self.persist_tx {
+            let action = if planned.row_action.is_empty() {
+                "none"
+            } else {
+                planned.row_action
+            };
+            let record = PersistRecord {
+                msg,
+                node_id,
+                source_id: source.as_ref().map(|s| s.source_id),
+                matched_rule_id: planned.matched_rule,
+                action,
+            };
+            match tx.try_send(record) {
+                Ok(()) => metrics::counter!("yagra_events_persist_enqueued_total").increment(1),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    metrics::counter!("yagra_events_persist_dropped_total", "reason" => "channel_full")
+                        .increment(1);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    metrics::counter!("yagra_events_persist_dropped_total", "reason" => "closed")
+                        .increment(1);
+                }
+            }
+        }
     }
 
     /// The pure matching/planning step: clear pass before fire pass (a message hitting
@@ -1107,6 +1155,87 @@ pub async fn run_ttl_sweeper(engine: Arc<EventEngine>) {
     }
 }
 
+/// Flush a batch of queued events to the durable stores (ADR-024). PostgreSQL gets the firehose
+/// when the log store is disabled, or only the alert-linked rows when it is enabled (Contract —
+/// the log store then holds the full firehose for search). Best-effort: a store error is logged,
+/// never propagated (alerts already fired synchronously in `handle_event`).
+async fn flush_persist(
+    repo: &EventRepo,
+    logs: &Option<Arc<dyn LogStore>>,
+    buf: &mut Vec<PersistRecord>,
+) {
+    if buf.is_empty() {
+        return;
+    }
+    let pg: Vec<&PersistRecord> = if logs.is_some() {
+        buf.iter().filter(|r| r.is_alert_linked()).collect()
+    } else {
+        buf.iter().collect()
+    };
+    if !pg.is_empty() {
+        match repo.insert_events_batch(&pg).await {
+            Ok(n) => {
+                metrics::counter!("yagra_events_persisted_total", "store" => "postgres")
+                    .increment(n);
+            }
+            Err(e) => tracing::warn!(error = %e, "batch-insert events to PostgreSQL failed"),
+        }
+    }
+    if let Some(store) = logs {
+        store.ingest_batch(buf).await;
+        metrics::counter!("yagra_events_persisted_total", "store" => "victorialogs")
+            .increment(buf.len() as u64);
+    }
+    buf.clear();
+}
+
+/// Async batch persist writer (ADR-024): drains the bounded persist queue and fans each batch out
+/// to PostgreSQL and/or the log store off the matcher's hot path. Batches opportunistically (one
+/// blocking `recv`, then a non-blocking drain up to [`PERSIST_BATCH_MAX`]). On shutdown it drains
+/// and flushes what's queued (best-effort final flush) before returning.
+pub async fn run_persist_writer(
+    mut rx: tokio::sync::mpsc::Receiver<PersistRecord>,
+    repo: Arc<EventRepo>,
+    logs: Option<Arc<dyn LogStore>>,
+    shutdown: CancellationToken,
+) {
+    let mut buf: Vec<PersistRecord> = Vec::with_capacity(PERSIST_BATCH_MAX);
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => {
+                while let Ok(rec) = rx.try_recv() {
+                    buf.push(rec);
+                    if buf.len() >= PERSIST_BATCH_MAX {
+                        flush_persist(&repo, &logs, &mut buf).await;
+                    }
+                }
+                flush_persist(&repo, &logs, &mut buf).await;
+                break;
+            }
+            first = rx.recv() => {
+                match first {
+                    None => {
+                        flush_persist(&repo, &logs, &mut buf).await;
+                        break;
+                    }
+                    Some(rec) => {
+                        buf.push(rec);
+                        while buf.len() < PERSIST_BATCH_MAX {
+                            match rx.try_recv() {
+                                Ok(rec) => buf.push(rec),
+                                Err(_) => break,
+                            }
+                        }
+                        flush_persist(&repo, &logs, &mut buf).await;
+                        metrics::gauge!("yagra_persist_queue_depth").set(rx.len() as f64);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1251,7 +1380,75 @@ mod tests {
             Arc::new(AlertManager::new()),
             Arc::new(Notifier::from_env()),
             Arc::new(AlertHistoryStore::new(pool)),
+            None,
         )
+    }
+
+    fn persist_record(action: &'static str) -> PersistRecord {
+        PersistRecord {
+            msg: syslog_msg("some event body"),
+            node_id: Some(Uuid::new_v4()),
+            source_id: None,
+            matched_rule_id: (action != "none").then(Uuid::new_v4),
+            action,
+        }
+    }
+
+    fn lazy_repo() -> Arc<EventRepo> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .expect("lazy pool");
+        Arc::new(EventRepo::new(pool))
+    }
+
+    #[test]
+    fn alert_linked_classification() {
+        for a in ["fired", "refreshed", "cleared", "suppressed"] {
+            assert!(
+                persist_record(a).is_alert_linked(),
+                "{a} should be alert-linked"
+            );
+        }
+        for a in ["info", "none"] {
+            assert!(
+                !persist_record(a).is_alert_linked(),
+                "{a} should not be alert-linked"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_writer_routes_non_alert_rows_to_log_store_only() {
+        // With the log store enabled, non-alert-linked rows go to the log store and never touch
+        // Postgres — so this exercises the writer end-to-end against a never-connected lazy pool.
+        let fake = Arc::new(crate::logstore::InMemoryLogStore::default());
+        let logs: Option<Arc<dyn LogStore>> = Some(fake.clone());
+        let (tx, rx) = tokio::sync::mpsc::channel::<PersistRecord>(16);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(run_persist_writer(rx, lazy_repo(), logs, token));
+
+        tx.send(persist_record("none")).await.unwrap();
+        tx.send(persist_record("info")).await.unwrap();
+        drop(tx); // close the channel → writer drains, flushes, returns
+        handle.await.unwrap();
+
+        assert_eq!(fake.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn persist_writer_final_flush_on_shutdown() {
+        let fake = Arc::new(crate::logstore::InMemoryLogStore::default());
+        let logs: Option<Arc<dyn LogStore>> = Some(fake.clone());
+        let (tx, rx) = tokio::sync::mpsc::channel::<PersistRecord>(16);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(run_persist_writer(rx, lazy_repo(), logs, token.clone()));
+
+        tx.send(persist_record("none")).await.unwrap();
+        // Give the writer a moment to drain the one message, then cancel; the buffer is already
+        // flushed, and the cancel arm's final flush is a no-op.
+        token.cancel();
+        handle.await.unwrap();
+        assert_eq!(fake.len(), 1);
     }
 
     fn syslog_msg(message: &str) -> EventMsg {

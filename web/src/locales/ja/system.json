@@ -91,6 +91,7 @@
     "deps": {
       "postgres": "PostgreSQL",
       "tsdb": "VictoriaMetrics (TSDB)",
+      "logs": "VictoriaLogs（イベントログ）",
       "bus": "NATS バス"
     },
     "cards": {

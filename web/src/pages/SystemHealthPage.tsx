@@ -60,6 +60,7 @@ function DependencyHealthCard() {
     <ul className="dep-list">
       <DependencyRow name={t('health.deps.postgres')} dep={data?.postgres} />
       <DependencyRow name={t('health.deps.tsdb')} dep={data?.tsdb} />
+      <DependencyRow name={t('health.deps.logs')} dep={data?.logs} />
       <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
     </ul>
   );
