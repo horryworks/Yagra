@@ -17,18 +17,32 @@ describe('widget registry', () => {
     }
   });
 
+  it('keeps allowedRowSpans well-formed and containing the (defaulted) default height', () => {
+    for (const d of REGISTRY) {
+      if (!d.allowedRowSpans) continue; // fixed-height widget — no height control
+      expect(d.allowedRowSpans.length).toBeGreaterThan(0);
+      expect(d.allowedRowSpans).toContain(d.defaultRowSpan ?? 1);
+      expect(d.allowedRowSpans).toContain(1); // standard height must always be selectable
+    }
+  });
+
   it('exposes a registryView consistent with the catalog', () => {
     for (const d of REGISTRY) {
       expect(registryView.isKnownType(d.type)).toBe(true);
       expect(registryView.allowedSpansFor(d.type)).toEqual(d.allowedSpans);
       expect(registryView.defaultSpanFor(d.type)).toBe(d.defaultSpan);
+      expect(registryView.allowedRowSpansFor(d.type)).toEqual(d.allowedRowSpans ?? [1]);
+      expect(registryView.defaultRowSpanFor(d.type)).toBe(d.defaultRowSpan ?? 1);
     }
     expect(registryView.isKnownType('does-not-exist')).toBe(false);
+    // an unknown type reports fixed-height defaults
+    expect(registryView.allowedRowSpansFor('does-not-exist')).toEqual([1]);
+    expect(registryView.defaultRowSpanFor('does-not-exist')).toBe(1);
   });
 
-  it('produces a v2 default layout: one board of known types with valid spans', () => {
+  it('produces a current-version default layout: one board of known types with valid spans', () => {
     const layout = defaultLayout();
-    expect(layout.version).toBe(2);
+    expect(layout.version).toBe(3);
     expect(layout.boards).toHaveLength(1);
     const widgets = layout.boards[0].widgets;
     expect(widgets.length).toBeGreaterThan(0);

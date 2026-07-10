@@ -52,6 +52,12 @@
       "12": "Full width"
     },
     "width": "Widget width",
+    "rowSpan": {
+      "1": "Standard height",
+      "2": "Tall",
+      "3": "Extra tall"
+    },
+    "height": "Widget height",
     "remove": "Remove {{name}}",
     "dragTitle": "Drag to reorder",
     "drag": "Drag {{name}} to reorder"

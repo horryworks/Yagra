@@ -5,7 +5,7 @@
 // backend lands. `type` strings are stable and persisted — never renumber them.
 
 import { DASHBOARD_VERSION, type RegistryView } from './layout';
-import type { DashboardLayout, Span, WidgetDefinition, WidgetInstance } from './types';
+import type { DashboardLayout, RowSpan, Span, WidgetDefinition, WidgetInstance } from './types';
 import {
   ActiveAlertsActions,
   ActiveAlertsWidget,
@@ -102,6 +102,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2],
     Component: FleetHealthTimelineWidget,
   },
   {
@@ -112,6 +113,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: RecentStateChangesWidget,
   },
   {
@@ -122,6 +124,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: ActiveAlertsWidget,
     Actions: ActiveAlertsActions,
   },
@@ -133,6 +136,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2],
     Component: AlertVolumeWidget,
   },
   {
@@ -153,6 +157,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: FlappingWatchlistWidget,
   },
   {
@@ -163,6 +168,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TopAlertingNodesWidget,
   },
   {
@@ -173,6 +179,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2],
     Component: AlertCalendarWidget,
   },
   {
@@ -183,6 +190,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TopRttWidget,
     Actions: TopAggActions,
   },
@@ -194,6 +202,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TopCpuWidget,
     Actions: TopAggActions,
   },
@@ -205,6 +214,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TopMemoryWidget,
     Actions: TopAggActions,
   },
@@ -216,6 +226,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: BusiestInterfacesWidget,
     Actions: TopAggActions,
   },
@@ -227,6 +238,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: MostErrorsWidget,
     Actions: TopAggActions,
   },
@@ -238,6 +250,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TopTalkersWidget,
     Actions: TopAggActions,
   },
@@ -249,6 +262,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2],
     Component: AggregateThroughputWidget,
   },
   {
@@ -259,6 +273,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: InterfaceHeatmapWidget,
   },
   {
@@ -269,6 +284,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TrafficSpikesWidget,
   },
   {
@@ -279,6 +295,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: TrafficDropsWidget,
   },
   {
@@ -289,6 +306,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 8,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: SiteHealthMatrixWidget,
   },
   {
@@ -299,6 +317,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2],
     Component: RegionRollupWidget,
   },
   {
@@ -309,6 +328,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'new',
     defaultSpan: 6,
     allowedSpans: [4, 6, 8],
+    allowedRowSpans: [1, 2, 3],
     Component: GeoMapWidget,
   },
   {
@@ -319,6 +339,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: DependencyWidget,
   },
   {
@@ -329,6 +350,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: MaintenanceWidget,
   },
   {
@@ -349,6 +371,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: DiscoveryQueueWidget,
   },
   {
@@ -369,6 +392,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'rollup',
     defaultSpan: 4,
     allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
     Component: StaleDataWidget,
   },
   {
@@ -379,6 +403,7 @@ export const REGISTRY: WidgetDefinition[] = [
     backing: 'live',
     defaultSpan: 6,
     allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
     Component: AuditWidget,
   },
 ];
@@ -390,11 +415,14 @@ export function getDefinition(type: string): WidgetDefinition | undefined {
   return BY_TYPE.get(type);
 }
 
-/** Registry-derived predicates for the pure layout helpers. */
+/** Registry-derived predicates for the pure layout helpers. A widget with no declared
+ *  `allowedRowSpans` is fixed-height: it allows only `[1]` and defaults to `1`. */
 export const registryView: RegistryView = {
   isKnownType: (type) => BY_TYPE.has(type),
   allowedSpansFor: (type) => BY_TYPE.get(type)?.allowedSpans ?? [],
   defaultSpanFor: (type) => BY_TYPE.get(type)?.defaultSpan ?? (6 as Span),
+  allowedRowSpansFor: (type) => BY_TYPE.get(type)?.allowedRowSpans ?? [1],
+  defaultRowSpanFor: (type) => BY_TYPE.get(type)?.defaultRowSpan ?? (1 as RowSpan),
 };
 
 /** Catalog grouped by section, in registry order (for the picker). */

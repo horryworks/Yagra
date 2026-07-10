@@ -25,6 +25,7 @@ import {
   reorderByIds,
   sanitizeLayout,
   setBoardWidgets,
+  setRowSpanById,
   setSettingsById,
   setSpanById,
 } from './layout';
@@ -73,6 +74,7 @@ export interface LayoutStore {
   move: (from: number, to: number) => void;
   reorder: (orderedIds: string[]) => void;
   setSpan: (instanceId: string, span: number) => void;
+  setRowSpan: (instanceId: string, rowSpan: number) => void;
   setSettings: (instanceId: string, patch: WidgetSettings) => void;
   resetToDefault: () => void;
   // Board actions.
@@ -191,6 +193,9 @@ export function createLayoutStore(config: LayoutStoreConfig) {
 
       setSpan: (instanceId, span) =>
         applyWidgets(setSpanById(get().widgets, instanceId, span, registryView)),
+
+      setRowSpan: (instanceId, rowSpan) =>
+        applyWidgets(setRowSpanById(get().widgets, instanceId, rowSpan, registryView)),
 
       setSettings: (instanceId, patch) =>
         applyWidgets(setSettingsById(get().widgets, instanceId, patch)),

@@ -17,6 +17,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
   const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
   const setSpan = useStore((s) => s.setSpan);
+  const setRowSpan = useStore((s) => s.setRowSpan);
   const removeWidget = useStore((s) => s.removeWidget);
   const setSettingsAction = useStore((s) => s.setSettings);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -28,6 +29,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
   if (!def) return null;
   const Body = def.Component;
   const Actions = def.Actions;
+  const rowSpan = instance.rowSpan ?? 1;
   const setSettings = (patch: WidgetSettings) => setSettingsAction(instance.instanceId, patch);
 
   const actions = editing ? (
@@ -42,6 +44,20 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
           {def.allowedSpans.map((s) => (
             <option key={s} value={s}>
               {t(`widgetFrame.span.${s}`)}
+            </option>
+          ))}
+        </Select>
+      )}
+      {def.allowedRowSpans && def.allowedRowSpans.length > 1 && (
+        <Select
+          value={String(rowSpan)}
+          onChange={(e) => setRowSpan(instance.instanceId, Number(e.target.value))}
+          aria-label={t('widgetFrame.height')}
+          title={t('widgetFrame.height')}
+        >
+          {def.allowedRowSpans.map((r) => (
+            <option key={r} value={r}>
+              {t(`widgetFrame.rowSpan.${r}`)}
             </option>
           ))}
         </Select>
@@ -77,6 +93,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       className={[
         'mydash-cell',
         `mydash-span-${instance.span}`,
+        `mydash-rowspan-${rowSpan}`,
         isDragging ? 'is-dragging' : '',
         editing ? 'is-editing' : '',
       ]

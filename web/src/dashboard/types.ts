@@ -11,6 +11,10 @@ import type { FC } from 'react';
 /** Grid span (of a 12-column grid). A widget declares which spans it allows. */
 export type Span = 4 | 6 | 8 | 12;
 
+/** Row span (stepped widget height): 1 = standard (content height), 2/3 = taller. A widget opts
+ *  into taller heights by declaring `allowedRowSpans`; otherwise its height is fixed at 1. */
+export type RowSpan = 1 | 2 | 3;
+
 /** How much backend work a widget needs today (mirrors the design handoff legend). `new`
  *  widgets are catalogued but not yet buildable, so they show disabled in the picker. */
 export type Backing = 'live' | 'rollup' | 'new';
@@ -44,6 +48,10 @@ export interface WidgetDefinition {
   defaultSpan: Span;
   /** Spans the user may pick for this widget. */
   allowedSpans: Span[];
+  /** Row heights (stepped) the user may pick. Omit ⇒ fixed height; no height control is shown. */
+  allowedRowSpans?: RowSpan[];
+  /** Row height when first added. Omit ⇒ 1 (standard). */
+  defaultRowSpan?: RowSpan;
   /** The body renderer. */
   Component: FC<WidgetProps>;
   /** Optional view-mode header actions (e.g. a node selector or a "View all" link). */
@@ -57,6 +65,9 @@ export interface WidgetInstance {
   instanceId: string;
   type: string;
   span: Span;
+  /** Stepped height. Absent ⇒ 1 (standard). Only present when the user picked a taller size, so a
+   *  standard-height widget serializes lean and old (pre-height) docs load unchanged. */
+  rowSpan?: RowSpan;
   settings?: WidgetSettings;
 }
 

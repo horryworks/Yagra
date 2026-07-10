@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addBoard,
   addInstance,
+  clampRowSpan,
   clampSpan,
   countOfType,
   DASHBOARD_VERSION,
@@ -13,17 +14,21 @@ import {
   sanitizeLayout,
   sanitizeWidgets,
   setBoardWidgets,
+  setRowSpanById,
   setSettingsById,
   setSpanById,
   type RegistryView,
 } from './layout';
 import type { Board, WidgetInstance } from './types';
 
-// Fake registry: type `a` allows spans 4/6 (default 4); `b` allows only 12 (default 12).
+// Fake registry: type `a` allows spans 4/6 (default 4) and heights 1/2 (default 1); `b` allows only
+// span 12 (default 12) and is fixed-height (only 1).
 const reg: RegistryView = {
   isKnownType: (t) => t === 'a' || t === 'b',
   allowedSpansFor: (t) => (t === 'a' ? [4, 6] : t === 'b' ? [12] : []),
   defaultSpanFor: (t) => (t === 'a' ? 4 : 12),
+  allowedRowSpansFor: (t) => (t === 'a' ? [1, 2] : t === 'b' ? [1] : []),
+  defaultRowSpanFor: () => 1,
 };
 
 const inst = (id: string, type = 'a', span: 4 | 6 | 8 | 12 = 4): WidgetInstance => ({
@@ -40,6 +45,17 @@ describe('clampSpan', () => {
   });
   it('falls back to the default when the type has no allowed spans', () => {
     expect(clampSpan('unknown', 8, reg)).toBe(12);
+  });
+});
+
+describe('clampRowSpan', () => {
+  it('keeps an allowed height and snaps a disallowed one to the nearest', () => {
+    expect(clampRowSpan('a', 2, reg)).toBe(2);
+    expect(clampRowSpan('a', 3, reg)).toBe(2); // nearest of [1,2]
+    expect(clampRowSpan('b', 2, reg)).toBe(1); // b is fixed-height ⇒ snaps to 1
+  });
+  it('falls back to the default when the type has no allowed heights', () => {
+    expect(clampRowSpan('unknown', 3, reg)).toBe(1);
   });
 });
 
@@ -132,6 +148,22 @@ describe('sanitizeWidgets', () => {
     expect(w[1].span).toBe(12);
   });
 
+  it('reads and clamps rowSpan, keeping standard (1) as an absent field', () => {
+    const w = sanitizeWidgets(
+      [
+        { instanceId: 'x', type: 'a', span: 4, rowSpan: 2 }, // kept
+        { instanceId: 'y', type: 'a', span: 4, rowSpan: 9 }, // clamped to 2 (nearest of [1,2])
+        { instanceId: 'z', type: 'a', span: 4, rowSpan: 1 }, // standard ⇒ field dropped
+        { instanceId: 'q', type: 'b', span: 12, rowSpan: 2 }, // b is fixed-height ⇒ dropped to 1
+        { instanceId: 'r', type: 'a', span: 4 }, // no rowSpan ⇒ standard (absent)
+      ],
+      reg,
+    );
+    expect(w.map((x) => x.rowSpan)).toEqual([2, 2, undefined, undefined, undefined]);
+    // the field is genuinely absent (not `rowSpan: 1`), so lean/pre-height docs round-trip unchanged
+    expect('rowSpan' in w[2]).toBe(false);
+  });
+
   it('returns [] for a non-array', () => {
     expect(sanitizeWidgets('nope', reg)).toEqual([]);
   });
@@ -204,6 +236,20 @@ describe('list mutators', () => {
     expect(withSettings[0].settings).toEqual({ agg: 'max_1h' });
     const merged = setSettingsById(withSettings, 'a1', { nodeId: 'n1' });
     expect(merged[0].settings).toEqual({ agg: 'max_1h', nodeId: 'n1' });
+  });
+
+  it('sets a row span (clamped) and drops the field when back to standard', () => {
+    const base = [inst('a1', 'a', 4)];
+    const tall = setRowSpanById(base, 'a1', 2, reg);
+    expect(tall[0].rowSpan).toBe(2);
+    // above the allowed range ⇒ snapped to the nearest (a allows [1,2])
+    expect(setRowSpanById(base, 'a1', 9, reg)[0].rowSpan).toBe(2);
+    // back to standard removes the field entirely (absence = standard height)
+    const standard = setRowSpanById(tall, 'a1', 1, reg);
+    expect(standard[0].rowSpan).toBeUndefined();
+    expect('rowSpan' in standard[0]).toBe(false);
+    // a fixed-height type can never gain a taller row span
+    expect(setRowSpanById([inst('b1', 'b', 12)], 'b1', 2, reg)[0].rowSpan).toBeUndefined();
   });
 
   it('counts instances of a type (for maxInstances)', () => {

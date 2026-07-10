@@ -1,5 +1,26 @@
 .mydash-cell {
   min-width: 0;
+  /* Column so the Card fills the cell — matters when a rowspan floors the cell taller than its
+     content (the Card then stretches instead of leaving a gap under it). */
+  display: flex;
+  flex-direction: column;
+}
+
+.mydash-cell > .card {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Stepped widget height (opt-in per widget via `allowedRowSpans`). rowspan-1 is the natural
+   content height (no floor); 2/3 set a minimum of N row steps (+ the gaps a real N-row span would
+   include). Content taller than the floor still grows the cell, and `align-items: start` keeps
+   shorter neighbours in the same grid row at their own height. */
+.mydash-rowspan-2 {
+  min-height: calc(var(--mydash-row) * 2 + var(--mydash-gap));
+}
+
+.mydash-rowspan-3 {
+  min-height: calc(var(--mydash-row) * 3 + var(--mydash-gap) * 2);
 }
 
 /* Edit-mode affordances live in the card's actions slot. */

@@ -1,8 +1,12 @@
-/* 12-column responsive board. Each widget cell sets its column span via .mydash-span-N. */
+/* 12-column responsive board. Each widget cell sets its column span via .mydash-span-N and its
+   (optional, stepped) height via .mydash-rowspan-N — both defined in WidgetFrame.css. `--mydash-row`
+   is the height of one step; a taller widget floors its height at N steps (+ the gaps between). */
 .mydash-grid {
+  --mydash-gap: 18px;
+  --mydash-row: 240px;
   display: grid;
   grid-template-columns: repeat(12, 1fr);
-  gap: 18px;
+  gap: var(--mydash-gap);
   align-items: start;
 }
 

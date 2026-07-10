@@ -2,12 +2,13 @@
 // injects registry-derived predicates), so they're trivially unit-testable in the node env.
 // Every mutator returns a new array (immutable update for Zustand).
 
-import type { Board, DashboardLayout, Span, WidgetInstance, WidgetSettings } from './types';
+import type { Board, DashboardLayout, RowSpan, Span, WidgetInstance, WidgetSettings } from './types';
 
 /** Current layout schema version. Bump when the persisted shape changes; `sanitizeLayout`
- *  then migrates/drops anything it no longer understands. v2 introduced multiple boards
- *  (`{ boards }`); v1 was a flat `{ widgets }`. */
-export const DASHBOARD_VERSION = 2;
+ *  then migrates/drops anything it no longer understands. v3 added a per-widget `rowSpan`
+ *  (stepped height); v2 introduced multiple boards (`{ boards }`); v1 was a flat `{ widgets }`.
+ *  `rowSpan` is additive/optional, so v2 docs load unchanged (an absent rowSpan means standard). */
+export const DASHBOARD_VERSION = 3;
 
 /** Id/name used for the first board when migrating a v1 doc or repairing an empty one. */
 const FALLBACK_BOARD_ID = 'board-1';
@@ -21,6 +22,10 @@ export interface RegistryView {
   allowedSpansFor: (type: string) => Span[];
   /** The span to use when a persisted one is invalid. */
   defaultSpanFor: (type: string) => Span;
+  /** The row spans (heights) a type allows. A fixed-height widget returns `[1]`. */
+  allowedRowSpansFor: (type: string) => RowSpan[];
+  /** The row span to use when a persisted one is invalid (usually `1`). */
+  defaultRowSpanFor: (type: string) => RowSpan;
 }
 
 /** Snap `span` to the nearest allowed value for a type (defaulting if the list is empty). */
@@ -32,6 +37,26 @@ export function clampSpan(type: string, span: number, reg: RegistryView): Span {
   return allowed.reduce((best, s) =>
     Math.abs(s - span) < Math.abs(best - span) ? s : best,
   );
+}
+
+/** Snap `rowSpan` to the nearest height the type allows (defaulting if the list is empty). Mirrors
+ *  {@link clampSpan}: an out-of-range or removed-option height degrades to the closest allowed one. */
+export function clampRowSpan(type: string, rowSpan: number, reg: RegistryView): RowSpan {
+  const allowed = reg.allowedRowSpansFor(type);
+  if (allowed.length === 0) return reg.defaultRowSpanFor(type);
+  if (allowed.includes(rowSpan as RowSpan)) return rowSpan as RowSpan;
+  return allowed.reduce((best, r) => (Math.abs(r - rowSpan) < Math.abs(best - rowSpan) ? r : best));
+}
+
+/** Return `w` carrying `rowSpan`, or with the field stripped when it's standard (1). Keeping the
+ *  field absent for standard height means untouched/old widgets serialize exactly as before. */
+function withRowSpan(w: WidgetInstance, rowSpan: RowSpan): WidgetInstance {
+  if (rowSpan <= 1) {
+    const next = { ...w };
+    delete next.rowSpan;
+    return next;
+  }
+  return { ...w, rowSpan };
 }
 
 /** Normalize an untrusted/old *widget array*: keep only known widget types, clamp spans, repair
@@ -58,10 +83,18 @@ export function sanitizeWidgets(rawWidgets: unknown, reg: RegistryView): WidgetI
       } while (seen.has(id));
     }
     seen.add(id);
+    // Clamp the persisted height to what the type currently allows; a standard (1) height is kept
+    // as an absent field so the serialized shape stays lean and pre-height docs round-trip cleanly.
+    const rowSpan = clampRowSpan(
+      e.type,
+      typeof e.rowSpan === 'number' ? e.rowSpan : reg.defaultRowSpanFor(e.type),
+      reg,
+    );
     widgets.push({
       instanceId: id,
       type: e.type,
       span: clampSpan(e.type, typeof e.span === 'number' ? e.span : reg.defaultSpanFor(e.type), reg),
+      ...(rowSpan > 1 ? { rowSpan } : {}),
       settings:
         e.settings && typeof e.settings === 'object' ? (e.settings as WidgetSettings) : undefined,
     });
@@ -166,6 +199,19 @@ export function setSpanById(
 ): WidgetInstance[] {
   return widgets.map((w) =>
     w.instanceId === instanceId ? { ...w, span: clampSpan(w.type, span, reg) } : w,
+  );
+}
+
+/** Set the height (row span) of one instance, clamped to what its type allows. A standard height
+ *  drops the field (see {@link withRowSpan}). */
+export function setRowSpanById(
+  widgets: WidgetInstance[],
+  instanceId: string,
+  rowSpan: number,
+  reg: RegistryView,
+): WidgetInstance[] {
+  return widgets.map((w) =>
+    w.instanceId === instanceId ? withRowSpan(w, clampRowSpan(w.type, rowSpan, reg)) : w,
   );
 }
 
