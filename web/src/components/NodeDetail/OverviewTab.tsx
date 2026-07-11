@@ -892,15 +892,19 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
       } catch {
         // fall back to the built-in scalars
       }
+      // Fetch every scalar concurrently (was a per-metric await waterfall — a dozen serial
+      // round-trips on open and on each poll). Order is preserved from `nameList`; a metric with
+      // no reading yet is simply dropped. Matches the sibling loaders (UrlHealth/CpuHealth/…).
+      const nameList = [...names];
+      const results = await Promise.allSettled(
+        nameList.map((name) => api.getNodeMetric(nodeId, name)),
+      );
       const out: { name: string; value: number }[] = [];
-      for (const name of names) {
-        try {
-          const r = await api.getNodeMetric(nodeId, name);
-          out.push({ name, value: r.value });
-        } catch {
-          // no reading for this metric yet
+      results.forEach((res, i) => {
+        if (res.status === 'fulfilled') {
+          out.push({ name: nameList[i], value: res.value.value });
         }
-      }
+      });
       if (!cancelled) setReadings(out);
     })();
     return () => {

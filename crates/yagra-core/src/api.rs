@@ -684,11 +684,21 @@ async fn list_nodes(
                     std::collections::HashSet::new(),
                 ),
             };
+            // Batch the coarse fallback probe for any node the engine hasn't observed yet: one TSDB
+            // query for the whole page instead of a `latest()` round-trip per node (see
+            // `fresh_fallback_ids`). Steady state adds no query (every node is observed).
+            let unobserved: Vec<NodeId> = nodes
+                .iter()
+                .filter(|n| !states.contains_key(&n.id))
+                .map(|n| n.id)
+                .collect();
+            let fresh_fallback = fresh_fallback_ids(&st, &unobserved).await;
             let mut out = Vec::with_capacity(nodes.len());
             for n in nodes {
                 let state = match states.get(&n.id) {
                     Some(s) => *s,
-                    None => derive_fallback_state(&st, n.id).await,
+                    None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
+                    None => NodeState::Unknown,
                 };
                 let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
                 let source = if meraki_ids.contains(&n.id.as_uuid()) {
@@ -723,7 +733,8 @@ async fn list_nodes(
 
 /// Coarse fallback state for a node the alert engine has not observed yet: a recent ICMP
 /// RTT reading ⇒ `ok`, otherwise `unknown`. Used only when the engine has no opinion (e.g.
-/// just-added node, or skeleton mode where nothing polls).
+/// just-added node, or skeleton mode where nothing polls). Single-node path (`get_node`); list
+/// and topology use the batched [`fresh_fallback_ids`] to avoid a per-node TSDB round-trip.
 async fn derive_fallback_state(st: &ApiState, node: NodeId) -> NodeState {
     if st
         .store
@@ -735,6 +746,31 @@ async fn derive_fallback_state(st: &ApiState, node: NodeId) -> NodeState {
     } else {
         NodeState::Unknown
     }
+}
+
+/// Freshness window for the coarse fallback probe: a node with an ICMP RTT sample within this
+/// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
+const FALLBACK_FRESH_SECS: u64 = 600;
+
+/// Batched fallback probe for a page/graph of nodes. The alert engine already holds a state for
+/// most; the `unobserved` remainder (just-added, or skeleton mode) would otherwise each cost a
+/// `latest()` round-trip to the TSDB — N sequential HTTP queries, and right after a core restart
+/// `states` is empty so *every* node hits this. Instead do a single `fresh_node_ids` query and
+/// membership-test, exactly as `fleet_coverage` does. Skips the query entirely when nothing is
+/// unobserved, so the steady-state path (engine knows every node) adds no TSDB call. Returns the
+/// set of node ids with a recent RTT sample (⇒ `ok`; absent ⇒ `unknown`).
+async fn fresh_fallback_ids(
+    st: &ApiState,
+    unobserved: &[NodeId],
+) -> std::collections::HashSet<Uuid> {
+    if unobserved.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    st.store
+        .fresh_node_ids("icmp_rtt_ms", FALLBACK_FRESH_SECS)
+        .await
+        .into_iter()
+        .collect()
 }
 
 /// One node's configuration detail, including its bindings (profile/credential/parent) so
@@ -1198,11 +1234,22 @@ async fn get_topology(State(st): State<ApiState>, headers: HeaderMap) -> Respons
             root_causes.entry(a.node).or_insert_with(|| cause.as_uuid());
         }
     }
+    // Batch the coarse fallback probe for unobserved nodes: a single TSDB query for the whole
+    // graph rather than one `latest()` round-trip per node (see `fresh_fallback_ids`). This path
+    // loads the full inventory, so after a core restart (empty `states`) the per-node version fired
+    // one VM query for every node.
+    let unobserved: Vec<NodeId> = nodes
+        .iter()
+        .filter(|n| !states.contains_key(&n.id))
+        .map(|n| n.id)
+        .collect();
+    let fresh_fallback = fresh_fallback_ids(&st, &unobserved).await;
     let mut out = Vec::with_capacity(nodes.len());
     for n in nodes {
         let state = match states.get(&n.id) {
             Some(s) => *s,
-            None => derive_fallback_state(&st, n.id).await,
+            None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
+            None => NodeState::Unknown,
         };
         out.push(TopologyNode {
             id: n.id.as_uuid(),

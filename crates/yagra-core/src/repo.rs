@@ -154,16 +154,26 @@ impl NodeRepo {
     /// Connect (with retry, so Postgres may start after core) and return the repo.
     pub async fn connect(url: &str) -> anyhow::Result<Self> {
         const MAX_ATTEMPTS: u32 = 30;
+        // One pool is shared by every core store (scheduler sweep, result ingest, API, coordinator
+        // mirror), so 5 connections is the whole process's DB concurrency ceiling — far too low for
+        // the tens-of-thousands-of-nodes target (the scheduler alone builds specs with concurrency
+        // 16). Default higher and let deployments tune it via env. Postgres' own `max_connections`
+        // (default 100) remains the outer bound; keep the default comfortably under it.
+        let max_conns = std::env::var("YAGRA_PG_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(20);
         let mut attempt = 0;
         loop {
             let result = PgPoolOptions::new()
-                .max_connections(5)
+                .max_connections(max_conns)
                 .acquire_timeout(Duration::from_secs(5))
                 .connect(url)
                 .await;
             match result {
                 Ok(pool) => {
-                    tracing::info!("connected to PostgreSQL");
+                    tracing::info!(max_connections = max_conns, "connected to PostgreSQL");
                     return Ok(Self { pool });
                 }
                 Err(e) if attempt < MAX_ATTEMPTS => {

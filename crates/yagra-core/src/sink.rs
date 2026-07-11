@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use uuid::Uuid;
 use yagra_bus::PollResult;
 use yagra_common::SeriesKey;
 
@@ -34,6 +35,23 @@ impl InMemorySink {
             .expect("sink mutex poisoned")
             .get(key)
             .copied()
+    }
+
+    /// Distinct node ids that have any recorded sample for `metric`. The skeleton sink keeps only
+    /// the latest value per series (no timestamps), so every stored sample counts as "fresh" —
+    /// this mirrors [`Self::latest`] so the API's derived-state fallback behaves the same in
+    /// skeleton / test mode as it does against a real TSDB (which times the window).
+    #[must_use]
+    pub fn fresh_node_ids(&self, metric: &str) -> Vec<Uuid> {
+        let map = self.latest.lock().expect("sink mutex poisoned");
+        let mut ids: Vec<Uuid> = map
+            .keys()
+            .filter(|k| k.metric == metric)
+            .map(|k| k.node.as_uuid())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 }
 
@@ -82,5 +100,19 @@ mod tests {
             sink.latest(&SeriesKey::node(node, "icmp_rtt_ms")),
             Some(4.0)
         );
+    }
+
+    #[test]
+    fn fresh_node_ids_returns_nodes_with_a_reading_for_metric() {
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let sink = InMemorySink::default();
+        sink.ingest(&result_with(a, "icmp_rtt_ms", 9.0));
+        sink.ingest(&result_with(b, "cpu_pct", 50.0));
+
+        // Only nodes with a sample for the queried metric are returned (mirrors `latest`).
+        assert_eq!(sink.fresh_node_ids("icmp_rtt_ms"), vec![a.as_uuid()]);
+        assert_eq!(sink.fresh_node_ids("cpu_pct"), vec![b.as_uuid()]);
+        assert!(sink.fresh_node_ids("missing").is_empty());
     }
 }

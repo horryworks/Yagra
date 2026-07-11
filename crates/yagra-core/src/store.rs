@@ -272,8 +272,10 @@ impl MetricStore for InMemorySink {
         Vec::new()
     }
 
-    async fn fresh_node_ids(&self, _metric: &str, _within_secs: u64) -> Vec<Uuid> {
-        Vec::new()
+    async fn fresh_node_ids(&self, metric: &str, _within_secs: u64) -> Vec<Uuid> {
+        // Skeleton sink has no timestamps; mirror `latest` (any stored sample counts as fresh) so
+        // the API's derived-state fallback is consistent with the real TSDB path.
+        InMemorySink::fresh_node_ids(self, metric)
     }
 
     async fn interface_delta(
