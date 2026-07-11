@@ -1,5 +1,49 @@
 # Release Notes
 
+## v0.1.8
+
+**Searchable passive-event log store, richer Events and dashboards, SSRF hardening, and large-fleet
+speedups** — received syslog messages and SNMP traps now land in a searchable log store, the Events views
+gained filtering, dashboard widgets can be resized and made taller, the URL-monitor probe is hardened
+against SSRF, and node inventory and topology load faster on big fleets.
+
+### New Features
+- **Passive-event log store with full-text search** — received syslog messages and SNMP traps are now
+  persisted to a dedicated log store (VictoriaLogs) via asynchronous batched writes and can be searched
+  full-text from the Events views, so passive events are retained and queryable instead of transient.
+- **Filters on the Events views** — events can now be narrowed by time range, event kind, whether they
+  matched a rule, and free-text / regex search, making it far easier to find a specific event in a busy
+  stream.
+- **Resizable, taller dashboard widgets** — dashboard widgets now support a stepped per-widget height (with
+  an edit-mode height selector) and corner drag-to-resize on a snap-aligned, gap-free grid; edits can be
+  discarded with Cancel, and a widget's content fills its resized cell.
+
+### Improvements
+- **Faster node list and topology on large fleets** — the node inventory and topology views now derive the
+  fallback status of not-yet-observed nodes with a single time-series query instead of one query per node.
+  This is most noticeable on large inventories and immediately after a core restart, when the alert engine
+  has not yet formed an opinion on every node.
+- **Tunable database connection pool** — the core's PostgreSQL connection pool size is now configurable via
+  the `YAGRA_PG_MAX_CONNECTIONS` environment variable and defaults higher, lifting a concurrency ceiling
+  that could throttle the scheduler, result ingest, and API under tens-of-thousands-of-nodes load.
+- **Faster node-detail open** — a node's SNMP scalar readings now load concurrently instead of one after
+  another, so the Overview tab fills in more quickly on devices with many scalar metrics.
+
+### Bug Fixes
+- **Dashboard chart flicker** — fixed a ResizeObserver-driven flicker on fill-mode (height-filling)
+  dashboard charts.
+- **UI text-size consistency** — the remaining hardcoded WebUI text sizes (including one that referenced a
+  previously-undefined style token and silently rendered at the wrong size) now use shared size tokens, so
+  text renders at consistent, themeable sizes.
+
+### Security
+- **URL-monitor SSRF hardening** — the HTTP(S) monitoring probe now resolves and connects only through an
+  SSRF-filtered resolver, applied to the initial target **and every redirect hop**. This closes two ways
+  the loopback / link-local / cloud-metadata blocklist could be bypassed: a monitored endpoint could
+  redirect the probe to a hostname that resolved to a blocked address, and a DNS-rebinding target could
+  pass the pre-flight check yet be dialed at a blocked address. Private/internal ranges remain allowed (an
+  NMS legitimately monitors them); only the loopback/link-local/metadata escalation surface is refused.
+
 ## v0.1.7
 
 **Host-resource trends, fuller localization, and a smoother large-fleet + upgrade experience** — System
