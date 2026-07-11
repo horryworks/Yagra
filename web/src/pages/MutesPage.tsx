@@ -11,7 +11,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { Mute, NodeGroup, NodeSummary } from '../types/api';
+import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -107,7 +107,6 @@ export function MutesPage() {
   const { t } = useTranslation('suppression');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<Mute[]>([]);
-  const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -129,7 +128,6 @@ export function MutesPage() {
 
   useEffect(() => {
     load();
-    api.listNodes().then(setNodes).catch(() => undefined);
     api.listNodeGroups().then(setGroups).catch(() => undefined);
   }, [load]);
 
@@ -233,7 +231,6 @@ export function MutesPage() {
 
       {adding && (
         <AddMuteModal
-          nodes={nodes}
           groups={groups}
           onClose={() => setAdding(false)}
           onSaved={load}

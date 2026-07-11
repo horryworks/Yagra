@@ -11,7 +11,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { MaintenanceWindow, NodeGroup, NodeSummary, ProfileSummary } from '../types/api';
+import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -105,7 +105,6 @@ export function MaintenancePage() {
   const { t } = useTranslation('suppression');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
-  const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [unavailable, setUnavailable] = useState(false);
@@ -129,7 +128,6 @@ export function MaintenancePage() {
 
   useEffect(() => {
     load();
-    api.listNodes().then(setNodes).catch(() => undefined);
     api.listNodeGroups().then(setGroups).catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, [load]);
@@ -258,7 +256,6 @@ export function MaintenancePage() {
 
       {adding && (
         <AddMaintenanceWindowModal
-          nodes={nodes}
           groups={groups}
           profiles={profiles}
           onClose={() => setAdding(false)}

@@ -8,15 +8,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
-import type {
-  MaintenanceScopeLevel,
-  NodeGroup,
-  NodeSummary,
-  ProfileSummary,
-} from '../../types/api';
+import type { MaintenanceScopeLevel, NodeGroup, ProfileSummary } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
+import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { localTimeZone } from '../../lib/format';
 import type { SuppressionTarget } from '../../lib/suppression';
@@ -30,7 +26,6 @@ const errMsg = (e: unknown, fallback: string) =>
 type CreateScope = 'node' | 'group_id' | 'profile';
 
 interface Props {
-  nodes: NodeSummary[];
   groups: NodeGroup[];
   /** Offered as the "profile" scope when present; omit (or empty) to hide that choice. */
   profiles?: ProfileSummary[];
@@ -41,7 +36,6 @@ interface Props {
 }
 
 export function AddMaintenanceWindowModal({
-  nodes,
   groups,
   profiles = [],
   initialScope,
@@ -57,6 +51,11 @@ export function AddMaintenanceWindowModal({
     initialScope ? (initialScope.kind === 'group' ? 'group_id' : 'node') : 'node',
   );
   const [scopeId, setScopeId] = useState(initialScope?.id ?? '');
+  // Resolved name for the node picker's trigger (typeahead over the lazily-loaded inventory, so it
+  // scales past the old flat <select> of the first 100 nodes — S12).
+  const [nodeLabel, setNodeLabel] = useState(
+    initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
+  );
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +132,7 @@ export function AddMaintenanceWindowModal({
               onChange={(e) => {
                 setScope(e.target.value as CreateScope);
                 setScopeId('');
+                setNodeLabel('');
               }}
             >
               <option value="node">{t('maintenanceForm.level.node')}</option>
@@ -145,14 +145,16 @@ export function AddMaintenanceWindowModal({
           <div className="modal-field">
             <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
             {scope === 'node' ? (
-              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">{t('maintenanceForm.pickNode')}</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name}
-                  </option>
-                ))}
-              </Select>
+              <NodePicker
+                id="maint-node"
+                value={scopeId || null}
+                valueLabel={nodeLabel || undefined}
+                onChange={(n) => {
+                  setScopeId(n?.id ?? '');
+                  setNodeLabel(n?.name ?? '');
+                }}
+                placeholder={t('maintenanceForm.pickNode')}
+              />
             ) : scope === 'profile' ? (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
                 <option value="">{t('maintenanceForm.pickProfile')}</option>

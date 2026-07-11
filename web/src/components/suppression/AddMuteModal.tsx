@@ -6,10 +6,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
-import type { NodeGroup, NodeSummary } from '../../types/api';
+import type { NodeGroup } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
+import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { localTimeZone } from '../../lib/format';
 import type { SuppressionTarget } from '../../lib/suppression';
@@ -23,7 +24,6 @@ const errMsg = (e: unknown, fallback: string) =>
 const CHECK_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
 
 interface Props {
-  nodes: NodeSummary[];
   groups: NodeGroup[];
   /** When set, the scope is fixed to this node/group (the All Nodes right-click "Custom…" path). */
   initialScope?: SuppressionTarget;
@@ -31,11 +31,16 @@ interface Props {
   onSaved: () => void;
 }
 
-export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: Props) {
+export function AddMuteModal({ groups, initialScope, onClose, onSaved }: Props) {
   const { t } = useTranslation('suppression');
   const locked = !!initialScope;
   const [scopeKind, setScopeKind] = useState<'node' | 'group'>(initialScope?.kind ?? 'node');
   const [scopeId, setScopeId] = useState(initialScope?.id ?? '');
+  // Resolved name for the node picker's trigger. NodePicker is a typeahead over the lazily-loaded
+  // inventory, so it scales past the old flat <select> of the first 100 nodes (S12).
+  const [nodeLabel, setNodeLabel] = useState(
+    initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
+  );
   const [check, setCheck] = useState('');
   const [until, setUntil] = useState('');
   const [reason, setReason] = useState('');
@@ -103,6 +108,7 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
               onChange={(e) => {
                 setScopeKind(e.target.value as 'node' | 'group');
                 setScopeId('');
+                setNodeLabel('');
               }}
             >
               <option value="node">{t('muteForm.kind.node')}</option>
@@ -114,14 +120,16 @@ export function AddMuteModal({ nodes, groups, initialScope, onClose, onSaved }: 
               {scopeKind === 'group' ? t('muteForm.entityGroup') : t('muteForm.entityNode')}
             </label>
             {scopeKind === 'node' ? (
-              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)} autoFocus>
-                <option value="">{t('muteForm.pickNode')}</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name}
-                  </option>
-                ))}
-              </Select>
+              <NodePicker
+                id="mute-node"
+                value={scopeId || null}
+                valueLabel={nodeLabel || undefined}
+                onChange={(n) => {
+                  setScopeId(n?.id ?? '');
+                  setNodeLabel(n?.name ?? '');
+                }}
+                placeholder={t('muteForm.pickNode')}
+              />
             ) : (
               <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)} autoFocus>
                 <option value="">{t('muteForm.pickGroup')}</option>

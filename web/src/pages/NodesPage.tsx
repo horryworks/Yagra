@@ -695,7 +695,6 @@ export function NodesPage() {
 
       {maintenanceTarget && (
         <AddMaintenanceWindowModal
-          nodes={nodes}
           groups={groups}
           initialScope={maintenanceTarget}
           onClose={() => setMaintenanceTarget(null)}
@@ -704,7 +703,6 @@ export function NodesPage() {
       )}
       {muteTarget && (
         <AddMuteModal
-          nodes={nodes}
           groups={groups}
           initialScope={muteTarget}
           onClose={() => setMuteTarget(null)}
