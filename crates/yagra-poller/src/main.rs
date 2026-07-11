@@ -412,8 +412,14 @@ async fn spawn_event_listeners(
         return Vec::new();
     }
 
-    let per_source = env_f64("YAGRA_EVENT_RATE_PER_SOURCE", 50.0);
-    let global = env_f64("YAGRA_EVENT_RATE_GLOBAL", 500.0);
+    // Edge intake caps (S8). Raised from the original 50/500 after the 2026-07-11 load test showed
+    // the core matcher + single NATS event subscriber sustain ≥27k msg/s with zero NATS drop (the
+    // real ceiling is the async persist writer, which sheds best-effort past it) — so the old
+    // defaults dropped 75-97% of a realistic multi-device / chassis-storm flow for no protective
+    // benefit. A chassis router's syslog burst now fits per-source; the global cap stays well under
+    // the measured drain limit. Both remain env-tunable per deployment.
+    let per_source = env_f64("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
+    let global = env_f64("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));

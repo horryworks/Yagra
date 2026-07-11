@@ -100,6 +100,11 @@ services:
       YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND-0.0.0.0:1162}
       # Optional trap community filter (mismatches dropped; value never logged).
       YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
+      # Edge intake caps (per-source-IP / global token buckets, S8). Defaults match the raised code
+      # defaults (200 / 5000 msg/s) — safe well under the measured ~27k/s core+NATS drain ceiling
+      # (2026-07-11 load test). Raise per site for chassis-scale syslog/trap storms.
+      YAGRA_EVENT_RATE_PER_SOURCE: ${YAGRA_EVENT_RATE_PER_SOURCE:-200}
+      YAGRA_EVENT_RATE_GLOBAL: ${YAGRA_EVENT_RATE_GLOBAL:-5000}
       # Optional: OpenTelemetry OTLP/HTTP endpoint (unset = logs only). Same collector as core.
       YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}

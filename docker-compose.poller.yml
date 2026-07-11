@@ -59,6 +59,10 @@ services:
       YAGRA_TRAP_BIND: ${YAGRA_TRAP_BIND:-0.0.0.0:1162}
       # Optional trap community filter (mismatches dropped; value never logged).
       YAGRA_TRAP_COMMUNITY: ${YAGRA_TRAP_COMMUNITY:-}
+      # Edge intake caps (per-source-IP / global token buckets, S8) — match the raised code
+      # defaults (200 / 5000 msg/s). Raise for a site with chassis-scale syslog/trap volume.
+      YAGRA_EVENT_RATE_PER_SOURCE: ${YAGRA_EVENT_RATE_PER_SOURCE:-200}
+      YAGRA_EVENT_RATE_GLOBAL: ${YAGRA_EVENT_RATE_GLOBAL:-5000}
       # ── Distributed tracing (optional) ─────────────────────────────────────────────
       # Export this remote poller's poll spans to a central OTLP collector (reachable from
       # the site — its own endpoint/TLS, separate from the NATS bus). Unset = logs only.
