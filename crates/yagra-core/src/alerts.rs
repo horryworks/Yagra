@@ -209,6 +209,10 @@ pub struct AlertManager {
     /// Committed liveness state per node — the source of truth for the inventory's display
     /// state and for the suppression down-set. Updated on every liveness observation.
     live: Mutex<HashMap<NodeId, NodeState>>,
+    /// The suppression down-set, maintained **incrementally** (== `{n : live[n] == Unreachable}`).
+    /// Kept in sync with `live` on every liveness flip so `down_set()` is O(down) rather than a full
+    /// O(live) scan on each transition — the hot path during a parent-down cascade (S3).
+    down: Mutex<BTreeSet<NodeId>>,
     tx: broadcast::Sender<String>,
     config: RwLock<AlertConfig>,
 }
@@ -222,6 +226,7 @@ impl AlertManager {
             states: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
+            down: Mutex::new(BTreeSet::new()),
             tx,
             config: RwLock::new(AlertConfig::default()),
         }
@@ -289,13 +294,8 @@ impl AlertManager {
 
     /// The set of nodes currently committed `Unreachable` — the suppression down-set.
     fn down_set(&self) -> BTreeSet<NodeId> {
-        self.live
-            .lock()
-            .expect("live mutex poisoned")
-            .iter()
-            .filter(|(_, s)| matches!(**s, NodeState::Unreachable))
-            .map(|(n, _)| *n)
-            .collect()
+        // Incrementally maintained in `process_check`, so this is O(down) not an O(live) scan.
+        self.down.lock().expect("down mutex poisoned").clone()
     }
 
     /// Feed one poll result through the engine: a liveness check from the outcome plus a
@@ -412,8 +412,18 @@ impl AlertManager {
                 .lock()
                 .expect("live mutex poisoned")
                 .insert(node, committed);
-            matches!(previous, Some(NodeState::Unreachable))
-                != matches!(committed, NodeState::Unreachable)
+            let flipped = matches!(previous, Some(NodeState::Unreachable))
+                != matches!(committed, NodeState::Unreachable);
+            if flipped {
+                // Keep the incremental down-set in lockstep with `live` (its only mutation site).
+                let mut down = self.down.lock().expect("down mutex poisoned");
+                if matches!(committed, NodeState::Unreachable) {
+                    down.insert(node);
+                } else {
+                    down.remove(&node);
+                }
+            }
+            flipped
         } else {
             false
         };
@@ -500,13 +510,23 @@ impl AlertManager {
     /// active-alert count; runs only when a node actually entered/left `Unreachable`.
     fn resweep_suppression(&self, changed: NodeId) -> Vec<NotifyAction> {
         let down = self.down_set();
+        // A flip of `changed` can only change the root-cause attribution of nodes with `changed` on
+        // an ancestor path — its descendants. Scope the re-sweep to them (S3): before, every flip
+        // re-ran `root_cause` for the *entire* active liveness set, so a parent-down cascade cost
+        // O(down × active). `descendants` excludes `changed` itself, matching the old `!= changed`.
+        let affected = self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .topology
+            .descendants(changed);
         // Snapshot the liveness alerts to reconsider, then release the lock before the
         // per-alert topology read / broadcast (keeps lock ordering flat, no nesting).
         let candidates: Vec<Alert> = {
             let active = self.active.lock().expect("alerts mutex poisoned");
             active
                 .values()
-                .filter(|a| a.node != changed && a.metric == LIVENESS)
+                .filter(|a| a.metric == LIVENESS && affected.contains(&a.node))
                 .cloned()
                 .collect()
         };
@@ -1969,6 +1989,58 @@ mod tests {
             .find(|a| a.node == child)
             .expect("child still active");
         assert_eq!(child_active.root_cause, None);
+    }
+
+    #[test]
+    fn grandparent_fall_reattributes_grandchild_through_resweep() {
+        // Transitive roll-up (S3 descendant scoping): gp → p → c. A re-sweep triggered by `gp`
+        // falling must reach the *grandchild* c, not just its direct child p — so c's attribution
+        // climbs to the new topmost cause. Guards against a non-transitive descendant scope.
+        let gp = NodeId::new();
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut topo = Topology::new();
+        topo.add_dependency(parent, gp);
+        topo.add_dependency(child, parent);
+
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::default().with_topology(topo));
+
+        let drive = |node: NodeId, outcome: CheckOutcome, base: i64| {
+            for i in 0..DWELL_SAMPLES {
+                mgr.observe(&result(node, outcome, base + i64::from(i)));
+            }
+        };
+
+        // c falls first (all upstream up) → pages standalone. Then p falls → c rolls under p.
+        drive(child, CheckOutcome::Unreachable, 0);
+        drive(parent, CheckOutcome::Unreachable, 100);
+        let c_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == child)
+            .expect("child active");
+        assert_eq!(c_active.root_cause, Some(parent));
+
+        // gp falls: the re-sweep from gp must reach the grandchild c (transitively) and re-attribute
+        // it to gp — the new topmost down, unsuppressed ancestor. p rolls up too.
+        drive(gp, CheckOutcome::Unreachable, 200);
+        let c_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == child)
+            .expect("child still active");
+        assert_eq!(
+            c_active.root_cause,
+            Some(gp),
+            "grandchild re-attributed to the grandparent via the transitive re-sweep"
+        );
+        let p_active = mgr
+            .active_alerts()
+            .into_iter()
+            .find(|a| a.node == parent)
+            .expect("parent still active");
+        assert_eq!(p_active.root_cause, Some(gp));
     }
 
     #[tokio::test]

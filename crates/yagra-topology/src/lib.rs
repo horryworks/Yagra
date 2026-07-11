@@ -16,6 +16,10 @@ use yagra_common::NodeId;
 pub struct Topology {
     /// child → its direct parents (upstreams).
     parents: BTreeMap<NodeId, BTreeSet<NodeId>>,
+    /// parent → its direct children (downstreams) — the forward index of `parents`, so a node's
+    /// whole subtree can be found without scanning the graph. Used to scope a suppression re-sweep
+    /// to only the nodes a single down-state flip can actually affect (its descendants).
+    children: BTreeMap<NodeId, BTreeSet<NodeId>>,
 }
 
 impl Topology {
@@ -28,6 +32,30 @@ impl Topology {
     /// Declare that `child` depends on `parent` (parent is upstream of child).
     pub fn add_dependency(&mut self, child: NodeId, parent: NodeId) {
         self.parents.entry(child).or_default().insert(parent);
+        self.children.entry(parent).or_default().insert(child);
+    }
+
+    /// All transitive descendants (downstreams) of `node` — every node that has `node` on an
+    /// ancestor path. Excludes `node` itself; cycle-safe (each node visited once). A flip of
+    /// `node`'s down-state can only change the root-cause attribution of these nodes, so a
+    /// suppression re-sweep need only reconsider them (ADR-015) instead of the whole active set.
+    #[must_use]
+    pub fn descendants(&self, node: NodeId) -> BTreeSet<NodeId> {
+        let mut out = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        visited.insert(node); // never emit the start node, even inside a cycle
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if let Some(kids) = self.children.get(&n) {
+                for &c in kids {
+                    if visited.insert(c) {
+                        out.insert(c);
+                        stack.push(c);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Whether `node`'s alert should be suppressed given the set of currently-down nodes.
@@ -145,6 +173,32 @@ mod tests {
 
         let down = down_set(&[p, c]); // gp is up
         assert_eq!(topo.root_cause(c, &down), Some(p));
+    }
+
+    #[test]
+    fn descendants_are_transitive_and_exclude_self() {
+        // gp → p → {c1, c2}; descendants(gp) is the whole subtree below gp.
+        let (gp, p, c1, c2) = (NodeId::new(), NodeId::new(), NodeId::new(), NodeId::new());
+        let mut topo = Topology::new();
+        topo.add_dependency(p, gp);
+        topo.add_dependency(c1, p);
+        topo.add_dependency(c2, p);
+
+        assert_eq!(topo.descendants(gp), down_set(&[p, c1, c2]));
+        assert_eq!(topo.descendants(p), down_set(&[c1, c2]));
+        assert!(topo.descendants(c1).is_empty()); // a leaf has no descendants
+        assert_eq!(topo.descendants(NodeId::new()), down_set(&[])); // unknown node
+    }
+
+    #[test]
+    fn descendants_are_cycle_safe() {
+        // a → b → a (misconfiguration). Must terminate; neither includes itself as the start.
+        let (a, b) = (NodeId::new(), NodeId::new());
+        let mut topo = Topology::new();
+        topo.add_dependency(a, b);
+        topo.add_dependency(b, a);
+        assert_eq!(topo.descendants(a), down_set(&[b]));
+        assert_eq!(topo.descendants(b), down_set(&[a]));
     }
 
     #[test]
