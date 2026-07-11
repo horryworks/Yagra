@@ -18,6 +18,7 @@ mod auth;
 mod classification;
 mod collection;
 mod config;
+mod config_gen;
 mod dashboard;
 mod discovery;
 mod events;
@@ -78,6 +79,7 @@ use uuid::Uuid;
 use volatile::VolatileStore;
 use yagra_alert::Alert;
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
+use yagra_common::NodeId;
 use yagra_topology::Topology;
 
 #[tokio::main]
@@ -384,11 +386,30 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let classification = classification.clone();
         let event_engine = event_engine.clone();
         spawn_cancellable(&shutdown, async move {
+            // Cache the config-derived alert base keyed by the config generation, so the full node
+            // scan + meta/topology rebuild runs only after an actual config change (S6). Maintenance
+            // windows are time-dependent, so re-resolve them each cycle over the cached node list,
+            // and only swap the live config when the base or the in-maintenance set actually changed.
+            let mut cached_base: Option<(u64, AlertConfigBase)> = None;
+            let mut last_maintenance: Option<std::collections::BTreeSet<NodeId>> = None;
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                alerts.set_config(
-                    load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await,
-                );
+                let generation = config_gen::current();
+                let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
+                if base_changed {
+                    cached_base =
+                        Some((generation, load_alert_config_base(&repo, &thresholds).await));
+                }
+                let base = &cached_base.as_ref().expect("alert base set above").1;
+                let in_maintenance =
+                    resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
+                if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {
+                    let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
+                        .with_topology(base.topology.clone())
+                        .with_maintenance(in_maintenance.clone());
+                    alerts.set_config(config);
+                    last_maintenance = Some(in_maintenance);
+                }
                 // Pick up classification-rule edits without a restart (also reloaded inline by
                 // the rule-edit handlers; this catches any drift / multi-instance future).
                 if let Err(e) = classifier.reload(&classification).await {
@@ -1445,24 +1466,64 @@ async fn serve(
 /// group tag-values) for scope resolution, the dependency topology (parent edges) for
 /// suppression / root-cause roll-up, and the nodes currently inside an active maintenance
 /// window. Failures degrade to empty rather than crashing the refresh loop.
-async fn load_alert_config(
-    repo: &NodeRepo,
-    thresholds: &ThresholdStore,
-    maintenance: &MaintenanceRepo,
-    groups: &groups::GroupRepo,
-) -> AlertConfig {
+/// The config-derived half of the alert config: all thresholds + a full node scan folded into the
+/// node-meta map and dependency topology. This is the expensive full-fleet work (a `list_nodes`
+/// scan + a 50k-entry map/topology build), gated behind the config generation so it runs only after
+/// an actual config change rather than every 30s refresh (S6). The raw node list is retained so the
+/// time-dependent maintenance resolution can run each cycle without re-scanning the DB.
+struct AlertConfigBase {
+    rules: Vec<thresholds::StoredThreshold>,
+    nodes: Vec<yagra_common::Node>,
+    meta: HashMap<NodeId, NodeMeta>,
+    topology: Topology,
+}
+
+/// Load the config-derived alert base (thresholds + node-meta + dependency topology).
+async fn load_alert_config_base(repo: &NodeRepo, thresholds: &ThresholdStore) -> AlertConfigBase {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load thresholds");
         Vec::new()
     });
+    let nodes = repo.list_nodes().await.unwrap_or_default();
+    let mut meta = HashMap::new();
+    let mut topology = Topology::new();
+    for node in &nodes {
+        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
+        if let Some(parent) = node.parent {
+            topology.add_dependency(node.id, parent);
+        }
+        meta.insert(
+            node.id,
+            NodeMeta {
+                profile: node.profile.as_ref().map(ToString::to_string),
+                groups: node.tags.values().cloned().collect(),
+            },
+        );
+    }
+    AlertConfigBase {
+        rules,
+        nodes,
+        meta,
+        topology,
+    }
+}
+
+/// Resolve the set of nodes currently inside an active maintenance window. Time-dependent (window
+/// boundaries move with wall-clock), so it runs every refresh cycle — but over the *cached* node
+/// list, not a fresh DB scan. Folder-group scopes expand against the inventory tree (recursive incl.
+/// subgroups, ADR-022) — the same chain the Troubleshoot scope uses; only touches the DB when one is
+/// actually active.
+async fn resolve_maintenance(
+    maintenance: &MaintenanceRepo,
+    groups: &groups::GroupRepo,
+    repo: &NodeRepo,
+    nodes: &[yagra_common::Node],
+) -> std::collections::BTreeSet<NodeId> {
     let scopes = maintenance.active_scopes().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load maintenance windows");
         Vec::new()
     });
-    let nodes = repo.list_nodes().await.unwrap_or_default();
-    let mut in_maintenance = maintenance::nodes_in_maintenance(&scopes, &nodes);
-    // Folder-group scopes resolve against the inventory tree (recursive incl. subgroups, ADR-022)
-    // — the same chain the Troubleshoot scope uses. Only touch the DB when one is actually active.
+    let mut in_maintenance = maintenance::nodes_in_maintenance(&scopes, nodes);
     let folder_groups: Vec<Uuid> = scopes
         .iter()
         .filter(|(level, _)| *level == maintenance::WindowScope::FolderGroup)
@@ -1487,23 +1548,22 @@ async fn load_alert_config(
             Err(e) => tracing::warn!(error = %e, "failed to load group edges for maintenance"),
         }
     }
-    let mut meta = HashMap::new();
-    let mut topology = Topology::new();
-    for node in nodes {
-        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
-        if let Some(parent) = node.parent {
-            topology.add_dependency(node.id, parent);
-        }
-        meta.insert(
-            node.id,
-            NodeMeta {
-                profile: node.profile.map(|p| p.to_string()),
-                groups: node.tags.into_values().collect(),
-            },
-        );
-    }
-    AlertConfig::new(rules, meta)
-        .with_topology(topology)
+    in_maintenance
+}
+
+/// Assemble the full alert config (config base + current maintenance). Used for the initial
+/// synchronous load at startup; the refresh loop uses the two halves directly with generation
+/// caching so the base isn't rebuilt when config is unchanged (S6).
+async fn load_alert_config(
+    repo: &NodeRepo,
+    thresholds: &ThresholdStore,
+    maintenance: &MaintenanceRepo,
+    groups: &groups::GroupRepo,
+) -> AlertConfig {
+    let base = load_alert_config_base(repo, thresholds).await;
+    let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
+    AlertConfig::new(base.rules, base.meta)
+        .with_topology(base.topology)
         .with_maintenance(in_maintenance)
 }
 

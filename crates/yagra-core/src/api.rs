@@ -459,6 +459,12 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
     };
     let resp = next.run(req).await;
     if audited {
+        // A successful config mutation bumps the process-wide config generation so background
+        // rebuilders (alert-config reloader, scheduler spec resolution) skip their full-fleet
+        // rebuild when nothing changed (S2/S6). Coarse but safe: any config write invalidates.
+        if resp.status().is_success() {
+            crate::config_gen::bump();
+        }
         if let Some(admin) = st.admin.as_ref() {
             let user = username.as_deref().unwrap_or(AUDIT_ANONYMOUS);
             let action = format!("{method} {path}");
