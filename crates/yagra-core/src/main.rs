@@ -78,7 +78,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use volatile::VolatileStore;
 use yagra_alert::Alert;
-use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
+use yagra_bus::{JobSpec, NatsBus, PollResult, DEFAULT_POOL};
 use yagra_common::NodeId;
 use yagra_topology::Topology;
 
@@ -1120,6 +1120,34 @@ async fn flush_history(history: &Arc<AlertHistoryStore>, buf: &mut Vec<HistoryRe
 /// both (no double-polling). The effective interval per node is `profile override → global default`
 /// (both re-read each round, so a UI edit applies next round). The loop wakes at the smallest
 /// interval in play; legacy jitter spans that window.
+/// Cached result of a full sweep's spec resolution, reused while config is unchanged (S2). Holds the
+/// per-pool desired working sets so a steady-state round costs no `list_nodes` scan, no per-node spec
+/// build, and no credential decrypt — the coordinator is fed the cached sets and handles poller
+/// membership + its own diff. Populated **only** when the whole fleet was working-set at build time
+/// (a legacy pool needs node rows each round, so a mixed fleet keeps rebuilding, as before).
+struct SweepCache {
+    /// Config generation this was built at; a mismatch forces a rebuild.
+    generation: u64,
+    /// Sleep period for the round (fleet-minimum interval), cached so the fast path needn't rescan.
+    min_interval: u32,
+    /// Per-pool desired working set (`build_node_specs` output).
+    desired_by_pool: HashMap<String, HashMap<NodeId, Vec<JobSpec>>>,
+}
+
+impl SweepCache {
+    /// Whether this cache can serve the current round: config unchanged since it was built AND every
+    /// cached pool still has a live poller (working-set). A pool that fell back to legacy needs node
+    /// rows this round, so the cache can't serve it — force a rebuild. (Config-derived pool membership
+    /// is stable while the generation is unchanged, so the cached pool set equals the current one.)
+    fn reusable(&self, generation: u64, live: &std::collections::HashSet<String>) -> bool {
+        self.generation == generation
+            && self
+                .desired_by_pool
+                .keys()
+                .all(|p| scheduler::pool_uses_working_set(p, live))
+    }
+}
+
 async fn run_scheduler(
     repo: Arc<NodeRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
@@ -1130,7 +1158,32 @@ async fn run_scheduler(
     use std::collections::HashSet;
     use std::time::Instant;
     let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
+    let mut cache: Option<SweepCache> = None;
     loop {
+        // Read the config generation before any work so a change racing the rebuild is caught next
+        // round (the cache is tagged with the pre-work value).
+        let generation = config_gen::current();
+        let now = Instant::now();
+        let live = coordinator.live_pools(now);
+
+        // Fast path: config unchanged since the cache was built AND every cached pool still has a
+        // live poller (working-set). Reuse the cached desired sets — no DB scan, no per-node spec
+        // build, no credential decrypt — and let the coordinator handle poller membership + its diff.
+        if let Some(c) = &cache {
+            if c.reusable(generation, &live) {
+                for (pool, desired) in &c.desired_by_pool {
+                    coordinator.reconcile_pool(pool, desired.clone(), now).await;
+                }
+                stats.record_sweep(0);
+                stats.set_pool_modes(c.desired_by_pool.len() as u64, 0);
+                let sleep_secs = c.min_interval;
+                metrics::counter!("yagra_sweep_cache_hits_total").increment(1);
+                tokio::time::sleep(Duration::from_secs(u64::from(sleep_secs))).await;
+                continue;
+            }
+        }
+        metrics::counter!("yagra_sweep_cache_misses_total").increment(1);
+
         // Meraki device nodes are polled by the org collector, not per-node — preload their ids
         // once per round (like the interval overrides) and skip them, so no per-node lookup runs in
         // the hot loop. A load failure degrades to an empty set (they'd fall through to the
@@ -1164,9 +1217,6 @@ async fn run_scheduler(
                 let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
                 let node_count = resolved.len();
 
-                let now = Instant::now();
-                let live = coordinator.live_pools(now);
-
                 // Group the non-Meraki nodes by pool (default `DEFAULT_POOL`) so each pool's mode is
                 // decided once. Meraki device nodes are dropped here (the org collector owns them).
                 let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
@@ -1196,6 +1246,9 @@ async fn run_scheduler(
                 let mut jobs_round: u64 = 0;
                 let mut working_set_pools: u64 = 0;
                 let mut legacy_pools: u64 = 0;
+                // Collect this rebuild's working-set desired sets to seed the cache (see below).
+                let mut new_desired_by_pool: HashMap<String, HashMap<NodeId, Vec<JobSpec>>> =
+                    HashMap::new();
 
                 // Per-node working-set builds fan out with bounded concurrency: each resolves a
                 // node's URL/SNMP/collection config with a few DB round-trips, so at tens of
@@ -1227,6 +1280,7 @@ async fn run_scheduler(
                                 })
                                 .collect()
                                 .await;
+                        new_desired_by_pool.insert(pool.clone(), desired.clone());
                         coordinator.reconcile_pool(&pool, desired, now).await;
                         working_set_pools += 1;
                     } else {
@@ -1260,6 +1314,19 @@ async fn run_scheduler(
                 last_dispatched.retain(|id, _| present.contains(id));
                 stats.record_sweep(jobs_round);
                 stats.set_pool_modes(working_set_pools, legacy_pools);
+                // Seed the fast-path cache only when the whole fleet was working-set — a legacy pool
+                // needs node rows every round, so a mixed fleet keeps rebuilding (unchanged behavior).
+                // Tagged with the generation read before the rebuild so a racing config change is
+                // detected next round.
+                cache = if legacy_pools == 0 {
+                    Some(SweepCache {
+                        generation,
+                        min_interval,
+                        desired_by_pool: new_desired_by_pool,
+                    })
+                } else {
+                    None
+                };
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
@@ -1796,6 +1863,34 @@ mod tests {
             spill.is_empty(),
             "spill drains once VM accepts writes again"
         );
+    }
+
+    fn sweep_cache(generation: u64, pools: &[&str]) -> SweepCache {
+        SweepCache {
+            generation,
+            min_interval: 30,
+            desired_by_pool: pools
+                .iter()
+                .map(|p| ((*p).to_owned(), HashMap::new()))
+                .collect(),
+        }
+    }
+
+    fn live(pools: &[&str]) -> std::collections::HashSet<String> {
+        pools.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    #[test]
+    fn sweep_cache_reused_only_when_gen_matches_and_all_pools_working_set() {
+        let c = sweep_cache(7, &["default", "site-a"]);
+        // Config unchanged and both pools have live pollers → reuse.
+        assert!(c.reusable(7, &live(&["default", "site-a"])));
+        // A newer generation (config edited) → rebuild.
+        assert!(!c.reusable(8, &live(&["default", "site-a"])));
+        // A cached pool lost its poller (fell back to legacy) → rebuild.
+        assert!(!c.reusable(7, &live(&["default"])));
+        // An empty-fleet cache is vacuously reusable while the generation holds.
+        assert!(sweep_cache(7, &[]).reusable(7, &live(&[])));
     }
 
     // The spill is bounded: past the cap the oldest batch is dropped rather than growing unbounded.
