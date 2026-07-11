@@ -84,6 +84,40 @@ impl AlertHistoryStore {
         Ok(())
     }
 
+    /// Append a **batch** of fire/resolve records in one multi-row INSERT (the async ingest writer,
+    /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
+    /// hiccup must not stop alerting. 11 columns × the writer's batch cap stays well under Postgres'
+    /// 65535-parameter ceiling. Returns rows inserted.
+    pub async fn record_batch(&self, records: &[(Alert, bool)]) -> anyhow::Result<u64> {
+        if records.is_empty() {
+            return Ok(0);
+        }
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO alert_history \
+             (id, node, check_id, severity, state, at_unix_ms, resolved, \
+              metric, observed_value, threshold_value, direction) ",
+        );
+        qb.push_values(records.iter(), |mut b, (alert, resolved)| {
+            let (value, threshold, direction) = match &alert.breach {
+                Some(br) => (Some(br.value), br.threshold, Some(br.direction.clone())),
+                None => (None, None, None),
+            };
+            let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
+            b.push_bind(Uuid::new_v4())
+                .push_bind(alert.node.as_uuid())
+                .push_bind(alert.check.as_uuid())
+                .push_bind(severity_str(alert.severity))
+                .push_bind(alert.state.as_str())
+                .push_bind(alert.at_unix_ms)
+                .push_bind(*resolved)
+                .push_bind(metric)
+                .push_bind(value)
+                .push_bind(threshold)
+                .push_bind(direction);
+        });
+        Ok(qb.build().execute(&self.pool).await?.rows_affected())
+    }
+
     /// Nodes with the most alert **fires** (resolved=false) at or after `since_ms` (Unix ms),
     /// highest first. Powers the "Top alerting nodes" widget (chronic offenders).
     pub async fn top_nodes_by_fires(

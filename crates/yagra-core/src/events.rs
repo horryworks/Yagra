@@ -1243,7 +1243,8 @@ pub async fn run_persist_writer(
                             }
                         }
                         flush_persist(&repo, &logs, &mut buf).await;
-                        metrics::gauge!("yagra_persist_queue_depth").set(rx.len() as f64);
+                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "events")
+                            .set(rx.len() as f64);
                     }
                 }
             }

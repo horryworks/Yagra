@@ -43,9 +43,9 @@ pub struct InterfaceMeta {
     pub last_seen_s: Option<i64>,
 }
 
-/// One interface row to batch-upsert: `(ifindex, if_name, if_alias, if_speed)`, metadata borrowed
-/// from the poll result. A `None` name/alias/speed leaves the stored value untouched (COALESCE).
-pub type InterfaceUpsert<'a> = (i32, Option<&'a str>, Option<&'a str>, Option<i64>);
+/// One row for [`NodeRepo::upsert_interfaces_batch`]: `(node_id, ifindex, if_name, if_alias,
+/// if_speed)`. A `None` name/alias/speed leaves the stored value untouched (COALESCE).
+pub type InterfaceBatchRow = (Uuid, i32, Option<String>, Option<String>, Option<i64>);
 
 /// Interface identity for a fleet Top-N name join (no timestamp — just labels + speed).
 pub struct InterfaceIdent {
@@ -466,26 +466,38 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Fill a node's **blank** vendor/model from an SNMP identity probe — `COALESCE` keeps any
-    /// existing (manually set or already-classified) value, so this never clobbers operator input;
-    /// it only writes a column that is currently NULL. A `None` argument leaves that column alone.
-    /// Returns whether the node exists. Used by the poll-result consumer after `identify()`.
-    pub async fn fill_node_identity(
+    /// Fill blank vendor/model
+    /// for MANY nodes in one `UPDATE` (the async ingest writer, ADR-025). `COALESCE` preserves any
+    /// existing value; a `None` leaves that column alone. `unnest` binds arrays, so the row count is
+    /// unbounded by Postgres' parameter ceiling. Dedups keeping the last occurrence per node.
+    pub async fn fill_node_identity_batch(
         &self,
-        id: Uuid,
-        vendor: Option<&str>,
-        model: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        let res = sqlx::query(
-            "UPDATE nodes SET vendor = COALESCE(vendor, $2), model = COALESCE(model, $3), \
-             updated_at = now() WHERE id = $1",
+        rows: &[(Uuid, Option<String>, Option<String>)],
+    ) -> anyhow::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut by_node: BTreeMap<Uuid, (Option<String>, Option<String>)> = BTreeMap::new();
+        for (node, vendor, model) in rows {
+            by_node.insert(*node, (vendor.clone(), model.clone()));
+        }
+        let ids: Vec<Uuid> = by_node.keys().copied().collect();
+        let vendors: Vec<Option<String>> = by_node.values().map(|v| v.0.clone()).collect();
+        let models: Vec<Option<String>> = by_node.values().map(|v| v.1.clone()).collect();
+        sqlx::query(
+            "UPDATE nodes SET \
+                vendor = COALESCE(nodes.vendor, t.vendor), \
+                model = COALESCE(nodes.model, t.model), \
+                updated_at = now() \
+             FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, vendor, model) \
+             WHERE nodes.id = t.id",
         )
-        .bind(id)
-        .bind(vendor)
-        .bind(model)
+        .bind(&ids)
+        .bind(&vendors)
+        .bind(&models)
         .execute(&self.pool)
         .await?;
-        Ok(res.rows_affected() > 0)
+        Ok(())
     }
 
     /// The `sort_order` of each of the given node ids (for the inventory tree, which orders nodes
@@ -652,49 +664,46 @@ impl NodeRepo {
             .collect()
     }
 
-    /// Upsert all interfaces discovered on one poll (table walk) in a **single** statement:
-    /// insert each, or refresh its metadata and `last_seen`. This is the busiest ingest path
-    /// (every SNMP-table poll of every node), so it must not fan out into one round-trip per
-    /// interface — a core switch has hundreds. Names/aliases are device-supplied metadata kept
-    /// in PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011). A `None`
-    /// field leaves the stored value untouched (COALESCE). Staleness is judged by `last_seen`
-    /// age; rows are not deleted here.
-    pub async fn upsert_interfaces(
-        &self,
-        node_id: Uuid,
-        rows: &[InterfaceUpsert<'_>],
-    ) -> anyhow::Result<()> {
+    /// Upsert interfaces for MANY nodes in one statement — the async ingest writer (ADR-025)
+    /// coalesces many polls, so this must not fan out per node. Names/aliases are device-supplied
+    /// metadata kept in PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011).
+    /// Rows are [`InterfaceBatchRow`]: `(node_id, ifindex, if_name, if_alias, if_speed)`. `unnest`
+    /// binds arrays, so the row count is unbounded by the 65535-parameter ceiling. Dedups within the
+    /// batch keeping the last occurrence per `(node_id, ifindex)` — `ON CONFLICT` cannot touch the
+    /// same key twice in one statement.
+    pub async fn upsert_interfaces_batch(&self, rows: &[InterfaceBatchRow]) -> anyhow::Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        // Dedup within the batch keeping the last occurrence: `ON CONFLICT DO UPDATE` cannot
-        // touch the same (node_id, ifindex) twice in one statement, and a multi-index table
-        // can fold several rows onto one synthetic ifindex. Last-wins matches the previous
-        // per-row loop's overwrite semantics.
         type OwnedIfaceMeta = (Option<String>, Option<String>, Option<i64>);
-        let mut by_ifindex: BTreeMap<i32, OwnedIfaceMeta> = BTreeMap::new();
-        for &(ifindex, name, alias, speed) in rows {
-            by_ifindex.insert(
-                ifindex,
-                (name.map(str::to_owned), alias.map(str::to_owned), speed),
-            );
+        let mut by_key: BTreeMap<(Uuid, i32), OwnedIfaceMeta> = BTreeMap::new();
+        for (node, ifindex, name, alias, speed) in rows {
+            by_key.insert((*node, *ifindex), (name.clone(), alias.clone(), *speed));
         }
-        let ifindexes: Vec<i32> = by_ifindex.keys().copied().collect();
-        let names: Vec<Option<String>> = by_ifindex.values().map(|v| v.0.clone()).collect();
-        let aliases: Vec<Option<String>> = by_ifindex.values().map(|v| v.1.clone()).collect();
-        let speeds: Vec<Option<i64>> = by_ifindex.values().map(|v| v.2).collect();
+        let mut node_ids: Vec<Uuid> = Vec::with_capacity(by_key.len());
+        let mut ifindexes: Vec<i32> = Vec::with_capacity(by_key.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(by_key.len());
+        let mut aliases: Vec<Option<String>> = Vec::with_capacity(by_key.len());
+        let mut speeds: Vec<Option<i64>> = Vec::with_capacity(by_key.len());
+        for ((node, ifindex), (name, alias, speed)) in by_key {
+            node_ids.push(node);
+            ifindexes.push(ifindex);
+            names.push(name);
+            aliases.push(alias);
+            speeds.push(speed);
+        }
         sqlx::query(
             "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, last_seen) \
-             SELECT $1, t.ifindex, t.if_name, t.if_alias, t.if_speed, now() \
-             FROM unnest($2::int[], $3::text[], $4::text[], $5::int8[]) \
-                  AS t(ifindex, if_name, if_alias, if_speed) \
+             SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, now() \
+             FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[]) \
+                  AS t(node_id, ifindex, if_name, if_alias, if_speed) \
              ON CONFLICT (node_id, ifindex) DO UPDATE SET \
                 if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
                 if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
                 if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
                 last_seen = now()",
         )
-        .bind(node_id)
+        .bind(&node_ids)
         .bind(&ifindexes)
         .bind(&names)
         .bind(&aliases)

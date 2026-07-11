@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_bus::PollResult;
@@ -69,6 +70,17 @@ pub trait MetricStore: Send + Sync {
     }
     /// Persist every sample in a completed poll.
     async fn write(&self, result: &PollResult);
+    /// Persist the samples of a **batch** of completed polls in as few round-trips as possible —
+    /// the async ingest writer (ADR-025) calls this so many results coalesce into one import. Returns
+    /// `false` when the batch was **not** durably accepted, so the writer's retry/spill loop can
+    /// re-queue it. The default loops [`write`] (correct for the skeleton sink and any store); only
+    /// [`VmStore`] overrides it with a single coalesced POST that reports success/failure.
+    async fn write_batch(&self, results: &[Arc<PollResult>]) -> bool {
+        for result in results {
+            self.write(result).await;
+        }
+        true
+    }
     /// The latest value for a series, if any.
     async fn latest(&self, key: &SeriesKey) -> Option<f64>;
     /// Sampled values for a series over `[from_s, to_s]` at `step_s` resolution
@@ -323,8 +335,17 @@ impl VmStore {
     /// Point at a VictoriaMetrics base URL (e.g. `http://victoriametrics:8428`).
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
+        // A bounded timeout is load-bearing: `write`/`healthy`/`query_*` all run on the single
+        // result-ingest task, so a hung VM socket (no timeout) would stall the entire fleet's
+        // ingest indefinitely. Matches the 10s discipline on the notifier client (`WebhookChannel`).
+        // The base URL is static config, so the build cannot fail at runtime; the default fallback
+        // simply loses the timeout rather than panicking.
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
         Self {
-            http: reqwest::Client::new(),
+            http,
             base: base.into(),
         }
     }
@@ -706,6 +727,35 @@ impl MetricStore for VmStore {
             }
             Err(e) => tracing::warn!(error = %e, "VictoriaMetrics import request failed"),
             Ok(_) => {}
+        }
+    }
+
+    async fn write_batch(&self, results: &[Arc<PollResult>]) -> bool {
+        // Coalesce every buffered result's samples into ONE exposition body → one import POST. Each
+        // line carries its own ms timestamp (`prometheus_line`), so mixing many results/timestamps
+        // in one body is valid. Returns success so the writer can retry/spill on failure.
+        let mut body = String::new();
+        for result in results {
+            for sample in &result.samples {
+                let key = sample.series_key(result.node_id);
+                body.push_str(&key.prometheus_line(sample.value, result.at_unix_ms));
+                body.push('\n');
+            }
+        }
+        if body.is_empty() {
+            return true; // nothing to persist (all buffered results were sample-free)
+        }
+        let url = format!("{}/api/v1/import/prometheus", self.base);
+        match self.http.post(&url).body(body).send().await {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                tracing::warn!(status = %resp.status(), "VictoriaMetrics batch import non-2xx");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics batch import request failed");
+                false
+            }
         }
     }
 
