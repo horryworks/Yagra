@@ -53,6 +53,7 @@ import type {
   Mute,
   NodeDetail,
   NodeGroup,
+  NodeNameEntry,
   NodePage,
   NodeStatus,
   NodeSummary,
@@ -271,6 +272,14 @@ export const api = {
   /** Inventory listing (first page; the response is keyset-paginated). */
   listNodes: (): Promise<NodeSummary[]> =>
     request<NodePage>('/nodes').then((r) => r.nodes),
+
+  /** Resolve a batch of node ids → display names across the whole fleet (not just the first list
+   *  page). Backs the shared `useEntityNames` resolver so a reference to any node — not only the
+   *  first 100 — shows its name instead of a raw UUID (S12). Unresolved ids are omitted. */
+  getNodeNames: (ids: string[]): Promise<NodeNameEntry[]> =>
+    ids.length === 0
+      ? Promise.resolve([])
+      : request<NodeNameEntry[]>('/node-names', jsonBody('POST', { ids })),
 
   /** One keyset page of the inventory (for the virtualized node table). Pass the previous
    *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. */

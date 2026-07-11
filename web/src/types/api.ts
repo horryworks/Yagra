@@ -108,6 +108,13 @@ export interface NodeSummary {
   source?: 'device' | 'meraki';
 }
 
+/** One resolved node id → display name (`POST /api/v1/node-names`). Unresolved ids are omitted
+ *  from the response, so the caller keeps the raw id as the fallback (S12). */
+export interface NodeNameEntry {
+  id: string;
+  name: string;
+}
+
 /** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
 export type GroupType = 'site' | 'region' | 'device_type' | 'service' | 'generic';
 

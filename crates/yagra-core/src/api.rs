@@ -150,6 +150,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/config", get(get_config).put(update_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
+        .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
@@ -643,6 +644,52 @@ fn is_valid_metric_name(metric: &str) -> bool {
 struct NodePageQuery {
     cursor: Option<Uuid>,
     limit: Option<i64>,
+}
+
+/// Cap on one batch name-resolution request so a client can't force an unbounded `IN (…)` query.
+const NODE_NAMES_BATCH_MAX: usize = 1000;
+
+/// Request body for `POST /api/v1/node-names`: the node ids whose display names to resolve.
+#[derive(Deserialize)]
+struct NodeNamesReq {
+    ids: Vec<Uuid>,
+}
+
+/// One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id).
+#[derive(Serialize)]
+struct NodeNameEntry {
+    id: Uuid,
+    name: String,
+}
+
+/// Resolve a batch of node ids to their display names (S12). The shared `useEntityNames` resolver
+/// and any table that renders a node reference by id use this so names resolve across the **whole**
+/// fleet: the old path resolved against the first page of `list_nodes` (default 100), so a
+/// reference to the 101st+ node silently degraded to a raw UUID. View-gated, read-only, bounded.
+async fn node_names_batch(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<NodeNamesReq>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let mut ids = req.ids;
+    ids.truncate(NODE_NAMES_BATCH_MAX);
+    let names = match st.admin.as_ref() {
+        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        None => std::collections::HashMap::new(),
+    };
+    let out: Vec<NodeNameEntry> = ids
+        .iter()
+        .filter_map(|id| {
+            names.get(id).map(|name| NodeNameEntry {
+                id: *id,
+                name: name.clone(),
+            })
+        })
+        .collect();
+    Json(out).into_response()
 }
 
 async fn list_nodes(
@@ -8563,6 +8610,28 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[tokio::test]
+    async fn node_names_batch_resolves_and_is_bounded() {
+        // Route registers (no collision with /nodes/:node_id), the JSON body parses, and the
+        // read gate is open in public-dashboard mode. Without an admin repo no names resolve, so
+        // the response is a well-formed empty array — the client then keeps the raw id (S12).
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let id = Uuid::new_v4();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/node-names")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"ids":["{id}"]}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(body_json(resp).await.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
