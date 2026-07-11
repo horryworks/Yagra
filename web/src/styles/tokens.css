@@ -54,11 +54,21 @@
   --ui-font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-family: 'SFMono-Regular', 'JetBrains Mono', 'Consolas', ui-monospace, monospace;
   --font-base: 13px;
+  --font-2xs: calc(var(--font-base) - 3px); /* 10px — micro labels / dense table sub-text */
   --font-xs: calc(var(--font-base) - 2px);
   --font-sm: calc(var(--font-base) - 1px);
   --font-md: var(--font-base);
   --font-lg: calc(var(--font-base) + 2px);
   --font-xl: calc(var(--font-base) + 5px);
+  /* Display scale — large numerals/titles (topbar, node-detail headers, KPI tiles, hero counts).
+     Sizes preserved exactly from the values they replace; not a color/status concept. */
+  --font-2xl: calc(var(--font-base) + 3px); /* 16px */
+  --font-3xl: calc(var(--font-base) + 7px); /* 20px */
+  --font-4xl: calc(var(--font-base) + 9px); /* 22px */
+  --font-5xl: calc(var(--font-base) + 11px); /* 24px */
+  --font-6xl: calc(var(--font-base) + 13px); /* 26px */
+  --font-7xl: calc(var(--font-base) + 17px); /* 30px */
+  --font-8xl: calc(var(--font-base) + 21px); /* 34px */
   --weight-normal: 400;
   --weight-medium: 500;
 

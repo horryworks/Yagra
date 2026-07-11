@@ -54,7 +54,7 @@
 }
 
 .nd-name {
-  font-size: 20px;
+  font-size: var(--font-3xl);
   font-weight: var(--weight-medium);
   white-space: nowrap;
   overflow: hidden;
@@ -194,7 +194,7 @@
 
 .nd-tab-warn {
   color: var(--status-warning);
-  font-size: 9px;
+  font-size: var(--font-2xs);
 }
 
 /* ---------------- tab body (scrolls) ---------------- */
@@ -349,7 +349,7 @@
 }
 
 .nd-health-metric-value {
-  font-size: 24px;
+  font-size: var(--font-5xl);
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

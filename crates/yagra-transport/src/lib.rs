@@ -393,13 +393,6 @@ impl FakeTransport {
         self
     }
 
-    /// Set the canned v3 string scalars this fake returns.
-    #[must_use]
-    pub fn with_snmp_v3_strings(mut self, rows: Vec<SnmpStringSample>) -> Self {
-        self.snmp_v3_strings = rows;
-        self
-    }
-
     /// Set the canned HTTP probe this fake returns.
     #[must_use]
     pub fn with_http(mut self, probe: HttpProbe) -> Self {

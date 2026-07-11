@@ -110,8 +110,6 @@ opentelemetry-otlp = { version = "0.27", default-features = false, features = ["
 tracing-opentelemetry = "0.28"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
-# Config
-config = "0.14"
 # Crypto (envelope encryption of monitoring credentials — pure Rust, no NASM)
 aes-gcm = "0.10"
 # Webhook ingest-token hashing (already in the tree via the crypto stack)

@@ -32,7 +32,7 @@
   gap: 2px;
 }
 .ts-intro-num {
-  font-size: 22px;
+  font-size: var(--font-4xl);
   font-weight: var(--weight-medium);
   line-height: 1;
   font-family: var(--font-family);
@@ -691,7 +691,7 @@
   gap: 3px;
 }
 .ts-res-num {
-  font-size: 26px;
+  font-size: var(--font-6xl);
   font-weight: var(--weight-medium);
   line-height: 1;
   font-family: var(--font-family);
@@ -808,7 +808,7 @@
   font-weight: var(--weight-medium);
 }
 .ts-anom-score-cap {
-  font-size: 9px;
+  font-size: var(--font-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);

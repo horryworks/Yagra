@@ -5,7 +5,7 @@
 }
 
 .kpitile-value {
-  font-size: 34px;
+  font-size: var(--font-8xl);
   font-weight: var(--weight-medium);
   line-height: 1;
   color: var(--text-primary);

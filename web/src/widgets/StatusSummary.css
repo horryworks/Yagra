@@ -11,7 +11,7 @@
 }
 
 .statussummary-num {
-  font-size: 30px;
+  font-size: var(--font-7xl);
   font-weight: var(--weight-medium);
   line-height: 1;
 }

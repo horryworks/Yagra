@@ -89,7 +89,7 @@
   background: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 9px;
+  font-size: var(--font-2xs);
   padding: 0;
   transition: transform var(--transition);
 }

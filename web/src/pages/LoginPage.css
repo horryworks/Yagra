@@ -30,7 +30,7 @@
 }
 
 .login-brand-name {
-  font-size: 22px;
+  font-size: var(--font-4xl);
   font-weight: var(--weight-medium);
   margin-top: 8px;
 }
