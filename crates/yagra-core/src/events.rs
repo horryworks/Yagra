@@ -65,6 +65,17 @@ pub const PERSIST_CHANNEL_CAP: usize = 8192;
 /// Largest batch the persist writer flushes at once (well under Postgres' 65535-parameter ceiling
 /// at 16 columns/row).
 const PERSIST_BATCH_MAX: usize = 500;
+/// Bounded queue between the (single) event matcher and the async **action** writer (S10). The
+/// matcher plans alert state changes synchronously under its locks, then hands the resulting
+/// fire/resolve side effects (alert-history write + notification delivery) to this channel so they
+/// run off the hot path — under an event storm (a real incident) the matcher keeps matching while
+/// the writer batches history INSERTs and delivers notifications in parallel. Unlike the persist
+/// queue this **never sheds**: the alert-history audit trail must be preserved and the notifier
+/// needs FIFO fire→resolve order, so a full queue applies backpressure (still strictly better than
+/// the old inline I/O, which serialized every DB round-trip and vendor call on the matcher).
+pub const ACTION_CHANNEL_CAP: usize = 8192;
+/// Largest action batch the writer records to `alert_history` in one multi-row INSERT.
+const ACTION_BATCH_MAX: usize = 500;
 
 fn now_unix_ms() -> i64 {
     SystemTime::now()
@@ -165,6 +176,14 @@ impl PersistRecord {
             "fired" | "refreshed" | "cleared" | "suppressed"
         )
     }
+}
+
+/// One planned alert side effect queued for the async action writer (S10): a fire/resolve/suppress
+/// to record in history and forward to the notifier, off the matcher's hot path. `reason` labels a
+/// resolve (`"clear"`/`"ttl"`/`"manual"`) for the resolved-total counter.
+pub struct EventAction {
+    pub action: NotifyAction,
+    pub reason: &'static str,
 }
 
 /// Outcome of verifying a webhook source's bearer token.
@@ -786,6 +805,10 @@ pub struct EventEngine {
     /// Non-blocking handoff to the async batch persist writer (ADR-024). `None` in unit tests that
     /// exercise the pure planner only.
     persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
+    /// Blocking handoff to the async action writer (S10): alert-history + notification I/O for
+    /// planned fire/resolve actions runs off the matcher's hot path. `None` falls back to inline
+    /// execution (unit tests / skeleton) so behavior is unchanged there.
+    action_tx: Option<tokio::sync::mpsc::Sender<EventAction>>,
 }
 
 impl EventEngine {
@@ -796,6 +819,7 @@ impl EventEngine {
         notifier: Arc<Notifier>,
         history: Arc<AlertHistoryStore>,
         persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
+        action_tx: Option<tokio::sync::mpsc::Sender<EventAction>>,
     ) -> Self {
         Self {
             repo,
@@ -806,6 +830,7 @@ impl EventEngine {
             runtime: Mutex::new(Runtime::new()),
             ingest_rate: Mutex::new(HashMap::new()),
             persist_tx,
+            action_tx,
         }
     }
 
@@ -903,9 +928,12 @@ impl EventEngine {
             },
         };
 
-        // Alert I/O first: raise/resolve + record history (the must-preserve record, synchronous).
+        // Hand the raise/resolve side effects (history write + notification) to the async action
+        // writer so the matcher isn't blocked on DB round-trips / vendor delivery under an event
+        // storm (S10). The in-memory alert state already advanced under the plan lock; only the I/O
+        // is deferred, in FIFO order, never dropped.
         for (action, reason) in planned.actions {
-            self.run_action(action, reason).await;
+            self.dispatch_action(action, reason).await;
         }
         self.update_active_gauge();
 
@@ -1083,6 +1111,25 @@ impl EventEngine {
         self.notifier.handle(action).await;
     }
 
+    /// Hand a planned action to the async action writer (S10). Blocking send — never drops (the
+    /// alert-history audit trail must survive and the notifier needs FIFO fire→resolve order); a
+    /// full queue backpressures the matcher, which is still strictly better than the old inline I/O.
+    /// Falls back to inline execution when no writer is wired (unit tests / skeleton) or if the
+    /// writer has already shut down, so the record/notify always lands.
+    async fn dispatch_action(&self, action: NotifyAction, reason: &'static str) {
+        match &self.action_tx {
+            Some(tx) => {
+                if let Err(err) = tx.send(EventAction { action, reason }).await {
+                    let EventAction { action, reason } = err.0;
+                    self.run_action(action, reason).await;
+                } else {
+                    metrics::counter!("yagra_event_actions_enqueued_total").increment(1);
+                }
+            }
+            None => self.run_action(action, reason).await,
+        }
+    }
+
     /// One sweeper pass: resolve TTL-expired alerts, prune stale gate counters. The
     /// runtime removal and the manager resolve happen together under the runtime lock
     /// (so a matching event arriving mid-sweep can't leave the two active sets diverged
@@ -1111,7 +1158,7 @@ impl EventEngine {
             actions
         };
         for (action, reason) in actions {
-            self.run_action(action, reason).await;
+            self.dispatch_action(action, reason).await;
         }
         self.update_active_gauge();
     }
@@ -1127,7 +1174,7 @@ impl EventEngine {
         };
         match action {
             Some(action) => {
-                self.run_action(action, "manual").await;
+                self.dispatch_action(action, "manual").await;
                 self.update_active_gauge();
                 true
             }
@@ -1244,6 +1291,101 @@ pub async fn run_persist_writer(
                         }
                         flush_persist(&repo, &logs, &mut buf).await;
                         metrics::gauge!("yagra_persist_queue_depth", "stream" => "events")
+                            .set(rx.len() as f64);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Map a drained action batch to the `alert_history` rows to insert: a fire records `resolved=false`,
+/// a resolve `resolved=true`, and a suppress records nothing (event alerts are never
+/// dependency-suppressed, but the variant is handled for exhaustiveness). Pure — unit-tested.
+fn history_rows(actions: &[EventAction]) -> Vec<(Alert, bool)> {
+    actions
+        .iter()
+        .filter_map(|ea| match &ea.action {
+            NotifyAction::Fire(alert) => Some((alert.clone(), false)),
+            NotifyAction::Resolve(alert) => Some((alert.clone(), true)),
+            NotifyAction::Suppress(_) => None,
+        })
+        .collect()
+}
+
+/// Flush a drained batch of alert actions (S10): one multi-row `alert_history` INSERT for all
+/// fire/resolve rows, then per-action notification delivery in FIFO order (the notifier serializes
+/// delivery internally). Best-effort on history: a DB error is logged, never propagated (the
+/// in-memory alert state already advanced in the matcher). Fire/resolve counters mirror the inline
+/// `run_action` path so metrics are identical whichever path executes.
+async fn flush_actions(
+    history: &AlertHistoryStore,
+    notifier: &Notifier,
+    buf: &mut Vec<EventAction>,
+) {
+    if buf.is_empty() {
+        return;
+    }
+    let rows = history_rows(buf);
+    if let Err(e) = history.record_batch(&rows).await {
+        tracing::warn!(error = %e, count = rows.len(), "batch-record event alert history failed");
+    }
+    for ea in buf.drain(..) {
+        match &ea.action {
+            NotifyAction::Fire(_) => {
+                metrics::counter!("yagra_event_alerts_fired_total").increment(1);
+            }
+            NotifyAction::Resolve(_) => {
+                metrics::counter!("yagra_event_alerts_resolved_total", "reason" => ea.reason)
+                    .increment(1);
+            }
+            NotifyAction::Suppress(_) => {}
+        }
+        notifier.handle(ea.action).await;
+    }
+}
+
+/// Async writer for event-alert side effects (S10): drains the bounded action queue and runs
+/// alert-history + notification I/O off the matcher's hot path. Batches history INSERTs (one
+/// blocking `recv`, then a non-blocking drain up to [`ACTION_BATCH_MAX`]) so an event storm doesn't
+/// serialize a PG round-trip per action on the matcher. Delivers notifications in FIFO order so a
+/// fire always precedes its later resolve. On shutdown it drains and flushes what's queued.
+pub async fn run_event_action_writer(
+    mut rx: tokio::sync::mpsc::Receiver<EventAction>,
+    history: Arc<AlertHistoryStore>,
+    notifier: Arc<Notifier>,
+    shutdown: CancellationToken,
+) {
+    let mut buf: Vec<EventAction> = Vec::with_capacity(ACTION_BATCH_MAX);
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => {
+                while let Ok(a) = rx.try_recv() {
+                    buf.push(a);
+                    if buf.len() >= ACTION_BATCH_MAX {
+                        flush_actions(&history, &notifier, &mut buf).await;
+                    }
+                }
+                flush_actions(&history, &notifier, &mut buf).await;
+                break;
+            }
+            first = rx.recv() => {
+                match first {
+                    None => {
+                        flush_actions(&history, &notifier, &mut buf).await;
+                        break;
+                    }
+                    Some(a) => {
+                        buf.push(a);
+                        while buf.len() < ACTION_BATCH_MAX {
+                            match rx.try_recv() {
+                                Ok(a) => buf.push(a),
+                                Err(_) => break,
+                            }
+                        }
+                        flush_actions(&history, &notifier, &mut buf).await;
+                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "event_actions")
                             .set(rx.len() as f64);
                     }
                 }
@@ -1397,6 +1539,7 @@ mod tests {
             Arc::new(Notifier::from_env()),
             Arc::new(AlertHistoryStore::new(pool)),
             None,
+            None,
         )
     }
 
@@ -1465,6 +1608,99 @@ mod tests {
         token.cancel();
         handle.await.unwrap();
         assert_eq!(fake.len(), 1);
+    }
+
+    // ── S10: event-action writer (history + notify offloaded off the matcher) ──
+
+    fn test_alert(node: Uuid, severity: Severity) -> Alert {
+        let node_id = NodeId::from(node);
+        Alert {
+            node: node_id,
+            check: check_id(node_id, "event:test"),
+            severity,
+            state: NodeState::Warning,
+            at_unix_ms: 1_000,
+            root_cause: None,
+            flapping: false,
+            metric: "event:test".into(),
+            breach: None,
+        }
+    }
+
+    fn lazy_history() -> Arc<AlertHistoryStore> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .expect("lazy pool");
+        Arc::new(AlertHistoryStore::new(pool))
+    }
+
+    #[test]
+    fn history_rows_map_fire_and_resolve_and_skip_suppress() {
+        let node = Uuid::new_v4();
+        let batch = vec![
+            EventAction {
+                action: NotifyAction::Fire(test_alert(node, Severity::Critical)),
+                reason: "fire",
+            },
+            EventAction {
+                action: NotifyAction::Resolve(test_alert(node, Severity::Critical)),
+                reason: "clear",
+            },
+            EventAction {
+                action: NotifyAction::Suppress(test_alert(node, Severity::Warning)),
+                reason: "fire",
+            },
+        ];
+        let rows = history_rows(&batch);
+        // Fire → resolved=false, Resolve → resolved=true, Suppress → no row. Order preserved.
+        assert_eq!(rows.len(), 2);
+        assert!(!rows[0].1, "fire should record resolved=false");
+        assert!(rows[1].1, "resolve should record resolved=true");
+    }
+
+    #[tokio::test]
+    async fn action_writer_drains_and_returns_on_channel_close() {
+        // Suppress actions record no history (no DB touched) and the env notifier has no channels,
+        // so this exercises the writer's batch-drain + FIFO delivery + clean shutdown without a
+        // live database or notifier. History mapping is covered purely above.
+        let (tx, rx) = tokio::sync::mpsc::channel::<EventAction>(16);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(run_event_action_writer(
+            rx,
+            lazy_history(),
+            Arc::new(Notifier::from_env()),
+            token,
+        ));
+        for _ in 0..3 {
+            tx.send(EventAction {
+                action: NotifyAction::Suppress(test_alert(Uuid::new_v4(), Severity::Warning)),
+                reason: "fire",
+            })
+            .await
+            .unwrap();
+        }
+        drop(tx); // close the channel → writer drains, flushes, returns
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn action_writer_final_flush_on_shutdown() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<EventAction>(16);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(run_event_action_writer(
+            rx,
+            lazy_history(),
+            Arc::new(Notifier::from_env()),
+            token.clone(),
+        ));
+        tx.send(EventAction {
+            action: NotifyAction::Suppress(test_alert(Uuid::new_v4(), Severity::Warning)),
+            reason: "fire",
+        })
+        .await
+        .unwrap();
+        token.cancel();
+        handle.await.unwrap();
     }
 
     fn syslog_msg(message: &str) -> EventMsg {

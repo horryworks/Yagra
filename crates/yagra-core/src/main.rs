@@ -284,12 +284,18 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let events_repo = Arc::new(events::EventRepo::new(repo.pool()));
     let (persist_tx, persist_rx) =
         tokio::sync::mpsc::channel::<events::PersistRecord>(events::PERSIST_CHANNEL_CAP);
+    // Alert side effects (history + notification) for matched events also run off the matcher's hot
+    // path (S10) so an event storm doesn't serialize DB round-trips / vendor delivery on the single
+    // matcher. Unlike the persist queue this never sheds (audit trail + FIFO fire→resolve order).
+    let (event_action_tx, event_action_rx) =
+        tokio::sync::mpsc::channel::<events::EventAction>(events::ACTION_CHANNEL_CAP);
     let event_engine = Arc::new(events::EventEngine::new(
         events_repo.clone(),
         alerts.clone(),
         notifier.clone(),
         history.clone(),
         Some(persist_tx),
+        Some(event_action_tx),
     ));
     event_engine.reload(&repo).await;
     {
@@ -304,6 +310,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         persist_rx,
         events_repo.clone(),
         logs.clone(),
+        shutdown.clone(),
+    ));
+    tokio::spawn(events::run_event_action_writer(
+        event_action_rx,
+        history.clone(),
+        notifier.clone(),
         shutdown.clone(),
     ));
 
