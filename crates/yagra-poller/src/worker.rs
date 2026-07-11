@@ -362,12 +362,30 @@ async fn execute_table_walk(
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
-    let column_oids: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
     let by_base: HashMap<&str, &SnmpColumn> = columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+    // Interface-speed columns (ifSpeed) declared in meta_columns; ifHighSpeed is walked poller-side.
+    let speed_oids: Vec<String> = meta_columns
+        .iter()
+        .filter(|m| matches!(m.field, InterfaceField::Speed))
+        .map(|m| m.oid.clone())
+        .collect();
+
+    // ONE numeric walk for the metric columns AND the interface-speed columns (ifSpeed +
+    // ifHighSpeed), demuxed by column base. A table poll previously opened a fresh SNMP session
+    // (UDP socket + client) per walk — metric, ifSpeed, ifHighSpeed — holding the poll's global
+    // permit ~3× longer and amplifying permit exhaustion during a mass outage (S5). Folding the
+    // numeric walks into one leaves just this walk + the string-metadata walk below (2 sessions).
+    let mut numeric_oids: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+    numeric_oids.extend(speed_oids.iter().cloned());
+    if !speed_oids.is_empty() {
+        numeric_oids.push(OID_IF_HIGH_SPEED.to_owned());
+    }
 
     let mut samples = Vec::new();
+    let mut raw_speed: HashMap<u32, f64> = HashMap::new();
+    let mut raw_high: HashMap<u32, f64> = HashMap::new();
     match walker
-        .walk(transport, job.target, &column_oids, timeout)
+        .walk(transport, job.target, &numeric_oids, timeout)
         .await
     {
         Ok(rows) => {
@@ -379,13 +397,26 @@ async fn execute_table_walk(
                         row.value,
                         col.kind,
                     ));
+                } else if row.oid_base == OID_IF_HIGH_SPEED {
+                    raw_high.insert(row.ifindex, row.value);
+                } else if speed_oids.iter().any(|o| o == &row.oid_base) {
+                    raw_speed.insert(row.ifindex, row.value);
                 }
             }
         }
         Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
     }
 
-    let interfaces = walk_interface_metadata(job, transport, walker, meta_columns, timeout).await;
+    let interfaces = walk_interface_metadata(
+        job,
+        transport,
+        walker,
+        meta_columns,
+        &raw_speed,
+        &raw_high,
+        timeout,
+    )
+    .await;
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
     let outcome = if samples.is_empty() {
@@ -460,13 +491,16 @@ async fn execute_snmp_v3_table(
     .await
 }
 
-/// Walk interface-metadata columns and fold them per ifIndex into [`DiscoveredInterface`]s.
-/// `ifName`/`ifAlias` are string columns; `ifSpeed` is numeric — each walked appropriately.
+/// Fold interface metadata into [`DiscoveredInterface`]s: walk the `ifName`/`ifAlias` **string**
+/// columns (the poll's second and only other SNMP session), and resolve `if_speed` from the
+/// `ifSpeed`/`ifHighSpeed` values already gathered by the combined numeric walk in the caller (S5).
 async fn walk_interface_metadata(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     meta_columns: &[SnmpMetaColumn],
+    raw_speed: &HashMap<u32, f64>,
+    raw_high: &HashMap<u32, f64>,
     timeout: Duration,
 ) -> Vec<DiscoveredInterface> {
     let field_by_base: HashMap<&str, InterfaceField> = meta_columns
@@ -476,11 +510,6 @@ async fn walk_interface_metadata(
     let string_oids: Vec<String> = meta_columns
         .iter()
         .filter(|m| matches!(m.field, InterfaceField::Name | InterfaceField::Alias))
-        .map(|m| m.oid.clone())
-        .collect();
-    let speed_oids: Vec<String> = meta_columns
-        .iter()
-        .filter(|m| matches!(m.field, InterfaceField::Speed))
         .map(|m| m.oid.clone())
         .collect();
 
@@ -516,61 +545,32 @@ async fn walk_interface_metadata(
         }
     }
 
-    if !speed_oids.is_empty() {
-        // Walk the 32-bit `ifSpeed` (the bus column) and the 64-bit `ifHighSpeed` (Mbps), then
-        // resolve the effective bandwidth so links above the ~4.29 Gbps `ifSpeed` cap report
-        // their true rate. ifHighSpeed is walked poller-side rather than as a bus column to keep
-        // the job contract N/N-1 compatible (no new wire field).
-        let raw_speed = walk_numeric_by_ifindex(job, transport, walker, &speed_oids, timeout)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifSpeed walk failed");
-                HashMap::new()
-            });
-        let high_oids = [OID_IF_HIGH_SPEED.to_owned()];
-        let raw_high = walk_numeric_by_ifindex(job, transport, walker, &high_oids, timeout)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::debug!(job_id = %job.job_id, error = %err, "snmp ifHighSpeed walk failed");
-                HashMap::new()
-            });
-
-        for ifindex in raw_speed
-            .keys()
-            .chain(raw_high.keys())
-            .copied()
-            .collect::<BTreeSet<u32>>()
-        {
-            match resolve_if_speed(
-                raw_speed.get(&ifindex).copied(),
-                raw_high.get(&ifindex).copied(),
-            ) {
-                Some(bps) => {
-                    let rec = ifs.entry(ifindex).or_insert_with(|| blank(ifindex));
-                    rec.if_speed = Some(bps);
-                }
-                None => tracing::debug!(
-                    job_id = %job.job_id,
-                    ifindex,
-                    "no resolvable interface speed (ifSpeed/ifHighSpeed absent or out of range)"
-                ),
+    // Resolve the effective bandwidth from the pre-walked 32-bit `ifSpeed` and 64-bit `ifHighSpeed`
+    // (Mbps), so links above the ~4.29 Gbps `ifSpeed` cap report their true rate. ifHighSpeed is
+    // gathered poller-side (not a bus column) to keep the job contract N/N-1 compatible.
+    for ifindex in raw_speed
+        .keys()
+        .chain(raw_high.keys())
+        .copied()
+        .collect::<BTreeSet<u32>>()
+    {
+        match resolve_if_speed(
+            raw_speed.get(&ifindex).copied(),
+            raw_high.get(&ifindex).copied(),
+        ) {
+            Some(bps) => {
+                let rec = ifs.entry(ifindex).or_insert_with(|| blank(ifindex));
+                rec.if_speed = Some(bps);
             }
+            None => tracing::debug!(
+                job_id = %job.job_id,
+                ifindex,
+                "no resolvable interface speed (ifSpeed/ifHighSpeed absent or out of range)"
+            ),
         }
     }
 
     ifs.into_values().collect()
-}
-
-/// Walk numeric table column(s) and fold the latest value per ifIndex.
-async fn walk_numeric_by_ifindex(
-    job: &PollJob,
-    transport: &dyn Transport,
-    walker: &SnmpWalker,
-    oids: &[String],
-    timeout: Duration,
-) -> Result<HashMap<u32, f64>, TransportError> {
-    let rows = walker.walk(transport, job.target, oids, timeout).await?;
-    Ok(rows.into_iter().map(|r| (r.ifindex, r.value)).collect())
 }
 
 /// Resolve the effective interface bandwidth (bits/sec) from `ifSpeed` (32-bit) and `ifHighSpeed`
