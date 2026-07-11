@@ -21,6 +21,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
+import { useEntityNames } from '../components/ui/EntityName';
 import './MutesPage.css';
 
 const COLS = '1.4fr 170px 180px 1fr 92px';
@@ -132,11 +133,17 @@ export function MutesPage() {
     api.listNodeGroups().then(setGroups).catch(() => undefined);
   }, [load]);
 
+  // Resolve a mute's node target by name across the whole fleet (not just the first list page —
+  // the old nodes.find() capped at 100 and showed a raw UUID for the 101st+ node, S12).
+  const { nodeName } = useEntityNames();
+
   // The mute's target: a node name, or a folder-group name (recursive). Falls back to the raw id.
   const targetName = (m: Mute): string =>
     m.scope_kind === 'group'
       ? groups.find((g) => g.id === m.group_id)?.name ?? m.group_id ?? '—'
-      : nodes.find((n) => n.id === m.node_id)?.name ?? m.node_id ?? '—';
+      : m.node_id
+        ? nodeName(m.node_id)
+        : '—';
 
   return (
     <div>

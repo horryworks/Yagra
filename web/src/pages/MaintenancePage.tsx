@@ -21,6 +21,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
+import { useEntityNames } from '../components/ui/EntityName';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
@@ -148,10 +149,13 @@ export function MaintenancePage() {
     return w.scope_level;
   };
 
+  // Resolve a node scope by name across the whole fleet (not just the first list page — the old
+  // nodes.find() capped at 100 and showed a raw UUID for the 101st+ node, S12).
+  const { nodeName } = useEntityNames();
+
   // Human label for a scope id (node/profile/folder-group names resolved when known).
   const scopeLabel = (w: MaintenanceWindow): string => {
-    if (w.scope_level === 'node')
-      return nodes.find((n) => n.id === w.scope_id)?.name ?? w.scope_id;
+    if (w.scope_level === 'node') return nodeName(w.scope_id);
     if (w.scope_level === 'profile')
       return profiles.find((p) => p.id === w.scope_id)?.name ?? w.scope_id;
     if (w.scope_level === 'group_id')
