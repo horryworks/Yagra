@@ -14,7 +14,6 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-futures = { workspace = true }
 surge-ping = { workspace = true }
 csnmp = { workspace = true }
 snmp2 = { workspace = true }

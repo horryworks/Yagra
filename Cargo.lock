@@ -4139,7 +4139,6 @@ version = "0.1.8"
 dependencies = [
  "async-trait",
  "csnmp",
- "futures",
  "rand 0.8.6",
  "reqwest",
  "serde_json",

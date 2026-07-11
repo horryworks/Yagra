@@ -72,32 +72,26 @@ impl Transport for SurgePingTransport {
                 .ok_or_else(|| TransportError::Io("no IPv6 ICMP socket available".to_owned()))?,
         };
 
-        // Fire all `count` echoes concurrently, each on its own pinger (distinct identifier), and
-        // await them together. A serial loop made a dead host cost count×timeout — the poll's global
-        // permit was then held for the full serial sum, collapsing detection throughput exactly
-        // during a mass outage (S4). Concurrent probes cost ~one timeout instead; loss% is preserved
-        // (all `count` are still sent and counted). Pingers are independent of the client's lifetime,
-        // so each future owns its pinger and nothing borrows `self` across the join.
+        // One pinger, sequential sequences. NOTE (S4): parallelizing this with N concurrent pingers
+        // to the SAME target does NOT work with surge-ping 0.8 — its concurrency model is
+        // one-pinger-per-target (concurrency comes from polling many targets at once), so multiple
+        // pingers on one target returned 100% loss for every host in the field. Reducing a dead
+        // host's permit hold (count×timeout) needs a different mechanism (e.g. early-terminate on
+        // first reply, or a single pinger with an overall deadline) — revisit under S4 with a live
+        // raw-socket test; correctness (this serial form works) wins for now.
+        let mut pinger = client.pinger(target, self.next_ident()).await;
+        pinger.timeout(timeout);
+
         let payload = [0u8; PAYLOAD_LEN];
-        let mut probes = Vec::with_capacity(usize::from(count));
-        for _ in 0..count {
-            let mut pinger = client.pinger(target, self.next_ident()).await;
-            pinger.timeout(timeout);
-            probes.push(async move {
-                match pinger.ping(PingSequence(0), &payload).await {
-                    Ok((_packet, rtt)) => Some(rtt.as_secs_f64() * 1000.0),
-                    Err(err) => {
-                        tracing::debug!(%target, error = %err, "icmp echo did not complete");
-                        None
-                    }
+        let mut rtts_ms = Vec::with_capacity(usize::from(count));
+        for seq in 0..count {
+            match pinger.ping(PingSequence(u16::from(seq)), &payload).await {
+                Ok((_packet, rtt)) => rtts_ms.push(rtt.as_secs_f64() * 1000.0),
+                Err(err) => {
+                    tracing::debug!(%target, error = %err, "icmp echo did not complete");
                 }
-            });
+            }
         }
-        let rtts_ms: Vec<f64> = futures::future::join_all(probes)
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
 
         Ok(summarize(count, &rtts_ms))
     }
