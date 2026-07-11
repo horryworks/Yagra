@@ -30,6 +30,7 @@ import type {
   EventRuleTestResult,
   EventSource,
   FleetCoverage,
+  FleetSummary,
   GroupType,
   InterfaceHeatmap,
   InterfaceRow,
@@ -840,6 +841,10 @@ export const api = {
 
   /** The dependency graph: nodes + parent edges + state + active root-cause attribution. */
   getTopology: (): Promise<{ nodes: TopologyNode[] }> => request('/topology'),
+
+  /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
+   *  status widgets are correct over the whole fleet, not the first page of nodes. */
+  getFleetSummary: (): Promise<FleetSummary> => request('/fleet/summary'),
 
   /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
   getFleetCoverage: (): Promise<FleetCoverage> => request('/fleet/coverage'),

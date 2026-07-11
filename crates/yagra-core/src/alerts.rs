@@ -279,6 +279,19 @@ impl AlertManager {
         self.node_states().get(&node).copied()
     }
 
+    /// Count of **observed** nodes by rolled-up display state (same rollup as [`Self::node_states`]) —
+    /// the fleet-summary source, so the dashboard's status/health/down numbers are computed over the
+    /// whole fleet server-side, not a paged slice (S12). Never-observed nodes are absent; the caller
+    /// adds `total_inventory − observed` as `Unknown`.
+    #[must_use]
+    pub fn node_state_counts(&self) -> HashMap<NodeState, usize> {
+        let mut counts: HashMap<NodeState, usize> = HashMap::new();
+        for state in self.node_states().values() {
+            *counts.entry(*state).or_insert(0) += 1;
+        }
+        counts
+    }
+
     /// The active alerts currently attributed to one node (its own problems plus any
     /// suppressed-but-shown downstream entry).
     #[must_use]
@@ -1709,6 +1722,28 @@ mod tests {
         let alerts = mgr.alerts_for(node);
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].state, NodeState::Critical);
+    }
+
+    #[test]
+    fn node_state_counts_tally_the_whole_fleet_and_match_node_states() {
+        // The fleet-summary source (S12): counts every observed node by rolled-up state, over the
+        // whole engine — not a paged slice. Must agree with counting `node_states()` (its source).
+        let mgr = AlertManager::new();
+        let up = NodeId::new();
+        let down = NodeId::new();
+        for i in 0..DWELL_SAMPLES {
+            mgr.observe(&result(up, CheckOutcome::Reachable, i64::from(i)));
+            mgr.observe(&result(down, CheckOutcome::Unreachable, i64::from(i)));
+        }
+        let counts = mgr.node_state_counts();
+        assert_eq!(counts.get(&NodeState::Ok).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&NodeState::Unreachable).copied().unwrap_or(0), 1);
+
+        let mut manual: HashMap<NodeState, usize> = HashMap::new();
+        for s in mgr.node_states().values() {
+            *manual.entry(*s).or_insert(0) += 1;
+        }
+        assert_eq!(counts, manual, "summary tally must match node_states()");
     }
 
     #[test]

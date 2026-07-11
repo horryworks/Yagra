@@ -282,6 +282,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/calendar", get(alert_calendar))
         .route("/api/v1/alerts/transitions", get(alert_transitions))
         .route("/api/v1/topology", get(get_topology))
+        .route("/api/v1/fleet/summary", get(fleet_summary))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
         .route("/api/v1/fleet/state-history", get(fleet_state_history))
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
@@ -1283,6 +1284,43 @@ struct FleetCoverage {
     /// Percent of nodes reporting fresh data (100 when the inventory is empty).
     coverage_pct: i64,
     stale: Vec<StaleNode>,
+}
+
+/// Fleet-wide status summary: total node count + a per-state tally, computed server-side from the
+/// live alert engine (S12). The dashboard's status-summary / health-ring / nodes-down widgets read
+/// this instead of aggregating a *paged* node slice — which silently under-counted the fleet past
+/// the first page (a correctness bug, not just a scale one). View-gated; works without the admin
+/// store (public dashboard). The state keys are always all present so the client needn't special-case
+/// an absent state, and they sum to `total`.
+async fn fleet_summary(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let total = st.nodes.count().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "fleet summary node count failed");
+        0
+    });
+    let mut states: std::collections::BTreeMap<&'static str, i64> = [
+        ("ok", 0),
+        ("warning", 0),
+        ("critical", 0),
+        ("unknown", 0),
+        ("unreachable", 0),
+        ("maintenance", 0),
+    ]
+    .into_iter()
+    .collect();
+    let mut observed_total: i64 = 0;
+    for (state, n) in st.alerts.node_state_counts() {
+        let n = n as i64;
+        *states.entry(state.as_str()).or_insert(0) += n;
+        observed_total += n;
+    }
+    // Never-observed nodes (brand new, or a pool with no live poller) display as `unknown`, matching
+    // the per-node list's fallback — so the per-state tally reconciles with the inventory `total`.
+    let unobserved = (total - observed_total).max(0);
+    *states.entry("unknown").or_insert(0) += unobserved;
+    Json(serde_json::json!({ "total": total, "states": states })).into_response()
 }
 
 /// How recent a node's last ICMP sample must be to count as "fresh" (silent beyond this ⇒ stale).

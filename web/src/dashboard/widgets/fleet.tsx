@@ -1,6 +1,7 @@
 // 01 · Fleet status widgets: status summary (reuses the existing presentational widget),
 // health ring (donut of node states with % healthy), and a nodes-down KPI tile. All read the
-// shared `useNodes()` poll, so adding several costs one inventory fetch.
+// shared server-computed `useFleetSummary()` poll (`/fleet/summary`) — correct over the whole
+// fleet, not the first page of `listNodes()` (S12) — so adding several costs one fetch.
 
 import { useTranslation } from 'react-i18next';
 import { stateColorValue, stateColorVar, stateLabel } from '../../lib/format';
@@ -9,21 +10,23 @@ import { MetricChart } from '../../components/MetricChart/MetricChart';
 import { StatusSummary } from '../../widgets/StatusSummary';
 import { Donut } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
-import { useNodes } from '../useNodes';
+import { useFleetSummary } from '../useFleetSummary';
 import { usePolled } from '../usePolled';
-import { downCount, percentHealthy, stateCounts } from './util';
 
 export function StatusSummaryWidget() {
-  const { nodes, loading } = useNodes();
-  return <StatusSummary nodes={nodes} loading={loading} />;
+  // Server-computed fleet tally (`/fleet/summary`), correct beyond the first page of nodes (S12).
+  const { summary, loading } = useFleetSummary();
+  return (
+    <StatusSummary counts={summary?.states ?? {}} total={summary?.total ?? 0} loading={loading} />
+  );
 }
 
 export function HealthRingWidget() {
   const { t } = useTranslation('dashboard');
-  const { nodes, loading } = useNodes();
-  if (loading && nodes.length === 0) return <p className="muted">{t('widgets.loadingNodes')}</p>;
-  if (nodes.length === 0) return <p className="muted">{t('widgets.noNodes')}</p>;
-  const c = stateCounts(nodes);
+  const { summary, loading } = useFleetSummary();
+  if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
+  if (!summary || summary.total === 0) return <p className="muted">{t('widgets.noNodes')}</p>;
+  const c = summary.states;
   const segments = [
     { label: t('widgets.healthRing.healthy'), value: c.ok, color: stateColorVar('ok') },
     { label: stateLabel('warning'), value: c.warning, color: stateColorVar('warning') },
@@ -31,10 +34,11 @@ export function HealthRingWidget() {
     { label: stateLabel('unknown'), value: c.unknown, color: stateColorVar('unknown') },
     { label: stateLabel('maintenance'), value: c.maintenance, color: stateColorVar('maintenance') },
   ].filter((s) => s.value > 0);
+  const pct = summary.total > 0 ? Math.round((c.ok / summary.total) * 100) : 0;
   return (
     <Donut
       segments={segments}
-      centerValue={String(percentHealthy(nodes))}
+      centerValue={String(pct)}
       centerSub={t('widgets.healthRing.healthyPct')}
     />
   );
@@ -42,9 +46,11 @@ export function HealthRingWidget() {
 
 export function NodesDownWidget() {
   const { t } = useTranslation('dashboard');
-  const { nodes, loading } = useNodes();
-  if (loading && nodes.length === 0) return <p className="muted">{t('widgets.loadingNodes')}</p>;
-  return <KpiTile value={String(downCount(nodes))} caption={t('widgets.nodesDown.caption')} />;
+  const { summary, loading } = useFleetSummary();
+  if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
+  // Hard-down = critical + unreachable, over the whole fleet.
+  const down = summary ? summary.states.critical + summary.states.unreachable : 0;
+  return <KpiTile value={String(down)} caption={t('widgets.nodesDown.caption')} />;
 }
 
 export function FleetHealthTimelineWidget() {

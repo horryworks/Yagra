@@ -754,6 +754,14 @@ export interface FleetCoverage {
   stale: { node_id: string; name: string }[];
 }
 
+/** Fleet-wide status summary (`GET /api/v1/fleet/summary`): total node count + a per-state tally,
+ *  computed server-side so the dashboard's status/health/down widgets are correct over the whole
+ *  fleet (not a paged slice). Every state key is present and the counts sum to `total`. */
+export interface FleetSummary {
+  total: number;
+  states: Record<NodeState, number>;
+}
+
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */
 export interface TopologyNode {
   id: string;

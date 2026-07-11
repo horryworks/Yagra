@@ -97,12 +97,20 @@ pub trait NodeListing: Send + Sync {
     /// capped at `limit`. The API paginates with this so large inventories don't load
     /// everything (ui-conventions: scale-aware lists).
     async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>>;
+    /// Total node count — for the fleet summary, which needs the whole-inventory denominator
+    /// (the paged `list_page` only ever sees one page). Cheap `count(*)`, no row transfer.
+    async fn count(&self) -> anyhow::Result<i64>;
 }
 
 #[async_trait]
 impl NodeListing for NodeRepo {
     async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>> {
         self.list_nodes_page(after, limit).await
+    }
+    async fn count(&self) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
+            .fetch_one(&self.pool)
+            .await?)
     }
 }
 
@@ -132,6 +140,9 @@ impl NodeListing for StaticNodeList {
             .filter(|n| after.is_none_or(|a| n.id.as_uuid() > a))
             .take(limit.clamp(1, 501) as usize)
             .collect())
+    }
+    async fn count(&self) -> anyhow::Result<i64> {
+        Ok(self.0.len() as i64)
     }
 }
 
