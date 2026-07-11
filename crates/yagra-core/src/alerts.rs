@@ -86,7 +86,10 @@ pub struct NodeMeta {
 /// without a restart.
 #[derive(Debug, Clone, Default)]
 pub struct AlertConfig {
-    thresholds: Vec<StoredThreshold>,
+    /// Thresholds bucketed by metric name so per-sample resolution scans only the rules for that
+    /// one metric, not the fleet's entire threshold set (S19). Built once at construction; a poll
+    /// with M samples then costs O(rules-for-those-M-metrics), not O(all thresholds) × M.
+    by_metric: HashMap<String, Vec<StoredThreshold>>,
     node_meta: HashMap<NodeId, NodeMeta>,
     topology: Topology,
     /// Nodes currently inside an active maintenance window (resolved at refresh time).
@@ -98,8 +101,12 @@ impl AlertConfig {
     /// add them with [`Self::with_topology`]).
     #[must_use]
     pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
+        let mut by_metric: HashMap<String, Vec<StoredThreshold>> = HashMap::new();
+        for t in thresholds {
+            by_metric.entry(t.rule.metric.clone()).or_default().push(t);
+        }
         Self {
-            thresholds,
+            by_metric,
             node_meta,
             topology: Topology::new(),
             maintenance: BTreeSet::new(),
@@ -122,11 +129,11 @@ impl AlertConfig {
 
     /// Resolve the effective threshold for one (node, metric), honouring scope inheritance.
     fn resolve(&self, node: NodeId, metric: &str) -> Option<EffectiveThreshold> {
+        let candidates = self.by_metric.get(metric)?;
         let meta = self.node_meta.get(&node);
-        let scoped: Vec<ScopedThreshold> = self
-            .thresholds
+        let scoped: Vec<ScopedThreshold> = candidates
             .iter()
-            .filter(|t| t.rule.metric == metric && self.applies(t, node, meta))
+            .filter(|t| self.applies(t, node, meta))
             .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
             .collect();
         resolve_effective(&scoped)
@@ -273,10 +280,27 @@ impl AlertManager {
         out
     }
 
-    /// The rolled-up display state for one node, if the engine has observed it.
+    /// The rolled-up display state for one node, if the engine has observed it. Resolves the one
+    /// node directly (its committed liveness rolled up with any active alert on it) instead of
+    /// cloning the whole fleet's state map just to index one entry (S17) — the node-detail endpoint
+    /// calls this per request, so at fleet scale the clone was pure waste.
     #[must_use]
     pub fn node_state(&self, node: NodeId) -> Option<NodeState> {
-        self.node_states().get(&node).copied()
+        let base = self
+            .live
+            .lock()
+            .expect("live mutex poisoned")
+            .get(&node)
+            .copied();
+        self.active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .values()
+            .filter(|a| a.node == node)
+            .fold(base, |acc, alert| match acc {
+                Some(s) if severity_rank(s) >= severity_rank(alert.state) => Some(s),
+                _ => Some(alert.state),
+            })
     }
 
     /// Count of **observed** nodes by rolled-up display state (same rollup as [`Self::node_states`]) —
