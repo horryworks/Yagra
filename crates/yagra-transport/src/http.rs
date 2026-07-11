@@ -10,7 +10,8 @@
 //! Errors are reserved for un-runnable configs (bad URL/scheme, SSRF-blocked target).
 
 use crate::{HttpProbe, HttpProbeSpec, TransportError};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use yagra_common::{is_ssrf_blocked, HttpMethod};
 
@@ -44,11 +45,14 @@ pub(crate) async fn probe_http(
                 let port = url
                     .port_or_known_default()
                     .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
-                // A resolvable name whose every answer is blocked is refused; a DNS failure falls
-                // through and is reported as unreachable below (reqwest will fail the same way).
+                // A resolvable name is refused if *any* of its answers is blocked (an external
+                // monitoring target never legitimately resolves to loopback/link-local/metadata;
+                // a mixed public+blocked answer set is exactly the DNS-rebinding shape). This is an
+                // early, explicit rejection — the authoritative, TOCTOU-free enforcement is the
+                // `SsrfResolver` wired into the client below, which reqwest also consults for every
+                // redirect hop. A DNS failure falls through and is reported as unreachable below.
                 if let Ok(addrs) = tokio::net::lookup_host((host, port)).await {
-                    let addrs: Vec<_> = addrs.collect();
-                    if !addrs.is_empty() && addrs.iter().all(|a| is_ssrf_blocked(a.ip())) {
+                    if addrs.into_iter().any(|a| is_ssrf_blocked(a.ip())) {
                         return Err(TransportError::Io("blocked target address".to_owned()));
                     }
                 }
@@ -57,12 +61,12 @@ pub(crate) async fn probe_http(
     }
 
     let redirect = if spec.follow_redirects {
-        // Re-validate every redirect hop, not just the initial target: a `302 Location:
-        // http://169.254.169.254/…` (or any loopback/link-local IP literal) would otherwise
-        // defeat the guard above. Refuse any hop to an unsupported scheme or an SSRF-blocked
-        // IP-literal host before the request to it is ever made. (A hop to a *hostname* is
-        // allowed here; the initial target's resolved addresses were already checked, and the
-        // metadata/loopback escalation surface always arrives as an IP literal in `Location`.)
+        // Re-validate every redirect hop, not just the initial target. Two complementary guards
+        // cover the whole SSRF surface across hops: this policy refuses an IP-*literal* hop host
+        // (`302 Location: http://169.254.169.254/…`) or a bad scheme before the request is made,
+        // and the `SsrfResolver` below refuses a *hostname* hop that resolves to a blocked address
+        // (the DNS-rebinding / metadata-behind-a-name case the literal check can't see). Since
+        // reqwest dials exactly what the resolver returns, there is no resolve-then-connect TOCTOU.
         reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 5 {
                 return attempt.stop();
@@ -78,6 +82,10 @@ pub(crate) async fn probe_http(
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .redirect(redirect)
+        // Pin DNS to an SSRF-filtered resolver: reqwest resolves — and therefore dials — only
+        // non-blocked addresses, for the initial target and every hostname redirect hop. This is
+        // the authoritative, TOCTOU-free enforcement (the resolved set is the dialed set).
+        .dns_resolver(Arc::new(SsrfResolver))
         // verify_tls is off only by explicit operator opt-in (default on — security.md).
         .danger_accept_invalid_certs(!spec.verify_tls)
         .tls_info(true)
@@ -144,6 +152,41 @@ fn redirect_hop_blocked(url: &reqwest::Url) -> bool {
         .is_some_and(is_ssrf_blocked)
 }
 
+/// Drop the SSRF-blocked addresses from a resolved set, returning the ones reqwest may dial. Pure
+/// (no I/O) so the allow/deny decision is unit-testable without live DNS.
+fn retain_allowed_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<SocketAddr> {
+    addrs
+        .into_iter()
+        .filter(|a| !is_ssrf_blocked(a.ip()))
+        .collect()
+}
+
+/// A `reqwest` DNS resolver that removes SSRF-blocked addresses from every lookup. Because reqwest
+/// dials exactly the addresses a resolver hands back — for the initial target *and* every hostname
+/// redirect hop — this is the authoritative SSRF guard for name-based targets, closing the
+/// resolve-then-connect (DNS-rebinding) TOCTOU window that a separate pre-check leaves open.
+/// IP-literal hosts skip DNS and are covered by the pre-request checks (`is_ssrf_blocked` on the
+/// initial target, `redirect_hop_blocked` on each hop).
+struct SsrfResolver;
+
+impl reqwest::dns::Resolve for SsrfResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            // Port 0: reqwest overrides it with the request's port (matches the default resolver).
+            let resolved = tokio::net::lookup_host((name.as_str(), 0)).await?;
+            let allowed = retain_allowed_addrs(resolved);
+            if allowed.is_empty() {
+                // The name either doesn't resolve or every answer is SSRF-blocked. Failing the
+                // lookup makes reqwest report a connect error, which the poller records as an
+                // unreachable target — it never follows into a blocked address.
+                return Err("no SSRF-allowed address for host".into());
+            }
+            let addrs: reqwest::dns::Addrs = Box::new(allowed.into_iter());
+            Ok(addrs)
+        })
+    }
+}
+
 /// Days until a DER-encoded X.509 certificate's `notAfter` (may be negative if already expired).
 /// `None` if the cert can't be parsed.
 fn cert_days_to_expiry(der: &[u8]) -> Option<f64> {
@@ -208,8 +251,41 @@ mod tests {
         assert!(blocked("http://[::1]/")); // bracketed IPv6 loopback
         assert!(blocked("http://[::ffff:169.254.169.254]/")); // mapped metadata
         assert!(blocked("ftp://example.com/")); // non-http(s) scheme
-                                                // Allowed hops: a hostname (resolution checked at hop 0) and a private internal target.
+                                                // Allowed hops: a hostname (resolution filtered by SsrfResolver) and a private target.
         assert!(!blocked("http://example.com/login"));
         assert!(!blocked("http://10.0.0.5/health"));
+    }
+
+    #[test]
+    fn retain_allowed_addrs_drops_blocked_keeps_public_and_private() {
+        let addrs: Vec<SocketAddr> = [
+            "127.0.0.1:80",                // loopback → dropped
+            "169.254.169.254:80",          // cloud metadata (link-local) → dropped
+            "[::1]:80",                    // IPv6 loopback → dropped
+            "[::ffff:169.254.169.254]:80", // IPv4-mapped metadata → dropped
+            "8.8.8.8:80",                  // public → kept
+            "10.0.0.5:80",                 // private internal target → kept (an NMS monitors these)
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+
+        let allowed = retain_allowed_addrs(addrs);
+        let ips: Vec<IpAddr> = allowed.iter().map(SocketAddr::ip).collect();
+        assert_eq!(ips.len(), 2, "only the public + private answers survive");
+        assert!(ips.contains(&"8.8.8.8".parse().unwrap()));
+        assert!(ips.contains(&"10.0.0.5".parse().unwrap()));
+    }
+
+    #[test]
+    fn retain_allowed_addrs_empty_when_all_blocked() {
+        // A name that resolves only to SSRF-blocked addresses yields nothing → the resolver fails
+        // the lookup and reqwest never dials a blocked host (the rebinding / metadata-behind-a-name
+        // case the IP-literal hop check can't see).
+        let addrs: Vec<SocketAddr> = ["127.0.0.1:443", "169.254.169.254:443"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert!(retain_allowed_addrs(addrs).is_empty());
     }
 }
