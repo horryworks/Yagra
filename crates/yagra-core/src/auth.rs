@@ -90,13 +90,9 @@ impl SessionStore {
     pub fn lookup(&self, token: &str) -> Option<Session> {
         let now = Instant::now();
         let mut map = self.sessions.lock().expect("sessions mutex poisoned");
-        let expired = match map.get(token) {
-            Some(s) => {
-                now.duration_since(s.issued_at) > SESSION_ABSOLUTE_TTL
-                    || now.duration_since(s.last_seen) > SESSION_IDLE_TTL
-            }
-            None => return None,
-        };
+        let s = map.get(token)?;
+        let expired = now.duration_since(s.issued_at) > SESSION_ABSOLUTE_TTL
+            || now.duration_since(s.last_seen) > SESSION_IDLE_TTL;
         if expired {
             map.remove(token);
             return None;
