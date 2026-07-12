@@ -1015,3 +1015,40 @@
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
+
+/* ============================================================ mobile (ADR-027 M2)
+   On a narrow screen the node detail is the full-screen pane (NodesPage pane switcher). Tighten the
+   chrome padding, let the tab bar scroll horizontally instead of overflowing, and drop the 2-column
+   facts grid to one column. */
+html[data-viewport='mobile'] .nd-head {
+  padding: 14px 12px 12px;
+}
+
+html[data-viewport='mobile'] .nd-tabs {
+  padding: 0 12px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+html[data-viewport='mobile'] .nd-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nd-tab {
+  flex: none;
+  margin-right: 16px;
+}
+
+html[data-viewport='mobile'] .nd-overview {
+  padding: 14px 12px 20px;
+}
+
+html[data-viewport='mobile'] .nd-tabpad {
+  padding: 12px;
+}
+
+html[data-viewport='mobile'] .nd-facts {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}

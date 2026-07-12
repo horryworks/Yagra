@@ -34,9 +34,10 @@ interface Props<T> {
   /** While the first page is in flight, show a loading placeholder instead of `empty` so an
    *  unloaded table never reads as "no rows". */
   loading?: boolean;
-  /** Mobile card renderer (ADR-027). When set AND the viewport is mobile, each row renders as a
-   *  variable-height card (header row hidden, dynamic-height virtualization) instead of the grid
-   *  row — a fixed multi-column grid can't fit ~390px. Desktop always uses the grid. */
+  /** Custom mobile card renderer (ADR-027). On mobile every DataTable renders as variable-height
+   *  cards (a fixed multi-column grid can't fit ~390px); without this it falls back to a generic
+   *  labeled key→value card built from `columns`. Provide this for a nicer per-screen card. Desktop
+   *  always uses the grid. */
   renderCard?: (row: T) => ReactNode;
   /** Estimated card height (mobile card mode) before measurement; keeps the initial scrollbar sane. */
   cardEstimatePx?: number;
@@ -59,9 +60,10 @@ export function DataTable<T>({
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
-  // Card mode only when a card renderer is supplied AND we're in mobile layout (respects the
-  // uiMode='desktop' override). Otherwise the grid path is byte-for-byte its previous self.
-  const cardMode = useViewportMode() === 'mobile' && !!renderCard;
+  // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
+  // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
+  // from the columns. Desktop is byte-for-byte its previous grid self.
+  const cardMode = useViewportMode() === 'mobile';
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -106,7 +108,19 @@ export function DataTable<T>({
                     style={{ transform: `translateY(${vi.start}px)` }}
                     onClick={onRowClick ? () => onRowClick(row) : undefined}
                   >
-                    {renderCard?.(row)}
+                    {renderCard ? (
+                      renderCard(row)
+                    ) : (
+                      // Generic fallback card: each column as a labeled key→value pair.
+                      <dl className="dt-card-auto">
+                        {columns.map((c) => (
+                          <div key={c.key} className="dt-card-pair">
+                            <dt className="dt-card-k">{c.header}</dt>
+                            <dd className="dt-card-v">{c.render(row)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
                   </div>
                 );
               }

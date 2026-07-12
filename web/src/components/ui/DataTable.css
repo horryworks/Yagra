@@ -110,3 +110,35 @@
 .dt-card:active {
   background: var(--bg-tertiary);
 }
+
+/* Generic fallback card (no custom renderCard): labeled key→value rows built from the columns. */
+.dt-card-auto {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dt-card-pair {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dt-card-k {
+  flex: none;
+  width: 40%;
+  max-width: 130px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.dt-card-v {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-sm);
+}

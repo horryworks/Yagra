@@ -150,3 +150,14 @@ html[data-viewport='mobile'] select,
 html[data-viewport='mobile'] textarea {
   font-size: var(--font-touch-input);
 }
+
+/* Forms stack to a single full-width column on mobile (side-by-side field pairs don't fit ~390px).
+   `.form-check` (checkbox + inline label) keeps its own row direction. */
+html[data-viewport='mobile'] .form-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+html[data-viewport='mobile'] .form-row > .form-label {
+  width: 100%;
+}

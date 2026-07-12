@@ -173,6 +173,52 @@
   }
 }
 
+/* ============================================================ mobile: ytable → stacked cards (ADR-027 M2)
+   `.ytable` rows are grids whose column template is set per-page (desktop widths — e.g. six tracks —
+   that don't fit ~390px, so cells clip/overlap). On mobile, stack each row's cells into a card and
+   hide the header row. Global safety net for every `.ytable` CRUD screen (Settings, alert config,
+   credentials, users, pollers, …) with no per-page JSX: the inline `grid-template-columns` is inert
+   once the row is flex. Row actions are already always-visible under (hover:none) (M0). */
+html[data-viewport='mobile'] .ytable-head {
+  display: none;
+}
+
+html[data-viewport='mobile'] .ytable-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  height: auto;
+  min-height: var(--touch-target);
+  padding: 9px 12px;
+}
+
+html[data-viewport='mobile'] .ytable-cell {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+}
+
+/* First cell = the row's primary identity (usually the name) — give it a touch more weight. */
+html[data-viewport='mobile'] .ytable-cell:first-child {
+  font-weight: var(--weight-medium);
+}
+
+/* Right-aligned cells (actions/counts) go left-aligned in the stacked card. */
+html[data-viewport='mobile'] .ytable-cell.right {
+  justify-content: flex-start;
+}
+
+html[data-viewport='mobile'] .ytable-actions {
+  margin-top: 4px;
+}
+
+/* The scroll wrapper's desktop max-height cap is unnecessary once rows are cards and the pane/page
+   scrolls — let it grow so short lists don't get a nested scrollbar. */
+html[data-viewport='mobile'] .ytable-scroll {
+  max-height: none;
+}
+
 /* ============================================================ cell vocabulary */
 /* Primary identifier: optional type-icon tile + name (medium) + optional mono sub-label. */
 .yt-name {
