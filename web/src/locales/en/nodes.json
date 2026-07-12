@@ -35,7 +35,8 @@
     "groupTruncated": "Some large groups are showing a partial member list. Use search to find a specific node.",
     "searchPlaceholder": "Search…",
     "loadingInventory": "Loading inventory…",
-    "selectPrompt": "Select a node or group to see its detail."
+    "selectPrompt": "Select a node or group to see its detail.",
+    "backToList": "Inventory"
   },
   "add": {
     "node": "Add node",

@@ -541,7 +541,7 @@ export function NodesPage() {
         <p className="muted nodes-truncated">{t('inventory.groupTruncated')}</p>
       )}
 
-      <div className="nodes-split">
+      <div className={selected ? 'nodes-split has-sel' : 'nodes-split'}>
         <div className="nodes-pane">
           <div className="nodes-pane-head">
             <span className="nodes-pane-title">{t('nav:groups.inventory')}</span>
@@ -601,6 +601,17 @@ export function NodesPage() {
         </div>
 
         <div className="nodes-pane nodes-detail-pane">
+          {/* Mobile-only back control (ADR-027 pane switcher) — returns to the full-screen tree by
+              clearing the ?sel= selection. Hidden on desktop via CSS. */}
+          {selected && (
+            <button
+              type="button"
+              className="nodes-detail-back"
+              onClick={() => select(null)}
+            >
+              ‹ {t('inventory.backToList')}
+            </button>
+          )}
           {selected?.kind === 'node' ? (
             // Render from the selection id so a node whose group isn't loaded still shows detail
             // (the detail pane fetches the node itself). Move needs the loaded summary — guarded.

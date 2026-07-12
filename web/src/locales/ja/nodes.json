@@ -35,7 +35,8 @@
     "groupTruncated": "一部の大きなグループはメンバーの一部のみ表示しています。特定のノードは検索でお探しください。",
     "searchPlaceholder": "検索…",
     "loadingInventory": "インベントリを読み込み中…",
-    "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。"
+    "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。",
+    "backToList": "インベントリ"
   },
   "add": {
     "node": "ノードを追加",

@@ -79,3 +79,46 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Mobile pane switcher (ADR-027): one full-height pane at a time — the inventory tree, or (once a
+   node/group is picked) its detail with a back control. Same ?sel= selection as desktop; the
+   `.has-sel` class reflects whether something is selected. Fixes the stacked-and-clipped detail on
+   narrow screens where neither pane could scroll to. */
+.nodes-detail-back {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nodes-split {
+  display: block;
+}
+
+html[data-viewport='mobile'] .nodes-split > .nodes-pane {
+  height: 100%;
+}
+
+/* No selection → tree only. */
+html[data-viewport='mobile'] .nodes-split:not(.has-sel) .nodes-detail-pane {
+  display: none;
+}
+
+/* Selection → detail only (full screen). */
+html[data-viewport='mobile'] .nodes-split.has-sel > .nodes-pane:not(.nodes-detail-pane) {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nodes-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: 0 12px;
+  background: none;
+  border: none;
+  border-bottom: var(--border-width) solid var(--border-color);
+  color: var(--accent-color);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  cursor: pointer;
+}
