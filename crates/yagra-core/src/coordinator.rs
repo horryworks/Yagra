@@ -56,6 +56,37 @@ const REDIS_TTL: Duration = OFFLINE_AFTER;
 /// (ADR-009).
 const PG_UPSERT_EVERY: Duration = Duration::from_secs(60);
 
+/// A [`std::io::Write`] sink that folds bytes into a hasher, so a value can be fingerprinted by
+/// streaming its serialization straight into the hash with no intermediate allocation.
+struct HashWriter(std::collections::hash_map::DefaultHasher);
+
+impl std::io::Write for HashWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use std::hash::Hasher;
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A stable in-process fingerprint of a node's working-set specs, used only as the reconcile diff
+/// baseline (S16) so core need not keep decrypted credentials resident between sweeps. Equal specs
+/// ⇒ equal fingerprint: the specs contain no maps/sets, so their JSON serialization is canonical,
+/// and every field serializes (no `skip_serializing_if`), so the fingerprint changes iff the spec
+/// set does — exactly what the old `Vec<JobSpec>` equality check gave. The comparison is per node
+/// against that same node's stored fingerprint (not all-pairs), so 64 bits is ample — no birthday
+/// amplification. Not persisted: a core restart bumps the epoch and re-snapshots every poller, so
+/// cross-version hash stability is irrelevant.
+fn specs_fingerprint(specs: &[JobSpec]) -> u64 {
+    use std::hash::Hasher;
+    let mut hw = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    // Serializing these plain (map-free) types into an infallible writer cannot fail.
+    let _ = serde_json::to_writer(&mut hw, specs);
+    hw.0.finish()
+}
+
 /// Registry entry for one poller (the authoritative liveness/telemetry record, ADR-009).
 struct PollerEntry {
     /// Pool this poller serves (from its latest heartbeat / sync request).
@@ -92,8 +123,13 @@ struct PollerEntry {
 struct CoordState {
     /// Live registry: poller id → entry.
     pollers: HashMap<String, PollerEntry>,
-    /// Last working set core sent each poller (node → specs), the diff baseline for reconcile.
-    published: HashMap<String, HashMap<NodeId, Vec<JobSpec>>>,
+    /// Diff baseline for reconcile: per poller, the **fingerprint** of the working set core last
+    /// sent it (node → specs fingerprint), *not* the specs themselves (S16). A [`JobSpec`] inlines a
+    /// decrypted monitoring credential, so keeping the full spec set resident here would leave
+    /// secrets in core's memory sweep-to-sweep and re-clone them on every reconcile. The fingerprint
+    /// is all the diff needs ("did this node's spec set change?"); the decrypted specs live only
+    /// transiently inside [`Coordinator::reconcile_pool`] while a message is built, then drop.
+    published: HashMap<String, HashMap<NodeId, u64>>,
     /// Per-poller count of results core has consumed off the bus (provenance for the Pollers view).
     /// Kept separate from [`PollerEntry`] so a result that arrives before the first heartbeat is
     /// still counted.
@@ -413,16 +449,20 @@ impl<B: SyncBus> Coordinator<B> {
             let epoch = self.epoch;
             for m in &members {
                 let target = targets.remove(m).unwrap_or_default();
+                // Baseline holds only per-node fingerprints (S16), never the decrypted specs.
                 let prev = st.published.get(m).cloned().unwrap_or_default();
+                // Fingerprint the target once — it is both the change signal vs `prev` and the next
+                // baseline we store below.
+                let target_fps: HashMap<NodeId, u64> = target
+                    .iter()
+                    .map(|(node, specs)| (*node, specs_fingerprint(specs)))
+                    .collect();
 
                 // Diff: a node is an upsert if it is new or its spec set changed; a node in the
                 // previous set but not the target is a remove. Both sorted for deterministic output.
                 let mut upserts: Vec<NodeJobs> = Vec::new();
                 for (node, specs) in &target {
-                    let changed = match prev.get(node) {
-                        Some(old) => old != specs,
-                        None => true,
-                    };
+                    let changed = prev.get(node).copied() != target_fps.get(node).copied();
                     if changed {
                         upserts.push(NodeJobs {
                             node_id: *node,
@@ -502,7 +542,7 @@ impl<B: SyncBus> Coordinator<B> {
                     deltas += 1;
                 }
                 entry.seq = new_seq;
-                st.published.insert(m.clone(), target);
+                st.published.insert(m.clone(), target_fps);
             }
         }
 
@@ -512,7 +552,14 @@ impl<B: SyncBus> Coordinator<B> {
                 tracing::warn!(error = %e, poller = %poller_id, "failed to publish working-set sync");
             }
         }
-        self.volatile.write_assignments(pool, &assign_map).await;
+        // S18: the Redis assignment mirror only changes when the working set does. If this sweep
+        // sent nothing (steady state), `assign_map` is byte-for-byte what Redis already holds — any
+        // node add/remove or ring-membership change produces at least one snapshot or delta above —
+        // so skip the O(fleet) DEL+HSET rewrite. A real change still rewrites the full map.
+        if snapshots + deltas > 0 {
+            self.volatile.write_assignments(pool, &assign_map).await;
+            self.stats.record_assignment_write();
+        }
         for _ in 0..snapshots {
             self.stats.record_snapshot();
         }
@@ -1149,5 +1196,61 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.snapshots_published_total, 1);
         assert_eq!(snap.deltas_published_total, 1);
+    }
+
+    #[test]
+    fn specs_fingerprint_is_stable_and_change_sensitive() {
+        // S16: the reconcile baseline stores this fingerprint instead of the decrypted specs. It
+        // must behave exactly like `Vec<JobSpec>` equality — equal sets match, any difference flips.
+        let a = vec![icmp_spec(node(1), 30)];
+        let b = vec![icmp_spec(node(1), 30)];
+        assert_eq!(
+            specs_fingerprint(&a),
+            specs_fingerprint(&b),
+            "identical spec sets fingerprint equal (⇒ no upsert)"
+        );
+        let interval_changed = vec![icmp_spec(node(1), 60)];
+        assert_ne!(
+            specs_fingerprint(&a),
+            specs_fingerprint(&interval_changed),
+            "a changed interval flips the fingerprint (⇒ upsert)"
+        );
+        let extra = vec![icmp_spec(node(1), 30), icmp_spec(node(2), 30)];
+        assert_ne!(specs_fingerprint(&a), specs_fingerprint(&extra));
+        assert_ne!(specs_fingerprint(&a), specs_fingerprint(&[]));
+    }
+
+    #[tokio::test]
+    async fn assignment_mirror_write_is_skipped_when_nothing_changes() {
+        // S18: the Redis assignment mirror is only rewritten when the sweep actually sent something.
+        let (coord, bus, stats) = coordinator();
+        let mut rx = bus.subscribe_sync();
+        let now = t0();
+        let inc = Uuid::new_v4();
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", inc), now)
+            .await;
+        let nodes = desired(&[(node(1), 30), (node(2), 30)]);
+
+        // First reconcile publishes a snapshot → mirror written once.
+        coord.reconcile_pool("default", nodes.clone(), now).await;
+        let _ = drain_syncs(&mut rx, "p1");
+        assert_eq!(stats.snapshot().assignment_mirror_writes_total, 1);
+
+        // Identical reconcile publishes nothing → the O(fleet) mirror rewrite is skipped.
+        coord
+            .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
+            .await;
+        coord.reconcile_pool("default", nodes, now).await;
+        assert_eq!(
+            stats.snapshot().assignment_mirror_writes_total,
+            1,
+            "an unchanged working set skips the assignment-mirror rewrite"
+        );
+
+        // A real change publishes a delta → mirror written again.
+        let changed = desired(&[(node(1), 60), (node(2), 30)]);
+        coord.reconcile_pool("default", changed, now).await;
+        assert_eq!(stats.snapshot().assignment_mirror_writes_total, 2);
     }
 }

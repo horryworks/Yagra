@@ -528,6 +528,9 @@ pub struct SchedulerStats {
     // working sets; the two `pools_*` are gauge-style (overwritten each sweep by the scheduler).
     snapshots_published_total: std::sync::atomic::AtomicU64,
     deltas_published_total: std::sync::atomic::AtomicU64,
+    // Redis assignment-mirror rewrites the coordinator actually issued (S18): in steady state this
+    // stays flat sweep-over-sweep because an unchanged working set skips the O(fleet) DEL+HSET.
+    assignment_mirror_writes_total: std::sync::atomic::AtomicU64,
     pools_working_set: std::sync::atomic::AtomicU64,
     pools_legacy: std::sync::atomic::AtomicU64,
 }
@@ -545,6 +548,9 @@ pub struct SchedulerStatsSnapshot {
     pub snapshots_published_total: u64,
     /// Working-set deltas core has published to pollers since start (ADR-020).
     pub deltas_published_total: u64,
+    /// Redis assignment-mirror rewrites issued since start (S18). Flat across steady-state sweeps —
+    /// an unchanged working set skips the rewrite — so growth tracks real assignment churn.
+    pub assignment_mirror_writes_total: u64,
     /// Pools served in working-set mode in the most recent sweep (a live poller owns them).
     pub pools_working_set: u64,
     /// Pools served in legacy per-job mode in the most recent sweep (no live poller).
@@ -581,6 +587,12 @@ impl SchedulerStats {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Count one Redis assignment-mirror rewrite (S18); skipped sweeps don't call this.
+    pub fn record_assignment_write(&self) {
+        self.assignment_mirror_writes_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Record how many pools ran in each mode this sweep (gauge-style: overwrites).
     pub fn set_pool_modes(&self, working_set: u64, legacy: u64) {
         use std::sync::atomic::Ordering;
@@ -599,6 +611,9 @@ impl SchedulerStats {
             results_total: self.results_total.load(Ordering::Relaxed),
             snapshots_published_total: self.snapshots_published_total.load(Ordering::Relaxed),
             deltas_published_total: self.deltas_published_total.load(Ordering::Relaxed),
+            assignment_mirror_writes_total: self
+                .assignment_mirror_writes_total
+                .load(Ordering::Relaxed),
             pools_working_set: self.pools_working_set.load(Ordering::Relaxed),
             pools_legacy: self.pools_legacy.load(Ordering::Relaxed),
         }

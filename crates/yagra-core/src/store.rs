@@ -137,6 +137,29 @@ pub trait MetricStore: Send + Sync {
     /// "fresh" set for fleet data-coverage. The API edge diffs this against the inventory to find
     /// stale (silent) nodes. Empty if the store has no such data.
     async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid>;
+
+    /// Like [`fresh_node_ids`], but restricted to `scope` — the fresh subset of a **page** of nodes
+    /// rather than the whole fleet (S20). The paged fallback probe (`fresh_fallback_ids`) asks about
+    /// at most a page of unobserved nodes, so it must not pull every fleet series back from the TSDB.
+    /// The default fetches the fleet set and intersects (correct but unscoped); [`VmStore`] overrides
+    /// it to push the id set into the query selector so only those series are returned. Empty `scope`
+    /// ⇒ empty (no query).
+    async fn fresh_node_ids_scoped(
+        &self,
+        metric: &str,
+        within_secs: u64,
+        scope: &[Uuid],
+    ) -> Vec<Uuid> {
+        if scope.is_empty() {
+            return Vec::new();
+        }
+        let want: std::collections::HashSet<Uuid> = scope.iter().copied().collect();
+        self.fresh_node_ids(metric, within_secs)
+            .await
+            .into_iter()
+            .filter(|id| want.contains(id))
+            .collect()
+    }
     /// The `limit` interfaces whose total throughput changed the most vs `window_secs` ago, as
     /// `(node_id, ifindex, signed_delta_bps)` ordered by magnitude. `Up` ⇒ biggest increases
     /// (spikes), `Down` ⇒ biggest decreases (drops). Empty if the store has no such data.
@@ -977,6 +1000,44 @@ impl MetricStore for VmStore {
             .collect()
     }
 
+    async fn fresh_node_ids_scoped(
+        &self,
+        metric: &str,
+        within_secs: u64,
+        scope: &[Uuid],
+    ) -> Vec<Uuid> {
+        if scope.is_empty() {
+            return Vec::new();
+        }
+        let url = format!("{}/api/v1/query", self.base);
+        // Push the page's node set into the selector so VM returns only those series, not the whole
+        // fleet (S20). Node label values are UUIDs (regex-safe: `[0-9a-f-]`), and VM anchors `=~`
+        // fully, so the alternation matches exactly this set. `metric` is an internal constant.
+        let ids = scope
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        let query = format!(
+            "last_over_time({metric}{{node=~\"{ids}\"}}[{}s])",
+            within_secs.max(1)
+        );
+        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics scoped freshness query failed");
+                return Vec::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return Vec::new();
+        };
+        parse_top_nodes(&json)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     async fn interface_delta(
         &self,
         direction: DeltaDirection,
@@ -1365,5 +1426,52 @@ mod tests {
             MetricStore::latest(&store, &SeriesKey::node(node, "icmp_rtt_ms")).await,
             Some(7.0)
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_node_ids_scoped_intersects_scope_with_the_fresh_set() {
+        // S20: the default scoped impl (used by the in-memory sink and any non-VM store) must return
+        // exactly the fresh nodes that are also in `scope` — never the whole fleet.
+        use yagra_bus::{CheckOutcome, Sample};
+        let store = InMemorySink::default();
+        let ids: Vec<NodeId> = (0..3).map(|_| NodeId::new()).collect();
+        for n in &ids {
+            let result = PollResult {
+                schema_version: 1,
+                job_id: Uuid::nil(),
+                node_id: *n,
+                at_unix_ms: 0,
+                outcome: CheckOutcome::Reachable,
+                samples: vec![Sample::gauge("icmp_rtt_ms", 1.0)],
+                interfaces: Vec::new(),
+                sys_descr: None,
+                poller_id: None,
+                trace_context: Default::default(),
+            };
+            MetricStore::write(&store, &result).await;
+        }
+
+        // Scope to nodes 0 and 2 (both fresh) → just those, not node 1.
+        let scope = vec![ids[0].as_uuid(), ids[2].as_uuid()];
+        let mut got = store
+            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &scope)
+            .await;
+        got.sort();
+        let mut want = scope.clone();
+        want.sort();
+        assert_eq!(got, want);
+
+        // A scoped id with no samples drops out (intersection, not union).
+        let stranger = NodeId::new().as_uuid();
+        let got = store
+            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &[stranger])
+            .await;
+        assert!(got.is_empty());
+
+        // Empty scope short-circuits to empty (no fleet scan).
+        assert!(store
+            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &[])
+            .await
+            .is_empty());
     }
 }

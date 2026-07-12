@@ -109,6 +109,21 @@ const DEFAULT_RANGE_SECS: i64 = 3600;
 /// Default range step when `step` is omitted (seconds).
 const DEFAULT_STEP_SECS: u64 = 60;
 
+/// Hard cap on the number of samples one range query may materialize, regardless of the requested
+/// window and step (S20). A client asking for a huge span at a tiny step would otherwise make
+/// VictoriaMetrics emit — and core parse — millions of points (a cheap resource-exhaustion vector).
+/// ~5000 comfortably exceeds any chart's horizontal pixel resolution.
+const MAX_RANGE_POINTS: i64 = 5000;
+
+/// Clamp a range query's `step` so `[from, to]` yields at most [`MAX_RANGE_POINTS`] samples. Floors
+/// at the caller's own minimum (`min_step`) and at 1s, then raises it further if the requested span
+/// would otherwise exceed the point cap. `from`/`to` are Unix seconds.
+fn clamp_range_step(from: i64, to: i64, step: u64, min_step: u64) -> u64 {
+    let span = (to - from).max(0);
+    let needed = u64::try_from(span / MAX_RANGE_POINTS.max(1)).unwrap_or(u64::MAX);
+    step.max(min_step).max(needed).max(1)
+}
+
 /// Core's own latest host-resource sample (self-observability), refreshed by the collector task in
 /// `main`. Read by `GET /api/v1/system/hosts`; `None` until the first sample (or in skeleton mode).
 pub type CoreHostSample = Arc<std::sync::Mutex<Option<HostSample>>>;
@@ -938,8 +953,11 @@ async fn fresh_fallback_ids(
     if unobserved.is_empty() {
         return std::collections::HashSet::new();
     }
+    // Scope the freshness query to just this page's unobserved nodes (S20) — don't pull the whole
+    // fleet's series back from the TSDB to answer about ≤ a page of nodes.
+    let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
     st.store
-        .fresh_node_ids("icmp_rtt_ms", FALLBACK_FRESH_SECS)
+        .fresh_node_ids_scoped("icmp_rtt_ms", FALLBACK_FRESH_SECS, &scope)
         .await
         .into_iter()
         .collect()
@@ -1106,7 +1124,7 @@ async fn get_node_metric_range(
     let node = NodeId::from(node_id);
     let to = q.to.unwrap_or_else(now_unix_s);
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = q.step.unwrap_or(DEFAULT_STEP_SECS).max(1);
+    let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
     let key = SeriesKey::node(node, metric.as_str());
     let points = match q.agg.as_deref() {
         Some("max") => st.store.aggregate_range(&key, from, to, step).await,
@@ -1726,7 +1744,7 @@ async fn throughput_range(
     }
     let to = q.to.unwrap_or_else(now_unix_s);
     let from = q.from.unwrap_or(to - 24 * 3600);
-    let step = q.step.unwrap_or(300).max(60);
+    let step = clamp_range_step(from, to, q.step.unwrap_or(300), 60);
     let (in_pts, out_pts) = st.store.throughput_range(from, to, step).await;
     // Align in/out onto one sorted timestamp axis (null where a side has no point).
     let mut grid: std::collections::BTreeMap<i64, (Option<f64>, Option<f64>)> =
@@ -1767,7 +1785,7 @@ async fn interface_heatmap(
     let limit = q.limit.unwrap_or(8).clamp(1, 20);
     let to = q.to.unwrap_or_else(now_unix_s);
     let from = q.from.unwrap_or(to - 6 * 3600);
-    let step = q.step.unwrap_or(600).max(60);
+    let step = clamp_range_step(from, to, q.step.unwrap_or(600), 60);
     // Pick the busiest links now, then fetch each one's throughput series.
     let top = st
         .store
@@ -2381,7 +2399,7 @@ async fn host_metric_range(
     };
     let to = q.to.unwrap_or_else(now_unix_s);
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = q.step.unwrap_or(DEFAULT_STEP_SECS).max(1);
+    let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
     let store = &st.store;
     let cpu_pct = store
         .host_metric_range(&instance, "cpu_pct", from, to, step)
@@ -7890,7 +7908,7 @@ async fn get_interface_series(
     // Default to ~120 points across the window; the rate lookback spans a few steps so a
     // single missed poll doesn't punch a hole in the line.
     let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
-    let step = q.step.unwrap_or((span / 120).max(60)).max(1);
+    let step = clamp_range_step(from, to, q.step.unwrap_or((span / 120).max(60)), 1);
     let lookback = (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS);
 
     let in_oct = st
@@ -8802,6 +8820,26 @@ mod tests {
         assert!(!is_valid_metric_name("a b"));
         assert!(!is_valid_metric_name("9starts_with_digit"));
         assert!(!is_valid_metric_name(""));
+    }
+
+    #[test]
+    fn clamp_range_step_bounds_point_count_but_honors_floors() {
+        // A normal request keeps its step (well under the point cap).
+        assert_eq!(clamp_range_step(0, 3600, 60, 1), 60);
+        // The caller's own minimum floor is respected when the requested step is smaller.
+        assert_eq!(clamp_range_step(0, 3600, 5, 60), 60);
+        // A huge span at a tiny step is forced up so it yields at most MAX_RANGE_POINTS samples.
+        let from = 0;
+        let to = 100 * 24 * 3600; // 100 days
+        let step = clamp_range_step(from, to, 1, 1);
+        assert!(step > 1, "tiny step over a huge span is raised");
+        assert!(
+            (to - from) / (step as i64) <= MAX_RANGE_POINTS,
+            "point count stays within the cap"
+        );
+        // Degenerate/backwards ranges never divide by zero or underflow; step floors at 1.
+        assert_eq!(clamp_range_step(500, 500, 0, 0), 1);
+        assert_eq!(clamp_range_step(500, 100, 0, 0), 1);
     }
 
     #[test]
