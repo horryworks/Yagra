@@ -9,7 +9,13 @@
       "dark": "Dark"
     },
     "language": "Language",
-    "languageHelp": "Choose the interface language. Changes apply immediately."
+    "languageHelp": "Choose the interface language. Changes apply immediately.",
+    "layout": "Layout",
+    "layoutHelp": "Auto follows your screen size (mobile under 768px wide). Desktop keeps the full desktop layout on any screen.",
+    "layouts": {
+      "auto": "Auto",
+      "desktop": "Desktop"
+    }
   },
   "about": {
     "title": "About",
