@@ -24,6 +24,7 @@ import {
   flatRowKey,
   isSelfOrDescendant,
   type FlatRow,
+  type StateCounts,
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { usePrefsStore } from '../../prefs';
@@ -67,6 +68,12 @@ interface Props {
   groups: NodeGroup[];
   nodes: NodeSummary[];
   canEdit: boolean;
+  /** Per-group DIRECT member state counts (server rollup, A-1). When given, group rows roll up from
+   *  these — correct over the whole fleet even before a group's members are lazily loaded (A-3). */
+  groupCounts?: Record<string, StateCounts>;
+  /** Ids of groups whose members have been lazily fetched (A-3). An open group not in this set shows
+   *  a loading placeholder instead of its members. Omit (with `groupCounts`) ⇒ every group loaded. */
+  loadedGroups?: Set<string>;
   /** First inventory load in flight — show a loading placeholder, not the empty message. */
   loading?: boolean;
   /** Currently-selected row (highlighted with the inset accent bar); drives the split detail pane. */
@@ -116,6 +123,8 @@ export function NodeTree({
   groups,
   nodes,
   canEdit,
+  groupCounts,
+  loadedGroups,
   loading,
   selected,
   onSelectNode,
@@ -156,8 +165,8 @@ export function NodeTree({
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
   // a tens-of-thousands-node inventory stays responsive (S13).
   const flat = useMemo(
-    () => flattenTree(tree, { collapsed, filter: filter ?? '' }),
-    [tree, collapsed, filter],
+    () => flattenTree(tree, { collapsed, filter: filter ?? '', groupCounts, loadedGroups }),
+    [tree, collapsed, filter, groupCounts, loadedGroups],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -330,7 +339,7 @@ export function NodeTree({
   };
 
   const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
-    const { group, depth, isOpen, hasChildren, members } = row;
+    const { group, depth, isOpen, hasChildren, tally } = row;
     const isSel = selected?.kind === 'group' && selected.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id };
     return (
@@ -378,8 +387,8 @@ export function NodeTree({
         >
           {group.name}
         </button>
-        <HealthBar nodes={members} className="ntree-health" />
-        <span className="ntree-count">{members.length}</span>
+        <HealthBar tally={tally} className="ntree-health" />
+        <span className="ntree-count">{tally.total}</span>
         {suppressionMarks(
           !!suppression?.maintenanceGroups.has(group.id),
           !!suppression?.muteGroups.has(group.id),
@@ -524,6 +533,14 @@ export function NodeTree({
     );
   };
 
+  // Placeholder shown under an open group whose members are still being lazily fetched (A-3).
+  const loadingRow = (depth: number): React.ReactNode => (
+    <div className="ntree-row ntree-loading" style={{ paddingLeft: depth * INDENT + BASE_PAD }}>
+      <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
+      <span className="ntree-loading-label muted">{t('tree.loadingNodes')}</span>
+    </div>
+  );
+
   const renderRow = (row: FlatRow): React.ReactNode => {
     switch (row.kind) {
       case 'group':
@@ -531,6 +548,8 @@ export function NodeTree({
       case 'node':
       case 'ungrouped-node':
         return renderNode(row.node, row.depth);
+      case 'group-loading':
+        return loadingRow(row.depth);
       case 'ungrouped-head':
         return ungroupedHeadRow(row.count);
     }

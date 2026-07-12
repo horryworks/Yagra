@@ -153,6 +153,24 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes');
   });
 
+  it('sends the node-picker search term + cap on the search request (A-2)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.searchNodes('tokyo', 25);
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/search?q=tokyo&limit=25');
+  });
+
+  it('omits an empty search term but still sends the cap (first page by name)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.searchNodes('', 50);
+    expect(spy).toHaveBeenCalledWith('/api/v1/nodes/search?limit=50');
+  });
+
   it('posts a threshold rule as a JSON body', async () => {
     const spy = vi
       .fn()

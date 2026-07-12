@@ -50,8 +50,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, IfIndex, NodeId, NodeState,
-    Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
+    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, IfIndex, Node, NodeId,
+    NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -150,6 +150,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/config", get(get_config).put(update_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
+        // Static `/nodes/search` + `/nodes/by-group` before the `/nodes/:node_id` param route
+        // (matchit prioritizes the static segment, but keep them adjacent for clarity).
+        .route("/api/v1/nodes/search", get(search_nodes))
+        .route("/api/v1/nodes/by-group", get(list_group_nodes))
         .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
@@ -284,6 +288,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/transitions", get(alert_transitions))
         .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/fleet/summary", get(fleet_summary))
+        .route("/api/v1/fleet/group-summary", get(fleet_group_summary))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
         .route("/api/v1/fleet/state-history", get(fleet_state_history))
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
@@ -693,6 +698,57 @@ async fn node_names_batch(
     Json(out).into_response()
 }
 
+/// Query for the node-picker typeahead: `?q=<substr>&limit=<n>`. Empty/absent `q` returns the
+/// first page ordered by name.
+#[derive(Deserialize)]
+struct NodeSearchQuery {
+    q: Option<String>,
+    limit: Option<i64>,
+}
+
+/// One node-picker result: id + display name + address. Deliberately excludes credentials/bindings
+/// (security.md — the picker only needs to show and select a node).
+#[derive(Serialize)]
+struct NodeSearchResult {
+    id: Uuid,
+    name: String,
+    address: String,
+}
+
+/// Server-side node search for the node-picker typeahead (A-2): match the name or address by
+/// case-insensitive substring, capped, so the picker never loads the whole inventory into the
+/// browser (ui-conventions: search is server-side at fleet scale — this was the last client-side
+/// full-load path, previously ~5,000 nodes). View-gated, read-only; routes through the shared
+/// `NodeListing` so it also works in skeleton mode. Only id/name/address leave the server.
+async fn search_nodes(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<NodeSearchQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let term = q.q.unwrap_or_default();
+    let limit = q.limit.unwrap_or(50);
+    match st.nodes.search(term.trim(), limit).await {
+        Ok(nodes) => {
+            let out: Vec<NodeSearchResult> = nodes
+                .into_iter()
+                .map(|n| NodeSearchResult {
+                    id: n.id.as_uuid(),
+                    name: n.name,
+                    address: n.address.to_string(),
+                })
+                .collect();
+            Json(out).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "node search failed");
+            internal("failed to search nodes")
+        }
+    }
+}
+
 async fn list_nodes(
     State(st): State<ApiState>,
     headers: HeaderMap,
@@ -715,64 +771,7 @@ async fn list_nodes(
             } else {
                 None
             };
-            // Display state comes from the live alert engine (committed liveness rolled up
-            // with any active threshold alert). Nodes the engine hasn't observed yet fall
-            // back to a coarse store probe (a recent RTT ⇒ ok, else unknown).
-            let states = st.alerts.node_states();
-            // Per-node tree order (admin/live only; skeleton mode has no order → 0 = name order).
-            let (orders, meraki_ids) = match st.admin.as_ref() {
-                Some(admin) => {
-                    let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
-                    (
-                        admin.repo.node_sort_orders(&ids).await.unwrap_or_default(),
-                        // Page-scoped (not a full-table scan): only which of this page's nodes
-                        // are Meraki devices, for the tree badge.
-                        admin
-                            .meraki_devices
-                            .filter_meraki(&ids)
-                            .await
-                            .unwrap_or_default(),
-                    )
-                }
-                None => (
-                    std::collections::HashMap::new(),
-                    std::collections::HashSet::new(),
-                ),
-            };
-            // Batch the coarse fallback probe for any node the engine hasn't observed yet: one TSDB
-            // query for the whole page instead of a `latest()` round-trip per node (see
-            // `fresh_fallback_ids`). Steady state adds no query (every node is observed).
-            let unobserved: Vec<NodeId> = nodes
-                .iter()
-                .filter(|n| !states.contains_key(&n.id))
-                .map(|n| n.id)
-                .collect();
-            let fresh_fallback = fresh_fallback_ids(&st, &unobserved).await;
-            let mut out = Vec::with_capacity(nodes.len());
-            for n in nodes {
-                let state = match states.get(&n.id) {
-                    Some(s) => *s,
-                    None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
-                    None => NodeState::Unknown,
-                };
-                let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
-                let source = if meraki_ids.contains(&n.id.as_uuid()) {
-                    "meraki"
-                } else {
-                    "device"
-                };
-                out.push(NodeSummary {
-                    id: n.id,
-                    name: n.name,
-                    address: n.address.to_string(),
-                    state,
-                    vendor: n.vendor,
-                    model: n.model,
-                    group_id: n.group.map(|g| g.as_uuid()),
-                    sort_order,
-                    source,
-                });
-            }
+            let out = build_node_summaries(&st, nodes).await;
             Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
         }
         Err(e) => {
@@ -782,6 +781,124 @@ async fn list_nodes(
                 "internal_error",
                 "failed to list nodes".to_owned(),
             )
+        }
+    }
+}
+
+/// Enrich a batch of raw `Node` rows into UI `NodeSummary` rows: attach the live rolled-up display
+/// state (the alert engine's opinion, else a coarse fresh-RTT fallback for a not-yet-observed node),
+/// the per-node tree sort order, and the Meraki-source badge. Shared by the paged fleet list and the
+/// per-group lazy tree load (A-3) so both paths produce identical rows. One batched TSDB probe for
+/// the unobserved subset (no per-node round-trip); steady state adds no query.
+async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummary> {
+    let states = st.alerts.node_states();
+    // Per-node tree order + Meraki badge (admin/live only; skeleton mode → 0 order, no badge).
+    let (orders, meraki_ids) = match st.admin.as_ref() {
+        Some(admin) => {
+            let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+            (
+                admin.repo.node_sort_orders(&ids).await.unwrap_or_default(),
+                admin
+                    .meraki_devices
+                    .filter_meraki(&ids)
+                    .await
+                    .unwrap_or_default(),
+            )
+        }
+        None => (
+            std::collections::HashMap::new(),
+            std::collections::HashSet::new(),
+        ),
+    };
+    let unobserved: Vec<NodeId> = nodes
+        .iter()
+        .filter(|n| !states.contains_key(&n.id))
+        .map(|n| n.id)
+        .collect();
+    let fresh_fallback = fresh_fallback_ids(st, &unobserved).await;
+    nodes
+        .into_iter()
+        .map(|n| {
+            let state = match states.get(&n.id) {
+                Some(s) => *s,
+                None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
+                None => NodeState::Unknown,
+            };
+            let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
+            let source = if meraki_ids.contains(&n.id.as_uuid()) {
+                "meraki"
+            } else {
+                "device"
+            };
+            NodeSummary {
+                id: n.id,
+                name: n.name,
+                address: n.address.to_string(),
+                state,
+                vendor: n.vendor,
+                model: n.model,
+                group_id: n.group.map(|g| g.as_uuid()),
+                sort_order,
+                source,
+            }
+        })
+        .collect()
+}
+
+/// Query for the per-group lazy tree load (A-3): `?group=<uuid>` returns that group's direct
+/// members; an absent/empty `group` returns the ungrouped nodes (`group_id IS NULL`).
+#[derive(Deserialize)]
+struct GroupNodesQuery {
+    group: Option<Uuid>,
+}
+
+/// Backstop cap on one group's direct-member load. The inventory tree lazy-loads a group's members
+/// only when it is expanded (A-3), so this bounds a single pathologically-large group; the client
+/// flags a truncated group. Normal groups are far below this.
+const GROUP_NODES_CAP: i64 = 2000;
+
+/// A group's direct members for the lazy inventory tree (A-3): the nodes whose `group_id` is exactly
+/// `group` (or the ungrouped bucket), ordered by the tree's sort order, capped. Loaded on demand
+/// when a group is expanded, so the initial page never pulls the whole fleet — it fetches the group
+/// skeleton + per-group counts (`/fleet/group-summary`) and streams members per open group.
+async fn list_group_nodes(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<GroupNodesQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        // Skeleton mode has no group membership; the demo node is ungrouped. Return it for the
+        // ungrouped bucket, nothing for a specific group.
+        let nodes = if q.group.is_none() {
+            st.nodes
+                .search("", GROUP_NODES_CAP)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let out = build_node_summaries(&st, nodes).await;
+        return Json(serde_json::json!({ "nodes": out, "truncated": false })).into_response();
+    };
+    match admin
+        .repo
+        .list_nodes_in_group(q.group, GROUP_NODES_CAP + 1)
+        .await
+    {
+        Ok(mut nodes) => {
+            let truncated = nodes.len() as i64 > GROUP_NODES_CAP;
+            if truncated {
+                nodes.truncate(GROUP_NODES_CAP as usize);
+            }
+            let out = build_node_summaries(&st, nodes).await;
+            Json(serde_json::json!({ "nodes": out, "truncated": truncated })).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list group nodes");
+            internal("failed to load group nodes")
         }
     }
 }
@@ -1391,6 +1508,77 @@ async fn fleet_summary(State(st): State<ApiState>, headers: HeaderMap) -> Respon
     let unobserved = (total - observed_total).max(0);
     *states.entry("unknown").or_insert(0) += unobserved;
     Json(serde_json::json!({ "total": total, "states": states })).into_response()
+}
+
+/// Per-group direct-member state tally. All six state keys are always present (a missing state is
+/// `0`) so the client needn't special-case an absent one, and they sum to the group's direct-member
+/// count.
+#[derive(Serialize, Default, Debug, PartialEq)]
+struct GroupStateCounts {
+    ok: i64,
+    warning: i64,
+    critical: i64,
+    unknown: i64,
+    unreachable: i64,
+    maintenance: i64,
+}
+
+/// The per-group rollup response: `group_id → direct-member state counts`.
+#[derive(Serialize)]
+struct FleetGroupSummary {
+    groups: std::collections::HashMap<Uuid, GroupStateCounts>,
+}
+
+/// Roll a node→group map + the engine's per-node states into per-group **direct-member** state
+/// tallies. Pure (no I/O) so the grouping/fallback rules are unit-testable. Ungrouped nodes (null
+/// group_id) are skipped — no widget rolls them up. A node the engine has never observed counts as
+/// `unknown`, matching the per-node list's fallback so a group's tally reconciles with its size.
+fn aggregate_group_counts(
+    node_groups: &[(Uuid, Option<Uuid>)],
+    states: &std::collections::HashMap<NodeId, NodeState>,
+) -> std::collections::HashMap<Uuid, GroupStateCounts> {
+    let mut groups: std::collections::HashMap<Uuid, GroupStateCounts> =
+        std::collections::HashMap::new();
+    for (id, group_id) in node_groups {
+        let Some(gid) = group_id else { continue };
+        let state = states
+            .get(&NodeId::from(*id))
+            .copied()
+            .unwrap_or(NodeState::Unknown);
+        let c = groups.entry(*gid).or_default();
+        match state {
+            NodeState::Ok => c.ok += 1,
+            NodeState::Warning => c.warning += 1,
+            NodeState::Critical => c.critical += 1,
+            NodeState::Unknown => c.unknown += 1,
+            NodeState::Unreachable => c.unreachable += 1,
+            NodeState::Maintenance => c.maintenance += 1,
+        }
+    }
+    groups
+}
+
+/// Per-group health rollup for the dashboard site-matrix / region-rollup / geo-map widgets: for
+/// every node group, the state tally of its direct member nodes (joining the PG node→group map with
+/// the live alert engine's rolled-up states). Replaces the old client-side aggregation of a *paged*
+/// node slice, which silently under-counted every group past the first 100 nodes — a correctness
+/// bug, not just a scale one (S12-class, A-1). The client joins these counts to the bounded group
+/// tree for names/geo and sums descendants for the region rollup. View-gated; works without the
+/// admin store (the node→group map comes from the shared `NodeListing`).
+async fn fleet_group_summary(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let node_groups = match st.nodes.node_group_map().await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!(error = %e, "fleet group summary node map failed");
+            return internal("failed to load group summary");
+        }
+    };
+    let states = st.alerts.node_states();
+    let groups = aggregate_group_counts(&node_groups, &states);
+    Json(FleetGroupSummary { groups }).into_response()
 }
 
 /// How recent a node's last ICMP sample must be to count as "fresh" (silent beyond this ⇒ stale).
@@ -10024,6 +10212,46 @@ mod tests {
         );
         assert_eq!(resp.pollers[0].cpu_pct, None);
         assert_eq!(resp.pollers[0].disk_used_pct, None);
+    }
+
+    #[test]
+    fn aggregate_group_counts_tallies_direct_members_with_unknown_fallback() {
+        let g1 = Uuid::from_u128(1);
+        let g2 = Uuid::from_u128(2);
+        let n_ok = Uuid::from_u128(10);
+        let n_warn = Uuid::from_u128(11);
+        let n_crit = Uuid::from_u128(12);
+        let n_never = Uuid::from_u128(13); // engine never observed it → unknown fallback
+        let n_ungrouped = Uuid::from_u128(14); // null group_id → contributes to no group
+
+        let node_groups = vec![
+            (n_ok, Some(g1)),
+            (n_warn, Some(g1)),
+            (n_crit, Some(g2)),
+            (n_never, Some(g2)),
+            (n_ungrouped, None),
+        ];
+        let mut states = std::collections::HashMap::new();
+        states.insert(NodeId::from(n_ok), NodeState::Ok);
+        states.insert(NodeId::from(n_warn), NodeState::Warning);
+        states.insert(NodeId::from(n_crit), NodeState::Critical);
+        // n_never intentionally absent from `states`.
+
+        let out = aggregate_group_counts(&node_groups, &states);
+
+        // The ungrouped node rolls up into no group.
+        assert_eq!(out.len(), 2);
+        let c1 = &out[&g1];
+        assert_eq!((c1.ok, c1.warning, c1.critical), (1, 1, 0));
+        let c2 = &out[&g2];
+        assert_eq!(c2.critical, 1);
+        assert_eq!(c2.unknown, 1); // never-observed member counts as unknown
+                                   // Each group's tally reconciles with its direct-member count.
+        let total = |c: &GroupStateCounts| {
+            c.ok + c.warning + c.critical + c.unknown + c.unreachable + c.maintenance
+        };
+        assert_eq!(total(c1), 2);
+        assert_eq!(total(c2), 2);
     }
 
     #[test]

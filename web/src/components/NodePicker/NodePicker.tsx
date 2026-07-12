@@ -1,18 +1,20 @@
 // A node-only typeahead filter control: a field-styled trigger opens a popover with a scale-aware
-// node search (lazy-loaded inventory, in-memory filtered, capped — never a flat dropdown). Emits a
-// plain { id, name } | null. Distinct from the troubleshoot ScopePicker (which also offers All/Group
-// modes) because the events API filters by node_id only. Reuses the generic scope data loader,
-// filter, popover/roving-key pattern, and SearchInput.
+// node search that queries the server on each keystroke (debounced), capped — never a flat dropdown
+// and never a whole-inventory client load (A-2). Emits a plain { id, name } | null. Distinct from
+// the troubleshoot ScopePicker (which also offers All/Group modes) because the events API filters by
+// node_id only. Reuses the popover/roving-key pattern and SearchInput.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../ui/TableToolbar';
-import { useScopeData } from '../../troubleshoot/useScopeData';
-import { filterNodes } from '../../troubleshoot/scope';
+import { api } from '../../services/api';
+import type { NodeSearchResult } from '../../types/api';
 import './NodePicker.css';
 
-/** Rendered node-result cap — filter first, then show this many (keep typing to narrow). */
+/** Server search cap: request (and show) at most this many hits — keep typing to narrow. */
 const MAX_RESULTS = 50;
+/** Debounce for the server search so a fast typist fires one request, not one per keystroke. */
+const SEARCH_DEBOUNCE_MS = 200;
 
 interface Props {
   /** Selected node id (the URL/parent is the source of truth), or null for "no filter". */
@@ -38,10 +40,11 @@ export function NodePicker({
   exclude,
 }: Props) {
   const { t } = useTranslation();
-  const { nodes, nodesLoaded, loadNodes } = useScopeData();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [results, setResults] = useState<NodeSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -67,16 +70,46 @@ export function NodePicker({
     if (open) boxRef.current?.querySelector('input')?.focus();
   }, [open]);
 
-  const filtered = useMemo(() => {
-    const base = filterNodes(nodes, query);
-    return exclude && exclude.size ? base.filter((node) => !exclude.has(node.id)) : base;
-  }, [nodes, query, exclude]);
-  const shown = filtered.slice(0, MAX_RESULTS);
+  // Server-side search: (re)query on open and on each (debounced) keystroke. Empty query returns
+  // the first page by name so the list isn't blank before typing. The cancelled flag drops a stale
+  // response so a slow request can't overwrite the results of a later keystroke.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const term = query.trim();
+    setLoading(true);
+    const h = setTimeout(
+      () => {
+        api
+          .searchNodes(term, MAX_RESULTS)
+          .then((r) => {
+            if (!cancelled) setResults(r);
+          })
+          .catch(() => {
+            if (!cancelled) setResults([]);
+          })
+          .finally(() => {
+            if (!cancelled) setLoading(false);
+          });
+      },
+      term ? SEARCH_DEBOUNCE_MS : 0,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(h);
+    };
+  }, [open, query]);
+
+  const shown = useMemo(
+    () => (exclude && exclude.size ? results.filter((node) => !exclude.has(node.id)) : results),
+    [results, exclude],
+  );
 
   const openPopover = () => {
     setQuery('');
     setActive(0);
-    loadNodes();
+    setResults([]);
+    setLoading(true);
     setOpen(true);
   };
 
@@ -146,7 +179,7 @@ export function NodePicker({
               />
             </div>
             <div className="nodepick-list" role="listbox" aria-label={t('nodePicker.listAria')}>
-              {!nodesLoaded ? (
+              {loading && results.length === 0 ? (
                 <div className="nodepick-empty">{t('nodePicker.loading')}</div>
               ) : shown.length === 0 ? (
                 <div className="nodepick-empty">{t('nodePicker.noMatch')}</div>
@@ -172,10 +205,9 @@ export function NodePicker({
                   </button>
                 ))
               )}
-              {nodesLoaded && filtered.length > MAX_RESULTS && (
-                <div className="nodepick-empty">
-                  {t('nodePicker.more', { count: filtered.length - MAX_RESULTS })}
-                </div>
+              {/* Server returned a full page ⇒ there may be more matches; prompt to narrow. */}
+              {results.length >= MAX_RESULTS && (
+                <div className="nodepick-empty">{t('nodePicker.capped', { count: MAX_RESULTS })}</div>
               )}
             </div>
           </div>

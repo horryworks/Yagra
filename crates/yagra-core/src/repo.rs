@@ -110,6 +110,18 @@ pub trait NodeListing: Send + Sync {
     /// Total node count — for the fleet summary, which needs the whole-inventory denominator
     /// (the paged `list_page` only ever sees one page). Cheap `count(*)`, no row transfer.
     async fn count(&self) -> anyhow::Result<i64>;
+    /// Every node's `(id, group_id)` — the lightweight join key for the per-group health rollup
+    /// (site-matrix / region-rollup / geo-map widgets). Two columns only; the live state comes
+    /// from the in-memory alert engine, so the grouping happens in-process (PG holds no live
+    /// state). O(fleet) but a single indexed scan, computed server-side once per poll instead of
+    /// shipping the whole inventory to every dashboard client (which under-counted every group
+    /// past the first page — a correctness bug, S12/A-1).
+    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
+    /// Nodes whose name or address matches a case-insensitive substring (empty term ⇒ the first
+    /// page ordered by name), capped at `limit`. Backs the node-picker's server-side typeahead so
+    /// it never loads the whole inventory into the browser (ui-conventions: search is server-side
+    /// at fleet scale, A-2).
+    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>>;
 }
 
 #[async_trait]
@@ -121,6 +133,41 @@ impl NodeListing for NodeRepo {
         Ok(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
             .fetch_one(&self.pool)
             .await?)
+    }
+    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        let rows = sqlx::query("SELECT id, group_id FROM nodes")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("group_id")?)))
+            .collect()
+    }
+    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>> {
+        let limit = limit.clamp(1, 100);
+        // Parameterized ILIKE (security.md — never string-format user input into SQL); the `%`
+        // wildcards are concatenated in SQL so the term itself is a bound value. `host(address)`
+        // strips the netmask so an IP-substring search matches the displayed address.
+        let rows = if term.is_empty() {
+            sqlx::query(&format!(
+                "SELECT {} FROM nodes ORDER BY name, id LIMIT $1",
+                Self::NODE_COLUMNS
+            ))
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(&format!(
+                "SELECT {} FROM nodes \
+                 WHERE name ILIKE '%' || $1 || '%' OR host(address) ILIKE '%' || $1 || '%' \
+                 ORDER BY name, id LIMIT $2",
+                Self::NODE_COLUMNS
+            ))
+            .bind(term)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.iter().map(node_from_row).collect()
     }
 }
 
@@ -153,6 +200,33 @@ impl NodeListing for StaticNodeList {
     }
     async fn count(&self) -> anyhow::Result<i64> {
         Ok(self.0.len() as i64)
+    }
+    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        Ok(self
+            .0
+            .iter()
+            .map(|n| (n.id.as_uuid(), n.group.map(|g| g.as_uuid())))
+            .collect())
+    }
+    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>> {
+        let t = term.to_lowercase();
+        let mut nodes: Vec<Node> = self
+            .0
+            .iter()
+            .filter(|n| {
+                t.is_empty()
+                    || n.name.to_lowercase().contains(&t)
+                    || n.address.to_string().contains(&t)
+            })
+            .cloned()
+            .collect();
+        nodes.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then(a.id.as_uuid().cmp(&b.id.as_uuid()))
+        });
+        nodes.truncate(limit.clamp(1, 100) as usize);
+        Ok(nodes)
     }
 }
 
@@ -506,6 +580,28 @@ impl NodeRepo {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
+    }
+
+    /// A group's **direct** member nodes (or the ungrouped bucket when `group` is `None`), ordered
+    /// by the tree's sort order, capped at `limit`. Backs the inventory tree's per-group lazy load
+    /// (A-3): the tree fetches a group's members only when it is expanded, so the initial view never
+    /// pulls the whole fleet. `IS NOT DISTINCT FROM` so a `NULL` group matches the ungrouped rows.
+    pub async fn list_nodes_in_group(
+        &self,
+        group: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
+        let limit = limit.clamp(1, 5001);
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM nodes WHERE group_id IS NOT DISTINCT FROM $1::uuid \
+             ORDER BY sort_order, name, id LIMIT $2",
+            Self::NODE_COLUMNS
+        ))
+        .bind(group)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(node_from_row).collect()
     }
 
     /// Assign a node to `group` and set its order in one update (drag reorder). Returns existence.
@@ -1176,5 +1272,52 @@ impl NodeRepo {
             "seeded built-in collection templates + device profiles + classification rules"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn node(id: u128, name: &str, addr: &str, group: Option<u128>) -> Node {
+        let mut n = Node::new(
+            NodeId::from(Uuid::from_u128(id)),
+            name,
+            addr.parse::<IpAddr>().unwrap(),
+        );
+        n.group = group.map(|g| GroupId::from(Uuid::from_u128(g)));
+        n
+    }
+
+    #[tokio::test]
+    async fn static_node_list_node_group_map_reports_group_membership() {
+        let list = StaticNodeList(vec![
+            node(1, "a", "10.0.0.1", Some(100)),
+            node(2, "b", "10.0.0.2", None),
+        ]);
+        let map = list.node_group_map().await.unwrap();
+        assert!(map.contains(&(Uuid::from_u128(1), Some(Uuid::from_u128(100)))));
+        assert!(map.contains(&(Uuid::from_u128(2), None)));
+    }
+
+    #[tokio::test]
+    async fn static_node_list_search_matches_name_or_address_ordered_and_capped() {
+        let list = StaticNodeList(vec![
+            node(1, "tokyo-edge", "10.0.0.1", None),
+            node(2, "osaka-core", "10.0.0.2", None),
+            node(3, "nagoya-edge", "192.168.5.9", None),
+        ]);
+        // Name substring, case-insensitive.
+        assert_eq!(list.search("EDGE", 50).await.unwrap().len(), 2);
+        // Address substring.
+        let by_addr = list.search("192.168", 50).await.unwrap();
+        assert_eq!(by_addr.len(), 1);
+        assert_eq!(by_addr[0].name, "nagoya-edge");
+        // Empty term returns all, ordered by name and capped.
+        let capped = list.search("", 2).await.unwrap();
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
+        assert_eq!(capped[1].name, "osaka-core");
     }
 }

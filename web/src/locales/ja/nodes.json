@@ -32,6 +32,7 @@
     "groupCount": "{{count}} グループ",
     "needAttention": "要対応 {{count}}",
     "truncated": "最初の {{count}} ノードを表示しています。より大きなインベントリでは検索/フィルターをご利用ください (仮想化ツリー読み込みは対応予定です)。",
+    "groupTruncated": "一部の大きなグループはメンバーの一部のみ表示しています。特定のノードは検索でお探しください。",
     "searchPlaceholder": "検索…",
     "loadingInventory": "インベントリを読み込み中…",
     "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。"

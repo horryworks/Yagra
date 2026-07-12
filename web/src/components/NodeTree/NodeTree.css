@@ -222,6 +222,15 @@
   padding: 14px 6px;
 }
 
+/* Placeholder row while a group's members are lazily fetched (A-3). */
+.ntree-loading {
+  cursor: default;
+}
+.ntree-loading-label {
+  font-size: var(--font-sm);
+  font-style: italic;
+}
+
 /* Right-click context menu (HoTTY-style). */
 .ntree-menu {
   position: fixed;

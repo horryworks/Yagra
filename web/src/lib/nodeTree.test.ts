@@ -57,8 +57,8 @@ describe('flattenTree', () => {
     expect(g1.kind === 'group' && g1.depth).toBe(0);
     const g2 = rows[1];
     expect(g2.kind === 'group' && g2.depth).toBe(1);
-    // The group carries its rolled-up descendant members for the health bar / count.
-    expect(g1.kind === 'group' && g1.members.map((n) => n.id)).toEqual(['n1']);
+    // The group carries its rolled-up subtree health (here: the one descendant node) for the bar.
+    expect(g1.kind === 'group' && g1.tally.total).toBe(1);
   });
 
   it('collapsing a group hides its descendants but keeps the group row', () => {
@@ -84,6 +84,60 @@ describe('flattenTree', () => {
     const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
     const rows = flattenTree(t, { collapsed: {}, filter: '' });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+  });
+});
+
+describe('flattenTree lazy load (A-3)', () => {
+  const counts = (partial: Partial<Record<NodeState, number>>): Record<NodeState, number> => ({
+    ok: 0,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+    ...partial,
+  });
+
+  it('rolls a group row up from server counts and rolls sub-group counts into the parent', () => {
+    // Tokyo (g1) has a sub-group Rack A (g2); no members are loaded, only per-group direct counts.
+    const t = buildNodeTree([group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 2 }), g2: counts({ critical: 1 }) },
+      loadedGroups: new Set(),
+    });
+    const g1 = rows.find((r) => flatRowKey(r) === 'g:g1');
+    // Tokyo's subtree tally = its own 2 ok + Rack A's 1 critical.
+    expect(g1?.kind === 'group' && g1.tally.total).toBe(3);
+    expect(g1?.kind === 'group' && g1.tally.counts.critical).toBe(1);
+    expect(g1?.kind === 'group' && g1.hasChildren).toBe(true);
+  });
+
+  it('emits a loading placeholder for an open group whose members are not loaded', () => {
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(), // g1 not loaded
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'loading:g1', 'ungrouped-head']);
+  });
+
+  it('emits member rows once the group is loaded, and no loading row for an empty group', () => {
+    // Explicit sort_order pins the sibling order (g1 before g2) independent of name.
+    const t = buildNodeTree(
+      [group('g1', 'Tokyo', null, 1), group('g2', 'Empty', null, 2)],
+      [node('n1', 'sw1', 'g1')],
+    );
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 1 }), g2: counts({}) }, // g2 has no direct members
+      loadedGroups: new Set(['g1']), // g1 loaded, g2 not (but empty → no loading row)
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'g:g2', 'ungrouped-head']);
   });
 });
 

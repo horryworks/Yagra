@@ -23,7 +23,8 @@
     "loading": "Loading nodes…",
     "noMatch": "No matching nodes.",
     "listAria": "Nodes",
-    "more": "+{{count}} more — keep typing to narrow"
+    "more": "+{{count}} more — keep typing to narrow",
+    "capped": "Showing the first {{count}} — keep typing to narrow"
   },
   "range": {
     "timeRange": "Time range",

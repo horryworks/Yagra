@@ -7,17 +7,20 @@
 import { useTranslation } from 'react-i18next';
 import type { NodeSummary } from '../../types/api';
 import { stateColorVar, stateLabel } from '../../lib/format';
-import { STATE_ORDER, tallyStates } from '../../lib/nodeTree';
+import { STATE_ORDER, tallyStates, type StateTally } from '../../lib/nodeTree';
 import './HealthBar.css';
 
 interface Props {
-  nodes: NodeSummary[];
+  /** Node set to tally, OR pass a pre-computed `tally` (server per-group counts, A-3). One required. */
+  nodes?: NodeSummary[];
+  /** Pre-computed per-state tally — used instead of `nodes` (the tree's counts-driven rollup). */
+  tally?: StateTally;
   className?: string;
 }
 
-export function HealthBar({ nodes, className }: Props) {
+export function HealthBar({ nodes, tally, className }: Props) {
   const { t } = useTranslation();
-  const { counts, total } = tallyStates(nodes);
+  const { counts, total } = tally ?? tallyStates(nodes ?? []);
   const segments = STATE_ORDER.filter((s) => counts[s] > 0);
   const title = segments.map((s) => `${counts[s]} ${stateLabel(s)}`).join(' · ') || t('healthbar.noNodes');
   return (

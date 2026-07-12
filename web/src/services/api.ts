@@ -30,7 +30,9 @@ import type {
   EventRuleTestResult,
   EventSource,
   FleetCoverage,
+  FleetGroupSummary,
   FleetSummary,
+  GroupNodesResult,
   GroupType,
   InterfaceHeatmap,
   InterfaceRow,
@@ -55,6 +57,7 @@ import type {
   NodeGroup,
   NodeNameEntry,
   NodePage,
+  NodeSearchResult,
   NodeStatus,
   NodeSummary,
   NotificationChannel,
@@ -280,6 +283,26 @@ export const api = {
     ids.length === 0
       ? Promise.resolve([])
       : request<NodeNameEntry[]>('/node-names', jsonBody('POST', { ids })),
+
+  /** Server-side node search for the node-picker typeahead (A-2): match name or address by
+   *  case-insensitive substring, capped, so the picker never loads the whole inventory into the
+   *  browser. Empty `q` returns the first page ordered by name. */
+  searchNodes: (q: string, limit = 50): Promise<NodeSearchResult[]> => {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    params.set('limit', String(limit));
+    return request(`/nodes/search?${params.toString()}`);
+  },
+
+  /** A group's direct member nodes for the inventory tree's per-group lazy load (A-3). Pass a group
+   *  id, or omit `group` for the ungrouped bucket. Fetched only when a group is expanded, so the
+   *  tree never pulls the whole fleet up front. */
+  getGroupNodes: (group: string | null): Promise<GroupNodesResult> => {
+    const params = new URLSearchParams();
+    if (group) params.set('group', group);
+    const qs = params.toString();
+    return request(qs ? `/nodes/by-group?${qs}` : '/nodes/by-group');
+  },
 
   /** One keyset page of the inventory (for the virtualized node table). Pass the previous
    *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. */
@@ -874,6 +897,11 @@ export const api = {
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */
   getFleetSummary: (): Promise<FleetSummary> => request('/fleet/summary'),
+
+  /** Per-group health rollup (each group's direct-member state counts), computed server-side so the
+   *  site-matrix / region-rollup / geo-map widgets aggregate the whole fleet, not the first page of
+   *  nodes (A-1). The client joins these to the group tree for names/geo and sums descendants. */
+  getFleetGroupSummary: (): Promise<FleetGroupSummary> => request('/fleet/group-summary'),
 
   /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
   getFleetCoverage: (): Promise<FleetCoverage> => request('/fleet/coverage'),

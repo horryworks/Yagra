@@ -28,6 +28,23 @@ export function worstState(states: NodeState[]): NodeState {
   return 'ok';
 }
 
+/** A per-state tally of a group's direct members — the `fleet/group-summary` value shape (A-1). */
+export type StateCounts = Record<NodeState, number>;
+
+/** The worst (most severe) state present in a per-state tally, or `ok` when the group is empty.
+ *  The counts-driven twin of {@link worstState} for the server-side per-group rollup. */
+export function worstStateFromCounts(c: StateCounts): NodeState {
+  for (const s of SEVERITY_ORDER) {
+    if ((c[s] ?? 0) > 0) return s;
+  }
+  return 'ok';
+}
+
+/** Sum of every state count = the group's direct-member total. */
+export function countsTotal(c: StateCounts): number {
+  return SEVERITY_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
+}
+
 /** Count nodes by state. */
 export function stateCounts(nodes: NodeSummary[]): Record<NodeState, number> {
   const counts: Record<NodeState, number> = {
@@ -156,6 +173,45 @@ export function topLevelRollup(nodes: NodeSummary[], groups: NodeGroup[]): Regio
     if (!s) continue;
     s.total += 1;
     if (n.state === 'ok') s.up += 1;
+  }
+  for (const s of stats) s.pct = s.total > 0 ? Math.round((s.up / s.total) * 100) : 0;
+  return stats.filter((s) => s.total > 0);
+}
+
+/** Roll per-group DIRECT-member counts up to their top-level group (walking parent links), summing
+ *  % healthy per region. The counts-driven twin of {@link topLevelRollup}: it drives off the
+ *  server-side per-group tally (A-1) instead of a client-side node slice, so it aggregates the whole
+ *  fleet, not the first page. Sub-group counts attribute to their top-level ancestor; a group with
+ *  no resolvable top-level is ignored. Cycle-guarded. Returns only regions with ≥1 member. */
+export function topLevelRollupFromCounts(
+  counts: Record<string, StateCounts>,
+  groups: NodeGroup[],
+): RegionStat[] {
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const topOf = (gid: string): string | null => {
+    let cur: NodeGroup | undefined = byId.get(gid);
+    const seen = new Set<string>();
+    while (cur && cur.parent_id && byId.has(cur.parent_id)) {
+      if (seen.has(cur.id)) {
+        console.warn('topLevelRollupFromCounts: cycle in group hierarchy, stopping at', cur.id);
+        break;
+      }
+      seen.add(cur.id);
+      cur = byId.get(cur.parent_id);
+    }
+    return cur ? cur.id : null;
+  };
+  const stats = groups
+    .filter((g) => g.parent_id === null)
+    .map((t) => ({ id: t.id, name: t.name, total: 0, up: 0, pct: 0 }));
+  const statById = new Map(stats.map((s) => [s.id, s]));
+  for (const [gid, c] of Object.entries(counts)) {
+    const top = topOf(gid);
+    if (!top) continue;
+    const s = statById.get(top);
+    if (!s) continue;
+    s.total += countsTotal(c);
+    s.up += c.ok ?? 0;
   }
   for (const s of stats) s.pct = s.total > 0 ? Math.round((s.up / s.total) * 100) : 0;
   return stats.filter((s) => s.total > 0);

@@ -10,11 +10,15 @@ import {
   bucketAlertsByHour,
   buildForest,
   calendarMatrix,
+  countsTotal,
   downCount,
   percentHealthy,
+  type StateCounts,
   stateCounts,
   topLevelRollup,
+  topLevelRollupFromCounts,
   worstState,
+  worstStateFromCounts,
 } from './util';
 
 const node = (id: string, state: NodeSummary['state'], group_id: string | null = null): NodeSummary => ({
@@ -128,6 +132,56 @@ describe('calendarMatrix', () => {
     expect(m[0][0]).toBe(3);
     expect(m[6][23]).toBe(5);
     expect(m[3][12]).toBe(0); // zero-filled
+  });
+});
+
+// The server-side per-group value shape (A-1): every state key present.
+const counts = (partial: Partial<StateCounts>): StateCounts => ({
+  ok: 0,
+  warning: 0,
+  critical: 0,
+  unreachable: 0,
+  maintenance: 0,
+  unknown: 0,
+  ...partial,
+});
+
+describe('counts-driven roll-ups (server-side per-group summary, A-1)', () => {
+  it('worstStateFromCounts picks the worst present state, ok when empty', () => {
+    expect(worstStateFromCounts(counts({ ok: 3, warning: 1, critical: 2 }))).toBe('critical');
+    expect(worstStateFromCounts(counts({ ok: 2, unknown: 1 }))).toBe('unknown');
+    expect(worstStateFromCounts(counts({ ok: 1, maintenance: 1 }))).toBe('maintenance');
+    expect(worstStateFromCounts(counts({}))).toBe('ok');
+  });
+
+  it('countsTotal sums every state', () => {
+    expect(countsTotal(counts({ ok: 3, warning: 1, unreachable: 2 }))).toBe(6);
+    expect(countsTotal(counts({}))).toBe(0);
+  });
+
+  it('topLevelRollupFromCounts attributes sub-group counts to their top-level region', () => {
+    const groups = [group('tokyo'), group('rackA', 'tokyo'), group('osaka')];
+    const groupCounts: Record<string, StateCounts> = {
+      tokyo: counts({ ok: 1 }),
+      rackA: counts({ critical: 1 }), // sub-group rolls up to tokyo
+      osaka: counts({ ok: 1 }),
+    };
+    const stats = topLevelRollupFromCounts(groupCounts, groups);
+    const tokyo = stats.find((s) => s.id === 'tokyo')!;
+    const osaka = stats.find((s) => s.id === 'osaka')!;
+    expect(tokyo.total).toBe(2);
+    expect(tokyo.up).toBe(1);
+    expect(tokyo.pct).toBe(50);
+    expect(osaka.pct).toBe(100);
+    // Only regions with members are returned.
+    expect(stats.every((s) => s.total > 0)).toBe(true);
+  });
+
+  it('topLevelRollupFromCounts ignores counts for orphan groups (no top-level ancestor)', () => {
+    // A group whose id isn't in the group list resolves to no top-level → contributes nothing.
+    const groups = [group('tokyo')];
+    const stats = topLevelRollupFromCounts({ ghost: counts({ critical: 5 }) }, groups);
+    expect(stats).toEqual([]);
   });
 });
 

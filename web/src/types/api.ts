@@ -115,6 +115,23 @@ export interface NodeNameEntry {
   name: string;
 }
 
+/** One node-picker search hit (`GET /api/v1/nodes/search`): id + display name + address only —
+ *  enough to show and select a node without loading the whole inventory client-side (A-2). */
+export interface NodeSearchResult {
+  id: string;
+  name: string;
+  address: string;
+}
+
+/** One group's direct member nodes (`GET /api/v1/nodes/by-group?group=<id>`; absent group ⇒ the
+ *  ungrouped bucket). The inventory tree lazy-loads a group's members only when it is expanded, so
+ *  the initial view never pulls the whole fleet (A-3). `truncated` ⇒ the group exceeded the load
+ *  backstop (a pathologically large flat group). */
+export interface GroupNodesResult {
+  nodes: NodeSummary[];
+  truncated: boolean;
+}
+
 /** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
 export type GroupType = 'site' | 'region' | 'device_type' | 'service' | 'generic';
 
@@ -767,6 +784,15 @@ export interface FleetCoverage {
 export interface FleetSummary {
   total: number;
   states: Record<NodeState, number>;
+}
+
+/** Per-group health rollup (`GET /api/v1/fleet/group-summary`): for each group id, the state tally
+ *  of its **direct** member nodes, computed server-side over the whole fleet (not a paged slice) so
+ *  the site-matrix / region-rollup / geo-map widgets stay correct past the first 100 nodes (A-1).
+ *  Every state key is present; ungrouped nodes are omitted (no widget rolls them up), and the client
+ *  sums descendants for the region rollup. */
+export interface FleetGroupSummary {
+  groups: Record<string, Record<NodeState, number>>;
 }
 
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */

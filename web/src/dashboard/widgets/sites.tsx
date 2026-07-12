@@ -1,39 +1,45 @@
-// 04 · Sites & topology widgets. Both are computed entirely client-side from the shared node
-// list joined to the node-group tree — no new endpoint. Site matrix = a tile per group (worst
-// member state + up/total); region rollup = % healthy per top-level group, as ranked bars.
+// 04 · Sites & topology widgets. Each computes from the server-side per-group health rollup
+// (`useGroupSummary`, A-1) joined to the node-group tree — so they aggregate the WHOLE fleet per
+// group, not the first page of a node slice (the old `useNodes()` path under-counted every group
+// past the first 100 nodes). Site matrix = a tile per group (worst direct-member state + up/total);
+// region rollup = % healthy per top-level group summing descendants; geo map = a pin per placed
+// group coloured by its direct members' worst state.
 
 import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../../lib/format';
 import { api } from '../../services/api';
 import { RankedBars } from '../primitives/RankedBars';
-import { useNodes } from '../useNodes';
+import { useGroupSummary } from '../useGroupSummary';
 import { usePolled } from '../usePolled';
-import { topLevelRollup, worstState } from './util';
+import { countsTotal, topLevelRollupFromCounts, worstStateFromCounts } from './util';
 
 export function SiteHealthMatrixWidget() {
   const { t } = useTranslation('dashboard');
-  const { nodes, loading, error } = useNodes();
+  const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
   if (error || groups.error) return <p className="muted">{t('widgets.siteMatrix.error')}</p>;
-  if ((loading && nodes.length === 0) || (groups.loading && !groups.data)) {
+  if ((loading && !summary) || (groups.loading && !groups.data)) {
     return <p className="muted">{t('common:loading')}</p>;
   }
+  const counts = summary?.groups ?? {};
   const tiles = (groups.data ?? [])
-    .map((g) => ({ id: g.id, name: g.name, members: nodes.filter((n) => n.group_id === g.id) }))
-    .filter((tile) => tile.members.length > 0);
+    .map((g) => ({ id: g.id, name: g.name, c: counts[g.id] }))
+    .filter((tile) => tile.c != null && countsTotal(tile.c) > 0);
   if (tiles.length === 0) return <p className="muted">{t('widgets.siteMatrix.empty')}</p>;
   return (
     <div className="matrix">
       {tiles.map((tile) => {
-        const worst = worstState(tile.members.map((m) => m.state));
-        const up = tile.members.filter((m) => m.state === 'ok').length;
+        const c = tile.c!;
+        const worst = worstStateFromCounts(c);
+        const up = c.ok ?? 0;
+        const total = countsTotal(c);
         return (
           <div className="matrix-tile" key={tile.id} title={`${tile.name}: ${stateLabel(worst)}`}>
             <span className="matrix-bar" style={{ background: stateColorVar(worst) }} />
             <span className="matrix-info">
               <span className="matrix-name">{tile.name}</span>
               <span className="matrix-count mono">
-                {up}/{tile.members.length}
+                {up}/{total}
               </span>
             </span>
           </div>
@@ -45,13 +51,13 @@ export function SiteHealthMatrixWidget() {
 
 export function RegionRollupWidget() {
   const { t } = useTranslation('dashboard');
-  const { nodes, loading, error } = useNodes();
+  const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
   if (error || groups.error) return <p className="muted">{t('widgets.regionRollup.error')}</p>;
-  if ((loading && nodes.length === 0) || (groups.loading && !groups.data)) {
+  if ((loading && !summary) || (groups.loading && !groups.data)) {
     return <p className="muted">{t('common:loading')}</p>;
   }
-  const regions = topLevelRollup(nodes, groups.data ?? []);
+  const regions = topLevelRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
   const rows = regions
     .sort((a, b) => a.pct - b.pct) // worst-first so problems surface at the top
     .map((r) => ({
@@ -71,12 +77,13 @@ export function RegionRollupWidget() {
 
 export function GeoMapWidget() {
   const { t } = useTranslation('dashboard');
-  const { nodes, loading, error } = useNodes();
+  const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
   if (error || groups.error) return <p className="muted">{t('widgets.geoMap.error')}</p>;
-  if ((loading && nodes.length === 0) || (groups.loading && !groups.data)) {
+  if ((loading && !summary) || (groups.loading && !groups.data)) {
     return <p className="muted">{t('common:loading')}</p>;
   }
+  const counts = summary?.groups ?? {};
   const placed = (groups.data ?? []).filter(
     (g) => g.latitude != null && g.longitude != null,
   );
@@ -95,8 +102,9 @@ export function GeoMapWidget() {
   return (
     <div className="geo" role="img" aria-label={t('widgets.geoMap.aria')}>
       {placed.map((g) => {
-        const members = nodes.filter((n) => n.group_id === g.id);
-        const worst = worstState(members.map((m) => m.state));
+        const c = counts[g.id];
+        const worst = c ? worstStateFromCounts(c) : 'ok';
+        const count = c ? countsTotal(c) : 0;
         const x = 6 + norm(g.longitude as number, minLon, maxLon) * 88;
         const y = 6 + (1 - norm(g.latitude as number, minLat, maxLat)) * 88;
         return (
@@ -106,7 +114,7 @@ export function GeoMapWidget() {
             title={t('widgets.geoMap.pinTitle', {
               name: g.name,
               state: stateLabel(worst),
-              count: members.length,
+              count,
             })}
             style={{ left: `${x}%`, top: `${y}%`, background: stateColorVar(worst) }}
           />

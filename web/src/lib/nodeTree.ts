@@ -71,9 +71,14 @@ export type FlatRow =
       group: TreeGroup;
       isOpen: boolean;
       hasChildren: boolean;
-      members: NodeSummary[];
+      /** Rolled-up health of the group's whole subtree — from the server per-group counts when
+       *  supplied (A-3 lazy load, correct over the whole fleet even before members load), else from
+       *  the loaded descendant members. Drives the row's health bar + member count. */
+      tally: StateTally;
     }
   | { kind: 'node'; depth: number; node: NodeSummary }
+  /** Placeholder under an open group whose members haven't been lazily fetched yet (A-3). */
+  | { kind: 'group-loading'; depth: number; groupId: string }
   | { kind: 'ungrouped-head'; count: number }
   | { kind: 'ungrouped-node'; depth: number; node: NodeSummary };
 
@@ -85,6 +90,8 @@ export function flatRowKey(row: FlatRow): string {
     case 'node':
     case 'ungrouped-node':
       return `n:${row.node.id}`;
+    case 'group-loading':
+      return `loading:${row.groupId}`;
     case 'ungrouped-head':
       return 'ungrouped-head';
   }
@@ -101,14 +108,30 @@ function subtreeMatches(group: TreeGroup, q: string): boolean {
 /** Flatten the visible rows of the inventory tree in display order, honouring collapse state and
  *  the name filter — the single source of truth the virtualized `NodeTree` renders. Collapsed
  *  groups omit their descendants; while filtering, every group is force-expanded and non-matching
- *  rows are hidden. Pure (no React) so the ordering/visibility rules are unit-tested directly. */
+ *  rows are hidden. Pure (no React) so the ordering/visibility rules are unit-tested directly.
+ *
+ *  Lazy load (A-3): when `groupCounts` (server per-group direct counts) is supplied, group rows roll
+ *  up from those — correct over the whole fleet even before members are fetched. `loadedGroups` says
+ *  which groups' members have been fetched; an open group that isn't loaded yet emits a single
+ *  `group-loading` placeholder instead of its members. Omit both for the legacy full-node path
+ *  (rollup from loaded descendants, every group treated as loaded). */
 export function flattenTree(
   tree: NodeTreeData,
-  opts: { collapsed: Record<string, boolean>; filter: string },
+  opts: {
+    collapsed: Record<string, boolean>;
+    filter: string;
+    groupCounts?: Record<string, StateCounts>;
+    loadedGroups?: Set<string>;
+  },
 ): FlatRow[] {
   const q = opts.filter.trim().toLowerCase();
   const filtering = q.length > 0;
   const rows: FlatRow[] = [];
+  const counts = opts.groupCounts;
+  // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
+  const subtree = counts ? subtreeTallyMap(tree.roots, counts) : null;
+  // Filter mode full-loads the inventory, so every group's members are present — no loading rows.
+  const isLoaded = (id: string) => filtering || !opts.loadedGroups || opts.loadedGroups.has(id);
 
   const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
     const selfMatch = filtering && group.name.toLowerCase().includes(q);
@@ -117,11 +140,20 @@ export function flattenTree(
     if (filtering && !effMatch && !subtreeMatches(group, q)) return;
 
     const isOpen = filtering ? true : !opts.collapsed[group.id];
-    const hasChildren = group.children.length + group.nodes.length > 0;
-    rows.push({ kind: 'group', depth, group, isOpen, hasChildren, members: descendantNodes(group) });
+    const tally = subtree ? subtree.get(group.id) ?? tallyFromCounts(emptyCounts())
+                          : tallyStates(descendantNodes(group));
+    const directTotal = counts ? countsTotal(counts[group.id] ?? emptyCounts()) : group.nodes.length;
+    // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it.
+    const hasChildren = group.children.length > 0 || tally.total > 0;
+    rows.push({ kind: 'group', depth, group, isOpen, hasChildren, tally });
     if (!isOpen) return;
     // Children first, then this group's own member nodes — matching the recursive render order.
     for (const child of group.children) walkGroup(child, depth + 1, effMatch);
+    if (!isLoaded(group.id)) {
+      // Members not fetched yet: a single loading placeholder when the group actually has some.
+      if (directTotal > 0) rows.push({ kind: 'group-loading', depth: depth + 1, groupId: group.id });
+      return;
+    }
     for (const n of group.nodes) {
       if (!filtering || effMatch || n.name.toLowerCase().includes(q)) {
         rows.push({ kind: 'node', depth: depth + 1, node: n });
@@ -186,6 +218,56 @@ export function tallyStates(nodes: NodeSummary[]): StateTally {
     if (PROBLEM_STATES.has(n.state)) needAttention += 1;
   }
   return { counts, total: nodes.length, needAttention };
+}
+
+/** A raw per-state count object — the `/fleet/group-summary` value shape (server per-group rollup,
+ *  A-1/A-3). Structurally identical to `StateTally.counts`. */
+export type StateCounts = Record<NodeState, number>;
+
+/** A zero-filled per-state count object. */
+function emptyCounts(): StateCounts {
+  return { ok: 0, warning: 0, critical: 0, unreachable: 0, maintenance: 0, unknown: 0 };
+}
+
+/** Sum of every state count in a per-state tally. */
+export function countsTotal(c: StateCounts): number {
+  return STATE_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
+}
+
+/** Build a `StateTally` (counts + total + need-attention) from a raw per-state count object — the
+ *  counts-driven twin of {@link tallyStates}, for the server-side per-group rollup (A-1/A-3). */
+export function tallyFromCounts(counts: StateCounts): StateTally {
+  let total = 0;
+  let needAttention = 0;
+  for (const s of STATE_ORDER) {
+    const n = counts[s] ?? 0;
+    total += n;
+    if (PROBLEM_STATES.has(s)) needAttention += n;
+  }
+  return { counts, total, needAttention };
+}
+
+/** Roll each group's DIRECT member counts up its subtree, yielding a per-group DESCENDANT tally
+ *  (the whole subtree's health) from the server per-group direct counts (A-3). Bottom-up over the
+ *  built tree, which is acyclic (each group appears once), so no cycle guard is needed. */
+function subtreeTallyMap(
+  roots: TreeGroup[],
+  counts: Record<string, StateCounts>,
+): Map<string, StateTally> {
+  const out = new Map<string, StateTally>();
+  const visit = (g: TreeGroup): StateCounts => {
+    const acc = emptyCounts();
+    const own = counts[g.id];
+    if (own) for (const s of STATE_ORDER) acc[s] += own[s] ?? 0;
+    for (const child of g.children) {
+      const sub = visit(child);
+      for (const s of STATE_ORDER) acc[s] += sub[s];
+    }
+    out.set(g.id, tallyFromCounts(acc));
+    return acc;
+  };
+  for (const r of roots) visit(r);
+  return out;
 }
 
 /** The chain of group names from the top-level ancestor down to `groupId` (inclusive), for the
