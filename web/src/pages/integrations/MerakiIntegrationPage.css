@@ -2,14 +2,14 @@
    no hardcoded colors so light/dark both work. */
 
 .meraki-killswitch-card {
-  margin-bottom: var(--space-4, 16px);
+  margin-bottom: var(--space-4);
 }
 
 .meraki-switch {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--text-primary);
   cursor: pointer;
 }
@@ -34,8 +34,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
   background: var(--bg-secondary);
   flex-wrap: wrap;
 }
@@ -49,7 +49,7 @@
 }
 
 .meraki-org-name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--text-primary);
 }
 

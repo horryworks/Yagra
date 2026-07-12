@@ -42,9 +42,9 @@ pub use meraki::{
     METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB, PROFILE_MERAKI_MR_API,
     PROFILE_MERAKI_MS_API, PROFILE_MERAKI_MX_API,
 };
-pub use metric::{MetricKind, SeriesKey};
+pub use metric::{is_valid_metric_name, MetricKind, SeriesKey};
 pub use node::Node;
-pub use profile::{Profile, ProfileCategory};
+pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope};
 pub use severity::Severity;
 pub use state::NodeState;

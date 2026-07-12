@@ -120,10 +120,18 @@ services:
     restart: unless-stopped
 
   # ── Yagra-web (web/) — WebUI ──
+  # TLS: the UI/API carries the login password, bearer tokens, and (pre-encryption) plaintext
+  # device credentials. Before exposing this port beyond a trusted LAN, front it with HTTPS —
+  # either an external reverse proxy or the in-container TLS block in web/nginx.conf. Do NOT
+  # publish this plain-HTTP port (or core's :8080) to an untrusted network without it.
   web:
     image: ghcr.io/horryworks/yagra-web:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
-    depends_on: [core]
+    # Wait for core to actually serve (its image HEALTHCHECK probes /healthz), not just to start —
+    # nginx proxies /api to it, so starting before core is ready would 502 the first requests.
+    depends_on:
+      core:
+        condition: service_healthy
     ports:
       - "${YAGRA_WEB_PORT:-3000}:8080"   # container listens on 8080 (rootless nginx-unprivileged)
     restart: unless-stopped

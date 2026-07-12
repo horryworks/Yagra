@@ -7,8 +7,6 @@
 //! themselves nest via `parent`. A node's effective thresholds resolve across
 //! profile → group → node (ADR-013); this type carries only the profile-level contribution.
 
-use crate::ids::ProfileId;
-use crate::thresholds::ThresholdRule;
 use serde::{Deserialize, Serialize};
 
 /// The functional role of a device class — the primary split axis for profiles and the
@@ -85,55 +83,9 @@ impl ProfileCategory {
     }
 }
 
-/// A device-class / profile.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Profile {
-    /// Stable identity.
-    pub id: ProfileId,
-    /// Human-readable name (e.g. "Cisco IOS/IOS-XE router").
-    pub name: String,
-    /// Functional role — the primary split axis / UI grouping.
-    pub category: ProfileCategory,
-    /// Vendor label (e.g. "Cisco"). Descriptive metadata only — never a TSDB label.
-    pub vendor: Option<String>,
-    /// Parent profile to inherit from, if any.
-    pub parent: Option<ProfileId>,
-    /// Default thresholds contributed at the profile scope.
-    pub thresholds: Vec<ThresholdRule>,
-}
-
-impl Profile {
-    /// A new generic profile with no parent and no thresholds.
-    #[must_use]
-    pub fn new(id: ProfileId, name: impl Into<String>) -> Self {
-        Self {
-            id,
-            name: name.into(),
-            category: ProfileCategory::default(),
-            vendor: None,
-            parent: None,
-            thresholds: Vec::new(),
-        }
-    }
-
-    /// Whether this profile inherits from another.
-    #[must_use]
-    pub const fn is_root(&self) -> bool {
-        self.parent.is_none()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn new_profile_is_root_without_thresholds() {
-        let p = Profile::new(ProfileId::new(), "Cisco router");
-        assert!(p.is_root());
-        assert!(p.thresholds.is_empty());
-        assert_eq!(p.category, ProfileCategory::GenericSnmp);
-    }
 
     #[test]
     fn category_token_roundtrips() {

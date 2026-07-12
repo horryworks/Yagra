@@ -13,10 +13,13 @@ interface Props {
   onClose: () => void;
   /** Footer actions, right-aligned (e.g. Cancel + Confirm). */
   footer?: ReactNode;
+  /** Dialog width. `default` is the standard 520px form width; `wide` (~880px) is for content-heavy
+   *  dialogs like the report viewer. Mobile always renders full-width (bottom sheet). */
+  size?: 'default' | 'wide';
   children: ReactNode;
 }
 
-export function Modal({ title, onClose, footer, children }: Props) {
+export function Modal({ title, onClose, footer, size = 'default', children }: Props) {
   const { t } = useTranslation('common');
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -48,7 +51,7 @@ export function Modal({ title, onClose, footer, children }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal"
+        className={size === 'wide' ? 'modal modal-wide' : 'modal'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

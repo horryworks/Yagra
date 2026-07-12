@@ -259,8 +259,9 @@ function Sparkline({
     <span className="nd-if-spark-wrap" ref={ref}>
       {path ? (
         <svg className="nd-if-spark-svg" viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none">
-          <path d={path.area} fill={SERIES_IN} opacity="0.12" />
-          <path d={path.line} fill="none" stroke={SERIES_IN} strokeWidth="1.4" />
+          {/* var() resolves in CSS (inline style), not in an SVG presentation attribute. */}
+          <path d={path.area} style={{ fill: SERIES_IN }} opacity="0.12" />
+          <path d={path.line} style={{ fill: 'none', stroke: SERIES_IN }} strokeWidth="1.4" />
         </svg>
       ) : (
         <span className="nd-if-spark-empty" />

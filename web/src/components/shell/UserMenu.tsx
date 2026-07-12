@@ -28,7 +28,9 @@ export function UserMenu() {
   }, []);
 
   const logout = () => {
-    api.logout();
+    // Fire the server-side revoke (request() captures the token synchronously before it's
+    // cleared); the local UI state clears immediately without waiting on the round-trip.
+    void api.logout();
     setAuthed(false);
     setRole(null);
     setOpen(false);

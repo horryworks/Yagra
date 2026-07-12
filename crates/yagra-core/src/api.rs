@@ -11,7 +11,9 @@ use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, AnalysisTool, JobParams, ScopeKind};
 use crate::audit::AuditRepo;
-use crate::auth::{AuthError, SessionStore, UserCreateOutcome, UserMutation, UserStore};
+use crate::auth::{
+    AuthError, LoginThrottle, SessionStore, UserCreateOutcome, UserMutation, UserStore,
+};
 use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::coordinator::{Coordinator, PollerView};
@@ -32,7 +34,10 @@ use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore,
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    http::{
+        header::{self, AUTHORIZATION},
+        HeaderMap, HeaderValue, StatusCode,
+    },
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -146,6 +151,8 @@ pub struct ApiState {
     pub admin: Option<Arc<AdminState>>,
     /// Bearer-token sessions for local auth.
     pub sessions: Arc<SessionStore>,
+    /// Brute-force guard for `POST /auth/login` (per-account lockout + global rate cap).
+    pub login_throttle: Arc<LoginThrottle>,
     /// Alert history (read); `None` in skeleton mode.
     pub history: Option<Arc<AlertHistoryStore>>,
     /// Inbound ack reflection from external tools (read-only display, ADR-015); `None` in
@@ -293,6 +300,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/users/:id/enabled", put(set_user_status))
         .route("/api/v1/users/:id/password", put(set_user_password))
         .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/alerts", get(list_alerts))
@@ -660,11 +668,15 @@ fn is_valid_metric_name(metric: &str) -> bool {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-/// Keyset pagination query for the node list.
+/// Keyset pagination query for the node list. An optional `search` substring switches the endpoint
+/// into server-side name/address search mode (capped, single page, no cursor) — so the Nodes tree's
+/// filter never full-loads the fleet into the browser (ui-conventions: search is server-side at
+/// scale). Both modes return full `NodeSummary` rows so the tree can nest + color them.
 #[derive(Deserialize)]
 struct NodePageQuery {
     cursor: Option<Uuid>,
     limit: Option<i64>,
+    search: Option<String>,
 }
 
 /// Cap on one batch name-resolution request so a client can't force an unbounded `IN (…)` query.
@@ -731,10 +743,11 @@ struct NodeSearchResult {
 }
 
 /// Server-side node search for the node-picker typeahead (A-2): match the name or address by
-/// case-insensitive substring, capped, so the picker never loads the whole inventory into the
-/// browser (ui-conventions: search is server-side at fleet scale — this was the last client-side
-/// full-load path, previously ~5,000 nodes). View-gated, read-only; routes through the shared
-/// `NodeListing` so it also works in skeleton mode. Only id/name/address leave the server.
+/// case-insensitive substring, capped, so a picker never loads the whole inventory into the browser
+/// (ui-conventions: search is server-side at fleet scale). Now also backs the Nodes tree name filter
+/// and the Troubleshoot scope picker, which previously full-loaded the fleet client-side.
+/// View-gated, read-only; routes through the shared `NodeListing` so it also works in skeleton mode.
+/// Only id/name/address leave the server.
 async fn search_nodes(
     State(st): State<ApiState>,
     headers: HeaderMap,
@@ -773,6 +786,21 @@ async fn list_nodes(
         return resp;
     }
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    // Search mode: a non-empty `search` filters by name/address server-side and returns a single
+    // capped page (no keyset cursor) — the tree's filter searches the fleet without loading it.
+    if let Some(term) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return match st.nodes.search(term, limit).await {
+            Ok(nodes) => {
+                let out = build_node_summaries(&st, nodes).await;
+                Json(serde_json::json!({ "nodes": out, "next_cursor": serde_json::Value::Null }))
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to search nodes for list");
+                internal("failed to list nodes")
+            }
+        };
+    }
     // Fetch one extra row to tell "exactly a full page" from "a full page with more after it",
     // so the client never makes a trailing request that returns an empty page at the boundary.
     match st.nodes.list_page(q.cursor, limit + 1).await {
@@ -1792,13 +1820,16 @@ async fn interface_heatmap(
         .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, limit)
         .await;
     let entries = build_interface_entries(&st, top).await;
+    // The per-link throughput queries are independent (bounded ≤ 20), so fan them out concurrently
+    // rather than awaiting one link at a time — one round-trip of latency instead of N.
+    let ranges = futures::future::join_all(entries.iter().map(|e| {
+        st.store
+            .interface_throughput_range(e.node_id, e.ifindex, from, to, step)
+    }))
+    .await;
     let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     let mut per_link: Vec<(String, std::collections::HashMap<i64, f64>)> = Vec::new();
-    for e in &entries {
-        let pts = st
-            .store
-            .interface_throughput_range(e.node_id, e.ifindex, from, to, step)
-            .await;
+    for (e, pts) in entries.iter().zip(ranges) {
         let mut m = std::collections::HashMap::new();
         for p in pts {
             union.insert(p.t);
@@ -2401,38 +2432,32 @@ async fn host_metric_range(
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
     let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
     let store = &st.store;
-    let cpu_pct = store
-        .host_metric_range(&instance, "cpu_pct", from, to, step)
-        .await;
-    let load1 = store
-        .host_metric_range(&instance, "load1", from, to, step)
-        .await;
-    let load5 = store
-        .host_metric_range(&instance, "load5", from, to, step)
-        .await;
-    let load15 = store
-        .host_metric_range(&instance, "load15", from, to, step)
-        .await;
-    let mem_used_bytes = store
-        .host_metric_range(&instance, "mem_used_bytes", from, to, step)
-        .await;
-    let mem_total_bytes = store
-        .host_metric_range(&instance, "mem_total_bytes", from, to, step)
-        .await;
-    let mut disks = Vec::with_capacity(mounts.len());
-    for mount in mounts {
-        let used_bytes = store
-            .host_disk_range(&instance, "fs_used_bytes", &mount, from, to, step)
-            .await;
-        let size_bytes = store
-            .host_disk_range(&instance, "fs_size_bytes", &mount, from, to, step)
-            .await;
-        disks.push(HostDiskRange {
-            mount,
-            used_bytes,
-            size_bytes,
-        });
-    }
+    // The six scalar host series and each mount's two disk series are all independent range
+    // queries — fan them all out concurrently (this backs the 15s System Health refresh).
+    let (cpu_pct, load1, load5, load15, mem_used_bytes, mem_total_bytes) = tokio::join!(
+        store.host_metric_range(&instance, "cpu_pct", from, to, step),
+        store.host_metric_range(&instance, "load1", from, to, step),
+        store.host_metric_range(&instance, "load5", from, to, step),
+        store.host_metric_range(&instance, "load15", from, to, step),
+        store.host_metric_range(&instance, "mem_used_bytes", from, to, step),
+        store.host_metric_range(&instance, "mem_total_bytes", from, to, step),
+    );
+    let disks = futures::future::join_all(mounts.into_iter().map(|mount| {
+        let store = &st.store;
+        let instance = &instance;
+        async move {
+            let (used_bytes, size_bytes) = tokio::join!(
+                store.host_disk_range(instance, "fs_used_bytes", &mount, from, to, step),
+                store.host_disk_range(instance, "fs_size_bytes", &mount, from, to, step),
+            );
+            HostDiskRange {
+                mount,
+                used_bytes,
+                size_bytes,
+            }
+        }
+    }))
+    .await;
     Json(HostMetricRange {
         instance,
         cpu_pct,
@@ -3719,15 +3744,34 @@ async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Respo
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
+    // Brute-force guard: refuse (without touching Argon2) if this account is locked out or the
+    // global attempt-rate cap is spent. Audited so a guessing run is visible.
+    if let Err(reject) = st.login_throttle.check(&body.username) {
+        audit_record(&admin.audit, &body.username, "auth.login", 429).await;
+        let mut resp = error_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attempts",
+            format!(
+                "too many login attempts; retry in {} seconds",
+                reject.retry_after_secs
+            ),
+        );
+        if let Ok(v) = HeaderValue::from_str(&reject.retry_after_secs.to_string()) {
+            resp.headers_mut().insert(header::RETRY_AFTER, v);
+        }
+        return resp;
+    }
     match admin.users.verify(&body.username, &body.password).await {
-        Ok(Some(principal)) => {
+        Ok(Some((user_id, principal))) => {
+            st.login_throttle.record_success(&body.username);
             let role = principal.role;
-            let token = st.sessions.issue(principal, &body.username);
+            let token = st.sessions.issue(user_id, principal, &body.username);
             // Auth events are audited with the username only — never the credential.
             audit_record(&admin.audit, &body.username, "auth.login", 200).await;
             Json(serde_json::json!({ "token": token, "role": role })).into_response()
         }
         Ok(None) => {
+            st.login_throttle.record_failure(&body.username);
             audit_record(&admin.audit, &body.username, "auth.login", 401).await;
             error_response(
                 StatusCode::UNAUTHORIZED,
@@ -3740,6 +3784,15 @@ async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Respo
             internal("login failed")
         }
     }
+}
+
+/// Server-side logout: revoke the caller's bearer token so it can't be reused. Idempotent — an
+/// absent or already-revoked token still returns 204.
+async fn logout(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(token) = bearer(&headers) {
+        st.sessions.revoke_token(token);
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
@@ -7838,24 +7891,21 @@ async fn list_node_interfaces(
             return internal("failed to list interfaces");
         }
     };
-    let node = NodeId::from(node_id);
     let now = now_unix_s();
+    // One batched fetch for the whole node (3 TSDB round-trips), not 3 queries per interface — a
+    // 48-port switch refreshing for every open client would otherwise be ~150 sequential queries.
+    let live = st
+        .store
+        .node_interface_live(node_id, DEFAULT_RATE_LOOKBACK_SECS)
+        .await;
     let mut out = Vec::with_capacity(metas.len());
     for m in metas {
         let ifindex = u32::try_from(m.ifindex).unwrap_or(0);
-        let key = |metric: &str| SeriesKey::interface(node, IfIndex(ifindex), metric);
+        let l = live.get(&m.ifindex).copied().unwrap_or_default();
         // Octet counters are bytes/sec via rate(); ×8 ⇒ bits/sec.
-        let in_bps = st
-            .store
-            .rate(&key("if_hc_in_octets"), DEFAULT_RATE_LOOKBACK_SECS)
-            .await
-            .map(|r| r * 8.0);
-        let out_bps = st
-            .store
-            .rate(&key("if_hc_out_octets"), DEFAULT_RATE_LOOKBACK_SECS)
-            .await
-            .map(|r| r * 8.0);
-        let oper_status = st.store.latest(&key("if_oper_status")).await;
+        let in_bps = l.in_bps.map(|r| r * 8.0);
+        let out_bps = l.out_bps.map(|r| r * 8.0);
+        let oper_status = l.oper_status;
         let speed = m.if_speed.filter(|s| *s > 0);
         let util = |bps: Option<f64>| match (bps, speed) {
             (Some(b), Some(s)) => Some(b / s as f64 * 100.0),
@@ -7911,22 +7961,21 @@ async fn get_interface_series(
     let step = clamp_range_step(from, to, q.step.unwrap_or((span / 120).max(60)), 1);
     let lookback = (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS);
 
-    let in_oct = st
-        .store
-        .rate_range(&key("if_hc_in_octets"), from, to, step, lookback)
-        .await;
-    let out_oct = st
-        .store
-        .rate_range(&key("if_hc_out_octets"), from, to, step, lookback)
-        .await;
-    let in_err = st
-        .store
-        .rate_range(&key("if_in_errors"), from, to, step, lookback)
-        .await;
-    let out_err = st
-        .store
-        .rate_range(&key("if_out_errors"), from, to, step, lookback)
-        .await;
+    // The four series are independent range queries — fan them out concurrently (this endpoint
+    // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
+    // they outlive the joined futures.
+    let (k_in, k_out, k_ierr, k_oerr) = (
+        key("if_hc_in_octets"),
+        key("if_hc_out_octets"),
+        key("if_in_errors"),
+        key("if_out_errors"),
+    );
+    let (in_oct, out_oct, in_err, out_err) = tokio::join!(
+        st.store.rate_range(&k_in, from, to, step, lookback),
+        st.store.rate_range(&k_out, from, to, step, lookback),
+        st.store.rate_range(&k_ierr, from, to, step, lookback),
+        st.store.rate_range(&k_oerr, from, to, step, lookback),
+    );
 
     // Shared x-axis = the union of all returned timestamps; align each series onto it.
     let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
@@ -8050,7 +8099,11 @@ async fn delete_user(
         return resp;
     }
     match admin.users.delete(id).await {
-        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::Done) => {
+            // Drop any live sessions the deleted account still holds.
+            st.sessions.revoke_user(id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
         Ok(UserMutation::LastAdmin) => last_admin(),
         Err(e) => {
@@ -8086,7 +8139,12 @@ async fn set_user_role(
         );
     }
     match admin.users.set_role(id, &body.role).await {
-        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::Done) => {
+            // Force re-login so the new role's permissions take effect immediately (the old
+            // principal is cached in the session).
+            st.sessions.revoke_user(id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
         Ok(UserMutation::LastAdmin) => last_admin(),
         Err(e) => {
@@ -8115,7 +8173,14 @@ async fn set_user_status(
         return resp;
     }
     match admin.users.set_enabled(id, body.enabled).await {
-        Ok(UserMutation::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(UserMutation::Done) => {
+            // Disabling an account must also cut its live sessions (the whole point of disabling a
+            // compromised account); enabling has nothing to revoke.
+            if !body.enabled {
+                st.sessions.revoke_user(id);
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
         Ok(UserMutation::LastAdmin) => last_admin(),
         Err(e) => {
@@ -8151,7 +8216,12 @@ async fn set_user_password(
         );
     }
     match admin.users.set_password(id, &body.password).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            // A password reset (e.g. after a compromise) must invalidate existing sessions, or the
+            // attacker's stolen token survives the reset.
+            st.sessions.revoke_user(id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => not_found("user_not_found", format!("no user {id}")),
         Err(e) => {
             tracing::error!(error = %e, "reset user password failed");
@@ -8698,6 +8768,7 @@ mod tests {
             host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions: Arc::new(SessionStore::new()),
+            login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
             events: None,
@@ -8709,7 +8780,11 @@ mod tests {
     fn private_state_with(store: Arc<dyn MetricStore>) -> (ApiState, String) {
         use yagra_common::{Principal, Role, Scope};
         let sessions = Arc::new(SessionStore::new());
-        let token = sessions.issue(Principal::new(Role::Viewer, Scope::All), "viewer1");
+        let token = sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
         let state = ApiState {
             store,
             logs: None,
@@ -8718,6 +8793,7 @@ mod tests {
             host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions,
+            login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
             events: None,
@@ -8731,7 +8807,7 @@ mod tests {
     fn state_with_role_token(role: yagra_common::Role) -> (ApiState, String) {
         use yagra_common::{Principal, Scope};
         let sessions = Arc::new(SessionStore::new());
-        let token = sessions.issue(Principal::new(role, Scope::All), "u1");
+        let token = sessions.issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u1");
         let state = ApiState {
             store: Arc::new(InMemorySink::default()),
             logs: None,
@@ -8740,6 +8816,7 @@ mod tests {
             host_sample: Arc::new(std::sync::Mutex::new(None)),
             admin: None,
             sessions,
+            login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
             events: None,

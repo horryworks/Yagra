@@ -9,9 +9,10 @@
 // health counts (`/fleet/group-summary`) + fleet totals — so the group rows and rollups paint
 // instantly at any fleet size. A group's member nodes are fetched only when it is open and visible
 // (`/nodes/by-group`), streaming in per group; collapsed groups are never loaded. An active name
-// filter is the exception: it full-loads the fleet once (up to NODE_CAP) and searches client-side.
-// The left pane is virtualized (only on-screen rows in the DOM, S13); node state stays live via the
-// node-state SSE stream (`useNodeStates`) rather than a full refetch.
+// filter runs a debounced SERVER-side search (`/nodes?search=`), capped at one page, and drops the
+// matches under their groups — it never loads the fleet into the browser. The left pane is
+// virtualized (only on-screen rows in the DOM, S13); node state stays live via the node-state SSE
+// stream (`useNodeStates`) rather than a full refetch.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -54,12 +55,11 @@ import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintena
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
 
-/** Page size for the filter-mode full load — the server's max keyset page, so a large fleet
- *  assembles in as few round-trips as possible. */
-const PAGE = 500;
-/** Fetch backstop for the filter-mode full load (pages of PAGE). Browse mode is lazy per-group so
- *  it never hits this; only an active name filter pulls the whole fleet (searched client-side). */
-const NODE_CAP = 50000;
+/** Cap on filter-mode results — one server page of matches (the server's max). Beyond this the
+ *  operator narrows the term; the fleet is never loaded into the browser. */
+const FILTER_SEARCH_LIMIT = 500;
+/** Debounce for the filter-mode server search so a fast typist fires one request, not one per key. */
+const FILTER_DEBOUNCE_MS = 200;
 
 /** Sentinel key for the ungrouped bucket in the lazy per-group member cache (A-3). */
 const UNGROUPED = '__ungrouped__';
@@ -324,15 +324,32 @@ export function NodesPage() {
     }
   }, [selKind, selId, groups, loadedGroups, loadingGroups, loading, loadGroupMembers]);
 
-  // Filter mode: full-load the fleet once so the client-side name filter can search the whole tree.
+  // Filter mode: debounced SERVER-side name/address search — the tree searches the fleet without
+  // loading it. Re-queries as the term changes; a stale response from an earlier keystroke is
+  // dropped. Results are capped at one server page (keep typing to narrow).
   useEffect(() => {
-    if (!filtering || allNodes !== null || allNodesLoading) return;
+    if (!filtering) return;
+    const term = filter.trim();
+    let cancelled = false;
     setAllNodesLoading(true);
-    loadAllNodes()
-      .then((res) => setAllNodes(res.nodes))
-      .catch(() => setAllNodes([]))
-      .finally(() => setAllNodesLoading(false));
-  }, [filtering, allNodes, allNodesLoading]);
+    const h = setTimeout(() => {
+      api
+        .listNodesPage({ search: term, limit: FILTER_SEARCH_LIMIT })
+        .then((page) => {
+          if (!cancelled) setAllNodes(page.nodes);
+        })
+        .catch(() => {
+          if (!cancelled) setAllNodes([]);
+        })
+        .finally(() => {
+          if (!cancelled) setAllNodesLoading(false);
+        });
+    }, FILTER_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(h);
+    };
+  }, [filtering, filter]);
 
   // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
   // maintenance/mute action from the tree so the icons update immediately (node `maintenance`
@@ -603,7 +620,7 @@ export function NodesPage() {
             groupCounts={groupCounts}
             loadedGroups={loadedGroups}
             canEdit={authed}
-            loading={loading}
+            loading={loading || (filtering && allNodesLoading)}
             showToolbar={false}
             selected={selected}
             filter={filter}
@@ -928,19 +945,6 @@ export function NodesPage() {
       )}
     </div>
   );
-}
-
-/** Load all node pages up to NODE_CAP, accumulating into one list for the tree. */
-async function loadAllNodes(): Promise<{ nodes: NodeSummary[]; truncated: boolean }> {
-  const out: NodeSummary[] = [];
-  let cursor: string | undefined;
-  for (let i = 0; i < NODE_CAP / PAGE; i++) {
-    const page = await api.listNodesPage({ cursor, limit: PAGE });
-    out.push(...page.nodes);
-    if (!page.next_cursor) return { nodes: out, truncated: false };
-    cursor = page.next_cursor;
-  }
-  return { nodes: out, truncated: true };
 }
 
 /** One-line impact summary for deleting a group: how many direct subgroups and member nodes

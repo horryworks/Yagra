@@ -305,11 +305,18 @@ export const api = {
   },
 
   /** One keyset page of the inventory (for the virtualized node table). Pass the previous
-   *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. */
-  listNodesPage: (opts?: { cursor?: string; limit?: number }): Promise<NodePage> => {
+   *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. A non-empty
+   *  `search` switches to server-side name/address search — a single capped page (no cursor) of
+   *  full node summaries — so the Nodes tree's filter never full-loads the fleet client-side. */
+  listNodesPage: (opts?: {
+    cursor?: string;
+    limit?: number;
+    search?: string;
+  }): Promise<NodePage> => {
     const params = new URLSearchParams();
     if (opts?.cursor) params.set('cursor', opts.cursor);
     if (opts?.limit != null) params.set('limit', String(opts.limit));
+    if (opts?.search) params.set('search', opts.search);
     const qs = params.toString();
     return request(qs ? `/nodes?${qs}` : '/nodes');
   },
@@ -1174,6 +1181,15 @@ export const api = {
     return res;
   },
 
-  /** Forget the stored token. */
-  logout: (): void => setToken(null),
+  /** Log out: revoke the token server-side (so it can't be reused), then forget it locally.
+   *  The local clear always happens even if the network call fails — a best-effort revoke must
+   *  never trap the user in a logged-in UI. */
+  logout: async (): Promise<void> => {
+    try {
+      await request('/auth/logout', jsonBody('POST', {}));
+    } catch {
+      // Ignore: the token may already be invalid/expired; we still clear it locally below.
+    }
+    setToken(null);
+  },
 };

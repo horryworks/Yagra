@@ -54,7 +54,7 @@ use ack::AckRepo;
 use alerts::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use api::{AdminState, ApiState};
 use audit::AuditRepo;
-use auth::{SessionStore, UserStore};
+use auth::{LoginThrottle, SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
@@ -84,6 +84,13 @@ use yagra_topology::Topology;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Container HEALTHCHECK entry point: `yagra-core healthcheck` probes our own `/healthz` and
+    // exits 0 (healthy) / 1 (not). Dependency-free (reqwest is already linked), so the slim runtime
+    // image needs no curl/wget. Handled before any store/bus wiring so it's cheap and side-effect-free.
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        std::process::exit(run_healthcheck().await);
+    }
+
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
     // spans at shutdown, so keep it alive for the whole process (`main` awaits the run loop below).
     let _telemetry = yagra_telemetry::init("yagra-core");
@@ -97,6 +104,26 @@ async fn main() -> anyhow::Result<()> {
     match Config::from_env() {
         Some(cfg) => run_live(cfg, metrics).await,
         None => run_skeleton(metrics).await,
+    }
+}
+
+/// Probe our own `/healthz` for the container HEALTHCHECK. Returns a process exit code: 0 when the
+/// endpoint answers 2xx, 1 otherwise. Derives the port from the configured API address (default
+/// 8080) so a custom `YAGRA_API_ADDR` still works.
+async fn run_healthcheck() -> i32 {
+    let addr = std::env::var("YAGRA_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let port = addr.rsplit(':').next().unwrap_or("8080");
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return 1,
+    };
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => 0,
+        _ => 1,
     }
 }
 
@@ -605,6 +632,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         alerts,
         admin,
         sessions,
+        login_throttle: Arc::new(LoginThrottle::new()),
         history: Some(history),
         ack: Some(acks),
         events: Some(event_engine),
@@ -638,6 +666,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         alerts: Arc::new(AlertManager::new()),
         admin: None,
         sessions: Arc::new(SessionStore::new()),
+        login_throttle: Arc::new(LoginThrottle::new()),
         history: None,
         ack: None,
         events: None,
@@ -1766,9 +1795,6 @@ mod tests {
         }
         async fn range(&self, _k: &SeriesKey, _f: i64, _t: i64, _s: u64) -> Vec<MetricPoint> {
             Vec::new()
-        }
-        async fn rate(&self, _k: &SeriesKey, _l: u64) -> Option<f64> {
-            None
         }
         async fn rate_range(
             &self,

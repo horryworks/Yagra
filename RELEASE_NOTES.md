@@ -1,5 +1,74 @@
 # Release Notes
 
+## v0.1.9
+
+**Phone support for the WebUI, scaling to tens of thousands of nodes, and a round of security
+hardening** — the WebUI now adapts to phones, the inventory / topology / dashboards stay responsive
+at fleet scale (searching the fleet on the server instead of loading it into the browser), and
+sessions, logins, TLS guidance, and metric ingest are hardened.
+
+### New Features
+- **Phone / mobile support for the WebUI** — the WebUI now adapts to phone-sized screens: a mobile
+  app shell with a navigation drawer and bottom sheets, card-style tables, forms, and node detail, a
+  pane switcher so a node's detail is reachable on a small screen, fuller event and interface views,
+  and a Preferences toggle to force the mobile or desktop layout. Desktop rendering is unchanged.
+
+### Improvements
+- **Scales to tens of thousands of nodes** — the inventory tree is virtualized and loads a group's
+  members lazily (only open, visible groups fetch), topology is paged on the server, and per-group
+  and fleet status rollups are computed server-side; live node status now arrives incrementally over
+  a stream instead of full-page refetches. Large inventories stay responsive.
+- **Fleet-wide search instead of loading the whole inventory** — the node inventory filter and the
+  Troubleshoot scope picker now search on the server (debounced and capped), and node pickers use the
+  same typeahead, so the browser never has to hold the entire fleet to find a node.
+- **Human names instead of raw IDs across the fleet** — referenced nodes, groups, and profiles now
+  resolve to their names on the Dependencies, Classification-rules, Mutes, and Maintenance pages
+  (with copy-of-the-id on hover), and name resolution covers the whole fleet, not just the first page.
+- **Faster, steadier metric ingest and polling at scale** — poll results are handled by a matcher
+  plus asynchronous batch writers, SNMP table walks are folded into a single session, dependency
+  suppression re-sweeps incrementally, and alert-config and sweep-spec resolution are cached per
+  configuration generation — smoothing throughput on large fleets.
+- **Faster node-detail interfaces list** — a node's per-interface throughput and status now load with
+  a constant handful of time-series queries for the whole node instead of several queries per
+  interface, so the interface list on a many-port switch opens far faster and refreshes cheaply.
+- **Snappier chart and health views** — the interface, busiest-links heatmap, and host-resource
+  charts fetch their independent series concurrently, and the URL-monitor probe reuses a pooled HTTP
+  client, trimming latency on those views.
+- **Higher default edge intake limits** — the syslog / SNMP-trap per-source and global rate-limit
+  defaults were raised (200 / 5000 messages per second) to suit chassis-scale event volume.
+- **Polished report viewer and confirmations** — the report viewer is now the standard app dialog
+  (keyboard focus handling, and a bottom sheet on mobile), and deleting a report, template, or
+  schedule uses the app's themed confirmation dialog instead of a native browser prompt.
+- **Container health checks** — the core image now reports readiness through a real health check, and
+  the web container waits for the core to be serving before it starts, avoiding first-request errors
+  on a cold start.
+
+### Bug Fixes
+- **Consistent spacing and emphasis** — several WebUI styles referenced undefined spacing tokens
+  (rendering with collapsed spacing) or off-scale font weights; these now use shared tokens, so
+  spacing and emphasis are consistent and theme-aware.
+- **Chart series colors follow the theme** — time-series chart colors are now drawn from the theme's
+  series palette, so they adapt to light and dark mode and no longer reuse the status
+  (warning / critical) colors.
+
+### Security
+- **Sessions can be revoked and now expire** — disabling, demoting, resetting the password of, or
+  deleting a user immediately invalidates that account's active sessions, and sessions now expire
+  after an idle period and an absolute lifetime; a new logout endpoint revokes the current token
+  server-side. Previously a bearer token stayed valid until the core restarted, so an admin action on
+  a compromised account did not cut off an already-issued token.
+- **Login brute-force protection** — the login endpoint now applies a per-account exponential lockout
+  after repeated failures plus a global attempt-rate cap, throttling password-guessing runs and the
+  CPU-exhaustion vector of repeatedly forcing a password hash.
+- **Metric-name validation at ingest** — metric names arriving from pollers are re-validated where
+  they enter the time-series store, so a malformed or hostile name can't inject stray series or
+  labels (a cardinality / data-integrity safeguard).
+- **TLS guidance for the WebUI / API** — the WebUI image and deployment now document how to terminate
+  HTTPS — an opt-in in-container TLS server block or an external reverse proxy — so the login
+  password, bearer tokens, and submitted device credentials are not exposed in plaintext beyond a
+  trusted network. The default remains plain HTTP for LAN / behind-proxy use; this is guidance and
+  configuration only.
+
 ## v0.1.8
 
 **Searchable passive-event log store, richer Events and dashboards, SSRF hardening, and large-fleet

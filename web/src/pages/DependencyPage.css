@@ -2,7 +2,7 @@
    from the state variables (set inline via stateColorVar), never hardcoded here. */
 
 .dep-name {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .dep-status {

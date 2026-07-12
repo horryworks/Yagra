@@ -16,6 +16,18 @@ use yagra_common::{HostSample, SeriesKey};
 
 use crate::sink::InMemorySink;
 
+/// Count (and debug-log) a poller-supplied sample dropped for a malformed metric name at the TSDB
+/// write edge. The name is the thing that failed validation, so it's safe to log for diagnosis
+/// (it never carries a credential — those never become metric names).
+fn reject_sample(metric: &str) {
+    metrics::counter!("yagra_result_samples_rejected_total", "reason" => "invalid_metric_name")
+        .increment(1);
+    tracing::debug!(
+        metric,
+        "dropped sample with invalid metric name at TSDB write edge"
+    );
+}
+
 /// How a fleet Top-N collapses each node's series to a single rankable value over the lookback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopAgg {
@@ -49,6 +61,19 @@ pub enum DeltaDirection {
     Up,
     /// Largest negative change (drops).
     Down,
+}
+
+/// Live per-interface values for the node-detail interface list, fetched in one batch and demuxed
+/// by ifindex (instead of a per-interface query fan-out). Rates are bytes/sec — the caller scales
+/// ×8 for bits/sec; `oper_status` is the raw `if_oper_status`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InterfaceLive {
+    /// Inbound octet rate (bytes/sec) over the lookback, or `None` with no data.
+    pub in_bps: Option<f64>,
+    /// Outbound octet rate (bytes/sec) over the lookback, or `None` with no data.
+    pub out_bps: Option<f64>,
+    /// Latest `if_oper_status`, or `None` with no data.
+    pub oper_status: Option<f64>,
 }
 
 /// One point of a time series: Unix-seconds timestamp and value.
@@ -87,10 +112,6 @@ pub trait MetricStore: Send + Sync {
     /// (oldest first). Empty if the store has no history (e.g. the in-memory sink).
     async fn range(&self, key: &SeriesKey, from_s: i64, to_s: i64, step_s: u64)
         -> Vec<MetricPoint>;
-    /// Per-second rate of a counter series over the trailing `lookback_s` window, derived
-    /// at query time (ADR-012) — the TSDB's `rate()` handles counter wrap/reset, so the
-    /// poller never does counter arithmetic. `None` if the store has no history.
-    async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64>;
     /// Per-second rate of a counter series sampled across `[from_s, to_s]` at `step_s`
     /// resolution (oldest first), each point a `rate(...[lookback_s])`. For charting a
     /// counter as a rate over time. Empty if the store has no history.
@@ -194,6 +215,20 @@ pub trait MetricStore: Send + Sync {
     /// (the in-memory sink). Names are deduplicated; order is unspecified.
     async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String>;
 
+    /// Live per-interface throughput + oper-status for ONE node in a fixed number of round-trips
+    /// (node-scoped queries demuxed by ifindex), NOT one query per interface. The node-detail
+    /// interface list refreshes for every open client, so a 48-port switch must not fan out into
+    /// ~150 sequential TSDB queries. Keyed by ifindex; the in/out values are octet **rates**
+    /// (bytes/sec — the caller scales ×8) over `lookback_s`. Default: empty (the in-memory sink has
+    /// no interface series); [`VmStore`] overrides it with the batched node-scoped form.
+    async fn node_interface_live(
+        &self,
+        _node: Uuid,
+        _lookback_s: u64,
+    ) -> std::collections::HashMap<i32, InterfaceLive> {
+        std::collections::HashMap::new()
+    }
+
     /// Persist a host self-metrics sample as low-cardinality `yagra_host_*{instance,role[,pool]
     /// [,mount]}` series (self-observability). Core is the single writer for **every** instance —
     /// its own host (`role="core"`) and each poller (`role="poller"`, whose samples arrive over
@@ -258,11 +293,6 @@ impl MetricStore for InMemorySink {
     ) -> Vec<MetricPoint> {
         // The skeleton sink keeps only the latest value, so it has no history to serve.
         Vec::new()
-    }
-
-    async fn rate(&self, _key: &SeriesKey, _lookback_s: u64) -> Option<f64> {
-        // No history ⇒ no rate.
-        None
     }
 
     async fn rate_range(
@@ -426,6 +456,23 @@ impl VmStore {
             })
             .collect()
     }
+
+    /// Run a node-scoped instant query and demux the result into `ifindex → value`. Backs the
+    /// batched node-detail interface list. Empty on any request/parse failure.
+    async fn node_interface_values(&self, query: String) -> std::collections::HashMap<i32, f64> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics node-interface query failed");
+                return std::collections::HashMap::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return std::collections::HashMap::new();
+        };
+        parse_ifindex_values(&json)
+    }
 }
 
 /// PromQL instant-vector selector for a thin-label series, e.g.
@@ -537,18 +584,6 @@ fn latest_query(key: &SeriesKey) -> String {
         "last_over_time({}[{}s])",
         selector(key),
         INSTANT_LOOKBACK_SECS
-    )
-}
-
-/// Instant query for the most recent rate within [`INSTANT_LOOKBACK_SECS`] — a subquery that
-/// samples `rate(…[lookback])` across the window and takes the last point, so a slightly
-/// stale series still yields its last computed rate rather than nothing.
-fn instant_rate_query(key: &SeriesKey, lookback_s: u64) -> String {
-    format!(
-        "last_over_time(({})[{}s:{}s])",
-        rate_query(key, lookback_s),
-        INSTANT_LOOKBACK_SECS,
-        lookback_s.max(1)
     )
 }
 
@@ -685,6 +720,36 @@ fn parse_top_interfaces(json: &serde_json::Value) -> Vec<(Uuid, i32, f64)> {
     out
 }
 
+/// Parse a node-scoped instant-query response into `ifindex → value`. Each `data.result[]` series
+/// contributes its `metric.ifindex` label and `value[1]`; series without a parseable ifindex/value
+/// are skipped. For the batched node-detail interface list (one query per metric, all ifindexes).
+fn parse_ifindex_values(json: &serde_json::Value) -> std::collections::HashMap<i32, f64> {
+    let mut out = std::collections::HashMap::new();
+    let Some(results) = json
+        .get("data")
+        .and_then(|d| d.get("result"))
+        .and_then(|r| r.as_array())
+    else {
+        return out;
+    };
+    for series in results {
+        let ifindex = series
+            .get("metric")
+            .and_then(|m| m.get("ifindex"))
+            .and_then(|i| i.as_str())
+            .and_then(|s| s.parse::<i32>().ok());
+        let value = series
+            .get("value")
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok());
+        if let (Some(ifindex), Some(value)) = (ifindex, value) {
+            out.insert(ifindex, value);
+        }
+    }
+    out
+}
+
 /// Parse a VictoriaMetrics instant-query response into `(node_id, value)` pairs: each
 /// `data.result[]` series contributes its `metric.node` label (parsed as a UUID) and
 /// `value[1]` (the string-encoded sample). Series without a parseable node label or value are
@@ -740,8 +805,15 @@ impl MetricStore for VmStore {
         let mut body = String::new();
         for sample in &result.samples {
             let key = sample.series_key(result.node_id);
+            if !yagra_common::is_valid_metric_name(&key.metric) {
+                reject_sample(&key.metric);
+                continue;
+            }
             body.push_str(&key.prometheus_line(sample.value, result.at_unix_ms));
             body.push('\n');
+        }
+        if body.is_empty() {
+            return; // every sample was rejected — nothing to import
         }
         let url = format!("{}/api/v1/import/prometheus", self.base);
         match self.http.post(&url).body(body).send().await {
@@ -761,12 +833,19 @@ impl MetricStore for VmStore {
         for result in results {
             for sample in &result.samples {
                 let key = sample.series_key(result.node_id);
+                // Re-validate the (poller-supplied) metric name at the TSDB write edge. Every
+                // legitimate producer emits a valid name; a malformed one — exposition-line
+                // injection or a forged label — is dropped, not written into series identity.
+                if !yagra_common::is_valid_metric_name(&key.metric) {
+                    reject_sample(&key.metric);
+                    continue;
+                }
                 body.push_str(&key.prometheus_line(sample.value, result.at_unix_ms));
                 body.push('\n');
             }
         }
         if body.is_empty() {
-            return true; // nothing to persist (all buffered results were sample-free)
+            return true; // nothing to persist (all buffered results were sample-free or rejected)
         }
         let url = format!("{}/api/v1/import/prometheus", self.base);
         match self.http.post(&url).body(body).send().await {
@@ -867,27 +946,6 @@ impl MetricStore for VmStore {
             .await
     }
 
-    async fn rate(&self, key: &SeriesKey, lookback_s: u64) -> Option<f64> {
-        let url = format!("{}/api/v1/query", self.base);
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[("query", instant_rate_query(key, lookback_s))])
-            .send()
-            .await
-            .ok()?;
-        let json: serde_json::Value = resp.json().await.ok()?;
-        // data.result[0].value[1] is the rate value as a string (empty result ⇒ None).
-        let raw = json
-            .get("data")?
-            .get("result")?
-            .get(0)?
-            .get("value")?
-            .get(1)?
-            .as_str()?;
-        raw.parse().ok()
-    }
-
     async fn rate_range(
         &self,
         key: &SeriesKey,
@@ -898,6 +956,38 @@ impl MetricStore for VmStore {
     ) -> Vec<MetricPoint> {
         self.query_range_points(rate_query(key, lookback_s), from_s, to_s, step_s)
             .await
+    }
+
+    async fn node_interface_live(
+        &self,
+        node: Uuid,
+        lookback_s: u64,
+    ) -> std::collections::HashMap<i32, InterfaceLive> {
+        // Three node-scoped instant queries (in-rate / out-rate / oper-status), each returning
+        // every interface at once, run concurrently — a constant 3 round-trips regardless of the
+        // node's interface count. `node` is a UUID (no injection risk in the selector).
+        let w = lookback_s.max(1);
+        let in_q = format!("rate(if_hc_in_octets{{node=\"{node}\"}}[{w}s])");
+        let out_q = format!("rate(if_hc_out_octets{{node=\"{node}\"}}[{w}s])");
+        let status_q =
+            format!("last_over_time(if_oper_status{{node=\"{node}\"}}[{INSTANT_LOOKBACK_SECS}s])");
+        let (ins, outs, status) = tokio::join!(
+            self.node_interface_values(in_q),
+            self.node_interface_values(out_q),
+            self.node_interface_values(status_q),
+        );
+        let mut out: std::collections::HashMap<i32, InterfaceLive> =
+            std::collections::HashMap::with_capacity(ins.len().max(status.len()));
+        for (idx, v) in ins {
+            out.entry(idx).or_default().in_bps = Some(v);
+        }
+        for (idx, v) in outs {
+            out.entry(idx).or_default().out_bps = Some(v);
+        }
+        for (idx, v) in status {
+            out.entry(idx).or_default().oper_status = Some(v);
+        }
+        out
     }
 
     async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -1076,8 +1166,11 @@ impl MetricStore for VmStore {
         // poll jitter; sampled at the requested step across the range.
         let in_q = "sum(rate(if_hc_in_octets[300s])) * 8".to_string();
         let out_q = "sum(rate(if_hc_out_octets[300s])) * 8".to_string();
-        let in_pts = self.query_range_points(in_q, from_s, to_s, step_s).await;
-        let out_pts = self.query_range_points(out_q, from_s, to_s, step_s).await;
+        // The in/out range queries are independent — run them concurrently.
+        let (in_pts, out_pts) = tokio::join!(
+            self.query_range_points(in_q, from_s, to_s, step_s),
+            self.query_range_points(out_q, from_s, to_s, step_s),
+        );
         (in_pts, out_pts)
     }
 
@@ -1182,15 +1275,6 @@ mod tests {
     }
 
     #[test]
-    fn instant_rate_query_wraps_rate_in_last_over_time_subquery() {
-        let key = SeriesKey::interface(NodeId::from(Uuid::nil()), IfIndex(3), "if_hc_in_octets");
-        assert_eq!(
-            instant_rate_query(&key, 300),
-            "last_over_time((rate(if_hc_in_octets{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"3\"}[300s]))[1800s:300s])"
-        );
-    }
-
-    #[test]
     fn aggregate_latest_query_wraps_node_selector_in_max_last_over_time() {
         let key = SeriesKey::node(NodeId::from(Uuid::nil()), "huawei_cpu_usage");
         assert_eq!(
@@ -1273,13 +1357,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_memory_store_has_no_rate() {
-        let store = InMemorySink::default();
-        let key = SeriesKey::interface(NodeId::new(), IfIndex(1), "if_hc_in_octets");
-        assert_eq!(MetricStore::rate(&store, &key, 300).await, None);
-    }
-
-    #[tokio::test]
     async fn in_memory_store_has_no_rate_range() {
         let store = InMemorySink::default();
         let key = SeriesKey::interface(NodeId::new(), IfIndex(1), "if_hc_in_octets");
@@ -1304,6 +1381,32 @@ mod tests {
         )
         .await
         .is_empty());
+    }
+
+    #[test]
+    fn parse_ifindex_values_demuxes_node_scoped_result_by_ifindex() {
+        let json = serde_json::json!({
+            "data": { "result": [
+                { "metric": { "node": "n", "ifindex": "1" }, "value": [0, "125.5"] },
+                { "metric": { "node": "n", "ifindex": "7" }, "value": [0, "0"] },
+                // Malformed rows are skipped, not fatal.
+                { "metric": { "node": "n" }, "value": [0, "9"] },
+                { "metric": { "node": "n", "ifindex": "3" }, "value": [0, "nan?"] },
+            ]}
+        });
+        let map = parse_ifindex_values(&json);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&1), Some(&125.5));
+        assert_eq!(map.get(&7), Some(&0.0));
+        assert!(!map.contains_key(&3));
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_has_no_interface_live() {
+        let store = InMemorySink::default();
+        assert!(MetricStore::node_interface_live(&store, Uuid::nil(), 300)
+            .await
+            .is_empty());
     }
 
     #[test]

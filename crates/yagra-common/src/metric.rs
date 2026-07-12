@@ -32,6 +32,21 @@ impl MetricKind {
     }
 }
 
+/// Whether `name` is a legal Prometheus/VictoriaMetrics metric name — `[a-zA-Z_:][a-zA-Z0-9_:]*`,
+/// non-empty. Series identity is the single biggest cardinality risk (ADR-011), so this is the
+/// shape check applied at every edge where a metric name enters series identity: the API (operator
+/// input) *and* the TSDB write path (poller-supplied sample names). A name that fails this can't be
+/// interpolated into an exposition line to inject stray labels or forge a series.
+#[must_use]
+pub fn is_valid_metric_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+}
+
 /// The stable identity of one time series.
 ///
 /// Construct via [`SeriesKey::node`] for node-level metrics or
@@ -113,6 +128,34 @@ mod tests {
     fn counter_is_rate_derivable_gauge_is_not() {
         assert!(MetricKind::Counter.is_rate_derivable());
         assert!(!MetricKind::Gauge.is_rate_derivable());
+    }
+
+    #[test]
+    fn metric_name_validation_accepts_real_names_and_rejects_injection() {
+        // Every name the poller actually emits is valid.
+        for ok in [
+            "icmp_rtt_ms",
+            "if_hc_in_octets",
+            "cpu_util",
+            "snmp_sys_uptime_ticks",
+            "snmp_oid_1_3_6_1_2_1_2_2_1_10",
+            "http:up",
+            "_leading_underscore",
+        ] {
+            assert!(is_valid_metric_name(ok), "{ok} should be valid");
+        }
+        // Malformed / hostile names are rejected before they reach series identity.
+        for bad in [
+            "",
+            "1_leading_digit",
+            "has space",
+            "has-dash",
+            "with.dot",
+            "inject{evil=\"x\"} 1\nother",
+            "trailing\n",
+        ] {
+            assert!(!is_valid_metric_name(bad), "{bad:?} should be rejected");
+        }
     }
 
     #[test]

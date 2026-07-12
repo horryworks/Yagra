@@ -21,7 +21,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
-import { useEntityNames } from '../components/ui/EntityName';
+import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
@@ -225,7 +225,7 @@ export function MaintenancePage() {
                     <div className="ytable-cell">
                       <span className="maint-scope">
                         <Badge>{scopeBadge(w)}</Badge>
-                        <span>{scopeLabel(w)}</span>
+                        <EntityName name={scopeLabel(w)} id={w.scope_id} />
                       </span>
                     </div>
                     <div className="ytable-cell mono">

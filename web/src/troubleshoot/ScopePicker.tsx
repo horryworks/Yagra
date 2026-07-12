@@ -6,15 +6,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../components/ui/TableToolbar';
+import { api } from '../services/api';
 import { groupOptions } from '../lib/nodeTree';
+import type { NodeSearchResult } from '../types/api';
 import { Segmented } from './Segmented';
 import { useScopeData } from './useScopeData';
-import { allScope, filterNodes, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
+import { allScope, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
 import './ScopePicker.css';
 
 type Mode = 'all' | 'group' | 'node';
-/** Rendered node-result cap — filter first, then show this many (keep typing to narrow). */
+/** Server search cap — request (and show) at most this many hits; keep typing to narrow. */
 const MAX_RESULTS = 50;
+/** Debounce so a fast typist fires one search request, not one per keystroke. */
+const SEARCH_DEBOUNCE_MS = 200;
 
 interface Props {
   value: ScopeValue;
@@ -26,7 +30,7 @@ interface Props {
 
 export function ScopePicker({ value, onChange, id, className, disabled }: Props) {
   const { t } = useTranslation('troubleshoot');
-  const { groups, nodes, nodesLoaded, loadNodes } = useScopeData();
+  const { groups } = useScopeData();
   const MODES = useMemo(
     () => [
       { value: 'all', label: t('scope.modes.all') },
@@ -39,6 +43,8 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
   const [mode, setMode] = useState<Mode>(value.kind);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [results, setResults] = useState<NodeSearchResult[]>([]);
+  const [nodesLoading, setNodesLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const nodeBoxRef = useRef<HTMLDivElement>(null);
 
@@ -64,29 +70,59 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
     if (open && mode === 'node') nodeBoxRef.current?.querySelector('input')?.focus();
   }, [open, mode]);
 
+  // Server-side node search: (re)query on entering Node mode and on each (debounced) keystroke —
+  // never a whole-inventory client load. Empty query returns the first page by name so the list
+  // isn't blank before typing. A cancelled flag drops a stale response from an earlier keystroke.
+  useEffect(() => {
+    if (!open || mode !== 'node') return;
+    let cancelled = false;
+    const term = query.trim();
+    setNodesLoading(true);
+    const h = setTimeout(
+      () => {
+        api
+          .searchNodes(term, MAX_RESULTS)
+          .then((r) => {
+            if (!cancelled) setResults(r);
+          })
+          .catch(() => {
+            if (!cancelled) setResults([]);
+          })
+          .finally(() => {
+            if (!cancelled) setNodesLoading(false);
+          });
+      },
+      term ? SEARCH_DEBOUNCE_MS : 0,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(h);
+    };
+  }, [open, mode, query]);
+
   const groupItems = useMemo(() => groupOptions(groups), [groups]);
   const nameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
 
-  const filtered = useMemo(() => filterNodes(nodes, query), [nodes, query]);
-  const shown = filtered.slice(0, MAX_RESULTS);
+  const shown = results;
 
   const openPopover = () => {
     if (disabled) return;
     setMode(value.kind);
     setQuery('');
     setActive(0);
-    if (value.kind === 'node') loadNodes();
+    setResults([]);
     setOpen(true);
   };
 
   const changeMode = (m: Mode) => {
     setMode(m);
     setActive(0);
+    setQuery('');
     if (m === 'all') {
       onChange(allScope(t));
       setOpen(false);
     } else if (m === 'node') {
-      loadNodes();
+      setResults([]);
     }
   };
 
@@ -184,7 +220,7 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
                 />
               </div>
               <div className="scope-list" role="listbox" aria-label={t('common:nodePicker.listAria')}>
-                {!nodesLoaded ? (
+                {nodesLoading && shown.length === 0 ? (
                   <div className="scope-empty">{t('common:nodePicker.loading')}</div>
                 ) : shown.length === 0 ? (
                   <div className="scope-empty">{t('common:nodePicker.noMatch')}</div>
@@ -210,9 +246,10 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
                     </button>
                   ))
                 )}
-                {nodesLoaded && filtered.length > MAX_RESULTS && (
+                {/* Server returned a full page ⇒ there may be more matches; prompt to narrow. */}
+                {results.length >= MAX_RESULTS && (
                   <div className="scope-empty">
-                    {t('common:nodePicker.more', { count: filtered.length - MAX_RESULTS })}
+                    {t('common:nodePicker.capped', { count: MAX_RESULTS })}
                   </div>
                 )}
               </div>

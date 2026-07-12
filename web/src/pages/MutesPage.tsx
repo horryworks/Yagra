@@ -21,7 +21,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
-import { useEntityNames } from '../components/ui/EntityName';
+import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import './MutesPage.css';
 
 const COLS = '1.4fr 170px 180px 1fr 92px';
@@ -196,7 +196,10 @@ export function MutesPage() {
                     <div className="ytable-cell">
                       <span className="mute-target">
                         {m.scope_kind === 'group' && <Badge>{t('mutes.badge.group')}</Badge>}
-                        <span className="yt-name-txt">{targetName(m)}</span>
+                        <EntityName
+                          name={targetName(m)}
+                          id={(m.scope_kind === 'group' ? m.group_id : m.node_id) ?? undefined}
+                        />
                       </span>
                     </div>
                     <div className="ytable-cell">

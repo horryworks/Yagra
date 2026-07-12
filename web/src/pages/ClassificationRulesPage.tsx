@@ -21,6 +21,7 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
+import { EntityName } from '../components/ui/EntityName';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
@@ -170,7 +171,9 @@ export function ClassificationRulesPage() {
                       </span>
                     )}
                   </div>
-                  <div className="ytable-cell">{profileName(r.profile_id)}</div>
+                  <div className="ytable-cell">
+                    <EntityName name={profileName(r.profile_id)} id={r.profile_id} />
+                  </div>
                   <div className="ytable-cell">
                     <Badge tone={r.enabled ? 'up' : 'neutral'}>
                       {r.enabled ? t('rules.enabled') : t('rules.disabled')}

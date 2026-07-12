@@ -60,38 +60,9 @@ pub(crate) async fn probe_http(
         }
     }
 
-    let redirect = if spec.follow_redirects {
-        // Re-validate every redirect hop, not just the initial target. Two complementary guards
-        // cover the whole SSRF surface across hops: this policy refuses an IP-*literal* hop host
-        // (`302 Location: http://169.254.169.254/…`) or a bad scheme before the request is made,
-        // and the `SsrfResolver` below refuses a *hostname* hop that resolves to a blocked address
-        // (the DNS-rebinding / metadata-behind-a-name case the literal check can't see). Since
-        // reqwest dials exactly what the resolver returns, there is no resolve-then-connect TOCTOU.
-        reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                return attempt.stop();
-            }
-            if redirect_hop_blocked(attempt.url()) {
-                return attempt.error("redirect target address is not allowed (SSRF)");
-            }
-            attempt.follow()
-        })
-    } else {
-        reqwest::redirect::Policy::none()
-    };
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(redirect)
-        // Pin DNS to an SSRF-filtered resolver: reqwest resolves — and therefore dials — only
-        // non-blocked addresses, for the initial target and every hostname redirect hop. This is
-        // the authoritative, TOCTOU-free enforcement (the resolved set is the dialed set).
-        .dns_resolver(Arc::new(SsrfResolver))
-        // verify_tls is off only by explicit operator opt-in (default on — security.md).
-        .danger_accept_invalid_certs(!spec.verify_tls)
-        .tls_info(true)
-        .user_agent("Yagra-poller")
-        .build()
-        .map_err(|e| TransportError::Io(format!("http client build failed: {e}")))?;
+    // Reuse one of the four cached clients (follow_redirects × verify_tls) instead of rebuilding
+    // rustls config + pool + SSRF resolver wiring every poll. Timeout is a per-request property.
+    let client = probe_client(spec.follow_redirects, spec.verify_tls);
 
     let method = match spec.method {
         HttpMethod::Get => reqwest::Method::GET,
@@ -100,7 +71,7 @@ pub(crate) async fn probe_http(
     };
 
     let started = Instant::now();
-    match client.request(method, url).send().await {
+    match client.request(method, url).timeout(timeout).send().await {
         Ok(resp) => {
             let response_time_ms = started.elapsed().as_secs_f64() * 1000.0;
             let status_code = Some(resp.status().as_u16());
@@ -128,6 +99,68 @@ pub(crate) async fn probe_http(
             })
         }
     }
+}
+
+/// One of the four static probe-client variants (`follow_redirects` × `verify_tls`), built once and
+/// reused. Rebuilding the rustls config, connection pool, and SSRF-resolver wiring on every poll was
+/// pure per-probe overhead. `pool_max_idle_per_host(0)` keeps the deliberate fresh-connect-per-probe
+/// measurement semantics (response time includes the TCP+TLS handshake; `tls_info` needs a real
+/// handshake to read the cert), so only the *construction* cost is removed. Timeout is applied
+/// per-request at the call site, not baked into the client.
+fn probe_client(follow_redirects: bool, verify_tls: bool) -> &'static reqwest::Client {
+    static CLIENTS: std::sync::OnceLock<[reqwest::Client; 4]> = std::sync::OnceLock::new();
+    let clients = CLIENTS.get_or_init(|| {
+        std::array::from_fn(|i| {
+            // A build failure here means the TLS backend itself can't initialize — every probe
+            // would fail regardless, so surfacing it as a panic at first use is appropriate (and
+            // the SSRF resolver is load-bearing, so there is no safe degraded fallback client).
+            build_probe_client(i & 0b10 != 0, i & 0b01 != 0)
+                .expect("probe HTTP client build failed (TLS backend init)")
+        })
+    });
+    &clients[(usize::from(follow_redirects) << 1) | usize::from(verify_tls)]
+}
+
+/// Build one probe client with the SSRF resolver, redirect policy, and TLS-verify setting wired in.
+/// Split out so [`probe_client`] can cache the (small, fixed) set of variants.
+fn build_probe_client(
+    follow_redirects: bool,
+    verify_tls: bool,
+) -> Result<reqwest::Client, TransportError> {
+    let redirect = if follow_redirects {
+        // Re-validate every redirect hop, not just the initial target. Two complementary guards
+        // cover the whole SSRF surface across hops: this policy refuses an IP-*literal* hop host
+        // (`302 Location: http://169.254.169.254/…`) or a bad scheme before the request is made,
+        // and the `SsrfResolver` below refuses a *hostname* hop that resolves to a blocked address
+        // (the DNS-rebinding / metadata-behind-a-name case the literal check can't see). Since
+        // reqwest dials exactly what the resolver returns, there is no resolve-then-connect TOCTOU.
+        // The closure is stateless (depends only on the hop URL), so one client can be cached.
+        reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.stop();
+            }
+            if redirect_hop_blocked(attempt.url()) {
+                return attempt.error("redirect target address is not allowed (SSRF)");
+            }
+            attempt.follow()
+        })
+    } else {
+        reqwest::redirect::Policy::none()
+    };
+    reqwest::Client::builder()
+        .redirect(redirect)
+        // Pin DNS to an SSRF-filtered resolver: reqwest resolves — and therefore dials — only
+        // non-blocked addresses, for the initial target and every hostname redirect hop. This is
+        // the authoritative, TOCTOU-free enforcement (the resolved set is the dialed set).
+        .dns_resolver(Arc::new(SsrfResolver))
+        // verify_tls is off only by explicit operator opt-in (default on — security.md).
+        .danger_accept_invalid_certs(!verify_tls)
+        .tls_info(true)
+        .user_agent("Yagra-poller")
+        // No idle-connection reuse: each probe measures a fresh handshake (see `probe_client`).
+        .pool_max_idle_per_host(0)
+        .build()
+        .map_err(|e| TransportError::Io(format!("http client build failed: {e}")))
 }
 
 /// Parse a URL host string as an IP literal, tolerating the bracketed IPv6 form (`[::1]`).

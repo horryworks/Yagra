@@ -19,13 +19,6 @@ pub struct DedupKey {
     pub severity: Severity,
 }
 
-/// Grouping key: alerts sharing a root cause are grouped into one incident.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct GroupKey {
-    /// The root-cause node alerts are grouped under (the node itself if standalone).
-    pub root: NodeId,
-}
-
 /// Numeric breach detail for a threshold alert (absent for a liveness up/down alert).
 /// Carried for the history log + notification payload — not part of alert identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,14 +66,6 @@ impl Alert {
             severity: self.severity,
         }
     }
-
-    /// The grouping key — the root cause if attributed upstream, else the node itself.
-    #[must_use]
-    pub fn group_key(&self) -> GroupKey {
-        GroupKey {
-            root: self.root_cause.unwrap_or(self.node),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -103,21 +88,6 @@ mod tests {
 
     fn uuid_nil() -> uuid::Uuid {
         uuid::Uuid::nil()
-    }
-
-    #[test]
-    fn standalone_alert_groups_under_itself() {
-        let n = NodeId::new();
-        assert_eq!(alert(n, None).group_key(), GroupKey { root: n });
-    }
-
-    #[test]
-    fn attributed_alert_groups_under_root_cause() {
-        let (node, parent) = (NodeId::new(), NodeId::new());
-        assert_eq!(
-            alert(node, Some(parent)).group_key(),
-            GroupKey { root: parent }
-        );
     }
 
     #[test]

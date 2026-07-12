@@ -11,7 +11,7 @@ pub mod flapping;
 pub mod hysteresis;
 pub mod notify;
 
-pub use alert::{Alert, Breach, DedupKey, GroupKey};
+pub use alert::{Alert, Breach, DedupKey};
 pub use flapping::FlapDetector;
 pub use hysteresis::DwellTracker;
 pub use notify::{

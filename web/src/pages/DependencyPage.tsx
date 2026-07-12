@@ -21,6 +21,7 @@ import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { EntityName } from '../components/ui/EntityName';
 import { SetParentModal } from '../components/SetParentModal/SetParentModal';
 import './DependencyPage.css';
 
@@ -94,7 +95,7 @@ export function DependencyPage() {
         width: '1.4fr',
         render: (r) =>
           r.parent_id ? (
-            <span title={r.parent_id}>{nameOf(r.parent_id)}</span>
+            <EntityName name={nameOf(r.parent_id) ?? r.parent_id} id={r.parent_id} />
           ) : (
             <span className="dep-none">—</span>
           ),
@@ -106,7 +107,7 @@ export function DependencyPage() {
         width: '1.4fr',
         render: (r) =>
           r.root_cause ? (
-            <span title={r.root_cause}>{nameOf(r.root_cause)}</span>
+            <EntityName name={nameOf(r.root_cause) ?? r.root_cause} id={r.root_cause} />
           ) : (
             <span className="dep-none">—</span>
           ),

@@ -1,7 +1,9 @@
-// Time-series chart pane backed by uPlot (fast at many series). Canvas strokes can't read
-// CSS vars, so chart colors come from a small palette constant — exempt from the theme-var
-// rule per CLAUDE.md (chart-library color props are data-driven). Supports a single series
-// (`values`) or multiple (`series`), and resizes to its container width.
+// Time-series chart pane backed by uPlot (fast at many series). Series colors come from the
+// theme's `--series-*` tokens (the same categorical palette every other chart surface uses), so
+// charts adapt to light/dark and never collide with the status channel. A uPlot canvas stroke
+// can't read a CSS var directly, so MetricChart resolves the `var(--series-N)` tokens against the
+// element's computed style at build time (like it already does for the axis/grid/reference colors).
+// Supports a single series (`values`) or multiple (`series`), and resizes to its container width.
 
 import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
@@ -9,13 +11,38 @@ import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
 import './MetricChart.css';
 
-/** Default series palette (In / Out / aux …), indexed by series position. Canvas strokes can't
- *  read CSS vars, so this data-driven palette is the single source of truth for series colors —
- *  exported so DOM legend swatches mirror the chart instead of re-hardcoding the same hex. */
-export const PALETTE = ['#4f8cff', '#34d399', '#f59e0b', '#ef4444'];
+/** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
+ *  or SVG (via inline `style`/CSS) `var(--series-N)` resolves directly; passed to MetricChart as a
+ *  series `color` it's resolved against computed style at build (canvas can't read CSS vars). One
+ *  source of truth so legend swatches mirror the chart instead of re-hardcoding a hex. */
+export const PALETTE = [
+  'var(--series-1)',
+  'var(--series-2)',
+  'var(--series-3)',
+  'var(--series-4)',
+  'var(--series-5)',
+  'var(--series-6)',
+];
 /** Canonical In / Out series colors (used by both the chart strokes and the legend swatches). */
 export const SERIES_IN = PALETTE[0];
 export const SERIES_OUT = PALETTE[1];
+
+/** Static fallbacks for the `--series-*` tokens, used only if computed style can't resolve them
+ *  (e.g. the var is missing). Mirror tokens.css so a fallback still looks right. */
+const SERIES_FALLBACK = ['#4c8dd6', '#9b7bd4', '#4caf9b', '#d68a4c', '#b05c8e', '#7c9b4c'];
+
+/** Resolve a color that may be a `var(--token)` reference against `cs` (the element's computed
+ *  style). Non-var strings pass through unchanged; an unresolvable var falls back. */
+function resolveColor(
+  raw: string | undefined,
+  cs: CSSStyleDeclaration,
+  fallback: string,
+): string {
+  if (!raw) return fallback;
+  const m = raw.match(/^var\((--[\w-]+)\)$/);
+  if (!m) return raw;
+  return cs.getPropertyValue(m[1]).trim() || fallback;
+}
 
 // First-paint estimate of uPlot's title+legend chrome height (px) in `fill` mode, before the real
 // elements exist to measure. Corrected to the exact measured value immediately after construction.
@@ -109,6 +136,9 @@ export function MetricChart({
     const gridColor = cs.getPropertyValue('--border-color').trim() || 'rgba(255,255,255,0.1)';
     const refColor = cs.getPropertyValue('--status-critical').trim() || '#ef5350';
     const uiFont = cs.getPropertyValue('--ui-font-family').trim() || 'sans-serif';
+    // Resolve the theme's categorical series palette once for this build (canvas needs concrete
+    // colors). A series' own `color` (which may itself be a `var(--series-N)`) wins over the palette.
+    const pal = PALETTE.map((v, i) => resolveColor(v, cs, SERIES_FALLBACK[i % SERIES_FALLBACK.length]));
     const axis = {
       stroke: axisColor,
       grid: { stroke: gridColor, width: 1 },
@@ -139,7 +169,7 @@ export function MetricChart({
         {},
         ...resolved.map((s, i) => ({
           label: s.label,
-          stroke: s.color ?? PALETTE[i % PALETTE.length],
+          stroke: s.color ? resolveColor(s.color, cs, pal[i % pal.length]) : pal[i % pal.length],
           width: 2,
           // Cursor-legend "Value" readout — format with units so a hover reads "75%" / "12 ms",
           // not a bare number. Reads the live formatters (explicit legend formatter, else the axis

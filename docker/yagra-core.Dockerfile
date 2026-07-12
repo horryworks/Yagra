@@ -45,4 +45,8 @@ RUN useradd -r -u 10001 yagra
 COPY --from=build /app/yagra-core /usr/local/bin/yagra-core
 USER yagra
 EXPOSE 8080
+# Liveness: the binary probes its own /healthz (dependency-free — the slim runtime has no curl/wget).
+# Gives orchestrators (compose/k8s) a real readiness signal instead of "process is up".
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/yagra-core", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/yagra-core"]

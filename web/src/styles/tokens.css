@@ -71,12 +71,19 @@
   --font-8xl: calc(var(--font-base) + 21px); /* 34px */
   --weight-normal: 400;
   --weight-medium: 500;
+  --weight-semibold: 600; /* emphasis a step above medium (section titles, active tabs) */
 
   /* ---- shape & space (§1.4: flat, 0.5px borders, generous whitespace) ---- */
   --radius: 6px;
   --radius-sm: 4px;
   --border-width: 0.5px;
   --gap: 12px;
+  /* Spacing scale (4px base) — use instead of raw px for gaps/margins/padding. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
   --row-h: 30px;
   --topbar-h: 52px;
   --sidebar-w: 220px;

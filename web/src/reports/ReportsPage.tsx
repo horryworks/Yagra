@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
+import { Modal } from '../components/ui/Modal';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { usePolled } from '../dashboard/usePolled';
@@ -88,6 +89,10 @@ export function ReportsPage() {
   const [viewerRunId, setViewerRunId] = useState<string | null>(null);
   const [scheduleFor, setScheduleFor] = useState<ReportSchedule | 'new' | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Destructive-action confirmation via the shared Modal (not a native window.confirm) — themed,
+  // focus-managed, consistent with every other delete in the app.
+  const [confirm, setConfirm] = useState<{ text: string; run: () => Promise<void> } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
@@ -106,22 +111,34 @@ export function ReportsPage() {
     }
   }
 
-  async function deleteDefinition(def: ReportDefinition) {
-    if (!window.confirm(t('confirm.deleteTemplate', { name: def.name }))) return;
-    await api.deleteReportDefinition(def.id).catch(() => undefined);
-    reloadDefs();
+  function deleteDefinition(def: ReportDefinition) {
+    setConfirm({
+      text: t('confirm.deleteTemplate', { name: def.name }),
+      run: async () => {
+        await api.deleteReportDefinition(def.id).catch(() => undefined);
+        reloadDefs();
+      },
+    });
   }
 
-  async function deleteRun(run: ReportRun) {
-    if (!window.confirm(t('confirm.deleteRun', { name: run.name }))) return;
-    await api.deleteReportRun(run.id).catch(() => undefined);
-    removeRun(run.id);
+  function deleteRun(run: ReportRun) {
+    setConfirm({
+      text: t('confirm.deleteRun', { name: run.name }),
+      run: async () => {
+        await api.deleteReportRun(run.id).catch(() => undefined);
+        removeRun(run.id);
+      },
+    });
   }
 
-  async function deleteSchedule(s: ReportSchedule) {
-    if (!window.confirm(t('confirm.deleteSchedule', { name: s.definition_name }))) return;
-    await api.deleteReportSchedule(s.id).catch(() => undefined);
-    reloadScheds();
+  function deleteSchedule(s: ReportSchedule) {
+    setConfirm({
+      text: t('confirm.deleteSchedule', { name: s.definition_name }),
+      run: async () => {
+        await api.deleteReportSchedule(s.id).catch(() => undefined);
+        reloadScheds();
+      },
+    });
   }
 
   // ── Column sets ──
@@ -366,6 +383,34 @@ export function ReportsPage() {
             reloadScheds();
           }}
         />
+      )}
+
+      {confirm && (
+        <Modal
+          title={t('common:actions.delete')}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <Button variant="outline" disabled={confirmBusy} onClick={() => setConfirm(null)}>
+                {t('common:actions.cancel')}
+              </Button>
+              <Button
+                variant="danger"
+                disabled={confirmBusy}
+                onClick={async () => {
+                  setConfirmBusy(true);
+                  await confirm.run();
+                  setConfirmBusy(false);
+                  setConfirm(null);
+                }}
+              >
+                {t('common:actions.delete')}
+              </Button>
+            </>
+          }
+        >
+          <p className="modal-confirm-text">{confirm.text}</p>
+        </Modal>
       )}
     </div>
   );

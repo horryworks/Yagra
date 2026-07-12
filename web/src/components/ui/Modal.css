@@ -23,6 +23,12 @@
   animation: modal-rise var(--transition);
 }
 
+/* Wide variant for content-heavy dialogs (e.g. the report viewer). Mobile keeps the full-width
+   bottom-sheet width from the mobile block below (this only widens the desktop centered dialog). */
+.modal.modal-wide {
+  width: min(960px, calc(100vw - 48px));
+}
+
 .modal-head {
   display: flex;
   align-items: center;
