@@ -509,7 +509,7 @@ export function NodesPage() {
     selected?.kind === 'group' ? groups.find((g) => g.id === selected.id) ?? null : null;
 
   return (
-    <div className="page-fill">
+    <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
       <PageHeader
         title={t('nav:nodes.all')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all') }]}

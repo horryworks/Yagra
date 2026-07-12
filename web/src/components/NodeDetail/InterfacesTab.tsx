@@ -19,6 +19,7 @@ import { operState } from './OverviewTab';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
 import { usePrefsStore } from '../../prefs';
+import { useIsMobileViewport } from '../../lib/viewport';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
 
 const STATUS_REFRESH_MS = 15_000;
@@ -285,6 +286,9 @@ function InterfaceDock({
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
   const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
+  // Taller charts on a phone so the interface detail actually fills the screen (the dock is capped
+  // at 50dvh; two ~160px charts + head land near that half-screen budget).
+  const chartHeight = useIsMobileViewport() ? 164 : 132;
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
   const [win, setWin] = useState<[number, number] | null>(null);
 
@@ -383,7 +387,7 @@ function InterfaceDock({
           {hasData ? (
             <MetricChart
               title=""
-              height={132}
+              height={chartHeight}
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={formatBps}
@@ -411,7 +415,7 @@ function InterfaceDock({
           {hasData ? (
             <MetricChart
               title=""
-              height={132}
+              height={chartHeight}
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={(v) => `${formatSi(v)}/s`}

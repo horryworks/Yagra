@@ -123,6 +123,16 @@
   display: none;
 }
 
+/* When a node/group detail is open on mobile, the page-level "All nodes / Add node / count" header
+   is redundant (the detail has its own header + the "‹ Inventory" back control) and just eats the
+   vertical budget the detail's tabs need. Hide it so the detail — and the interface charts — get the
+   screen. */
+html[data-viewport='mobile'] .nodes-detail-active > .pageheader,
+html[data-viewport='mobile'] .nodes-detail-active > .form-error,
+html[data-viewport='mobile'] .nodes-detail-active > .nodes-truncated {
+  display: none;
+}
+
 html[data-viewport='mobile'] .nodes-split {
   display: block;
 }

@@ -1021,7 +1021,13 @@
    chrome padding, let the tab bar scroll horizontally instead of overflowing, and drop the 2-column
    facts grid to one column. */
 html[data-viewport='mobile'] .nd-head {
-  padding: 14px 12px 12px;
+  padding: 12px 12px 10px;
+}
+
+/* The breadcrumb eyebrow (region / site path) is redundant on mobile — the "‹ Inventory" back
+   control + the node name give enough context — and it steals a row the tab body needs. */
+html[data-viewport='mobile'] .nd-eyebrow {
+  display: none;
 }
 
 html[data-viewport='mobile'] .nd-tabs {
@@ -1097,10 +1103,11 @@ html[data-viewport='mobile'] .nd-if-cell.right {
   padding: 0;
 }
 
-/* The selected-interface dock keeps to half the screen so the list stays reachable; its charts
-   already stack (auto-fit). Let the head wrap rather than overflow. */
+/* The selected-interface dock takes up to ~60% of the screen on mobile so the throughput + errors
+   charts (taller here) are actually readable; its charts already stack (auto-fit). The × still
+   closes it to get the full list back. Let the head wrap rather than overflow. */
 html[data-viewport='mobile'] .nd-if-dock {
-  max-height: 50dvh;
+  max-height: 60dvh;
   overflow-y: auto;
 }
 
