@@ -13,7 +13,7 @@ import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { useEventLog } from '../components/EventLog/useEventLog';
-import { eventColumns } from '../components/EventLog/eventColumns';
+import { eventColumns, eventCard } from '../components/EventLog/eventColumns';
 import {
   EventFilterBar,
   type KindFilter,
@@ -44,6 +44,7 @@ export function EventsPage() {
   });
 
   const columns = useMemo(() => eventColumns(nodeName, t), [nodeName, t]);
+  const renderCard = useMemo(() => eventCard(nodeName, t), [nodeName, t]);
 
   const setNode = (node: { id: string; name: string } | null) => {
     const params = new URLSearchParams(searchParams);
@@ -85,6 +86,8 @@ export function EventsPage() {
       <DataTable
         rows={rows}
         columns={columns}
+        renderCard={renderCard}
+        cardEstimatePx={92}
         rowKey={(r) => r.id}
         onReachEnd={loadMore}
         empty={t('events.empty')}

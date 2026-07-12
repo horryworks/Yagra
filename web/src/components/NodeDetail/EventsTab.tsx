@@ -12,7 +12,7 @@ import { DataTable } from '../ui/DataTable';
 import { TableToolbar, ResultCount } from '../ui/TableToolbar';
 import { useEntityNames } from '../ui/EntityName';
 import { useEventLog } from '../EventLog/useEventLog';
-import { eventColumns } from '../EventLog/eventColumns';
+import { eventColumns, eventCard } from '../EventLog/eventColumns';
 import {
   EventFilterBar,
   type KindFilter,
@@ -39,6 +39,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     end,
   });
   const columns = useMemo(() => eventColumns(nodeName, t, { showSource: false }), [nodeName, t]);
+  const renderCard = useMemo(() => eventCard(nodeName, t, { showSource: false }), [nodeName, t]);
 
   return (
     <div className="nd-ev">
@@ -69,6 +70,8 @@ export function EventsTab({ node }: { node: NodeDetail }) {
       <DataTable
         rows={rows}
         columns={columns}
+        renderCard={renderCard}
+        cardEstimatePx={92}
         rowKey={(r) => r.id}
         onReachEnd={loadMore}
         empty={t('eventLog.emptyNode')}

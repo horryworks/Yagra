@@ -8,3 +8,89 @@
   white-space: nowrap;
   min-width: 0;
 }
+
+/* Mobile event card (ADR-027 M2, via eventCard() → DataTable renderCard). Only renders in mobile
+   card mode, so these plain classes never match on desktop. The message lives in a <details>
+   disclosure: collapsed = one-line preview, tapped open = full wrapped text — fixes the message
+   being ellipsis-cut and unreadable on a ~390px card. */
+.ev-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ev-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+  font-size: var(--font-sm);
+}
+
+.ev-card-when {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.ev-card-msg {
+  min-width: 0;
+}
+
+.ev-card-msg > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-secondary);
+}
+
+.ev-card-msg > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron affordance — rotates when the message is expanded. */
+.ev-card-msg > summary::after {
+  content: '⌄';
+  flex: none;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.ev-card-msg[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.ev-card-msg-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+}
+
+/* Full message (revealed on tap): wrap long lines, break unbroken tokens. */
+.ev-card-msg[open] .ev-card-msg-preview {
+  display: none;
+}
+
+.ev-card-msg-full {
+  display: none;
+}
+
+.ev-card-msg[open] .ev-card-msg-full {
+  display: block;
+  padding: 4px 0 2px;
+  font-size: var(--font-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}

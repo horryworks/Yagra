@@ -3,6 +3,7 @@
 // node's tab, where every row is that node. Device-supplied text (message) is rendered as
 // plain text only (no dangerouslySetInnerHTML), per the security rules.
 
+import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { Column } from '../ui/DataTable';
 import type { EventRow } from '../../types/api';
@@ -80,4 +81,41 @@ export function eventColumns(
     },
   );
   return cols;
+}
+
+/** Mobile card for an event row (ADR-027 M2): a compact meta line (kind · [source] · result ·
+ *  time) plus the message behind a native `<details>` disclosure — collapsed shows a one-line
+ *  preview, tapping reveals the full wrapped message (the desktop grid ellipsis-truncates it, so
+ *  on a ~390px card the message was unreadable). Passed to `DataTable`'s `renderCard`, so it only
+ *  renders in mobile card mode; desktop keeps the grid. Message is plain text (no HTML), per the
+ *  security rules. `showSource` off inside a single node's tab, where every row is that node. */
+export function eventCard(
+  nodeName: (id: string) => string,
+  t: TFunction,
+  opts?: { showSource?: boolean },
+): (r: EventRow) => ReactNode {
+  const showSource = opts?.showSource ?? true;
+  return (r) => (
+    <div className="ev-card">
+      <div className="ev-card-meta">
+        <Badge tone="neutral">{r.kind}</Badge>
+        {r.action !== 'none' && (
+          <Badge tone={ACTION_TONE[r.action]}>{t(`alerts:eventLog.action.${r.action}`)}</Badge>
+        )}
+        {showSource &&
+          (r.node_id ? (
+            <EntityName name={nodeName(r.node_id)} id={r.node_id} />
+          ) : (
+            <span className="mono muted">{r.source_ip ?? '—'}</span>
+          ))}
+        <span className="ev-card-when muted">{formatTimestamp(r.at_unix_ms)}</span>
+      </div>
+      <details className="ev-card-msg">
+        <summary>
+          <span className="ev-card-msg-preview mono">{r.message || '—'}</span>
+        </summary>
+        <div className="ev-card-msg-full mono">{r.message}</div>
+      </details>
+    </div>
+  );
 }
