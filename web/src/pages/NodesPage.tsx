@@ -20,6 +20,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import { usePrefsStore } from '../prefs';
+import { useViewportMode } from '../lib/viewport';
 import type {
   CredentialSummary,
   FleetGroupSummary,
@@ -146,6 +147,12 @@ export function NodesPage() {
   const [error, setError] = useState<string | null>(null);
   // The user's collapsed-group set (prefs) decides which groups are open → which members to load.
   const collapsed = usePrefsStore((s) => s.nodeTreeCollapsed);
+  // Inventory-pane collapse (desktop only): slim the tree to a rail so the detail uses the full
+  // width. On mobile the pane switcher governs, so the rail is suppressed there.
+  const paneCollapsed = usePrefsStore((s) => s.nodesPaneCollapsed);
+  const toggleNodesPane = usePrefsStore((s) => s.toggleNodesPane);
+  const isMobileView = useViewportMode() === 'mobile';
+  const railed = paneCollapsed && !isMobileView;
 
   // The right-pane selection and the inline detail tab live in the URL (`?sel=node:<id>&tab=…`)
   // so a browser reload restores the same pane instead of snapping back to the empty state
@@ -541,11 +548,37 @@ export function NodesPage() {
         <p className="muted nodes-truncated">{t('inventory.groupTruncated')}</p>
       )}
 
-      <div className={selected ? 'nodes-split has-sel' : 'nodes-split'}>
-        <div className="nodes-pane">
+      <div
+        className={`nodes-split${selected ? ' has-sel' : ''}${railed ? ' inv-collapsed' : ''}`}
+      >
+        {railed ? (
+          <div className="nodes-pane nodes-rail">
+            <button
+              type="button"
+              className="nodes-rail-btn"
+              onClick={toggleNodesPane}
+              title={t('inventory.showTree')}
+              aria-label={t('inventory.showTree')}
+            >
+              »
+            </button>
+          </div>
+        ) : (
+          <div className="nodes-pane">
           <div className="nodes-pane-head">
             <span className="nodes-pane-title">{t('nav:groups.inventory')}</span>
             <div className="nodes-pane-tools">
+              {!isMobileView && (
+                <button
+                  type="button"
+                  className="nodes-pane-collapse"
+                  onClick={toggleNodesPane}
+                  title={t('inventory.hideTree')}
+                  aria-label={t('inventory.hideTree')}
+                >
+                  «
+                </button>
+              )}
               {authed && (
                 <Button
                   variant="outline"
@@ -598,7 +631,8 @@ export function NodesPage() {
             onSetMaintenance={authed ? setMaintenance : undefined}
             onSetMute={authed ? setMute : undefined}
           />
-        </div>
+          </div>
+        )}
 
         <div className="nodes-pane nodes-detail-pane">
           {/* Mobile-only back control (ADR-027 pane switcher) — returns to the full-screen tree by

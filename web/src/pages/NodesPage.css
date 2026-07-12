@@ -65,6 +65,41 @@
   padding: 0 9px;
 }
 
+/* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). */
+.nodes-split.inv-collapsed {
+  grid-template-columns: 40px 1fr;
+}
+
+.nodes-pane-collapse,
+.nodes-rail-btn {
+  height: 28px;
+  min-width: 24px;
+  padding: 0 6px;
+  background: none;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.nodes-pane-collapse:hover,
+.nodes-rail-btn:hover {
+  color: var(--text-primary);
+}
+
+/* The collapsed rail: just a centered expand button at the top. */
+.nodes-rail {
+  align-items: center;
+  padding-top: 8px;
+}
+
+.nodes-rail-btn {
+  width: 28px;
+  height: 32px;
+}
+
 /* Right-pane empty / loading state. */
 .nd-empty {
   margin: auto;

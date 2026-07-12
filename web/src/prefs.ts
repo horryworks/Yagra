@@ -41,6 +41,9 @@ interface PrefsStore {
   throughputScale: ThroughputScale;
   /** Layout-mode override; `auto` follows the viewport (see [`UiMode`] / `lib/viewport.ts`). */
   uiMode: UiMode;
+  /** Collapse the Nodes page inventory-tree pane to a slim rail so the node detail uses the full
+   *  width (desktop only; on mobile the pane switcher governs). */
+  nodesPaneCollapsed: boolean;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -52,6 +55,8 @@ interface PrefsStore {
   toggleThroughputScale: () => void;
   /** Set the layout-mode override (`auto` follows the viewport; `desktop` pins the desktop shell). */
   setUiMode: (mode: UiMode) => void;
+  /** Toggle the Nodes inventory pane between full and a slim rail (persisted). */
+  toggleNodesPane: () => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -63,6 +68,7 @@ export const usePrefsStore = create<PrefsStore>()(
       nodeTreeCollapsed: {},
       throughputScale: 'fit',
       uiMode: 'auto',
+      nodesPaneCollapsed: false,
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
       setLanguage: (language) => set({ language }),
@@ -78,6 +84,7 @@ export const usePrefsStore = create<PrefsStore>()(
       toggleThroughputScale: () =>
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),
       setUiMode: (uiMode) => set({ uiMode }),
+      toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

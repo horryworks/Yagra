@@ -36,7 +36,9 @@
     "searchPlaceholder": "Search…",
     "loadingInventory": "Loading inventory…",
     "selectPrompt": "Select a node or group to see its detail.",
-    "backToList": "Inventory"
+    "backToList": "Inventory",
+    "hideTree": "Collapse inventory",
+    "showTree": "Show inventory"
   },
   "add": {
     "node": "Add node",

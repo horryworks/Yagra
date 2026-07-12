@@ -1052,3 +1052,75 @@ html[data-viewport='mobile'] .nd-facts {
   grid-template-columns: 1fr;
   gap: 12px;
 }
+
+/* Interfaces list: the desktop 5-column grid needs ~620px (the sparkline + In/Out sit off-screen at
+   ~390px, forcing a sideways scroll to reach the graph). Reflow each row to two lines — line 1: name
+   + oper, line 2: full-width sparkline + In/Out — and hide the header + description. */
+html[data-viewport='mobile'] .nd-if-head {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nd-if-row {
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'name oper'
+    'spark inout';
+  gap: 4px 10px;
+  height: auto;
+  min-height: var(--touch-target);
+  padding: 8px 12px;
+}
+
+html[data-viewport='mobile'] .nd-if-id {
+  grid-area: name;
+  padding: 0;
+}
+
+html[data-viewport='mobile'] .nd-if-oper {
+  grid-area: oper;
+  justify-self: end;
+  padding: 0;
+}
+
+html[data-viewport='mobile'] .nd-if-desc {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nd-if-spark {
+  grid-area: spark;
+  padding: 0;
+}
+
+html[data-viewport='mobile'] .nd-if-cell.right {
+  grid-area: inout;
+  justify-self: end;
+  padding: 0;
+}
+
+/* The selected-interface dock keeps to half the screen so the list stays reachable; its charts
+   already stack (auto-fit). Let the head wrap rather than overflow. */
+html[data-viewport='mobile'] .nd-if-dock {
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+
+html[data-viewport='mobile'] .nd-if-dock-head {
+  flex-wrap: wrap;
+}
+
+/* Collection tab: the status card's right-aligned stat cluster (profile / credential / last poll)
+   would overflow ~390px — let the card wrap and drop the stats to a full-width row. */
+html[data-viewport='mobile'] .nd-coll {
+  padding: 14px 12px 20px;
+}
+
+html[data-viewport='mobile'] .nd-coll-status {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .nd-coll-status-r {
+  margin-left: 0;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
