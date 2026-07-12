@@ -24,6 +24,8 @@
 //!   FIREHOSE_SECONDS    run duration; 0 = run forever    (default 30)
 //!   FIREHOSE_DOWN_PCT   % of results reporting Unreachable, to drive liveness alerts (default 2)
 //!   FIREHOSE_IFACES     interfaces per result (needs seeded nodes for the FK upsert) (default 0)
+//!   FIREHOSE_SEEDED     1 ⇒ target the deterministic ids from `seed_nodes.rs` instead of random
+//!                       NodeIds, so results land on real FK-valid, scheduled nodes (default 0)
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,6 +44,15 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Deterministic node-id scheme, **shared verbatim with `seed_nodes.rs`** — `FIREHOSE_SEEDED=1` aims
+/// results at the same rows the seeder wrote. High 64 bits are a fixed namespace tag; the low 64 bits
+/// carry the index. Keep in lockstep with the seeder if you change it.
+const SEED_TAG_HI: u64 = 0xF17E_0000_5EED_0000;
+
+fn seeded_node_id(i: u64) -> NodeId {
+    NodeId::from(Uuid::from_u128(((SEED_TAG_HI as u128) << 64) | i as u128))
 }
 
 /// Build one synthetic result for `node`, index `i` (drives the down/up pattern and sample jitter).
@@ -93,16 +104,24 @@ async fn main() -> anyhow::Result<()> {
     let seconds = env_usize("FIREHOSE_SECONDS", 30);
     let down_pct = env_usize("FIREHOSE_DOWN_PCT", 2).min(100);
     let ifaces = env_usize("FIREHOSE_IFACES", 0);
+    let seeded = env_usize("FIREHOSE_SEEDED", 0) != 0;
 
     // Every Nth result reports down; N derived from the requested percentage (0 ⇒ never down).
     let down_every = 100u64.checked_div(down_pct as u64).unwrap_or(0);
 
     eprintln!(
-        "result_firehose → {url}: {node_count} nodes, {rate}/s, {}s, down≈{down_pct}%, {ifaces} ifaces/result",
+        "result_firehose → {url}: {node_count} {} nodes, {rate}/s, {}s, down≈{down_pct}%, {ifaces} ifaces/result",
+        if seeded { "seeded" } else { "random" },
         if seconds == 0 { "∞".to_owned() } else { seconds.to_string() }
     );
     let bus = NatsBus::connect(&url).await?;
-    let nodes: Vec<NodeId> = (0..node_count).map(|_| NodeId::new()).collect();
+    // Seeded mode reproduces `seed_nodes.rs`' deterministic ids (results hit real FK-valid, scheduled
+    // rows); otherwise use throwaway random ids (fine for pure ingest-throughput measurement).
+    let nodes: Vec<NodeId> = if seeded {
+        (0..node_count as u64).map(seeded_node_id).collect()
+    } else {
+        (0..node_count).map(|_| NodeId::new()).collect()
+    };
 
     // Pace in 50ms ticks so the load is smooth rather than one burst per second.
     const TICKS_PER_SEC: usize = 20;
