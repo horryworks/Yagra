@@ -63,6 +63,10 @@ export function EventFilterBar({
   const [searchDraft, setSearchDraft] = useState('');
   const [fromDraft, setFromDraft] = useState('');
   const [toDraft, setToDraft] = useState('');
+  // Mobile only: the filter controls collapse behind a "Filters" toggle so the event list gets the
+  // screen height (the controls stack ~4 rows tall otherwise). Desktop ignores this — the toggle is
+  // hidden and `.event-filters` is `display: contents`, so the controls stay inline in the toolbar.
+  const [open, setOpen] = useState(false);
 
   // Debounce the text box so we don't refetch on every keystroke (matches the MIB search).
   useEffect(() => {
@@ -83,82 +87,102 @@ export function EventFilterBar({
 
   const hasRange = fromDraft !== '' || toDraft !== '';
 
+  // Badge on the collapsed mobile toggle so applied filters are visible without expanding.
+  const activeCount =
+    (kind !== '' ? 1 : 0) +
+    (matched !== '' ? 1 : 0) +
+    (searchDraft.trim() !== '' ? 1 : 0) +
+    (regex ? 1 : 0) +
+    (hasRange ? 1 : 0) +
+    (showNodePicker && nodeId ? 1 : 0);
+
   return (
     <>
-      <Select value={kind} onChange={(e) => onKindChange(e.target.value as KindFilter)}>
-        <option value="">{t('events.filters.allKinds')}</option>
-        <option value="syslog">syslog</option>
-        <option value="trap">trap</option>
-        <option value="webhook">webhook</option>
-      </Select>
-      <Select value={matched} onChange={(e) => onMatchedChange(e.target.value as MatchedFilter)}>
-        <option value="">{t('events.filters.allEvents')}</option>
-        <option value="matched">{t('events.filters.matched')}</option>
-        <option value="unmatched">{t('events.filters.unmatched')}</option>
-      </Select>
-      {showNodePicker && (
-        <NodePicker
-          value={nodeId ?? null}
-          valueLabel={nodeId ? nodeLabel : undefined}
-          onChange={(n) => onNodeChange?.(n)}
-          placeholder={t('nav:nodes.all')}
-        />
-      )}
-      <div className="event-search">
-        <SearchInput
-          value={searchDraft}
-          onChange={setSearchDraft}
-          placeholder={
-            regex ? t('events.filters.searchPlaceholderRegex') : t('events.searchPlaceholder')
-          }
-          ariaLabel={t('events.searchAria')}
-        />
-        <button
-          type="button"
-          className={`event-regex-toggle${regex ? ' active' : ''}`}
-          aria-pressed={regex}
-          title={t('events.filters.regexAria')}
-          aria-label={t('events.filters.regexAria')}
-          onClick={() => onRegexChange(!regex)}
-        >
-          {t('events.filters.regexLabel')}
-        </button>
-      </div>
-      <div className="event-range">
-        <input
-          className="field event-range-input"
-          type="datetime-local"
-          value={fromDraft}
-          aria-label={t('events.filters.from')}
-          title={t('events.filters.from')}
-          onChange={(e) => {
-            setFromDraft(e.target.value);
-            emitRange(e.target.value, toDraft);
-          }}
-        />
-        <span className="event-range-sep">–</span>
-        <input
-          className="field event-range-input"
-          type="datetime-local"
-          value={toDraft}
-          aria-label={t('events.filters.to')}
-          title={t('events.filters.to')}
-          onChange={(e) => {
-            setToDraft(e.target.value);
-            emitRange(fromDraft, e.target.value);
-          }}
-        />
-        {hasRange && (
+      <button
+        type="button"
+        className="event-filters-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {t('events.filters.toggle')}
+        {activeCount > 0 && <span className="event-filters-count">{activeCount}</span>}
+      </button>
+      <div className="event-filters" data-open={open ? 'true' : 'false'}>
+        <Select value={kind} onChange={(e) => onKindChange(e.target.value as KindFilter)}>
+          <option value="">{t('events.filters.allKinds')}</option>
+          <option value="syslog">syslog</option>
+          <option value="trap">trap</option>
+          <option value="webhook">webhook</option>
+        </Select>
+        <Select value={matched} onChange={(e) => onMatchedChange(e.target.value as MatchedFilter)}>
+          <option value="">{t('events.filters.allEvents')}</option>
+          <option value="matched">{t('events.filters.matched')}</option>
+          <option value="unmatched">{t('events.filters.unmatched')}</option>
+        </Select>
+        {showNodePicker && (
+          <NodePicker
+            value={nodeId ?? null}
+            valueLabel={nodeId ? nodeLabel : undefined}
+            onChange={(n) => onNodeChange?.(n)}
+            placeholder={t('nav:nodes.all')}
+          />
+        )}
+        <div className="event-search">
+          <SearchInput
+            value={searchDraft}
+            onChange={setSearchDraft}
+            placeholder={
+              regex ? t('events.filters.searchPlaceholderRegex') : t('events.searchPlaceholder')
+            }
+            ariaLabel={t('events.searchAria')}
+          />
           <button
             type="button"
-            className="event-range-clear"
-            title={t('events.filters.clearRange')}
-            aria-label={t('events.filters.clearRange')}
-            onClick={clearRange}
+            className={`event-regex-toggle${regex ? ' active' : ''}`}
+            aria-pressed={regex}
+            title={t('events.filters.regexAria')}
+            aria-label={t('events.filters.regexAria')}
+            onClick={() => onRegexChange(!regex)}
           >
-            ×
+            {t('events.filters.regexLabel')}
           </button>
-        )}
+        </div>
+        <div className="event-range">
+          <input
+            className="field event-range-input"
+            type="datetime-local"
+            value={fromDraft}
+            aria-label={t('events.filters.from')}
+            title={t('events.filters.from')}
+            onChange={(e) => {
+              setFromDraft(e.target.value);
+              emitRange(e.target.value, toDraft);
+            }}
+          />
+          <span className="event-range-sep">–</span>
+          <input
+            className="field event-range-input"
+            type="datetime-local"
+            value={toDraft}
+            aria-label={t('events.filters.to')}
+            title={t('events.filters.to')}
+            onChange={(e) => {
+              setToDraft(e.target.value);
+              emitRange(fromDraft, e.target.value);
+            }}
+          />
+          {hasRange && (
+            <button
+              type="button"
+              className="event-range-clear"
+              title={t('events.filters.clearRange')}
+              aria-label={t('events.filters.clearRange')}
+              onClick={clearRange}
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
     </>
   );

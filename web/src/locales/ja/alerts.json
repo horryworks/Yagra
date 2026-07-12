@@ -52,7 +52,8 @@
       "searchPlaceholderRegex": "メッセージを正規表現で検索…",
       "from": "開始",
       "to": "終了",
-      "clearRange": "期間をクリア"
+      "clearRange": "期間をクリア",
+      "toggle": "フィルタ"
     }
   },
   "eventLog": {

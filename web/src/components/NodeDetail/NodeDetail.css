@@ -1030,6 +1030,26 @@ html[data-viewport='mobile'] .nd-eyebrow {
   display: none;
 }
 
+/* The per-node action buttons (Poll now / Dependency / Move / Open detail / Edit / Delete) wrapped
+   to 2–3 rows on a narrow screen, pushing the tabs + tab body down so a tab like Events had almost
+   no room. Keep the name on its own line and lay the actions in a single horizontally-scrollable
+   row, so the header stays compact and the list gets the height. */
+html[data-viewport='mobile'] .nd-actions {
+  width: 100%;
+  margin-left: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+html[data-viewport='mobile'] .nd-actions::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-viewport='mobile'] .nd-actions > * {
+  flex: none;
+}
+
 html[data-viewport='mobile'] .nd-tabs {
   padding: 0 12px;
   flex-wrap: nowrap;

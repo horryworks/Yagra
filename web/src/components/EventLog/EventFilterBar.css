@@ -1,6 +1,17 @@
 /* Event-log filter controls (kind/matched/node selects come from Field/NodePicker; this styles the
    search+regex group and the From/To time-range group). Tokens only, per ui-conventions. */
 
+/* Desktop: the controls stay inline in the toolbar (the wrapper collapses out of the layout) and the
+   mobile "Filters" toggle is hidden. Mobile overrides below turn `.event-filters` into a real
+   collapsible container. */
+.event-filters {
+  display: contents;
+}
+
+.event-filters-toggle {
+  display: none;
+}
+
 .event-search {
   display: inline-flex;
   align-items: center;
@@ -74,4 +85,81 @@
 .event-range-clear:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+/* ============================================================ mobile (ADR-027 M2)
+   Collapse the whole filter set behind a "Filters" toggle so the event list gets the vertical space
+   (the controls otherwise stack ~4 rows tall above a ~390px-wide log). The toggle carries a count
+   badge when filters are applied, so a collapsed bar still shows something is filtering. */
+html[data-viewport='mobile'] .event-filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  padding: 0 14px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+/* Chevron affordance — rotates when the filter set is expanded. */
+html[data-viewport='mobile'] .event-filters-toggle::after {
+  content: '⌄';
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+html[data-viewport='mobile'] .event-filters-toggle[aria-expanded='true']::after {
+  transform: rotate(180deg);
+}
+
+.event-filters-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--brand);
+  color: var(--brand-mark);
+  font-size: var(--font-2xs);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Collapsed by default; expands to a full-width wrapping stack below the toggle. */
+html[data-viewport='mobile'] .event-filters {
+  display: none;
+}
+
+html[data-viewport='mobile'] .event-filters[data-open='true'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* Each control goes full-width so it is a comfortable touch target and reads clearly. */
+html[data-viewport='mobile'] .event-filters > .field,
+html[data-viewport='mobile'] .event-filters .event-search,
+html[data-viewport='mobile'] .event-filters .event-range {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+html[data-viewport='mobile'] .event-search .table-search {
+  flex: 1;
+}
+
+/* The From/To datetime inputs share the row and grow; the separator/clear stay intrinsic. */
+html[data-viewport='mobile'] .event-range-input {
+  flex: 1;
+  min-width: 0;
 }
