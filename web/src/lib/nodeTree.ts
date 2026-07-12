@@ -61,6 +61,92 @@ export function descendantNodes(group: TreeGroup): NodeSummary[] {
   return out;
 }
 
+/** One visible row of the inventory tree, flattened for virtualized rendering (S13). The tree shape
+ *  is carried by row order + `depth` (indentation is purely `depth × INDENT`), so a windowed list of
+ *  these renders identically to the old recursive DOM but only builds the on-screen rows. */
+export type FlatRow =
+  | {
+      kind: 'group';
+      depth: number;
+      group: TreeGroup;
+      isOpen: boolean;
+      hasChildren: boolean;
+      members: NodeSummary[];
+    }
+  | { kind: 'node'; depth: number; node: NodeSummary }
+  | { kind: 'ungrouped-head'; count: number }
+  | { kind: 'ungrouped-node'; depth: number; node: NodeSummary };
+
+/** A stable key for a flat row (for React keys + virtualizer identity). */
+export function flatRowKey(row: FlatRow): string {
+  switch (row.kind) {
+    case 'group':
+      return `g:${row.group.id}`;
+    case 'node':
+    case 'ungrouped-node':
+      return `n:${row.node.id}`;
+    case 'ungrouped-head':
+      return 'ungrouped-head';
+  }
+}
+
+/** Whether a group's subtree contains anything matching `q` (its own name, a descendant group's
+ *  name, or a member node's name) — so ancestor groups stay visible to reveal a nested match. */
+function subtreeMatches(group: TreeGroup, q: string): boolean {
+  if (group.name.toLowerCase().includes(q)) return true;
+  if (group.nodes.some((n) => n.name.toLowerCase().includes(q))) return true;
+  return group.children.some((c) => subtreeMatches(c, q));
+}
+
+/** Flatten the visible rows of the inventory tree in display order, honouring collapse state and
+ *  the name filter — the single source of truth the virtualized `NodeTree` renders. Collapsed
+ *  groups omit their descendants; while filtering, every group is force-expanded and non-matching
+ *  rows are hidden. Pure (no React) so the ordering/visibility rules are unit-tested directly. */
+export function flattenTree(
+  tree: NodeTreeData,
+  opts: { collapsed: Record<string, boolean>; filter: string },
+): FlatRow[] {
+  const q = opts.filter.trim().toLowerCase();
+  const filtering = q.length > 0;
+  const rows: FlatRow[] = [];
+
+  const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
+    const selfMatch = filtering && group.name.toLowerCase().includes(q);
+    const effMatch = ancestorMatch || selfMatch;
+    // Hide a group entirely when filtering and nothing under it matches.
+    if (filtering && !effMatch && !subtreeMatches(group, q)) return;
+
+    const isOpen = filtering ? true : !opts.collapsed[group.id];
+    const hasChildren = group.children.length + group.nodes.length > 0;
+    rows.push({ kind: 'group', depth, group, isOpen, hasChildren, members: descendantNodes(group) });
+    if (!isOpen) return;
+    // Children first, then this group's own member nodes — matching the recursive render order.
+    for (const child of group.children) walkGroup(child, depth + 1, effMatch);
+    for (const n of group.nodes) {
+      if (!filtering || effMatch || n.name.toLowerCase().includes(q)) {
+        rows.push({ kind: 'node', depth: depth + 1, node: n });
+      }
+    }
+  };
+
+  for (const g of tree.roots) walkGroup(g, 0, false);
+
+  const ungroupedShown = filtering
+    ? tree.ungrouped.filter((n) => n.name.toLowerCase().includes(q))
+    : tree.ungrouped;
+  // Show the ungrouped header + its root drop zone whenever there's any inventory (so the drop zone
+  // is reachable next to the groups), but not when filtering yields no ungrouped matches, and not
+  // for a completely empty inventory (the page shows its own empty-state message instead).
+  const showUngrouped = filtering
+    ? ungroupedShown.length > 0
+    : tree.roots.length > 0 || tree.ungrouped.length > 0;
+  if (showUngrouped) {
+    rows.push({ kind: 'ungrouped-head', count: tree.ungrouped.length });
+    for (const n of ungroupedShown) rows.push({ kind: 'ungrouped-node', depth: 1, node: n });
+  }
+  return rows;
+}
+
 /** The order states are shown in a health bar / legend (best → worst, with the neutral states
  *  trailing). Stable so the bar segments and legend read consistently everywhere. */
 export const STATE_ORDER: NodeState[] = [

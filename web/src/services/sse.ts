@@ -7,7 +7,7 @@
 // token and streams the response body. The event *parsing* stays split out as pure functions so
 // it can be tested without a network stream.
 
-import type { Alert, AnalysisJob, ReportRun } from '../types/api';
+import type { Alert, AnalysisJob, NodeState, ReportRun } from '../types/api';
 import { getToken, notifyAuthFailure } from './api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -36,6 +36,40 @@ export function parseAnalysisJob(data: string): AnalysisJob | null {
     const obj = JSON.parse(data) as Partial<AnalysisJob>;
     if (typeof obj.id === 'string' && typeof obj.state === 'string') {
       return obj as AnalysisJob;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** An incremental node-state change off the wire (S14): a node's new rolled-up display state. */
+export interface NodeStateEvent {
+  node_id: string;
+  state: NodeState;
+  at_unix_ms: number;
+}
+
+const NODE_STATES: readonly string[] = [
+  'ok',
+  'warning',
+  'critical',
+  'unknown',
+  'unreachable',
+  'maintenance',
+];
+
+/** Parse one node-state SSE payload, or null if malformed (also rejects the `resync` hint, whose
+ *  `data` is a bare number). */
+export function parseNodeStateEvent(data: string): NodeStateEvent | null {
+  try {
+    const obj = JSON.parse(data) as Partial<NodeStateEvent>;
+    if (
+      typeof obj.node_id === 'string' &&
+      typeof obj.state === 'string' &&
+      NODE_STATES.includes(obj.state)
+    ) {
+      return obj as NodeStateEvent;
     }
     return null;
   } catch {
@@ -176,6 +210,25 @@ export function subscribeAlerts(
       if (!event) return;
       if (event.resolved) onResolve?.(event);
       else onAlert(event);
+    },
+    onError,
+  );
+}
+
+/**
+ * Subscribe to the node-state stream (S14): each event is one node's new rolled-up display state.
+ * The inventory/topology views seed from REST once and then patch individual nodes live off this
+ * stream instead of re-fetching the whole fleet every 15s. Returns an unsubscribe function.
+ */
+export function subscribeNodeStates(
+  onState: (ev: NodeStateEvent) => void,
+  onError?: (err: unknown) => void,
+): () => void {
+  return subscribeSSE(
+    '/stream/node-states',
+    (data) => {
+      const ev = parseNodeStateEvent(data);
+      if (ev) onState(ev);
     },
     onError,
   );

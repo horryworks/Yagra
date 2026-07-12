@@ -56,6 +56,10 @@ const FLAP_THRESHOLD: usize = 5;
 /// window and miss events; if one does lag, the stream handler logs it and emits a `resync`
 /// hint so the client can re-fetch the active-alert list (see `stream_alerts` in api.rs).
 const EVENT_BUFFER: usize = 1024;
+/// Node-state SSE buffer (S14). Larger than the alert buffer because a full poll sweep can emit
+/// one state event per node (first observation plus genuine transitions). A subscriber that
+/// overflows this gets a `resync` hint and re-seeds from REST, so the bound is a soft backstop.
+const NODE_EVENT_BUFFER: usize = 4096;
 
 /// What the manager wants done about a committed transition.
 #[derive(Debug, Clone)]
@@ -221,6 +225,10 @@ pub struct AlertManager {
     /// O(live) scan on each transition — the hot path during a parent-down cascade (S3).
     down: Mutex<BTreeSet<NodeId>>,
     tx: broadcast::Sender<String>,
+    /// Incremental node-state (rolled-up display state) change stream for the WebUI (S14) — a
+    /// dedicated channel so the inventory/topology views patch one node live instead of re-fetching
+    /// the whole fleet every 15s. Kept separate from `tx` so the two event schemas don't mix.
+    node_tx: broadcast::Sender<String>,
     config: RwLock<AlertConfig>,
 }
 
@@ -229,12 +237,14 @@ impl AlertManager {
     #[must_use]
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
+        let (node_tx, _) = broadcast::channel(NODE_EVENT_BUFFER);
         Self {
             states: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             down: Mutex::new(BTreeSet::new()),
             tx,
+            node_tx,
             config: RwLock::new(AlertConfig::default()),
         }
     }
@@ -248,6 +258,24 @@ impl AlertManager {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.tx.subscribe()
+    }
+
+    /// Subscribe to the incremental node-state stream (S14): JSON `{node_id, state, at_unix_ms}`
+    /// per rolled-up display-state change, for the inventory/topology live-patch views.
+    #[must_use]
+    pub fn subscribe_node_states(&self) -> broadcast::Receiver<String> {
+        self.node_tx.subscribe()
+    }
+
+    /// Emit one incremental node-state change to the node-state SSE subscribers. Fire-and-forget —
+    /// no subscribers is not an error.
+    fn broadcast_node_state(&self, node: NodeId, state: NodeState, at_unix_ms: i64) {
+        let event = serde_json::json!({
+            "node_id": node.as_uuid(),
+            "state": state,
+            "at_unix_ms": at_unix_ms,
+        });
+        let _ = self.node_tx.send(event.to_string());
     }
 
     /// Snapshot of currently active alerts.
@@ -340,6 +368,11 @@ impl AlertManager {
     /// every committed transition (also broadcast to SSE subscribers here).
     pub fn observe(&self, result: &PollResult) -> Vec<NotifyAction> {
         let node = result.node_id;
+        // Rolled-up display state before this observation. Only this node's own state can move in
+        // one `observe` (suppression re-attributes other nodes' alerts but leaves their committed
+        // liveness — and thus their display state — unchanged), so a single before/after diff
+        // captures every node-state SSE event this call should emit (S14).
+        let state_before = self.node_state(node);
         let mut actions = Vec::new();
 
         // Inside an active maintenance window every check observes `Maintenance` instead of
@@ -406,6 +439,16 @@ impl AlertManager {
                         eval: Some(eval),
                     },
                 ));
+            }
+        }
+
+        // Push an incremental node-state event only when the rolled-up display state actually moved
+        // (including this node's first observation) — subscribers patch the one node live instead of
+        // re-fetching the whole fleet (S14). `after` is `Some` whenever a liveness check ran.
+        let state_after = self.node_state(node);
+        if state_after != state_before {
+            if let Some(state) = state_after {
+                self.broadcast_node_state(node, state, result.at_unix_ms);
             }
         }
         actions
@@ -1578,6 +1621,38 @@ mod tests {
         let actions = mgr.observe(&result(node, CheckOutcome::Reachable, 300));
         assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn observe_broadcasts_node_state_changes_only() {
+        // S14: the node-state SSE stream carries one event per rolled-up display-state change
+        // (including the first observation), and nothing while the state is steady.
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+        let mut rx = mgr.subscribe_node_states();
+
+        // First observation commits Ok and emits the initial node-state event.
+        mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let ev = rx.try_recv().expect("first observe emits state");
+        assert!(ev.contains("\"ok\""), "state ok in payload: {ev}");
+        assert!(
+            ev.contains(&node.as_uuid().to_string()),
+            "carries node id: {ev}"
+        );
+
+        // Steady Ok: no state change ⇒ no further events.
+        mgr.observe(&result(node, CheckOutcome::Reachable, 1));
+        assert!(rx.try_recv().is_err(), "steady Ok must not emit");
+
+        // Drive Unreachable up to the dwell threshold; only the committing observe changes state.
+        for i in 0..(DWELL_SAMPLES - 1) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, 10 + i64::from(i)));
+            assert!(rx.try_recv().is_err(), "pre-dwell must not emit");
+        }
+        mgr.observe(&result(node, CheckOutcome::Unreachable, 100));
+        let ev = rx.try_recv().expect("dwell-crossing observe emits");
+        assert!(ev.contains("\"unreachable\""), "state unreachable: {ev}");
+        assert!(rx.try_recv().is_err(), "exactly one event per real change");
     }
 
     #[test]

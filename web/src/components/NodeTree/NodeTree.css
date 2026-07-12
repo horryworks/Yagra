@@ -201,10 +201,11 @@
   color: var(--accent-color);
 }
 
-.ntree-ungrouped {
-  margin-top: 6px;
-  border-top: var(--border-width) dashed var(--border-color);
-  padding-top: 6px;
+/* Ungrouped section header row (also the root drop zone). In the flattened/virtualized list it's a
+   standalone row, so it carries the separator the old wrapper provided — via an inset line rather
+   than a border/margin, so the row height stays exactly --row-h for the virtualizer's estimate. */
+.ntree-row.ntree-ungrouped-head {
+  box-shadow: inset 0 1px 0 0 var(--border-color);
 }
 
 .ntree-ungrouped-icon {

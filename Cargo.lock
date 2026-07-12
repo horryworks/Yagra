@@ -4089,6 +4089,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "rand 0.8.6",
  "snmp2",
+ "socket2 0.5.10",
  "tokio",
  "tokio-stream",
  "tracing",

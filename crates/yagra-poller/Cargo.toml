@@ -31,6 +31,8 @@ uuid = { workspace = true }
 tokio-stream = { workspace = true }
 rand = { workspace = true }
 hostname = { workspace = true }
+# SO_REUSEPORT + SO_RCVBUF for the parallel edge UDP listeners (S9).
+socket2 = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

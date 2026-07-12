@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildNodeTree,
   descendantNodes,
+  flattenTree,
+  flatRowKey,
   groupOptions,
   groupPath,
   isSelfOrDescendant,
@@ -39,6 +41,50 @@ const node = (
   model: null,
   group_id: groupId,
   sort_order,
+});
+
+describe('flattenTree', () => {
+  const tree = () =>
+    buildNodeTree(
+      [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1')],
+      [node('n1', 'sw1', 'g2'), node('n2', 'router', null)],
+    );
+
+  it('emits rows in display order: group, nested group, node, then the ungrouped section', () => {
+    const rows = flattenTree(tree(), { collapsed: {}, filter: '' });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1', 'ungrouped-head', 'n:n2']);
+    const g1 = rows[0];
+    expect(g1.kind === 'group' && g1.depth).toBe(0);
+    const g2 = rows[1];
+    expect(g2.kind === 'group' && g2.depth).toBe(1);
+    // The group carries its rolled-up descendant members for the health bar / count.
+    expect(g1.kind === 'group' && g1.members.map((n) => n.id)).toEqual(['n1']);
+  });
+
+  it('collapsing a group hides its descendants but keeps the group row', () => {
+    const rows = flattenTree(tree(), { collapsed: { g1: true }, filter: '' });
+    // g1 present (collapsed), g2/n1 hidden, ungrouped still shows.
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'ungrouped-head', 'n:n2']);
+    const g1 = rows[0];
+    expect(g1.kind === 'group' && g1.isOpen).toBe(false);
+  });
+
+  it('filtering force-expands and hides non-matching rows', () => {
+    const rows = flattenTree(tree(), { collapsed: { g1: true }, filter: 'sw1' });
+    // The match reveals the ancestor groups (force-expanded) down to the node; router is filtered out.
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1']);
+  });
+
+  it('a completely empty inventory yields no rows (page shows its own empty state)', () => {
+    const empty = buildNodeTree([], []);
+    expect(flattenTree(empty, { collapsed: {}, filter: '' })).toEqual([]);
+  });
+
+  it('shows the ungrouped header alongside groups even when there are no ungrouped nodes', () => {
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, { collapsed: {}, filter: '' });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'ungrouped-head']);
+  });
 });
 
 describe('buildNodeTree', () => {

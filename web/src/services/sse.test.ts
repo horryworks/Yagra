@@ -3,11 +3,30 @@ import {
   dataFromEventBlock,
   parseAlertEvent,
   parseAnalysisJob,
+  parseNodeStateEvent,
   parseReportRun,
   subscribeAlerts,
   subscribeAnalysis,
 } from './sse';
 import { setToken } from './api';
+
+describe('parseNodeStateEvent', () => {
+  it('parses a well-formed node-state payload', () => {
+    const data = JSON.stringify({ node_id: 'n1', state: 'unreachable', at_unix_ms: 1000 });
+    const ev = parseNodeStateEvent(data);
+    expect(ev?.node_id).toBe('n1');
+    expect(ev?.state).toBe('unreachable');
+  });
+
+  it('rejects an unknown state value', () => {
+    expect(parseNodeStateEvent(JSON.stringify({ node_id: 'n1', state: 'exploded' }))).toBeNull();
+  });
+
+  it('rejects the resync hint (a bare number) and malformed JSON', () => {
+    expect(parseNodeStateEvent('5')).toBeNull();
+    expect(parseNodeStateEvent('{nope')).toBeNull();
+  });
+});
 
 describe('parseAlertEvent', () => {
   it('parses a well-formed alert payload', () => {

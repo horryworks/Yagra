@@ -14,13 +14,16 @@
 // group inside its own subtree are refused (cycle guard). This component is presentation +
 // interaction only; the page owns the data and turns the callbacks into API calls + a reload.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import {
   buildNodeTree,
-  descendantNodes,
+  flattenTree,
+  flatRowKey,
   isSelfOrDescendant,
+  type FlatRow,
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { usePrefsStore } from '../../prefs';
@@ -39,18 +42,13 @@ import './NodeTree.css';
 /** What the inventory currently has selected (drives the split's detail pane). */
 export type TreeSelection = { kind: 'node' | 'group'; id: string } | null;
 
-/** Whether a group's subtree contains anything matching the filter (its own name, a descendant
- *  group's name, or a member node's name) — so ancestor groups stay visible to reveal matches. */
-function subtreeMatches(group: TreeGroup, q: string): boolean {
-  if (group.name.toLowerCase().includes(q)) return true;
-  if (group.nodes.some((n) => n.name.toLowerCase().includes(q))) return true;
-  return group.children.some((c) => subtreeMatches(c, q));
-}
-
 /** Pixels of indent per tree depth. */
 const INDENT = 16;
 /** Left padding of a depth-0 row. */
 const BASE_PAD = 6;
+/** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
+ *  flattened list virtualizes with a uniform estimate (S13). */
+const ROW_H = 30;
 
 type DragItem = { kind: 'node' | 'group'; id: string };
 type DropPos = 'before' | 'after' | 'inside';
@@ -140,7 +138,7 @@ export function NodeTree({
   onSetMute,
 }: Props) {
   const { t } = useTranslation('nodes');
-  const tree = buildNodeTree(groups, nodes);
+  const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
   // Expansion defaults to fully-expanded and persists across reloads: the prefs store keeps the
   // set of groups the user explicitly collapsed (empty ⇒ everything open), so the last layout is
   // restored and any newly-added group shows expanded automatically.
@@ -154,6 +152,21 @@ export function NodeTree({
   // non-matching rows are hidden, so matches are always revealed.
   const q = (filter ?? '').trim().toLowerCase();
   const filtering = q.length > 0;
+  // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
+  // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
+  // a tens-of-thousands-node inventory stays responsive (S13).
+  const flat = useMemo(
+    () => flattenTree(tree, { collapsed, filter: filter ?? '' }),
+    [tree, collapsed, filter],
+  );
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: flat.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    overscan: 16,
+    getItemKey: (index) => flatRowKey(flat[index]),
+  });
   // Row click selects (drives the split detail pane); without a select handler, fall back to the
   // legacy "open node" behaviour so the tree still works on its own.
   const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
@@ -316,120 +329,97 @@ export function NodeTree({
     return dropTarget.ok ? ` drop-${dropTarget.position}` : ' drop-bad';
   };
 
-  const renderGroup = (
-    group: TreeGroup,
-    depth: number,
-    ancestorMatch = false,
-  ): React.ReactNode => {
-    const selfMatch = filtering && group.name.toLowerCase().includes(q);
-    // A matched group (self or via an ancestor) reveals all its members; otherwise only the
-    // matching descendants show. Hide a group entirely when nothing under it matches.
-    const effMatch = ancestorMatch || selfMatch;
-    if (filtering && !effMatch && !subtreeMatches(group, q)) return null;
-
-    const isOpen = filtering ? true : !collapsed[group.id];
-    const hasChildren = group.children.length + group.nodes.length > 0;
-    const members = descendantNodes(group);
+  const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
+    const { group, depth, isOpen, hasChildren, members } = row;
     const isSel = selected?.kind === 'group' && selected.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id };
-    const visibleNodes = group.nodes.filter(
-      (n) => !filtering || effMatch || n.name.toLowerCase().includes(q),
-    );
     return (
-      <div className="ntree-group" key={group.id}>
-        <div
-          className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
-          style={{ paddingLeft: depth * INDENT + BASE_PAD }}
-          draggable={canEdit}
-          onClick={() => selectGroup(group)}
-          onDragStart={(e) => {
+      <div
+        className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
+        style={{ paddingLeft: depth * INDENT + BASE_PAD }}
+        draggable={canEdit}
+        onClick={() => selectGroup(group)}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          e.dataTransfer.effectAllowed = 'move';
+          setDrag({ kind: 'group', id: group.id });
+        }}
+        onDragEnd={reset}
+        onDragOver={(e) => onRowDragOver(e, target, true)}
+        onDrop={(e) => onRowDrop(e, target, true)}
+        onContextMenu={(e) => {
+          if (!canEdit) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
+        }}
+      >
+        <button
+          type="button"
+          className={`ntree-twisty${isOpen ? ' open' : ''}`}
+          onClick={(e) => {
             e.stopPropagation();
-            e.dataTransfer.effectAllowed = 'move';
-            setDrag({ kind: 'group', id: group.id });
+            toggle(group.id);
           }}
-          onDragEnd={reset}
-          onDragOver={(e) => onRowDragOver(e, target, true)}
-          onDrop={(e) => onRowDrop(e, target, true)}
-          onContextMenu={(e) => {
-            if (!canEdit) return;
-            e.preventDefault();
-            setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
+          aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
+          disabled={!hasChildren}
+        >
+          ▶
+        </button>
+        <span className="ntree-icon">
+          <GroupIcon type={group.group_type} />
+        </span>
+        <button
+          type="button"
+          className="ntree-grp-name"
+          onClick={(e) => {
+            e.stopPropagation();
+            selectGroup(group);
           }}
         >
-          <button
-            type="button"
-            className={`ntree-twisty${isOpen ? ' open' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggle(group.id);
-            }}
-            aria-label={isOpen ? t('nav:shell.collapse') : t('nav:shell.expand')}
-            disabled={!hasChildren}
-          >
-            ▶
-          </button>
-          <span className="ntree-icon">
-            <GroupIcon type={group.group_type} />
+          {group.name}
+        </button>
+        <HealthBar nodes={members} className="ntree-health" />
+        <span className="ntree-count">{members.length}</span>
+        {suppressionMarks(
+          !!suppression?.maintenanceGroups.has(group.id),
+          !!suppression?.muteGroups.has(group.id),
+        )}
+        {canEdit && (
+          <span className="ntree-actions">
+            <button
+              type="button"
+              className="ntree-act"
+              title={t('group.addSubgroup')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddGroup(group.id);
+              }}
+            >
+              ＋
+            </button>
+            <button
+              type="button"
+              className="ntree-act"
+              title={t('tree.editMoveGroup')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditGroup(group);
+              }}
+            >
+              ✎
+            </button>
+            <button
+              type="button"
+              className="ntree-act"
+              title={t('group.delete')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteGroup(group);
+              }}
+            >
+              🗑
+            </button>
           </span>
-          <button
-            type="button"
-            className="ntree-grp-name"
-            onClick={(e) => {
-              e.stopPropagation();
-              selectGroup(group);
-            }}
-          >
-            {group.name}
-          </button>
-          <HealthBar nodes={members} className="ntree-health" />
-          <span className="ntree-count">{members.length}</span>
-          {suppressionMarks(
-            !!suppression?.maintenanceGroups.has(group.id),
-            !!suppression?.muteGroups.has(group.id),
-          )}
-          {canEdit && (
-            <span className="ntree-actions">
-              <button
-                type="button"
-                className="ntree-act"
-                title={t('group.addSubgroup')}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAddGroup(group.id);
-                }}
-              >
-                ＋
-              </button>
-              <button
-                type="button"
-                className="ntree-act"
-                title={t('tree.editMoveGroup')}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEditGroup(group);
-                }}
-              >
-                ✎
-              </button>
-              <button
-                type="button"
-                className="ntree-act"
-                title={t('group.delete')}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteGroup(group);
-                }}
-              >
-                🗑
-              </button>
-            </span>
-          )}
-        </div>
-        {isOpen && (
-          <div className="ntree-children">
-            {group.children.map((c) => renderGroup(c, depth + 1, effMatch))}
-            {visibleNodes.map((n) => renderNode(n, depth + 1))}
-          </div>
         )}
       </div>
     );
@@ -502,11 +492,51 @@ export function NodeTree({
     );
   };
 
-  const rootDropActive = dropTarget?.id === 'root' && !!drag;
+  // The Ungrouped section header row — also the root drop zone (drop here → move to top level) and
+  // the right-click "add at top level" target. In the flattened list it's a single row; the old
+  // wrapper's dashed separator moves onto the row via `.ntree-ungrouped-head`.
+  const ungroupedHeadRow = (count: number): React.ReactNode => {
+    const rootDropActive = dropTarget?.id === 'root' && !!drag;
+    return (
+      <div
+        className={`ntree-row ntree-ungrouped-head${rootDropActive ? ' drop-inside' : ''}`}
+        style={{ paddingLeft: BASE_PAD }}
+        onDragOver={(e) => {
+          if (!drag) return;
+          e.preventDefault();
+          setDropTarget({ id: 'root', position: 'inside', ok: true });
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          dropOnRoot();
+        }}
+        onContextMenu={(e) => {
+          if (!canEdit) return;
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
+        }}
+      >
+        <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
+        <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
+        <span className="ntree-grp-name ntree-ungrouped-label">{t('ungrouped')}</span>
+        <span className="ntree-count">{count}</span>
+      </div>
+    );
+  };
 
-  const ungroupedShown = filtering
-    ? tree.ungrouped.filter((n) => n.name.toLowerCase().includes(q))
-    : tree.ungrouped;
+  const renderRow = (row: FlatRow): React.ReactNode => {
+    switch (row.kind) {
+      case 'group':
+        return groupRow(row);
+      case 'node':
+      case 'ungrouped-node':
+        return renderNode(row.node, row.depth);
+      case 'ungrouped-head':
+        return ungroupedHeadRow(row.count);
+    }
+  };
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
 
   return (
     <div className="ntree">
@@ -519,44 +549,10 @@ export function NodeTree({
         </div>
       )}
 
-      <div className="ntree-body">
-        {tree.roots.map((g) => renderGroup(g, 0))}
-
-        {/* Ungrouped nodes + the root drop zone (hidden while filtering with no matches). */}
-        {(!filtering || ungroupedShown.length > 0) && (
-          <div
-            className={`ntree-ungrouped${rootDropActive ? ' drop-inside' : ''}`}
-            onDragOver={(e) => {
-              if (!drag) return;
-              e.preventDefault();
-              setDropTarget({ id: 'root', position: 'inside', ok: true });
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              dropOnRoot();
-            }}
-          >
-            <div
-              className="ntree-row ntree-ungrouped-head"
-              style={{ paddingLeft: BASE_PAD }}
-              onContextMenu={(e) => {
-                if (!canEdit) return;
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
-              }}
-            >
-              <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
-              <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
-              <span className="ntree-grp-name ntree-ungrouped-label">{t('ungrouped')}</span>
-              <span className="ntree-count">{tree.ungrouped.length}</span>
-            </div>
-            {ungroupedShown.map((n) => renderNode(n, 1))}
-          </div>
-        )}
-
-        {tree.roots.length === 0 &&
-          tree.ungrouped.length === 0 &&
-          (loading ? (
+      <div className="ntree-body" ref={scrollRef}>
+        {flat.length === 0 ? (
+          // Empty flat list: a blank body while filtering with no matches, else loading / empty-state.
+          filtering ? null : loading ? (
             <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (
             <p
@@ -569,7 +565,27 @@ export function NodeTree({
             >
               {t('tree.emptyInventory')}
             </p>
-          ))}
+          )
+        ) : (
+          // Virtualized body: only the on-screen window of `flat` is turned into DOM (S13).
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualRows.map((vi) => (
+              <div
+                key={vi.key}
+                data-index={vi.index}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${vi.start}px)`,
+                }}
+              >
+                {renderRow(flat[vi.index])}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {menu && (

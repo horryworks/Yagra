@@ -1,11 +1,20 @@
 //! Passive-event UDP listeners: syslog and SNMP traps (Phase 2 passive monitoring).
 //!
-//! Each listener is a long-lived `recv_from` loop bound to an **unprivileged** container
-//! port (compose maps host 514/162 onto it — the binary keeps only `cap_net_raw`). Every
-//! received datagram is rate-limited per source IP ([`yagra_ingest::SourceLimiter`]),
-//! parsed by the pure `yagra-ingest` parsers, normalized into an [`EventMsg`], and
-//! published on `yagra.events` for core to match. Publish failures are logged and
-//! counted, never fatal — UDP event delivery is best-effort by nature.
+//! Each protocol runs **N parallel `recv_from` loops** bound to the same **unprivileged**
+//! container port via `SO_REUSEPORT` (compose maps host 514/162 onto it — the binary keeps
+//! only `cap_net_raw`). The kernel load-balances arriving datagrams across the N sockets,
+//! each of which has its own kernel receive queue drained by its own task — so a momentary
+//! stall in one reader (e.g. a slow NATS publish) never backs up the others' queues, and the
+//! single-task receive ceiling is lifted (S9). Each socket also requests an enlarged
+//! `SO_RCVBUF` so bursts are absorbed by the kernel instead of silently dropped. On non-Unix
+//! (the dev box) `SO_REUSEPORT` is unavailable, so a single socket is used regardless.
+//!
+//! Every received datagram is rate-limited per source IP ([`yagra_ingest::SourceLimiter`],
+//! shared across all readers behind a `std::sync::Mutex` — the critical section is a few
+//! arithmetic ops and is never held across an `.await`, so the global budget stays exact
+//! without async-lock overhead, S22), parsed by the pure `yagra-ingest` parsers, normalized
+//! into an [`EventMsg`], and published on `yagra.events` for core to match. Publish failures
+//! are logged and counted, never fatal — UDP event delivery is best-effort by nature.
 //!
 //! Enabled per poller via env (`YAGRA_SYSLOG_BIND` / `YAGRA_TRAP_BIND`); unset = off.
 //! This is site-deployment config, deliberately *not* config-over-bus (ADR-020 covers
@@ -14,11 +23,11 @@
 //! **Log discipline:** raw message bodies only at `debug` (syslog routinely carries
 //! credentials); the trap community value is never logged at any level.
 
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 use yagra_bus::{Bus, EventKind, EventMsg, BUS_SCHEMA_VERSION};
 use yagra_ingest::{
@@ -56,7 +65,9 @@ pub async fn run_syslog_listener<B: Bus>(
             }
         };
         metrics::counter!("yagra_events_received_total", "kind" => "syslog").increment(1);
-        if !limiter.lock().await.allow(peer.ip(), now_unix_ms()) {
+        // Sync critical section (a few arithmetic ops) — the guard is dropped at the end of
+        // this `if` condition, never held across the `.await` in `publish` below (S22).
+        if !allow(&limiter, peer.ip()) {
             metrics::counter!("yagra_events_dropped_total", "reason" => "rate_limit").increment(1);
             continue;
         }
@@ -106,7 +117,7 @@ pub async fn run_trap_listener<B: Bus>(
             metrics::counter!("yagra_events_dropped_total", "reason" => "oversize").increment(1);
             continue;
         }
-        if !limiter.lock().await.allow(peer.ip(), now_unix_ms()) {
+        if !allow(&limiter, peer.ip()) {
             metrics::counter!("yagra_events_dropped_total", "reason" => "rate_limit").increment(1);
             continue;
         }
@@ -170,6 +181,19 @@ pub async fn run_trap_listener<B: Bus>(
     }
 }
 
+/// Take one token for `source` from the shared limiter. Uses a `std::sync::Mutex` (not the
+/// async one) because `SourceLimiter::allow` is synchronous and the critical section is tiny —
+/// the guard is created and dropped entirely within this call, so it is never held across an
+/// `.await` (S22). Poison-tolerant: a limiter never panics while holding the lock, but if some
+/// future change ever did, recovering the inner value keeps intake alive rather than crashing
+/// every reader.
+fn allow(limiter: &Mutex<SourceLimiter>, source: IpAddr) -> bool {
+    limiter
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .allow(source, now_unix_ms())
+}
+
 /// Publish one event; failures are counted + logged (never fatal).
 async fn publish<B: Bus>(bus: &B, event: EventMsg, source: IpAddr, byte_len: usize) {
     let kind = event.kind;
@@ -184,13 +208,61 @@ async fn publish<B: Bus>(bus: &B, event: EventMsg, source: IpAddr, byte_len: usi
     }
 }
 
-/// Bind a UDP listener socket from an env-style bind string (e.g. `0.0.0.0:1514`,
-/// `[::]:1162` for dual-stack).
-pub async fn bind_udp(bind: &str) -> anyhow::Result<UdpSocket> {
+/// Bind `workers` UDP listener sockets to the same env-style bind address (e.g. `0.0.0.0:1514`,
+/// `[::]:1162` for dual-stack) with `SO_REUSEPORT`, so the kernel load-balances datagrams across
+/// N independent receive queues (S9). Each socket requests `rcvbuf_bytes` of `SO_RCVBUF` so bursts
+/// are buffered by the kernel rather than dropped. Returns one socket per reader task.
+///
+/// `SO_REUSEPORT` is Unix-only; on other platforms (the dev box) a single socket is returned
+/// regardless of `workers`, since a second bind to the same port would fail without it.
+pub async fn bind_reuseport(
+    bind: &str,
+    workers: usize,
+    rcvbuf_bytes: usize,
+) -> anyhow::Result<Vec<UdpSocket>> {
     let addr: SocketAddr = bind
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid listener bind address {bind:?}: {e}"))?;
-    Ok(UdpSocket::bind(addr).await?)
+    let effective = if cfg!(unix) { workers.max(1) } else { 1 };
+    // Bind the first socket to resolve an ephemeral (`:0`, in tests) port to a concrete one, then
+    // bind the remaining sockets to that exact address so they all share the same port.
+    let first = make_reuseport_socket(addr, rcvbuf_bytes)?;
+    let bound = first.local_addr()?;
+    let mut socks = Vec::with_capacity(effective);
+    socks.push(first);
+    for _ in 1..effective {
+        socks.push(make_reuseport_socket(bound, rcvbuf_bytes)?);
+    }
+    Ok(socks)
+}
+
+/// Build one `SO_REUSEPORT` + enlarged-`SO_RCVBUF` UDP socket bound to `addr`.
+fn make_reuseport_socket(addr: SocketAddr, rcvbuf_bytes: usize) -> anyhow::Result<UdpSocket> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let sock = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    sock.set_reuse_address(true)?;
+    // SO_REUSEPORT lets the N reader sockets share the port; the kernel spreads datagrams across
+    // them. Unix-only — the `#[cfg]` keeps this compiling on the Windows dev box.
+    #[cfg(unix)]
+    sock.set_reuse_port(true)?;
+    // Best-effort: a larger receive buffer reduces silent kernel drops under burst. The kernel
+    // clamps the request to `net.core.rmem_max`; failing to raise it is non-fatal.
+    if let Err(e) = sock.set_recv_buffer_size(rcvbuf_bytes) {
+        tracing::debug!(error = %e, rcvbuf_bytes, "could not enlarge SO_RCVBUF (kernel clamp?)");
+    }
+    // Keep the historical dual-stack behaviour for `[::]` binds (tokio's default).
+    if addr.is_ipv6() {
+        let _ = sock.set_only_v6(false);
+    }
+    // tokio requires a non-blocking socket for `from_std`.
+    sock.set_nonblocking(true)?;
+    sock.bind(&addr.into())?;
+    let std_sock: std::net::UdpSocket = sock.into();
+    Ok(UdpSocket::from_std(std_sock)?)
 }
 
 #[cfg(test)]
@@ -301,7 +373,58 @@ mod tests {
 
     #[test]
     fn bind_rejects_malformed_address() {
-        let err = futures::executor::block_on(bind_udp("not-an-addr")).unwrap_err();
+        let err =
+            futures::executor::block_on(bind_reuseport("not-an-addr", 1, 1 << 20)).unwrap_err();
         assert!(err.to_string().contains("invalid listener bind address"));
+    }
+
+    /// The parallel bind opens the requested number of sockets, all sharing one concrete port.
+    /// On non-Unix (no `SO_REUSEPORT`) it collapses to a single socket regardless of `workers`.
+    #[tokio::test]
+    async fn bind_reuseport_shares_one_port_across_readers() {
+        let socks = bind_reuseport("127.0.0.1:0", 4, 1 << 20)
+            .await
+            .expect("bind should succeed");
+        let expected = if cfg!(unix) { 4 } else { 1 };
+        assert_eq!(socks.len(), expected);
+        // Every reader socket is bound to the same port (the ephemeral one the first resolved).
+        let port = socks[0].local_addr().unwrap().port();
+        assert_ne!(port, 0);
+        for s in &socks {
+            assert_eq!(s.local_addr().unwrap().port(), port);
+        }
+    }
+
+    /// A datagram sent to the shared port is delivered to exactly one of the N parallel readers
+    /// (kernel `SO_REUSEPORT` load-balancing) and still becomes a bus event end-to-end.
+    #[tokio::test]
+    async fn parallel_readers_receive_over_shared_port() {
+        let bus = Arc::new(InMemoryBus::new(8));
+        let mut events = bus.subscribe_events();
+
+        let socks = bind_reuseport("127.0.0.1:0", 3, 1 << 20).await.unwrap();
+        let addr = socks[0].local_addr().unwrap();
+        let limiter = limiter();
+        for sock in socks {
+            tokio::spawn(run_syslog_listener(
+                sock,
+                bus.clone(),
+                limiter.clone(),
+                Some("default".into()),
+            ));
+        }
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(b"<13>Jul  6 22:14:15 edge-sw1 chassisd: link down", addr)
+            .await
+            .unwrap();
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("event within timeout")
+            .unwrap();
+        assert_eq!(event.kind, EventKind::Syslog);
+        assert_eq!(event.message, "chassisd: link down");
     }
 }

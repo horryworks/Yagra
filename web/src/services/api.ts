@@ -848,8 +848,28 @@ export const api = {
   getAlertTransitions: (limit?: number): Promise<AlertTransition[]> =>
     request(limit != null ? `/alerts/transitions?limit=${limit}` : '/alerts/transitions'),
 
-  /** The dependency graph: nodes + parent edges + state + active root-cause attribution. */
-  getTopology: (): Promise<{ nodes: TopologyNode[] }> => request('/topology'),
+  /** The dependency graph: nodes + parent edges + state + active root-cause attribution. The
+   *  endpoint is keyset-paginated (S7) — this pages through `next_cursor` and assembles the whole
+   *  graph, so callers keep the same `{ nodes }` shape. Views fetch this once and keep node state
+   *  fresh via the node-state SSE stream (`useNodeStates`) rather than re-fetching every 15s. */
+  getTopology: async (): Promise<{ nodes: TopologyNode[] }> => {
+    const nodes: TopologyNode[] = [];
+    let cursor: string | undefined;
+    // Bounded loop: pages are ≤5000 server-side, so even a 50k fleet is ~10 iterations. The guard
+    // caps a pathological run at 100k nodes (200 pages) rather than looping unbounded.
+    for (let i = 0; i < 200; i++) {
+      const params = new URLSearchParams();
+      if (cursor) params.set('cursor', cursor);
+      const qs = params.toString();
+      const page = await request<{ nodes: TopologyNode[]; next_cursor: string | null }>(
+        qs ? `/topology?${qs}` : '/topology',
+      );
+      nodes.push(...page.nodes);
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+    return { nodes };
+  },
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */

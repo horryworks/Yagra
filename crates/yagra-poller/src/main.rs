@@ -423,26 +423,37 @@ async fn spawn_event_listeners(
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    let limiter = Arc::new(tokio::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
+    // One shared limiter behind a `std::sync::Mutex` (S22): its critical section is a few
+    // arithmetic ops and is never held across an await, so all readers share the exact global
+    // budget without async-lock overhead. Sharing (not sharding) keeps the global rate correct.
+    let limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
         per_source, global, now_ms,
     )));
     let pool = env_nonempty("YAGRA_POLLER_POOL");
+    // Parallel receive (S9): N reader sockets per protocol via SO_REUSEPORT, each with an enlarged
+    // SO_RCVBUF. Default worker count tracks CPUs (capped) so a single poller drains the kernel in
+    // parallel; both knobs are env-tunable per deployment.
+    let workers = env_listener_workers();
+    let rcvbuf = env_usize("YAGRA_LISTENER_RCVBUF_BYTES", 4 * 1024 * 1024);
     let mut labels = Vec::new();
 
     if let Some(bind) = syslog_bind {
-        match listeners::bind_udp(&bind).await {
-            Ok(sock) => {
-                tracing::info!(%bind, per_source, global, "syslog listener enabled");
+        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf, per_source, global, "syslog listener enabled");
                 labels.push(format!("syslog:{bind}"));
-                spawn_cancellable(
-                    shutdown,
-                    listeners::run_syslog_listener(
-                        sock,
-                        bus.clone(),
-                        limiter.clone(),
-                        pool.clone(),
-                    ),
-                );
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        listeners::run_syslog_listener(
+                            sock,
+                            bus.clone(),
+                            limiter.clone(),
+                            pool.clone(),
+                        ),
+                    );
+                }
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind syslog listener"),
         }
@@ -451,20 +462,48 @@ async fn spawn_event_listeners(
     if let Some(bind) = trap_bind {
         // Optional community filter — value must never be logged.
         let community = env_nonempty("YAGRA_TRAP_COMMUNITY");
-        match listeners::bind_udp(&bind).await {
-            Ok(sock) => {
-                tracing::info!(%bind, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
+        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
                 labels.push(format!("trap:{bind}"));
-                spawn_cancellable(
-                    shutdown,
-                    listeners::run_trap_listener(sock, bus.clone(), limiter, community, pool),
-                );
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        listeners::run_trap_listener(
+                            sock,
+                            bus.clone(),
+                            limiter.clone(),
+                            community.clone(),
+                            pool.clone(),
+                        ),
+                    );
+                }
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
         }
     }
 
     labels
+}
+
+/// Number of parallel `recv_from` readers per edge listener (S9). Defaults to the host's parallelism
+/// capped at 4 (a single poller sustains tens of thousands of msg/s well before this matters); env
+/// `YAGRA_LISTENER_WORKERS` overrides. Non-Unix collapses to one socket in `bind_reuseport` anyway.
+fn env_listener_workers() -> usize {
+    let default = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 4);
+    env_usize("YAGRA_LISTENER_WORKERS", default).max(1)
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
 }
 
 fn env_nonempty(key: &str) -> Option<String> {

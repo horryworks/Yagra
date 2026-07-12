@@ -75,6 +75,10 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rand = "0.8"
 # Machine hostname for poller identity default (ADR-009) — tiny, cross-platform, no unsafe of ours.
 hostname = "0.4"
+# Low-level socket options for the parallel edge UDP listeners (S9): SO_REUSEPORT so the kernel
+# load-balances datagrams across N independent receive queues, and an enlarged SO_RCVBUF to absorb
+# bursts. The Unix-only options are cfg-gated; the non-unix dev box falls back to a single socket.
+socket2 = "0.5"
 # Host self-metrics (self-observability): CPU/load/memory of the core & poller hosts. Cross-platform
 # so `cargo run` still works on the Windows dev box. Only yagra-hoststats (pulled by core + poller)
 # depends on it, keeping the heavy collector out of the shared/bus/alert crates.

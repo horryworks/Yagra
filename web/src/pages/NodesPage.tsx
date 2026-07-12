@@ -5,9 +5,10 @@
 // node, read its tabs, Poll now, move on. Add/rename/delete/move of groups and nodes runs through
 // focused-edit modals (ManageConfig); 503 in skeleton mode is surfaced.
 //
-// Scale note: the tree needs the full group + node sets, so it loads all node pages up to a cap
-// (NODE_CAP) and flags when an inventory is larger than that — virtualized lazy loading is the
-// follow-up for very large fleets.
+// Scale note: the tree needs the full group + node sets, so it loads all node pages up to a safety
+// cap (NODE_CAP) and flags when an inventory is larger. The left pane is virtualized (only on-screen
+// rows are in the DOM, S13), so the cap is a fetch backstop, not the old ~5k render ceiling; node
+// state stays live via the node-state SSE stream (`useNodeStates`) rather than a full refetch.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -25,6 +26,7 @@ import type {
   ProfileSummary,
 } from '../types/api';
 import { groupOptions, isSelfOrDescendant, tallyStates } from '../lib/nodeTree';
+import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -39,9 +41,12 @@ import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintena
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
 
-const PAGE = 100;
-/** Max nodes the tree loads (pages of PAGE). Beyond this we flag the inventory as truncated. */
-const NODE_CAP = 5000;
+/** Page size for the inventory load — the server's max keyset page, so a large fleet assembles in
+ *  as few round-trips as possible (S13). */
+const PAGE = 500;
+/** Fetch backstop: max nodes the tree loads (pages of PAGE). The tree renders virtualized, so this
+ *  is a load guard, not a render limit; beyond it we flag the inventory as truncated. */
+const NODE_CAP = 50000;
 
 const GROUP_TYPES: GroupType[] = ['site', 'region', 'device_type', 'service', 'generic'];
 
@@ -138,6 +143,18 @@ export function NodesPage() {
   const suppression = useMemo(
     () => buildSuppressionIndex(windows, mutes, groups, nodes),
     [windows, mutes, groups, nodes],
+  );
+
+  // Overlay the live SSE node states (S14) so the tree's status dots + the header attention count
+  // update without re-fetching the inventory; a fresh event wins over the loaded snapshot.
+  const live = useNodeStates();
+  const liveNodes = useMemo(
+    () =>
+      nodes.map((n) => {
+        const s = live.get(n.id);
+        return s && s !== n.state ? { ...n, state: s } : n;
+      }),
+    [nodes, live],
   );
 
   const reload = useCallback(async () => {
@@ -329,7 +346,7 @@ export function NodesPage() {
       .catch((e: unknown) => setError(errMsg(e, t('err.reorderGroup'))));
 
   const nodeCount = nodes.length;
-  const attention = tallyStates(nodes).needAttention;
+  const attention = tallyStates(liveNodes).needAttention;
   const selectedNode =
     selected?.kind === 'node' ? nodes.find((n) => n.id === selected.id) ?? null : null;
   const selectedGroup =
@@ -401,7 +418,7 @@ export function NodesPage() {
           </div>
           <NodeTree
             groups={groups}
-            nodes={nodes}
+            nodes={liveNodes}
             canEdit={authed}
             loading={loading}
             showToolbar={false}

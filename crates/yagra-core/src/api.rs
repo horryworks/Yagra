@@ -302,6 +302,7 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/version", get(version))
         .route("/api/v1/stream/alerts", get(stream_alerts))
+        .route("/api/v1/stream/node-states", get(stream_node_states))
         .route(
             "/api/v1/notification-channels",
             get(list_notification_channels).post(create_notification_channel),
@@ -1265,20 +1266,42 @@ struct TopologyNode {
 
 /// The dependency graph: every node with its parent edge, current state, and any active
 /// root-cause attribution. Assembled from the inventory (parent links) + the live alert engine
-/// (state + root_cause) — no new model. Admin-only data source (full node list).
-async fn get_topology(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+/// (state + root_cause) — no new model. Admin-only data source.
+///
+/// Keyset-paginated (`?cursor=&limit=`, S7): the old handler returned one unbounded full-fleet JSON
+/// blob every 15s. It now returns bounded pages ordered by id with a `next_cursor` (same contract
+/// as `/nodes`); the client pages through once and keeps state fresh via the node-state SSE stream
+/// (S14) instead of re-fetching. `state`/`root_cause` stay in the payload so the initial page load
+/// is self-contained.
+async fn get_topology(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<NodePageQuery>,
+) -> Response {
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
     };
-    let nodes = match admin.repo.list_nodes().await {
-        Ok(n) => n,
+    // Default page large (the graph views assemble the whole fleet, so fewer round-trips is better)
+    // but bounded so no single response is a multi-MB blob.
+    let limit = q.limit.unwrap_or(2000).clamp(1, 5000);
+    let mut rows = match admin.repo.list_topology_page(q.cursor, limit + 1).await {
+        Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "topology list nodes failed");
             return internal("failed to load topology");
         }
+    };
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.truncate(limit as usize);
+    }
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.id.to_string())
+    } else {
+        None
     };
     let states = st.alerts.node_states();
     // node → upstream root cause (from active, suppressed alerts).
@@ -1288,32 +1311,32 @@ async fn get_topology(State(st): State<ApiState>, headers: HeaderMap) -> Respons
             root_causes.entry(a.node).or_insert_with(|| cause.as_uuid());
         }
     }
-    // Batch the coarse fallback probe for unobserved nodes: a single TSDB query for the whole
-    // graph rather than one `latest()` round-trip per node (see `fresh_fallback_ids`). This path
-    // loads the full inventory, so after a core restart (empty `states`) the per-node version fired
-    // one VM query for every node.
-    let unobserved: Vec<NodeId> = nodes
+    // Batch the coarse fallback probe for this page's unobserved nodes: a single TSDB query rather
+    // than one `latest()` round-trip per node (see `fresh_fallback_ids`). After a core restart
+    // (empty `states`) the per-node version fired one VM query for every node.
+    let unobserved: Vec<NodeId> = rows
         .iter()
-        .filter(|n| !states.contains_key(&n.id))
-        .map(|n| n.id)
+        .map(|r| NodeId::from(r.id))
+        .filter(|id| !states.contains_key(id))
         .collect();
     let fresh_fallback = fresh_fallback_ids(&st, &unobserved).await;
-    let mut out = Vec::with_capacity(nodes.len());
-    for n in nodes {
-        let state = match states.get(&n.id) {
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let nid = NodeId::from(r.id);
+        let state = match states.get(&nid) {
             Some(s) => *s,
-            None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
+            None if fresh_fallback.contains(&r.id) => NodeState::Ok,
             None => NodeState::Unknown,
         };
         out.push(TopologyNode {
-            id: n.id.as_uuid(),
-            name: n.name,
-            parent_id: n.parent.map(|p| p.as_uuid()),
+            id: r.id,
+            name: r.name,
+            parent_id: r.parent_id,
             state,
-            root_cause: root_causes.get(&n.id).copied(),
+            root_cause: root_causes.get(&nid).copied(),
         });
     }
-    Json(serde_json::json!({ "nodes": out })).into_response()
+    Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
 }
 
 /// A node returning no fresh data (silent failure / blind spot).
@@ -2589,6 +2612,35 @@ async fn stream_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Respon
             }
         },
     );
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// Live node-state stream (SSE, ADR-019 / S14): rolled-up display-state changes as they happen.
+/// Each event's `data` is `{node_id, state, at_unix_ms}`. The inventory/topology views seed from
+/// REST once, then patch individual nodes off this stream instead of re-fetching the whole fleet
+/// every 15s. A lagged subscriber gets a named `resync` event and re-seeds. View-gated; works in
+/// skeleton mode (the alert engine is always present).
+async fn stream_node_states(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe_node_states())
+        .filter_map(|r| async move {
+            match r {
+                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
+                // Slow subscriber missed `n` events — emit a `resync` hint so the client re-seeds
+                // node state from REST and closes the gap (same contract as `stream_alerts`).
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        missed = n,
+                        "SSE node-state subscriber lagged; emitting resync hint"
+                    );
+                    Some(Ok(Event::default().event("resync").data(n.to_string())))
+                }
+            }
+        });
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()

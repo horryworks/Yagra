@@ -85,6 +85,16 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
     })
 }
 
+/// The dependency-graph skeleton for one node: just enough to draw the topology/dependency views
+/// (id, display name, upstream parent). Loaded in keyset pages by [`NodeRepo::list_topology_page`]
+/// so the endpoints never build one unbounded full-fleet row set (S7).
+#[derive(Debug, Clone)]
+pub struct TopologyRow {
+    pub id: Uuid,
+    pub name: String,
+    pub parent_id: Option<Uuid>,
+}
+
 /// Fixed id for the seeded demo node the walking-skeleton WebUI queries.
 const DEMO_NODE_ID: Uuid = Uuid::nil();
 
@@ -297,6 +307,45 @@ impl NodeRepo {
             }
         };
         rows.iter().map(node_from_row).collect()
+    }
+
+    /// One keyset page of the dependency-graph skeleton — only `(id, name, parent_id)` — ordered by
+    /// id, starting after `after` (S7). Deliberately light: the topology/coverage endpoints don't
+    /// need the full node row (address/creds/tags), and at 50k nodes a large page keeps the
+    /// whole-graph assembly to a handful of round-trips instead of returning one unbounded JSON blob.
+    pub async fn list_topology_page(
+        &self,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<TopologyRow>> {
+        // Larger page than the node list (its 501 cap is UI-facing); +1 to detect "has more".
+        let limit = limit.clamp(1, 5001);
+        let rows = match after {
+            Some(after) => {
+                sqlx::query(
+                    "SELECT id, name, parent_id FROM nodes WHERE id > $1 ORDER BY id LIMIT $2",
+                )
+                .bind(after)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query("SELECT id, name, parent_id FROM nodes ORDER BY id LIMIT $1")
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.iter()
+            .map(|row| {
+                Ok(TopologyRow {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    parent_id: row.try_get("parent_id")?,
+                })
+            })
+            .collect()
     }
 
     /// Create a node; returns its new id. Optional profile, bound credential, parent, and

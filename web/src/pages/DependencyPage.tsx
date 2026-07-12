@@ -1,15 +1,17 @@
 // Topology ▸ Dependencies. The management surface for the dependency graph: every node, its
 // upstream (parent), live status, and — when suppressed — the root cause it's rolled up under.
 // Set/change/clear a node's upstream inline (the shared SetParentModal). Read: GET /api/v1/topology
-// (the same payload the Network map renders), polled on the dashboard cadence; the map stays the
-// visualization, this is where you edit the edges. Names are resolved locally from the payload
-// (every node is present), so no raw UUIDs are shown.
+// (the same payload the Network map renders), fetched on a slow reconcile cadence and kept live via
+// the node-state SSE stream (`useNodeStates`, S14); the map stays the visualization, this is where
+// you edit the edges. Names are resolved locally from the payload (every node is present), so no
+// raw UUIDs are shown.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
+import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
 import { useAuthStore } from '../store';
 import { stateColorVar, stateLabel } from '../lib/format';
 import type { NodeState, TopologyNode } from '../types/api';
@@ -39,11 +41,24 @@ export function DependencyPage() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'upstream' | 'suppressed'>('all');
   const [editing, setEditing] = useState<TopologyNode | null>(null);
-  // Bumped after a save to re-arm usePolled for an immediate refresh (it also polls every 15s).
+  // Bumped after a save to re-arm usePolled for an immediate refresh (it also reconciles slowly).
   const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const { data, loading, error } = usePolled(() => api.getTopology(), [refreshNonce]);
-  const nodes = useMemo(() => data?.nodes ?? [], [data]);
+  const { data, loading, error } = usePolled(
+    () => api.getTopology(),
+    [refreshNonce],
+    LIVE_RECONCILE_MS,
+  );
+  const live = useNodeStates();
+  // Overlay the live SSE state on top of the fetched graph (S14): a fresh event wins over the
+  // slower structural refetch's snapshot.
+  const nodes = useMemo(() => {
+    const base = data?.nodes ?? [];
+    return base.map((n) => {
+      const s = live.get(n.id);
+      return s && s !== n.state ? { ...n, state: s } : n;
+    });
+  }, [data, live]);
   const nameOf = useMemo(() => {
     const m = new Map<string, string>();
     for (const n of nodes) m.set(n.id, n.name);

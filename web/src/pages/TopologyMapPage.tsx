@@ -1,9 +1,10 @@
 // Topology ▸ Network map. A visual dependency graph: every node with a parent → child link,
 // colored by live status, with dependency-suppressed nodes (an upstream root cause) drawn muted
-// and their edge dashed. Data: GET /api/v1/topology (parent links + live state + root_cause),
-// polled on the dashboard cadence. Isolated nodes (no dependency links) are summarised, not drawn,
-// so a flat inventory doesn't paint thousands of disconnected boxes. The forest is a single-parent
-// tree, so we lay it out ourselves (no graph-lib dependency) — see components/TopologyMap.
+// and their edge dashed. Data: GET /api/v1/topology (parent links + state + root_cause), fetched on
+// a slow reconcile cadence and kept live via the node-state SSE stream (`useNodeStates`, S14) so
+// status updates without re-fetching the whole graph every 15s (S7). Isolated nodes (no dependency
+// links) are summarised, not drawn, so a flat inventory doesn't paint thousands of disconnected
+// boxes. The forest is a single-parent tree, so we lay it out ourselves — see components/TopologyMap.
 
 import { useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -16,6 +17,7 @@ import { stateColorVar, stateLabel } from '../lib/format';
 import type { NodeState } from '../types/api';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
+import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
 import './TopologyMapPage.css';
 
 /** Above this many linked nodes an SVG map stops being legible (and cheap) — surface the size
@@ -33,8 +35,17 @@ const LEGEND_ORDER: NodeState[] = [
 
 export function TopologyMapPage() {
   const { t } = useTranslation('topology');
-  const { data, loading, error } = usePolled(() => api.getTopology(), []);
-  const nodes = useMemo(() => data?.nodes ?? [], [data]);
+  const { data, loading, error } = usePolled(() => api.getTopology(), [], LIVE_RECONCILE_MS);
+  const live = useNodeStates();
+  // Overlay the live SSE state on top of the fetched graph (S14): a fresh event wins over the
+  // slower structural refetch's snapshot.
+  const nodes = useMemo(() => {
+    const base = data?.nodes ?? [];
+    return base.map((n) => {
+      const s = live.get(n.id);
+      return s && s !== n.state ? { ...n, state: s } : n;
+    });
+  }, [data, live]);
   const layout = useMemo(() => layoutTopology(nodes), [nodes]);
 
   const presentStates = useMemo(() => {
