@@ -70,3 +70,45 @@
   margin: 0;
   padding: 8px 0;
 }
+
+/* Mobile (ADR-027): the single fixed-height row would overflow ~390px, so wrap it into a stacked
+   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/acked;
+   line 4: actions. `order` reshuffles the DOM (which puts time before the descriptive bits) into
+   reading order. CSS-only; desktop is untouched. */
+html[data-viewport='mobile'] .alertrow {
+  height: auto;
+  min-height: var(--touch-target);
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 0;
+  row-gap: 4px;
+}
+
+html[data-viewport='mobile'] .alertrow-node {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-viewport='mobile'] .alertrow-time {
+  order: 1; /* stay on line 1, pushed right by its margin-left:auto */
+}
+
+html[data-viewport='mobile'] .alertrow-check {
+  order: 2;
+  flex-basis: 100%; /* own line */
+}
+
+html[data-viewport='mobile'] .alertrow-cause,
+html[data-viewport='mobile'] .alertrow-flap,
+html[data-viewport='mobile'] .alertrow-acked {
+  order: 3;
+}
+
+html[data-viewport='mobile'] .alertrow-actions {
+  order: 4;
+  flex-basis: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+}

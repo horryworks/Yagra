@@ -90,3 +90,23 @@
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
+
+/* Mobile card (ADR-027): variable-height, absolutely positioned like a row but content-sized. The
+   virtualizer measures it (measureElement + data-index) and drives translateY. The card's inner
+   layout is the caller's `renderCard`. */
+.dt-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 12px 14px;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.dt-card.clickable {
+  cursor: pointer;
+}
+
+.dt-card:active {
+  background: var(--bg-tertiary);
+}

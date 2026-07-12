@@ -195,7 +195,10 @@
 }
 .rp-viewer {
   width: min(1100px, calc(100vw - 48px));
+  /* dvh (with a vh fallback line above) so the iOS toolbar can't clip the viewer; identical on
+     desktop. */
   height: min(900px, calc(100vh - 48px));
+  height: min(900px, calc(100dvh - 48px));
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);

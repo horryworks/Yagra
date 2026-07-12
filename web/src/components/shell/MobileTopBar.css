@@ -1,0 +1,94 @@
+/* Mobile top bar (ADR-027). Height = --topbar-h plus the top safe-area inset (notch); a flat row of
+   44px touch targets. Only mounts in mobile mode, so no data-viewport scoping is needed. */
+.mtopbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: calc(var(--topbar-h) + var(--safe-top));
+  padding: var(--safe-top) max(10px, var(--safe-right)) 0 max(10px, var(--safe-left));
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+  flex: none;
+}
+
+.mtopbar-burger {
+  flex: none;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mtopbar-burger:hover {
+  color: var(--text-primary);
+}
+
+.mtopbar-home {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.mtopbar-wordmark {
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.mtopbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.mtopbar-bell {
+  position: relative;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mtopbar-bell:hover {
+  color: var(--text-primary);
+}
+
+.mtopbar-bell-glyph {
+  font-size: var(--font-2xl);
+  line-height: 1;
+}
+
+.mtopbar-bell-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-2xs);
+  color: var(--on-status);
+  background: var(--status-critical);
+  border-radius: 8px;
+}

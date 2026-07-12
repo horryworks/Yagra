@@ -17,6 +17,11 @@ export type Theme = 'light' | 'dark';
 /** Interface language. English is the default; others are lazy-loaded (see `i18n.ts`). */
 export type Language = 'en' | 'ja';
 
+/** UI layout mode override (ADR-027). `auto` follows the viewport width (mobile < 768px); `desktop`
+ *  forces the desktop shell even on a narrow screen. There is no `mobile` value — a wide screen is
+ *  always desktop, so the only override worth persisting is "keep desktop". See `lib/viewport.ts`. */
+export type UiMode = 'auto' | 'desktop';
+
 /** How the interface Throughput chart's Y-axis treats the configured-bandwidth reference line.
  *  `fit` auto-fits the axis to traffic (line pinned to the top edge until traffic nears it);
  *  `capacity` pins the axis top to the bandwidth so headroom is shown as a proportion. A single
@@ -34,6 +39,8 @@ interface PrefsStore {
   nodeTreeCollapsed: Record<string, true>;
   /** Global Y-axis mode for interface throughput charts (see [`ThroughputScale`]). */
   throughputScale: ThroughputScale;
+  /** Layout-mode override; `auto` follows the viewport (see [`UiMode`] / `lib/viewport.ts`). */
+  uiMode: UiMode;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -43,6 +50,8 @@ interface PrefsStore {
   setThroughputScale: (scale: ThroughputScale) => void;
   /** Flip the throughput Y-axis between fit-to-traffic and scale-to-capacity (global + persisted). */
   toggleThroughputScale: () => void;
+  /** Set the layout-mode override (`auto` follows the viewport; `desktop` pins the desktop shell). */
+  setUiMode: (mode: UiMode) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -53,6 +62,7 @@ export const usePrefsStore = create<PrefsStore>()(
       sidebarCollapsed: false,
       nodeTreeCollapsed: {},
       throughputScale: 'fit',
+      uiMode: 'auto',
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
       setLanguage: (language) => set({ language }),
@@ -67,6 +77,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setThroughputScale: (throughputScale) => set({ throughputScale }),
       toggleThroughputScale: () =>
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),
+      setUiMode: (uiMode) => set({ uiMode }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

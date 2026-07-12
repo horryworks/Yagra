@@ -139,3 +139,14 @@ code,
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
+
+/* ============================================================ responsive / mobile base
+   iOS Safari auto-zooms the page when a focused input's font-size is < 16px. The UI base is 13px,
+   so in mobile mode pin form controls to --font-touch-input (16px) to suppress the zoom-on-focus
+   (ADR-027 / ui-conventions.md "Responsive / mobile"). Scoped to html[data-viewport='mobile'] so
+   desktop rendering is untouched. */
+html[data-viewport='mobile'] input,
+html[data-viewport='mobile'] select,
+html[data-viewport='mobile'] textarea {
+  font-size: var(--font-touch-input);
+}

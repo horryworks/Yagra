@@ -83,6 +83,18 @@
   --sidebar-w-collapsed: 52px;
   --transition: 0.15s ease;
 
+  /* ---- responsive / mobile (ADR-027; ui-conventions.md "Responsive / mobile") ----
+     The one canonical layout boundary is 768px (< 768px = mobile mode). A CSS custom property
+     can't be used inside an @media condition, so 768 lives as a documented constant here and in
+     web/src/lib/viewport.ts (MOBILE_BP — the single TS source). Mode-dependent LAYOUT keys off
+     html[data-viewport='mobile']; these tokens back touch ergonomics + iOS quirks. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --touch-target: 44px; /* min tap target on mobile; 40px floor for secondary in-row controls */
+  --font-touch-input: 16px; /* iOS Safari auto-zooms inputs < 16px on focus — pin mobile inputs here */
+
   /* ---- Light theme (default; §1.5) ---- */
   --bg-primary: #ffffff;
   --bg-secondary: #f3efe9;

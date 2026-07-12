@@ -10,6 +10,7 @@ import { AppRoutes } from './routes';
 import { useTranslation } from 'react-i18next';
 import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
 import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
+import { applyViewportMode, useViewportMode } from './lib/viewport';
 import i18n from './i18n';
 import { useAuthStore } from './store';
 
@@ -20,6 +21,7 @@ export function App() {
   const setRole = useAuthStore((s) => s.setRole);
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
+  const viewportMode = useViewportMode();
   const [config, setConfig] = useState<ClientConfig | null>(null);
 
   // Resolve the current principal's role once we're authenticated but don't yet know it (e.g. after
@@ -45,6 +47,12 @@ export function App() {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Reflect the resolved layout mode onto <html data-viewport> so mobile CSS applies (ADR-027).
+  // Recomputes when the viewport crosses 768px or the uiMode override changes.
+  useEffect(() => {
+    applyViewportMode(viewportMode);
+  }, [viewportMode]);
 
   // Reflect the persisted language into i18next + <html lang> (immediate switch, no reload). A
   // non-English language lazy-loads its chunks here; the EN fallback shows until they arrive.

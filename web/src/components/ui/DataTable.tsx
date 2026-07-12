@@ -8,6 +8,7 @@ import { useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
+import { useViewportMode } from '../../lib/viewport';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -33,9 +34,16 @@ interface Props<T> {
   /** While the first page is in flight, show a loading placeholder instead of `empty` so an
    *  unloaded table never reads as "no rows". */
   loading?: boolean;
+  /** Mobile card renderer (ADR-027). When set AND the viewport is mobile, each row renders as a
+   *  variable-height card (header row hidden, dynamic-height virtualization) instead of the grid
+   *  row — a fixed multi-column grid can't fit ~390px. Desktop always uses the grid. */
+  renderCard?: (row: T) => ReactNode;
+  /** Estimated card height (mobile card mode) before measurement; keeps the initial scrollbar sane. */
+  cardEstimatePx?: number;
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
+const CARD_PX = 110; // default estimate for a mobile card before it is measured
 
 export function DataTable<T>({
   rows,
@@ -45,15 +53,20 @@ export function DataTable<T>({
   onRowClick,
   empty,
   loading,
+  renderCard,
+  cardEstimatePx = CARD_PX,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
+  // Card mode only when a card renderer is supplied AND we're in mobile layout (respects the
+  // uiMode='desktop' override). Otherwise the grid path is byte-for-byte its previous self.
+  const cardMode = useViewportMode() === 'mobile' && !!renderCard;
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_PX,
+    estimateSize: () => (cardMode ? cardEstimatePx : ROW_PX),
     overscan: 12,
   });
 
@@ -66,13 +79,15 @@ export function DataTable<T>({
 
   return (
     <div className="dt">
-      <div className="dt-head" style={{ gridTemplateColumns: template }}>
-        {columns.map((c) => (
-          <div key={c.key} className={c.align === 'right' ? 'dt-h right' : 'dt-h'}>
-            {c.header}
-          </div>
-        ))}
-      </div>
+      {!cardMode && (
+        <div className="dt-head" style={{ gridTemplateColumns: template }}>
+          {columns.map((c) => (
+            <div key={c.key} className={c.align === 'right' ? 'dt-h right' : 'dt-h'}>
+              {c.header}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="dt-scroll scroll-y" ref={scrollRef}>
         {rows.length === 0 ? (
           <div className="dt-empty">{loading ? t('loading') : (empty ?? t('noRows'))}</div>
@@ -80,6 +95,21 @@ export function DataTable<T>({
           <div className="dt-body" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {
               const row = rows[vi.index];
+              if (cardMode) {
+                // Variable-height card: measured by the virtualizer (data-index + measureElement).
+                return (
+                  <div
+                    key={rowKey(row)}
+                    data-index={vi.index}
+                    ref={virtualizer.measureElement}
+                    className={onRowClick ? 'dt-card clickable' : 'dt-card'}
+                    style={{ transform: `translateY(${vi.start}px)` }}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {renderCard?.(row)}
+                  </div>
+                );
+              }
               return (
                 <div
                   key={rowKey(row)}

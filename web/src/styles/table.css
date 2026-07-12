@@ -158,6 +158,21 @@
   opacity: 1;
 }
 
+/* ============================================================ touch affordances
+   On a coarse (touch) pointer there is no hover to reveal the on-hover row controls, so make every
+   hover-revealed affordance always visible (ui-conventions.md "Responsive / mobile", channel 2 —
+   touch affordances, independent of layout mode). Scoped to `@media (hover: none)` so any
+   hover-capable device — including a touch laptop with a mouse in forced-desktop view — renders
+   pixel-identically. */
+@media (hover: none) {
+  .ytable-actions,
+  .il-actions,
+  .yt-copy-btn,
+  .yt-entity-copy {
+    opacity: 1;
+  }
+}
+
 /* ============================================================ cell vocabulary */
 /* Primary identifier: optional type-icon tile + name (medium) + optional mono sub-label. */
 .yt-name {
@@ -583,6 +598,16 @@
 
 .table-spacer {
   flex: 1;
+}
+
+/* Mobile (ADR-027): the search takes the whole first row; filters/count/primary action wrap onto
+   the next row (the toolbar already `flex-wrap: wrap`s). */
+html[data-viewport='mobile'] .table-search {
+  flex: 1 1 100%;
+}
+
+html[data-viewport='mobile'] .table-search input {
+  width: 100%;
 }
 
 .table-count {

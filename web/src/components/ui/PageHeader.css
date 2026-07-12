@@ -28,3 +28,27 @@
   align-items: center;
   gap: 8px;
 }
+
+/* Mobile (ADR-027): let the action cluster wrap under the title instead of squeezing it, and keep
+   a long title from overflowing the viewport (ellipsis). */
+html[data-viewport='mobile'] .pageheader-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+html[data-viewport='mobile'] .pageheader-row > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+html[data-viewport='mobile'] .pageheader-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-viewport='mobile'] .pageheader-actions {
+  margin-left: 0;
+  flex-wrap: wrap;
+}

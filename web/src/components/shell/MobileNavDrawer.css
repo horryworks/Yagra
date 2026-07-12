@@ -1,0 +1,164 @@
+/* Mobile navigation drawer (ADR-027). Backdrop + off-canvas left panel. Only mounts in mobile
+   mode, so plain component classes are safe (no desktop leakage). */
+.mdrawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--overlay);
+  display: flex;
+  animation: mdrawer-fade var(--transition);
+}
+
+.mdrawer {
+  width: min(80vw, 300px);
+  /* Full height with a dvh fallback pair (iOS toolbar); safe-area insets on the leading/edge sides. */
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-right: var(--border-width) solid var(--border-color);
+  padding-top: var(--safe-top);
+  padding-left: var(--safe-left);
+  padding-bottom: var(--safe-bottom);
+  outline: none;
+  animation: mdrawer-slide var(--transition);
+  overflow: hidden;
+}
+
+.mdrawer-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.mdrawer-section {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+/* Section accordion header — a full-width, ≥44px touch row. */
+.mdrawer-sec-head {
+  width: 100%;
+  min-height: var(--touch-target);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 16px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  text-align: left;
+}
+
+.mdrawer-sec-head.open {
+  color: var(--text-primary);
+}
+
+.mdrawer-chevron {
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  flex: none;
+}
+
+.mdrawer-items {
+  padding: 2px 0 8px;
+}
+
+.mdrawer-group + .mdrawer-group {
+  margin-top: 6px;
+}
+
+.mdrawer-group-head {
+  padding: 4px 16px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+/* Item row — indented under its section, ≥44px, left accent when active. */
+.mdrawer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  padding: 0 16px 0 28px;
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  border-left: 2px solid transparent;
+}
+
+.mdrawer-item.active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-left-color: var(--accent-color);
+  font-weight: var(--weight-medium);
+}
+
+.mdrawer-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unimplemented (Coming soon) marker — a small dimmed dot, matching the sidebar convention. */
+.mdrawer-soon {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  opacity: 0.6;
+  flex: none;
+}
+
+.mdrawer-foot {
+  flex: none;
+  border-top: var(--border-width) solid var(--border-color);
+  padding: 10px 16px calc(10px + var(--safe-bottom));
+}
+
+.mdrawer-desktop {
+  width: 100%;
+  min-height: 40px;
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.mdrawer-desktop:hover {
+  color: var(--text-primary);
+}
+
+@keyframes mdrawer-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mdrawer-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mdrawer-overlay,
+  .mdrawer {
+    animation: none;
+  }
+}

@@ -11,7 +11,10 @@
 
 .modal {
   width: min(520px, calc(100vw - 48px));
+  /* dvh so the iOS Safari dynamic toolbar can't push the modal off-screen; vh fallback above for
+     browsers without dvh. Identical to vh on desktop (no dynamic toolbar). */
   max-height: calc(100vh - 96px);
+  max-height: calc(100dvh - 96px);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
@@ -105,5 +108,47 @@
   from {
     transform: translateY(6px);
     opacity: 0;
+  }
+}
+
+/* ============================================================ mobile bottom-sheet (ADR-027)
+   In mobile mode a modal becomes a bottom sheet: full-width, pinned to the bottom edge, only the
+   top corners rounded, with a sticky full-width footer sitting above the home-indicator safe area.
+   Every dialog built on <Modal> inherits this — no per-dialog work (Modals UI-consistency group). */
+html[data-viewport='mobile'] .modal-overlay {
+  align-items: flex-end;
+}
+
+html[data-viewport='mobile'] .modal {
+  width: 100vw;
+  max-width: 100vw;
+  max-height: 90dvh;
+  border: none;
+  border-top: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius) var(--radius) 0 0;
+  animation: modal-sheet-rise var(--transition);
+}
+
+html[data-viewport='mobile'] .modal-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-secondary);
+  padding-bottom: calc(14px + var(--safe-bottom));
+}
+
+/* Full-width action buttons in the sheet footer. */
+html[data-viewport='mobile'] .modal-footer > * {
+  flex: 1;
+}
+
+@keyframes modal-sheet-rise {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-viewport='mobile'] .modal {
+    animation: none;
   }
 }

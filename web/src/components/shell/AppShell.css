@@ -17,3 +17,12 @@
   overflow-y: auto;
   padding: 20px 24px;
 }
+
+/* Mobile content pane (ADR-027): tighter padding + safe-area insets on the physical edges. Keeps
+   the scroll/flex behaviour of .shell-content and only overrides the padding. */
+.shell-content--mobile {
+  padding: 12px;
+  padding-left: max(12px, var(--safe-left));
+  padding-right: max(12px, var(--safe-right));
+  padding-bottom: max(12px, var(--safe-bottom));
+}
