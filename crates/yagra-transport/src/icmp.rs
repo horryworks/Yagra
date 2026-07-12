@@ -12,7 +12,7 @@ use crate::{IcmpProbe, Transport, TransportError};
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use surge_ping::{Client, Config, PingIdentifier, PingSequence, ICMP};
 
 /// ICMP echo payload size in bytes (a conventional 56-byte body → 64-byte packet).
@@ -72,28 +72,46 @@ impl Transport for SurgePingTransport {
                 .ok_or_else(|| TransportError::Io("no IPv6 ICMP socket available".to_owned()))?,
         };
 
-        // One pinger, sequential sequences. NOTE (S4): parallelizing this with N concurrent pingers
-        // to the SAME target does NOT work with surge-ping 0.8 — its concurrency model is
-        // one-pinger-per-target (concurrency comes from polling many targets at once), so multiple
-        // pingers on one target returned 100% loss for every host in the field. Reducing a dead
-        // host's permit hold (count×timeout) needs a different mechanism (e.g. early-terminate on
-        // first reply, or a single pinger with an overall deadline) — revisit under S4 with a live
-        // raw-socket test; correctness (this serial form works) wins for now.
+        // ONE pinger per target, sequences sent sequentially. surge-ping 0.8's concurrency model is
+        // one-pinger-per-target (parallelism comes from polling many targets at once); N concurrent
+        // pingers to the SAME target return 100% loss for every host — that broke liveness fleet-wide
+        // and was reverted (64f42ef). Do not reintroduce concurrent same-target pingers.
         let mut pinger = client.pinger(target, self.next_ident()).await;
         pinger.timeout(timeout);
 
+        // S4 — bound the permit hold of a dead host. A plain serial loop makes an unresponsive host
+        // cost count×timeout (default 3×1s); the poll holds the poller's global concurrency permit
+        // for that whole span, so at 64 permits the fleet clears only ~21 dead-host polls/s — detection
+        // throughput collapses exactly during a mass outage (ADR-023 #1). Cap the *whole* probe with an
+        // overall deadline: once a host has stayed completely silent for one full timeout, more echoes
+        // to the same black hole only prolong the permit hold without changing the verdict, so stop and
+        // report it unreachable now (~1×timeout instead of count×timeout). A host that answers even one
+        // echo is kept on the full sweep so partial packet loss is still measured. A single lost echo to
+        // an up host cannot manufacture an outage — liveness commits only after DWELL_SAMPLES(=3)
+        // consecutive unreachable polls (yagra-alert hysteresis). NOTE: this path needs CAP_NET_RAW and
+        // is not unit-testable; validate on a live raw socket after deploy (loopback demo node must stay
+        // icmp_loss_pct=0). The pure pieces (`probe_exhausted`, `summarize`) are unit-tested.
+        let started = Instant::now();
         let payload = [0u8; PAYLOAD_LEN];
         let mut rtts_ms = Vec::with_capacity(usize::from(count));
+        let mut sent: u8 = 0;
         for seq in 0..count {
+            sent += 1;
             match pinger.ping(PingSequence(u16::from(seq)), &payload).await {
                 Ok((_packet, rtt)) => rtts_ms.push(rtt.as_secs_f64() * 1000.0),
                 Err(err) => {
                     tracing::debug!(%target, error = %err, "icmp echo did not complete");
                 }
             }
+            if probe_exhausted(rtts_ms.len(), started.elapsed(), timeout) {
+                break;
+            }
         }
 
-        Ok(summarize(count, &rtts_ms))
+        // Loss is over probes actually sent, not the nominal count: an early break means the remaining
+        // echoes were never put on the wire, so counting them as "lost" would be a lie. When the host
+        // answers, no break happens and sent == count, so healthy/lossy hosts are unaffected.
+        Ok(summarize(sent, &rtts_ms))
     }
 
     async fn snmp_get(
@@ -183,8 +201,21 @@ impl Transport for SurgePingTransport {
     }
 }
 
-/// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply
-/// arrived, mean RTT over replies, loss% over the `count` sent. Pure — unit-tested.
+/// Whether to stop probing early (S4). True once the target has produced **no reply at all**
+/// (`received == 0`) *and* we have already waited out the overall `deadline` — at that point the
+/// host is confidently unreachable for this poll and further echoes to a silent target only hold
+/// the poller's permit longer without changing the verdict. As soon as any echo replies
+/// (`received > 0`) this stays false, so the remaining probes are sent and partial loss is measured.
+/// Pure — unit-tested (the raw-socket loop that calls it is not).
+#[must_use]
+fn probe_exhausted(received: usize, elapsed: Duration, deadline: Duration) -> bool {
+    received == 0 && elapsed >= deadline
+}
+
+/// Aggregate per-probe RTTs into a single [`IcmpProbe`]: reachable if any reply arrived, mean RTT
+/// over replies, loss% over the number of probes actually **sent** (`count`). Callers pass the sent
+/// count, which equals the requested count unless [`probe_exhausted`] cut the sweep short. Pure —
+/// unit-tested.
 #[must_use]
 pub fn summarize(count: u8, rtts_ms: &[f64]) -> IcmpProbe {
     let sent = f64::from(count.max(1));
@@ -237,5 +268,56 @@ mod tests {
         let p = summarize(0, &[]);
         assert_eq!(p.loss_pct, 100.0);
         assert!(!p.reachable);
+    }
+
+    #[test]
+    fn silent_host_is_exhausted_once_the_deadline_passes() {
+        // No reply and the full deadline has elapsed → stop early (dead host frees the permit).
+        assert!(probe_exhausted(
+            0,
+            Duration::from_millis(1000),
+            Duration::from_millis(1000)
+        ));
+        assert!(probe_exhausted(
+            0,
+            Duration::from_millis(1500),
+            Duration::from_millis(1000)
+        ));
+    }
+
+    #[test]
+    fn silent_host_within_the_deadline_keeps_probing() {
+        // No reply yet but still inside the budget → keep waiting, don't declare down prematurely.
+        assert!(!probe_exhausted(
+            0,
+            Duration::from_millis(999),
+            Duration::from_millis(1000)
+        ));
+    }
+
+    #[test]
+    fn any_reply_never_exhausts_so_partial_loss_is_measured() {
+        // Once a single echo has answered, the host is up — keep sending the rest to measure loss,
+        // even long past the deadline. This is what preserves partial-packet-loss monitoring.
+        assert!(!probe_exhausted(
+            1,
+            Duration::from_millis(5000),
+            Duration::from_millis(1000)
+        ));
+        assert!(!probe_exhausted(
+            2,
+            Duration::from_millis(5000),
+            Duration::from_millis(1000)
+        ));
+    }
+
+    #[test]
+    fn early_break_reports_full_loss_over_probes_actually_sent() {
+        // A dead host that breaks after one silent probe: sent=1, received=0 → 100% loss, not the
+        // "1 of 3" a nominal-count denominator would wrongly report.
+        let p = summarize(1, &[]);
+        assert!(!p.reachable);
+        assert_eq!(p.loss_pct, 100.0);
+        assert_eq!(p.rtt_ms, None);
     }
 }
