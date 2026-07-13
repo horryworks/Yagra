@@ -1,5 +1,25 @@
 # Release Notes
 
+## v0.1.11
+
+**Mobile WebUI polish (parity round 3)** — the remaining screens whose interactions still needed a
+mouse now work by touch: dashboard tiles reorder by press-and-hold, the topology map zooms with a
+two-finger pinch, and the report builder reflows to fit a phone.
+
+### Improvements
+- **Dashboard editing works by touch** — in Customize mode, press and hold a tile's move handle to
+  reorder it (a normal swipe still scrolls the board), and the edit controls have larger tap targets.
+  On phones, where the board collapses to a single full-width column, the resize grip is hidden since
+  it can't change the stacked layout. Desktop mouse editing is unchanged.
+- **Pinch to zoom the topology map** — the dependency map now zooms with a two-finger pinch and pans
+  with two fingers, alongside the existing drag-pan and wheel-zoom; the on-map zoom controls are
+  larger for touch.
+- **Report builder fits phones** — the report tabs scroll sideways instead of crushing, and the
+  builder's section settings stack full-width in the sheet, with larger touch targets for the tab and
+  section-reorder controls.
+
+Desktop rendering is unchanged.
+
 ## v0.1.10
 
 **Mobile WebUI polish (parity round 2)** — the settings and admin screens the phone layout hadn't
