@@ -43,6 +43,7 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 tokio-stream = { workspace = true }
 lettre = { workspace = true }
+openidconnect = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

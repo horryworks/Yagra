@@ -30,6 +30,7 @@ mod maintenance;
 mod meraki;
 mod mib;
 mod notifications;
+mod oidc;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
@@ -602,6 +603,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         pollers: poller_repo.clone(),
     }));
     let sessions = Arc::new(SessionStore::new());
+    // External-IdP login (OIDC, ADR-010 Phase 3): provider store (envelope-encrypted secret) + the
+    // in-memory in-flight authorization map.
+    let oidc = Some(Arc::new(oidc::OidcRepo::from_env(repo.pool())));
+    let oidc_flight = Arc::new(oidc::OidcFlight::new());
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
@@ -618,6 +623,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         events: Some(event_engine),
         public_dashboard: cfg.public_dashboard,
         is_leader: is_leader.clone(),
+        oidc,
+        oidc_flight,
     };
 
     if cfg.enable_ha {
@@ -693,6 +700,9 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         public_dashboard: true,
         // Skeleton has no leader election — always "ready".
         is_leader: Arc::new(AtomicBool::new(true)),
+        // Skeleton has no metadata store, so no OIDC provider config.
+        oidc: None,
+        oidc_flight: Arc::new(oidc::OidcFlight::new()),
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }

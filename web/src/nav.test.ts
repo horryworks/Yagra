@@ -119,17 +119,14 @@ describe('sidebarGroups', () => {
     }
   });
 
-  it('collects the known placeholders (Geo map, Scheduled, Saved findings, Authentication)', () => {
+  it('collects the known placeholders (Geo map, Scheduled, Saved findings)', () => {
     const soonPaths = NAV.flatMap((s) => sidebarGroups(s))
       .filter((g) => g.comingSoon)
       .flatMap((g) => g.items.map((i) => i.path));
-    for (const p of [
-      '/topology/geo',
-      '/troubleshoot/scheduled',
-      '/troubleshoot/findings',
-      '/settings/auth',
-    ]) {
+    for (const p of ['/topology/geo', '/troubleshoot/scheduled', '/troubleshoot/findings']) {
       expect(soonPaths).toContain(p);
     }
+    // Authentication (/settings/auth) is now implemented — no longer a placeholder.
+    expect(soonPaths).not.toContain('/settings/auth');
   });
 });

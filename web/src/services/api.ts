@@ -89,6 +89,8 @@ import type {
   TopologyNode,
   UrlCheckConfig,
   UserSummary,
+  OidcProviderSummary,
+  OidcProviderInput,
 } from '../types/api';
 
 /** Request body to create a collection item (scalar or table). */
@@ -199,6 +201,8 @@ function jsonBody(method: string, body: unknown): RequestInit {
 export interface ClientConfig {
   public_dashboard: boolean;
   auth_available: boolean;
+  /** Whether an OIDC provider is enabled — drives the "Continue with SSO" button. */
+  sso_enabled: boolean;
   /** Global default polling interval (seconds); per-profile overrides take precedence. */
   default_poll_interval_secs: number;
 }
@@ -1192,4 +1196,34 @@ export const api = {
     }
     setToken(null);
   },
+
+  // ── OIDC (external IdP login) ──
+  /** Begin SSO: get the IdP authorization URL to redirect the browser to. */
+  oidcAuthorize: (): Promise<{ authorize_url: string }> => request('/auth/oidc/authorize'),
+
+  /** Complete SSO from the IdP redirect: exchange code+state for a session; stores the token. */
+  oidcCallback: async (code: string, state: string): Promise<{ token: string; role: string }> => {
+    const res = await request<{ token: string; role: string }>(
+      '/auth/oidc/callback',
+      jsonBody('POST', { code, state }),
+    );
+    setToken(res.token);
+    return res;
+  },
+
+  // ── OIDC provider config (Settings ▸ Auth, ManageUsers) ──
+  /** List configured OIDC providers (never includes the client_secret). */
+  listOidcProviders: (): Promise<OidcProviderSummary[]> => request('/settings/oidc'),
+
+  /** Create an OIDC provider. */
+  createOidcProvider: (body: OidcProviderInput): Promise<{ id: string }> =>
+    request('/settings/oidc', jsonBody('POST', body)),
+
+  /** Update an OIDC provider (omit client_secret to keep the stored one). */
+  updateOidcProvider: (id: string, body: OidcProviderInput): Promise<void> =>
+    request(`/settings/oidc/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete an OIDC provider. */
+  deleteOidcProvider: (id: string): Promise<void> =>
+    request(`/settings/oidc/${encodeURIComponent(id)}`, jsonBody('DELETE', {})),
 };

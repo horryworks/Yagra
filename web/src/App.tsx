@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
+import { OidcCallbackPage } from './pages/OidcCallbackPage';
 import { AppRoutes } from './routes';
 import { useTranslation } from 'react-i18next';
 import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
@@ -77,17 +78,24 @@ export function App() {
         setConfig({
           public_dashboard: true,
           auth_available: false,
+          sso_enabled: false,
           default_poll_interval_secs: 30,
         }),
       );
   }, []);
 
   const gated = config != null && !config.public_dashboard && !authed;
+  // The OIDC redirect lands here before a session exists — handle it regardless of the login gate
+  // (otherwise the gate would swap in the login screen and drop the code/state).
+  const isOidcCallback =
+    typeof window !== 'undefined' && window.location.pathname === '/auth/callback';
 
   return (
     <BrowserRouter>
       {config == null ? (
         <div className="app-loading muted">{t('loading')}</div>
+      ) : isOidcCallback ? (
+        <OidcCallbackPage />
       ) : gated ? (
         <LoginPage />
       ) : (

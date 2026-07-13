@@ -97,6 +97,7 @@
       "viewer": "Viewers"
     },
     "you": "You",
+    "ssoAccount": "Provisioned via SSO (external IdP)",
     "status": {
       "active": "Active",
       "disabled": "Disabled"

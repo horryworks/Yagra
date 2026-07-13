@@ -1,0 +1,42 @@
+{
+  "note": "外部 IdP(OIDC)を設定すると、組織の SSO で Yagra にサインインできます。ローカルアカウントも併用できます。",
+  "unavailable": "認証設定には管理者アカウントが必要です。",
+  "empty": "IdP が未設定です。追加すると SSO サインインが有効になります。",
+  "mappedGroups_other": "{{count}} 個のグループをロールにマッピング",
+  "badge": {
+    "enabled": "有効",
+    "disabled": "無効"
+  },
+  "add": { "title": "プロバイダを追加" },
+  "edit": { "title": "プロバイダを編集" },
+  "delete": {
+    "title": "プロバイダを削除",
+    "confirm": "SSO プロバイダ「{{name}}」を削除しますか?SSO でサインインするユーザーはサインインできなくなります。"
+  },
+  "field": {
+    "name": "表示名",
+    "issuer": "Issuer URL",
+    "issuerHint": "プロバイダのベース URL。discovery は {issuer}/.well-known/openid-configuration を参照します。",
+    "clientId": "クライアント ID",
+    "replaceSecret": "クライアントシークレットを差し替える",
+    "clientSecret": "クライアントシークレット",
+    "clientSecretHint": "保存時に暗号化され、再表示されません。",
+    "redirectUri": "リダイレクト URI",
+    "redirectUriHint": "この URL をそのまま IdP の許可リダイレクトとして登録してください。",
+    "scopes": "スコープ",
+    "groupsClaim": "グループクレーム",
+    "groupsClaimHint": "ユーザーのグループを含む ID トークンのクレーム名(既定: groups)。",
+    "roleMap": "グループ → ロール マッピング",
+    "roleMapHint": "IdP のグループ名を Yagra のロールにマッピングします。最も高いロールが優先されます。",
+    "groupPlaceholder": "idp-group-name",
+    "addMapping": "マッピングを追加",
+    "defaultRole": "既定ロール",
+    "defaultRoleNone": "なし — マッピングが無ければ拒否",
+    "defaultRoleHint": "どのマッピングにも一致しないユーザーのロール。",
+    "enabled": "有効"
+  },
+  "err": {
+    "save": "プロバイダの保存に失敗しました",
+    "delete": "プロバイダの削除に失敗しました"
+  }
+}

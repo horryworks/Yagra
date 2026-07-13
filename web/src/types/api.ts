@@ -216,6 +216,40 @@ export interface UserSummary {
   last_login_at: string | null;
   /** Account status: a disabled account is kept for the record but cannot authenticate. */
   enabled: boolean;
+  /** How the account authenticates: `local` (password) or `oidc` (external IdP). */
+  auth_source: 'local' | 'oidc';
+}
+
+/** A configured OIDC provider (`GET /api/v1/settings/oidc`, core `OidcProviderSummary`). The
+ *  client_secret is write-only and never returned; `has_secret` signals one is stored. */
+export interface OidcProviderSummary {
+  id: string;
+  name: string;
+  issuer: string;
+  client_id: string;
+  redirect_uri: string;
+  scopes: string;
+  groups_claim: string;
+  /** IdP group name → Yagra role. */
+  role_map: Record<string, Role>;
+  default_role: Role | null;
+  enabled: boolean;
+  has_secret: boolean;
+}
+
+/** Create/update payload for an OIDC provider. `client_secret` is write-only: omit (or empty) on
+ *  update to keep the stored secret. */
+export interface OidcProviderInput {
+  name: string;
+  issuer: string;
+  client_id: string;
+  client_secret?: string;
+  redirect_uri: string;
+  scopes: string;
+  groups_claim: string;
+  role_map: Record<string, Role>;
+  default_role?: Role | null;
+  enabled: boolean;
 }
 
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). Split by functional

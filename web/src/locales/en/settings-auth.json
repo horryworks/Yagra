@@ -1,0 +1,43 @@
+{
+  "note": "Configure an external identity provider (OIDC) so users can sign in with your organization's SSO. Local accounts keep working alongside it.",
+  "unavailable": "Authentication settings require an administrator account.",
+  "empty": "No identity provider configured. Add one to enable SSO sign-in.",
+  "mappedGroups_one": "{{count}} group mapped to a role",
+  "mappedGroups_other": "{{count}} groups mapped to a role",
+  "badge": {
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "add": { "title": "Add provider" },
+  "edit": { "title": "Edit provider" },
+  "delete": {
+    "title": "Delete provider",
+    "confirm": "Delete the SSO provider \"{{name}}\"? Users who sign in via SSO will no longer be able to."
+  },
+  "field": {
+    "name": "Display name",
+    "issuer": "Issuer URL",
+    "issuerHint": "The provider's base URL; discovery reads {issuer}/.well-known/openid-configuration.",
+    "clientId": "Client ID",
+    "replaceSecret": "Replace client secret",
+    "clientSecret": "Client secret",
+    "clientSecretHint": "Encrypted at rest and never shown again.",
+    "redirectUri": "Redirect URI",
+    "redirectUriHint": "Register this exact URL at the IdP as an allowed redirect.",
+    "scopes": "Scopes",
+    "groupsClaim": "Groups claim",
+    "groupsClaimHint": "The ID-token claim that carries the user's groups (default: groups).",
+    "roleMap": "Group → role mapping",
+    "roleMapHint": "Map IdP group names to Yagra roles. The highest matching role wins.",
+    "groupPlaceholder": "idp-group-name",
+    "addMapping": "Add mapping",
+    "defaultRole": "Default role",
+    "defaultRoleNone": "None — deny if no group maps",
+    "defaultRoleHint": "Role for a user whose groups don't match any mapping.",
+    "enabled": "Enabled"
+  },
+  "err": {
+    "save": "Failed to save the provider",
+    "delete": "Failed to delete the provider"
+  }
+}

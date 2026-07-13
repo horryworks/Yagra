@@ -309,6 +309,22 @@ pub fn generate_bootstrap_password() -> String {
     s
 }
 
+/// Placeholder stored in `users.password_hash` for OIDC accounts (which have no local password).
+/// Deliberately not a valid Argon2 PHC string, so it can never verify; combined with the
+/// `auth_source = 'oidc'` guard in [`UserStore::verify`], an OIDC user can never local-login. Keeping
+/// the column NOT NULL (rather than nullable) keeps a rolling upgrade N-1 safe (ADR-017): an old
+/// binary still reads a valid `String` it simply can't verify against.
+pub const OIDC_PASSWORD_SENTINEL: &str = "!oidc-no-local-login";
+
+/// The stored text form of a role (matches [`parse_role`]).
+fn role_text(role: Role) -> &'static str {
+    match role {
+        Role::Admin => "admin",
+        Role::Operator => "operator",
+        Role::Viewer => "viewer",
+    }
+}
+
 /// Parse a stored role string (defaults to the least-privileged role on garbage).
 fn parse_role(s: &str) -> Role {
     match s {
@@ -332,6 +348,8 @@ pub struct UserSummary {
     /// Account status: a disabled account is retained for the audit trail but cannot
     /// authenticate (defaults to `true` for accounts created before this column existed).
     pub enabled: bool,
+    /// How the account authenticates: `"local"` (password) or `"oidc"` (external IdP).
+    pub auth_source: String,
 }
 
 /// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
@@ -394,11 +412,12 @@ impl UserStore {
         username: &str,
         password: &str,
     ) -> anyhow::Result<Option<(Uuid, Principal)>> {
-        let row =
-            sqlx::query("SELECT id, password_hash, role, enabled FROM users WHERE username = $1")
-                .bind(username)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query(
+            "SELECT id, password_hash, role, enabled, auth_source FROM users WHERE username = $1",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -406,6 +425,12 @@ impl UserStore {
         // leak account state to an unauthenticated caller.
         let enabled: bool = row.try_get("enabled")?;
         if !enabled {
+            return Ok(None);
+        }
+        // OIDC accounts have no local password — they must sign in via the IdP. Reject before the
+        // password check (their stored hash is a non-verifiable sentinel anyway).
+        let auth_source: String = row.try_get("auth_source")?;
+        if auth_source == "oidc" {
             return Ok(None);
         }
         let hash: String = row.try_get("password_hash")?;
@@ -433,7 +458,7 @@ impl UserStore {
     pub async fn list(&self) -> anyhow::Result<Vec<UserSummary>> {
         let rows = sqlx::query(
             "SELECT id, username, role, created_at::text AS created_at, \
-             last_login_at::text AS last_login_at, enabled \
+             last_login_at::text AS last_login_at, enabled, auth_source \
              FROM users ORDER BY created_at, username",
         )
         .fetch_all(&self.pool)
@@ -447,6 +472,7 @@ impl UserStore {
                     created_at: row.try_get("created_at")?,
                     last_login_at: row.try_get("last_login_at")?,
                     enabled: row.try_get("enabled")?,
+                    auth_source: row.try_get("auth_source")?,
                 })
             })
             .collect()
@@ -480,6 +506,64 @@ impl UserStore {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Look up (or JIT-provision) the local account for a validated OIDC identity, returning its
+    /// `(id, principal)`. Keyed on `(provider, subject)` so a renamed user keeps one account; the
+    /// role is refreshed from the IdP on every login (the IdP is authoritative). A new account stores
+    /// the non-verifiable [`OIDC_PASSWORD_SENTINEL`] and `auth_source = 'oidc'`; a colliding username
+    /// is disambiguated with a short subject suffix rather than hijacking an existing account.
+    pub async fn upsert_oidc_user(
+        &self,
+        provider_id: Uuid,
+        subject: &str,
+        username: &str,
+        role: Role,
+    ) -> anyhow::Result<(Uuid, Principal)> {
+        let role_str = role_text(role);
+        // Existing identity → refresh role + last_login.
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE oidc_provider_id = $1 AND oidc_subject = $2",
+        )
+        .bind(provider_id)
+        .bind(subject)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(id) = existing {
+            sqlx::query("UPDATE users SET role = $2, last_login_at = now() WHERE id = $1")
+                .bind(id)
+                .bind(role_str)
+                .execute(&self.pool)
+                .await?;
+            return Ok((id, Principal::new(role, Scope::All)));
+        }
+        // New identity → JIT-provision. Disambiguate a colliding username.
+        let taken: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)")
+                .bind(username)
+                .fetch_one(&self.pool)
+                .await?;
+        let uname = if taken {
+            let suffix: String = subject.chars().take(8).collect();
+            format!("{username} ({suffix})")
+        } else {
+            username.to_owned()
+        };
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users \
+             (id, username, password_hash, role, auth_source, oidc_subject, oidc_provider_id, last_login_at) \
+             VALUES ($1, $2, $3, $4, 'oidc', $5, $6, now())",
+        )
+        .bind(id)
+        .bind(&uname)
+        .bind(OIDC_PASSWORD_SENTINEL)
+        .bind(role_str)
+        .bind(subject)
+        .bind(provider_id)
+        .execute(&self.pool)
+        .await?;
+        Ok((id, Principal::new(role, Scope::All)))
     }
 
     /// Delete an account, refusing to remove the **last** admin (which would lock everyone out

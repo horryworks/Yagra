@@ -121,6 +121,10 @@ aes-gcm = "0.10"
 sha2 = "0.10"
 # Password hashing for local auth (Argon2, pure Rust)
 argon2 = "0.5"
+# External IdP login (OIDC authorization-code + PKCE, ADR-010 Phase 3). Handles discovery, PKCE,
+# code exchange, and ID-token signature/claim validation per spec. TLS rides the in-tree reqwest
+# (rustls) — `default-features = false` + explicit `rustls-tls` keeps native-tls/openssl/NASM out.
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 
 [profile.release]
 lto = "thin"

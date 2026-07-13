@@ -96,6 +96,7 @@
       "viewer": "閲覧者"
     },
     "you": "あなた",
+    "ssoAccount": "SSO(外部 IdP)で自動作成",
     "status": {
       "active": "有効",
       "disabled": "無効"

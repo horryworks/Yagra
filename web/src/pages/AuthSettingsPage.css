@@ -1,0 +1,71 @@
+.auth-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.auth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-provider {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-provider-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.auth-provider-meta {
+  margin-top: 4px;
+  font-size: calc(var(--font-size-base) * 0.9);
+  color: var(--text-secondary);
+}
+
+.auth-badge {
+  font-size: calc(var(--font-size-base) * 0.8);
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+.auth-badge.on {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+.auth-badge.off {
+  color: var(--text-tertiary);
+}
+
+/* "Replace secret" / "Enabled" inline checkboxes (mirrors the credentials replace toggle). */
+.auth-replace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.auth-rolemap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.auth-rolemap-row {
+  display: grid;
+  grid-template-columns: 1fr 140px auto;
+  gap: 8px;
+  align-items: center;
+}

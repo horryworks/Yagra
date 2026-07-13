@@ -55,6 +55,11 @@
     "refresh": "Refresh",
     "more": "More actions"
   },
+  "role": {
+    "viewer": "Viewer",
+    "operator": "Operator",
+    "admin": "Admin"
+  },
   "resultCount": "<b>{{shown}}</b> of {{total}} {{noun}}",
   "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",
   "noun": {

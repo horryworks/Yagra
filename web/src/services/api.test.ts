@@ -756,6 +756,35 @@ describe('api client', () => {
     expect(spy.mock.calls[0][1].method).toBe('POST');
   });
 
+  it('oidcAuthorize fetches the IdP authorize URL', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ authorize_url: 'https://idp.example.com/authorize?x=1' }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.oidcAuthorize();
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/auth/oidc/authorize');
+    expect(res.authorize_url).toBe('https://idp.example.com/authorize?x=1');
+  });
+
+  it('oidcCallback exchanges code+state and stores the returned session token', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ token: 'sso-tok', role: 'operator' }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.oidcCallback('the-code', 'the-state');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/auth/oidc/callback');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ code: 'the-code', state: 'the-state' });
+    expect(res.role).toBe('operator');
+    expect(getToken()).toBe('sso-tok');
+    setToken(null);
+  });
+
   it('creates an event rule as a tagged JSON body', async () => {
     const spy = vi
       .fn()

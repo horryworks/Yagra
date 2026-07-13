@@ -29,6 +29,7 @@ import enReports from './locales/en/reports.json';
 import enTroubleshoot from './locales/en/troubleshoot.json';
 import enAccess from './locales/en/access.json';
 import enSystem from './locales/en/system.json';
+import enSettingsAuth from './locales/en/settings-auth.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
 export const NAMESPACES = [
@@ -48,6 +49,7 @@ export const NAMESPACES = [
   'troubleshoot',
   'access',
   'system',
+  'settings-auth',
 ] as const;
 
 void i18n
@@ -85,6 +87,7 @@ void i18n
         troubleshoot: enTroubleshoot,
         access: enAccess,
         system: enSystem,
+        'settings-auth': enSettingsAuth,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages

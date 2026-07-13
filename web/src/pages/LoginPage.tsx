@@ -4,7 +4,7 @@
 // color-split: danger = hard failure (bad credentials / unavailable), warning = recoverable.
 // MFA is a backend gap, so no MFA step here yet.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,33 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<{ tone: ErrTone; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+
+  // Whether an OIDC provider is configured — surfaces the "Continue with SSO" button.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getConfig()
+      .then((c) => !cancelled && setSsoEnabled(c.sso_enabled))
+      .catch(() => !cancelled && setSsoEnabled(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const startSso = () => {
+    setError(null);
+    setBusy(true);
+    api
+      .oidcAuthorize()
+      .then((res) => {
+        window.location.assign(res.authorize_url);
+      })
+      .catch((x: unknown) => {
+        setBusy(false);
+        setError({ tone: 'danger', message: x instanceof ApiError ? x.message : t('ssoFailed') });
+      });
+  };
 
   const text = (set: (v: string) => void) => (e: ChangeEvent<HTMLInputElement>) =>
     set(e.target.value);
@@ -65,10 +92,16 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
         <div className="login-form-side">
           <h1 className="login-title">{t('signIn')}</h1>
 
-          <button className="login-sso" disabled title={t('ssoDisabledTitle')}>
-            {t('continueWithSso')}
-            <span className="login-sso-note">{t('ssoNotConfigured')}</span>
-          </button>
+          {ssoEnabled ? (
+            <button className="login-sso" type="button" onClick={startSso} disabled={busy}>
+              {t('continueWithSso')}
+            </button>
+          ) : (
+            <button className="login-sso" type="button" disabled title={t('ssoDisabledTitle')}>
+              {t('continueWithSso')}
+              <span className="login-sso-note">{t('ssoNotConfigured')}</span>
+            </button>
+          )}
 
           <div className="login-divider">
             <span>{t('orSignInLocally')}</span>

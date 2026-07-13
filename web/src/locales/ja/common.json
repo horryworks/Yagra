@@ -55,6 +55,11 @@
     "refresh": "更新",
     "more": "その他の操作"
   },
+  "role": {
+    "viewer": "閲覧者",
+    "operator": "オペレーター",
+    "admin": "管理者"
+  },
   "resultCount": "全 {{total}} {{noun}}中 <b>{{shown}}</b> 件",
   "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",
   "noun": {

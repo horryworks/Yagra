@@ -165,6 +165,11 @@ export function UsersPage() {
                       <div className="il-line1">
                         <span className="il-name">{u.username}</span>
                         {me === u.username && <span className="you-pill">{t('users.you')}</span>}
+                        {u.auth_source === 'oidc' && (
+                          <span className="you-pill" title={t('users.ssoAccount')}>
+                            SSO
+                          </span>
+                        )}
                         <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
                           <span className="yt-status-dot" />
                           {u.enabled ? t('users.status.active') : t('users.status.disabled')}
