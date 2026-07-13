@@ -1,0 +1,51 @@
+# Yagra — two-core HIGH-AVAILABILITY failover test overlay (ADR-016).
+#
+# Layers a second `yagra-core` (`core-b`) onto the single-node stack and turns on leader election
+# for BOTH cores, sharing the same PostgreSQL / Redis / NATS / VictoriaMetrics. Use it to watch
+# automatic failover — the default docker-compose.yml stays single-core and untouched.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build
+#
+# Then, in another shell:
+#   # exactly one core is ready (200), the other is a standby (503):
+#   curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/readyz   # core-a
+#   curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8081/readyz   # core-b
+#   docker compose logs core core-b | grep -i leader
+#   # stop whichever core is ready and watch the standby take over within ~5s
+#   # (its log prints "acquired leadership", is_leader flips, /readyz → 200):
+#   docker compose stop core        # (or core-b, whichever holds leadership)
+#
+# The `yagra_core_is_leader` gauge on each core's /metrics is 1 on the leader, 0 on the standby.
+# Production HA belongs on Kubernetes: a core Deployment + a Service that routes on the /readyz
+# readiness probe (only the leader is Ready). This overlay is for local/test-server verification.
+
+name: yagra
+
+services:
+  # Enable leader election on the base core and label it.
+  core:
+    environment:
+      YAGRA_ENABLE_HA: "true"
+      YAGRA_CORE_ID: "core-a"
+
+  # Second core replica — identical image/config, own host port, shares every store with `core`.
+  core-b:
+    build:
+      context: .
+      dockerfile: docker/yagra-core.Dockerfile
+    image: ghcr.io/horryworks/yagra-core:dev
+    depends_on: [postgres, redis, nats, victoriametrics, victorialogs]
+    environment:
+      YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
+      YAGRA_REDIS_URL: redis://redis:6379
+      YAGRA_BUS_URL: nats://nats:4222
+      YAGRA_TSDB_URL: http://victoriametrics:8428
+      YAGRA_LOGS_URL: http://victorialogs:9428
+      YAGRA_DISK_WATCH_PATHS: "/=root,/hostfs/vm=metrics"
+      YAGRA_ENABLE_HA: "true"
+      YAGRA_CORE_ID: "core-b"
+    ports:
+      - "8081:8080"   # standby/leader northbound API on a distinct host port
+    volumes:
+      - vmdata:/hostfs/vm:ro
+    restart: unless-stopped

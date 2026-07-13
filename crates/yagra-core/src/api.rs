@@ -164,12 +164,18 @@ pub struct ApiState {
     /// When true, read-only endpoints skip authentication (public read-only dashboard).
     /// When false (default), they require a valid session with `View` (every role has it).
     pub public_dashboard: bool,
+    /// HA leadership (ADR-016): `true` when this core holds the advisory lock and runs the
+    /// coordinator + ingest + alert/notify singletons. Drives `/readyz` (so a load balancer routes
+    /// only to the leader) and gates the event-ingest handlers that would otherwise enqueue to an
+    /// undrained channel on a standby. Always `true` when HA is off or in skeleton mode.
+    pub is_leader: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/api/v1/config", get(get_config).put(update_config))
         .route("/api/v1/nodes", get(list_nodes).post(create_node))
         // Static `/nodes/search` + `/nodes/by-group` before the `/nodes/:node_id` param route
@@ -505,9 +511,37 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
     resp
 }
 
-/// Liveness probe for the deploy/orchestrator — no auth, no store access.
+/// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
+/// standbys answer this so their containers stay healthy while a standby waits for leadership.
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Readiness probe (ADR-016): `200` only when this core holds HA leadership — i.e. it is running the
+/// coordinator + ingest and can serve live status. A standby returns `503` so a load balancer /
+/// orchestrator routes traffic only to the active core. With HA off this core is always the leader,
+/// so it always returns `200`. No auth, no store access (mirrors `/healthz`).
+async fn readyz(State(st): State<ApiState>) -> StatusCode {
+    if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+/// Guard for handlers that touch leader-only in-memory pipelines (ADR-016): `Some(503)` on a
+/// standby, `None` on the leader (and always `None` when HA is off / this core is always leader).
+/// Mirrors [`authorize`]'s `Option<Response>` shape so call sites read the same.
+fn require_leader(st: &ApiState) -> Option<Response> {
+    if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
+        None
+    } else {
+        Some(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_leader",
+            "this core is a standby; the request must be routed to the leader".to_owned(),
+        ))
+    }
 }
 
 /// Product/build version for the WebUI's Settings ▸ About page. Public (no secrets) — just the
@@ -6841,6 +6875,12 @@ async fn ingest_webhook(
     let Some(engine) = st.events.as_ref() else {
         return unavailable();
     };
+    // The event engine's persist/action channels are drained only by the leader's writers (ADR-016);
+    // ingesting on a standby would enqueue to an undrained channel and eventually block. Route
+    // ingestion to the leader (503 here, `/readyz` tells the LB which core that is).
+    if let Some(resp) = require_leader(&st) {
+        return resp;
+    }
     let Some(token) = bearer(&headers) else {
         return error_response(
             StatusCode::UNAUTHORIZED,
@@ -7441,6 +7481,11 @@ async fn close_event_alert(
         return unavailable();
     };
     if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    // The event engine's active-alert map lives only in the leader's process (fed by the leader-only
+    // event pipeline, ADR-016); closing on a standby would act on an empty map. Route to the leader.
+    if let Some(resp) = require_leader(&st) {
         return resp;
     }
     if engine
@@ -8773,6 +8818,7 @@ mod tests {
             ack: None,
             events: None,
             public_dashboard: true,
+            is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -8798,6 +8844,7 @@ mod tests {
             ack: None,
             events: None,
             public_dashboard: false,
+            is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         (state, token)
     }
@@ -8821,6 +8868,7 @@ mod tests {
             ack: None,
             events: None,
             public_dashboard: false,
+            is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         (state, token)
     }
@@ -9953,6 +10001,37 @@ mod tests {
                     .body(Body::from(
                         r#"{"node":"00000000-0000-0000-0000-000000000001","check":"00000000-0000-0000-0000-000000000002","severity":"critical","acked":true}"#,
                     ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn readyz_reflects_leadership() {
+        // Leader (the default in test state) ⇒ ready.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Standby (advisory lock not held) ⇒ 503 so a load balancer routes elsewhere.
+        let mut state = state_with(Arc::new(InMemorySink::default()));
+        state.is_leader = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await

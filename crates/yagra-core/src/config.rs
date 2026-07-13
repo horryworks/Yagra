@@ -59,6 +59,15 @@ pub struct Config {
     /// from and written to VictoriaLogs (PostgreSQL then keeps only alert-linked rows); when unset,
     /// events stay entirely in PostgreSQL (backward-compatible). Consumed by `run_live`.
     pub logs_url: Option<String>,
+    /// High-availability leader election (ADR-016). Default `false`: single active core, all
+    /// background work runs unconditionally (byte-identical to pre-HA behavior). When `true`, this
+    /// core races for a PostgreSQL advisory lock and runs the coordinator + ingest + alert/notify
+    /// singletons **only while it holds the lock**; standbys serve `/healthz` (and 503 `/readyz`)
+    /// until they win it. Opt-in so the common single-core deployment is unaffected.
+    pub enable_ha: bool,
+    /// Human-readable identifier for this core instance, for HA logs / diagnostics
+    /// (`YAGRA_CORE_ID`). Not required; `None` falls back to a generic label in logs.
+    pub core_id: Option<String>,
 }
 
 impl Config {
@@ -80,6 +89,9 @@ impl Config {
             redis_url: parse_optional(std::env::var("YAGRA_REDIS_URL").ok()),
             // Optional, independent of live/skeleton: unset ⇒ events stay in PostgreSQL (ADR-024).
             logs_url: parse_optional(std::env::var("YAGRA_LOGS_URL").ok()),
+            // HA (ADR-016): opt-in. Unset ⇒ single-core behavior, no advisory lock.
+            enable_ha: parse_bool(std::env::var("YAGRA_ENABLE_HA").ok()),
+            core_id: parse_optional(std::env::var("YAGRA_CORE_ID").ok()),
         })
     }
 }

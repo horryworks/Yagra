@@ -24,6 +24,7 @@ mod discovery;
 mod events;
 mod groups;
 mod history;
+mod leader;
 mod logstore;
 mod maintenance;
 mod meraki;
@@ -45,6 +46,7 @@ mod url_check;
 mod volatile;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -210,18 +212,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // (ADR-017). `serve` (end of `run`) installs the signal handler that cancels this token.
     let shutdown = CancellationToken::new();
 
-    // Feed the registry: heartbeats (liveness/telemetry) and snapshot requests. Thin consumer loops
-    // that end when the bus stream closes (shutdown), mirroring the other bus consumers.
-    {
-        let coordinator = coordinator.clone();
-        let stream = Box::pin(bus.subscribe_heartbeats().await?);
-        spawn_cancellable(&shutdown, coordinator.run_heartbeat_consumer(stream));
-    }
-    {
-        let coordinator = coordinator.clone();
-        let stream = Box::pin(bus.subscribe_sync_requests().await?);
-        spawn_cancellable(&shutdown, coordinator.run_sync_request_consumer(stream));
-    }
+    // HA leader election (ADR-016): every leader-only background task (coordinator consumers, the
+    // result-ingest → alert/notify/persist chain, the event pipeline, the schedulers, and the
+    // config/retention/routing refresh loops) is deferred into `leader_work` below and spawned only
+    // once this core holds the advisory lock. Read-only priming (event/alert/routing config) stays
+    // inline so the API serves complete config from its first request, on the leader and standbys
+    // alike. When HA is off, `leader_work` runs inline before `serve` — byte-identical to pre-HA.
 
     // Core self-observability (monitoring-conventions): sample core's own host every
     // HOST_SAMPLE_SECS, cache the latest for the System Health page, and persist the `yagra_host_*`
@@ -234,71 +230,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         spawn_cancellable(&shutdown, run_host_collector(store, cache, pool));
     }
 
-    // Notification delivery runs on its own task, fed by the result consumer over a bounded queue,
-    // so a slow/wedged vendor endpoint (retries, 10s timeouts, honored `Retry-After`) can never stall
-    // the poll-result ingest pipeline. Single consumer ⇒ deliveries stay ordered; a bounded channel
-    // ⇒ sustained overload applies backpressure rather than growing memory unbounded.
-    let (notify_tx, mut notify_rx) =
-        tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
-    {
-        let notifier = notifier.clone();
-        spawn_cancellable(&shutdown, async move {
-            while let Some(action) = notify_rx.recv().await {
-                notifier.handle(action).await;
-            }
-        });
-    }
-
-    // Poll-result ingestion (ADR-025): a single in-memory matcher hands persistence to async batch
-    // writers over bounded channels. Metrics (VictoriaMetrics) and interface metadata are best-effort
-    // — they shed on sustained overload (a shed metric never loses an alert; metadata self-heals,
-    // re-emitted every poll). Alert history is preserved (the matcher falls back to an inline write
-    // when its channel is full). The writers take the shutdown token directly (not `spawn_cancellable`)
-    // so they do a best-effort final flush on cancel rather than being dropped mid-batch.
-    let (metrics_tx, metrics_rx) =
-        tokio::sync::mpsc::channel::<Arc<PollResult>>(RESULT_PERSIST_CHANNEL_CAP);
-    let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(RESULT_PERSIST_CHANNEL_CAP);
-    let (history_tx, history_rx) =
-        tokio::sync::mpsc::channel::<HistoryRecord>(RESULT_PERSIST_CHANNEL_CAP);
-    tokio::spawn(run_vm_writer(metrics_rx, store.clone(), shutdown.clone()));
-    tokio::spawn(run_pg_writer(
-        meta_rx,
-        history_rx,
-        repo.clone(),
-        history.clone(),
-        shutdown.clone(),
-    ));
-    {
-        let alerts = alerts.clone();
-        let history = history.clone();
-        let stats = scheduler_stats.clone();
-        let meraki_inflight = meraki_inflight.clone();
-        let coordinator = coordinator.clone();
-        let results = Box::pin(bus.subscribe_results().await?);
-        spawn_cancellable(
-            &shutdown,
-            consume_results(
-                results,
-                alerts,
-                notify_tx,
-                metrics_tx,
-                meta_tx,
-                history_tx,
-                history,
-                stats,
-                meraki_inflight,
-                coordinator,
-            ),
-        );
-    }
-
-    // Discovery: a runner that publishes sweep jobs + a consumer that folds results back in,
-    // classifying each found device into a suggested profile via the shared classifier.
+    // Discovery: a runner that publishes sweep jobs (shared with the API) + a consumer that folds
+    // results back in — the consumer is leader-only (spawned in `leader_work`).
     let discovery = Arc::new(DiscoveryRunner::new(bus.clone(), classifier.clone()));
-    {
-        let results = Box::pin(bus.subscribe_discovery_results().await?);
-        spawn_cancellable(&shutdown, discovery.clone().run_consumer(results));
-    }
 
     // Passive events (Phase 2): syslog/traps arrive from pollers on `yagra.events`,
     // webhooks via the ingest endpoint. The engine matches rules and raises alerts
@@ -324,27 +258,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         Some(persist_tx),
         Some(event_action_tx),
     ));
+    // Priming: load the rule/address snapshot now so the API's webhook/rule-test endpoints read a
+    // populated engine from the first request (also refreshed by the leader's 30s loop). The event
+    // consumer, TTL sweeper, and the persist/action writers are leader-only (spawned in
+    // `leader_work`); `persist_rx`/`event_action_rx` are held for it.
     event_engine.reload(&repo).await;
-    {
-        let stream = Box::pin(bus.subscribe_events().await?);
-        spawn_cancellable(
-            &shutdown,
-            events::consume_events(stream, event_engine.clone()),
-        );
-    }
-    spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
-    tokio::spawn(events::run_persist_writer(
-        persist_rx,
-        events_repo.clone(),
-        logs.clone(),
-        shutdown.clone(),
-    ));
-    tokio::spawn(events::run_event_action_writer(
-        event_action_rx,
-        history.clone(),
-        notifier.clone(),
-        shutdown.clone(),
-    ));
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
     let creds = Arc::new(CredentialStore::from_env(repo.pool()));
@@ -372,40 +290,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         cfg.poll_interval_secs,
     ));
 
-    // Scheduler: inventory → working-set syncs (pools with a live poller) or jittered per-job
-    // dispatch (pools without one), decided per pool each sweep via the coordinator's `live_pools`.
-    {
-        let repo = repo.clone();
-        let dispatcher = dispatcher.clone();
-        let stats = scheduler_stats.clone();
-        let meraki_devices = meraki_devices.clone();
-        let coordinator = coordinator.clone();
-        spawn_cancellable(
-            &shutdown,
-            run_scheduler(repo, dispatcher, stats, meraki_devices, coordinator),
-        );
-    }
-
-    // Meraki scheduler: one org-scoped collect per due tier, single-flighted per org so the shared
-    // API rate budget is never exceeded. Separate loop so the per-node scheduler is untouched.
-    // Collects route to the configured Meraki pool (env `YAGRA_MERAKI_POOL`, default `default`).
+    // Scheduler + Meraki scheduler are leader-only (spawned in `leader_work`). Collects route to the
+    // configured Meraki pool (env `YAGRA_MERAKI_POOL`, default `default`); resolve it here so the
+    // value is available to `leader_work`.
     let meraki_pool = std::env::var("YAGRA_MERAKI_POOL")
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_POOL.to_owned());
-    {
-        let orgs = meraki_orgs.clone();
-        let devices = meraki_devices.clone();
-        let creds = creds.clone();
-        let bus = bus.clone();
-        let inflight = meraki_inflight.clone();
-        let sys = repo.clone();
-        spawn_cancellable(
-            &shutdown,
-            run_meraki_scheduler(orgs, devices, creds, bus, inflight, sys, meraki_pool),
-        );
-    }
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
     // periodically so edits (and window start/end boundaries) take effect without a restart.
@@ -414,111 +306,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
     // group to its subtree, and AdminState serves group CRUD — one hierarchy, read in several places.
     let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
+    // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
+    // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
     alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await);
-    {
-        let alerts = alerts.clone();
-        let repo = repo.clone();
-        let thresholds = thresholds.clone();
-        let maintenance = maintenance.clone();
-        let group_repo = group_repo.clone();
-        let classifier = classifier.clone();
-        let classification = classification.clone();
-        let event_engine = event_engine.clone();
-        spawn_cancellable(&shutdown, async move {
-            // Cache the config-derived alert base keyed by the config generation, so the full node
-            // scan + meta/topology rebuild runs only after an actual config change (S6). Maintenance
-            // windows are time-dependent, so re-resolve them each cycle over the cached node list,
-            // and only swap the live config when the base or the in-maintenance set actually changed.
-            let mut cached_base: Option<(u64, AlertConfigBase)> = None;
-            let mut last_maintenance: Option<std::collections::BTreeSet<NodeId>> = None;
-            loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                let generation = config_gen::current();
-                let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
-                if base_changed {
-                    cached_base =
-                        Some((generation, load_alert_config_base(&repo, &thresholds).await));
-                }
-                let base = &cached_base.as_ref().expect("alert base set above").1;
-                let in_maintenance =
-                    resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
-                if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {
-                    let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
-                        .with_topology(base.topology.clone())
-                        .with_maintenance(in_maintenance.clone());
-                    alerts.set_config(config);
-                    last_maintenance = Some(in_maintenance);
-                }
-                // Pick up classification-rule edits without a restart (also reloaded inline by
-                // the rule-edit handlers; this catches any drift / multi-instance future).
-                if let Err(e) = classifier.reload(&classification).await {
-                    tracing::warn!(error = %e, "failed to refresh classification rules");
-                }
-                // Event rules + node address map (also reloaded inline after rule edits).
-                event_engine.reload(&repo).await;
-            }
-        });
-    }
 
-    // Fleet health timeline: snapshot the node-state counts every few minutes into PostgreSQL so
-    // the dashboard can chart "degrading vs recovering" over time, and prune old snapshots +
-    // alert history past the retention window (the only place these tables are trimmed).
-    {
-        let repo = repo.clone();
-        let alerts = alerts.clone();
-        let history = history.clone();
-        let events_repo = events_repo.clone();
-        spawn_cancellable(&shutdown, async move {
-            const SNAPSHOT_SECS: u64 = 300;
-            const RETENTION_SECS: i64 = 90 * 86_400;
-            loop {
-                tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
-                let states = alerts.node_states();
-                let mut counts: HashMap<String, i64> = HashMap::new();
-                for s in states.values() {
-                    *counts.entry(s.as_str().to_owned()).or_insert(0) += 1;
-                }
-                let snapshot: Vec<(String, i64)> = counts.into_iter().collect();
-                if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
-                    tracing::warn!(error = %e, "node-state snapshot failed");
-                }
-                if let Err(e) = repo.prune_state_snapshots(RETENTION_SECS).await {
-                    tracing::warn!(error = %e, "prune state snapshots failed");
-                }
-                if let Err(e) = history.prune_old(RETENTION_SECS).await {
-                    tracing::warn!(error = %e, "prune alert history failed");
-                }
-                // Passive events in PostgreSQL: matched rows follow alert-history retention,
-                // unmatched (rule-authoring material) are pruned at 24h — see events.rs constants.
-                // When the log store is enabled (ADR-024) unmatched rows never land in PostgreSQL,
-                // so this pruning naturally trims PostgreSQL to the alert-linked subset; the log
-                // store keeps the full firehose under its own retention (`-retentionPeriod`).
-                if let Err(e) = events_repo.prune_old().await {
-                    tracing::warn!(error = %e, "prune events failed");
-                }
-            }
-        });
-    }
-
-    // Notification routing + mutes: load the DB channels/rules into the notifier now, then
-    // refresh periodically so edits take effect without a restart (env channels stay
-    // always-on; expired mutes drop out on refresh).
+    // Notification routing + mutes priming: load the DB channels/rules into the notifier now (env
+    // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).
     load_routing(&notifier, &notifications).await;
     load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
-    {
-        let notifier = notifier.clone();
-        let notifications = notifications.clone();
-        let maintenance = maintenance.clone();
-        let repo = repo.clone();
-        let group_repo = group_repo.clone();
-        spawn_cancellable(&shutdown, async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                load_routing(&notifier, &notifications).await;
-                load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
-            }
-        });
-    }
 
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let users = Arc::new(UserStore::new(repo.pool()));
@@ -546,23 +341,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             );
         }
     }
-    // Troubleshoot analysis runner (ADR-022): TSDB-read background diagnostics. Fail any job left
-    // `running` by a previous core process (it can't resume), then build the runner over the same
-    // TSDB seam and node inventory the rest of core uses.
+    // Troubleshoot analysis runner (ADR-022): TSDB-read background diagnostics. The orphan-reconcile
+    // (fail jobs left `running` by a previous process) is a leader-only DB mutation — deferred to
+    // `leader_work` so a standby never fails the live leader's in-flight jobs; `analysis_repo` is
+    // held for it. The runner itself serves the API on all cores.
     let analysis_repo = Arc::new(analysis::AnalysisRepo::new(repo.pool()));
-    match analysis_repo.fail_orphans().await {
-        Ok(n) if n > 0 => {
-            tracing::warn!(
-                orphans = n,
-                "failed analysis jobs left running by a previous process"
-            );
-        }
-        Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
-        _ => {}
-    }
     // `group_repo` is created earlier (shared with maintenance/mute scope resolution).
     let analysis = Arc::new(analysis::AnalysisRunner::new(
-        analysis_repo,
+        analysis_repo.clone(),
         store.clone(),
         repo.clone(),
         group_repo.clone(),
@@ -572,27 +358,221 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // analysis runner). Fail any run left `running` by a previous process, then build the runner over
     // the same store/inventory/alert/history seams. A 60s loop fires due schedules.
     let reports_repo = Arc::new(reports::ReportsRepo::new(repo.pool()));
-    match reports_repo.fail_orphans().await {
-        Ok(n) if n > 0 => {
-            tracing::warn!(
-                orphans = n,
-                "failed report runs left running by a previous process"
-            );
-        }
-        Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned report runs"),
-        _ => {}
-    }
+    // Orphan reconcile + the 60s schedule-firing loop are leader-only (deferred to `leader_work`);
+    // `reports_repo` / `reports` are held for it. The runner serves the API on all cores.
     let reports = Arc::new(reports::ReportRunner::new(
-        reports_repo,
+        reports_repo.clone(),
         store.clone(),
         repo.clone(),
         alerts.clone(),
         history.clone(),
     ));
-    {
+
+    // ── HA leader election (ADR-016) ────────────────────────────────────────────────────────────
+    // `is_leader` drives `/readyz` and the `yagra_core_is_leader` gauge. With HA off this core is
+    // always the leader (ready); with HA on it flips true only once the advisory lock is won.
+    let is_leader = Arc::new(AtomicBool::new(!cfg.enable_ha));
+    metrics::gauge!("yagra_core_is_leader").set(if cfg.enable_ha { 0.0 } else { 1.0 });
+
+    // Every leader-only background task, deferred so it starts exactly once — the moment this core
+    // holds the advisory lock (immediately when HA is off). It captures *clones* so `AdminState`/
+    // `ApiState` below keep their own handles; the single-owner channel receivers (`persist_rx`,
+    // `event_action_rx`) and `meraki_pool` move in (only the leader drains them). Bus subscriptions
+    // happen *inside* so a standby never subscribes. On a standby these never run, so the
+    // event-webhook/close API handlers 503 (see api.rs) to avoid enqueuing to an undrained channel.
+    let leader_work = {
+        let shutdown = shutdown.clone();
+        let bus = bus.clone();
+        let coordinator = coordinator.clone();
+        let notifier = notifier.clone();
+        let store = store.clone();
+        let repo = repo.clone();
+        let history = history.clone();
+        let alerts = alerts.clone();
+        let scheduler_stats = scheduler_stats.clone();
+        let meraki_inflight = meraki_inflight.clone();
+        let meraki_devices = meraki_devices.clone();
+        let meraki_orgs = meraki_orgs.clone();
+        let creds = creds.clone();
+        let dispatcher = dispatcher.clone();
+        let discovery = discovery.clone();
+        let event_engine = event_engine.clone();
+        let events_repo = events_repo.clone();
+        let logs = logs.clone();
+        let thresholds = thresholds.clone();
+        let maintenance = maintenance.clone();
+        let group_repo = group_repo.clone();
+        let classifier = classifier.clone();
+        let classification = classification.clone();
+        let notifications = notifications.clone();
+        let analysis_repo = analysis_repo.clone();
+        let reports_repo = reports_repo.clone();
         let reports = reports.clone();
-        spawn_cancellable(&shutdown, run_report_scheduler(reports));
-    }
+        async move {
+            // Coordinator registry: heartbeats + snapshot requests.
+            let hb = Box::pin(bus.subscribe_heartbeats().await?);
+            spawn_cancellable(&shutdown, coordinator.clone().run_heartbeat_consumer(hb));
+            let sr = Box::pin(bus.subscribe_sync_requests().await?);
+            spawn_cancellable(&shutdown, coordinator.clone().run_sync_request_consumer(sr));
+
+            // Notification delivery worker (bounded queue, single ordered consumer) — fed by the
+            // matcher so a slow vendor endpoint can never stall ingest.
+            let (notify_tx, mut notify_rx) =
+                tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
+            {
+                let notifier = notifier.clone();
+                spawn_cancellable(&shutdown, async move {
+                    while let Some(action) = notify_rx.recv().await {
+                        notifier.handle(action).await;
+                    }
+                });
+            }
+
+            // Poll-result ingestion (ADR-025): async batch writers + the single in-memory matcher.
+            let (metrics_tx, metrics_rx) =
+                tokio::sync::mpsc::channel::<Arc<PollResult>>(RESULT_PERSIST_CHANNEL_CAP);
+            let (meta_tx, meta_rx) =
+                tokio::sync::mpsc::channel::<MetaRecord>(RESULT_PERSIST_CHANNEL_CAP);
+            let (history_tx, history_rx) =
+                tokio::sync::mpsc::channel::<HistoryRecord>(RESULT_PERSIST_CHANNEL_CAP);
+            tokio::spawn(run_vm_writer(metrics_rx, store.clone(), shutdown.clone()));
+            tokio::spawn(run_pg_writer(
+                meta_rx,
+                history_rx,
+                repo.clone(),
+                history.clone(),
+                shutdown.clone(),
+            ));
+            {
+                let results = Box::pin(bus.subscribe_results().await?);
+                spawn_cancellable(
+                    &shutdown,
+                    consume_results(
+                        results,
+                        alerts.clone(),
+                        notify_tx,
+                        metrics_tx,
+                        meta_tx,
+                        history_tx,
+                        history.clone(),
+                        scheduler_stats.clone(),
+                        meraki_inflight.clone(),
+                        coordinator.clone(),
+                    ),
+                );
+            }
+
+            // Discovery-result consumer (folds swept devices back in, classified to a profile).
+            {
+                let results = Box::pin(bus.subscribe_discovery_results().await?);
+                spawn_cancellable(&shutdown, discovery.clone().run_consumer(results));
+            }
+
+            // Passive-event pipeline: consumer + TTL sweeper + persist/action writers (ADR-024).
+            {
+                let stream = Box::pin(bus.subscribe_events().await?);
+                spawn_cancellable(
+                    &shutdown,
+                    events::consume_events(stream, event_engine.clone()),
+                );
+            }
+            spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
+            tokio::spawn(events::run_persist_writer(
+                persist_rx,
+                events_repo.clone(),
+                logs.clone(),
+                shutdown.clone(),
+            ));
+            tokio::spawn(events::run_event_action_writer(
+                event_action_rx,
+                history.clone(),
+                notifier.clone(),
+                shutdown.clone(),
+            ));
+
+            // Per-node scheduler (working-set syncs / jittered dispatch) + Meraki scheduler.
+            spawn_cancellable(
+                &shutdown,
+                run_scheduler(
+                    repo.clone(),
+                    dispatcher.clone(),
+                    scheduler_stats.clone(),
+                    meraki_devices.clone(),
+                    coordinator.clone(),
+                ),
+            );
+            spawn_cancellable(
+                &shutdown,
+                run_meraki_scheduler(
+                    meraki_orgs.clone(),
+                    meraki_devices.clone(),
+                    creds.clone(),
+                    bus.clone(),
+                    meraki_inflight.clone(),
+                    repo.clone(),
+                    meraki_pool,
+                ),
+            );
+
+            // Config / retention / routing refresh loops.
+            spawn_cancellable(
+                &shutdown,
+                run_alert_config_refresh(
+                    alerts.clone(),
+                    repo.clone(),
+                    thresholds.clone(),
+                    maintenance.clone(),
+                    group_repo.clone(),
+                    classifier.clone(),
+                    classification.clone(),
+                    event_engine.clone(),
+                ),
+            );
+            spawn_cancellable(
+                &shutdown,
+                run_fleet_health_timeline(
+                    repo.clone(),
+                    alerts.clone(),
+                    history.clone(),
+                    events_repo.clone(),
+                ),
+            );
+            spawn_cancellable(
+                &shutdown,
+                run_routing_refresh(
+                    notifier.clone(),
+                    notifications.clone(),
+                    maintenance.clone(),
+                    repo.clone(),
+                    group_repo.clone(),
+                ),
+            );
+
+            // Orphan reconcile: fail analysis/report jobs a previous leader left `running`
+            // (leader-only — a standby must never touch the live leader's in-flight jobs).
+            match analysis_repo.fail_orphans().await {
+                Ok(n) if n > 0 => tracing::warn!(
+                    orphans = n,
+                    "failed analysis jobs left running by a previous process"
+                ),
+                Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
+                _ => {}
+            }
+            match reports_repo.fail_orphans().await {
+                Ok(n) if n > 0 => tracing::warn!(
+                    orphans = n,
+                    "failed report runs left running by a previous process"
+                ),
+                Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned report runs"),
+                _ => {}
+            }
+
+            // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
+            spawn_cancellable(&shutdown, run_report_scheduler(reports.clone()));
+
+            Ok::<(), anyhow::Error>(())
+        }
+    };
 
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
@@ -637,7 +617,45 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         ack: Some(acks),
         events: Some(event_engine),
         public_dashboard: cfg.public_dashboard,
+        is_leader: is_leader.clone(),
     };
+
+    if cfg.enable_ha {
+        // Standby until the advisory lock is won. The API (incl. `/healthz`) already serves below,
+        // so the container stays healthy while waiting; promotion is live (no restart). A lost lock
+        // connection = graceful shutdown for orchestrator restart (spawn-once, ADR-016 model B).
+        let shutdown_lease = shutdown.clone();
+        let is_leader = is_leader.clone();
+        let db_url = cfg.database_url.clone();
+        let core_label = cfg.core_id.clone().unwrap_or_else(|| "core".to_owned());
+        tokio::spawn(async move {
+            tracing::info!(core = %core_label, "HA enabled — standby, waiting for leadership");
+            let Some(conn) = leader::acquire(&db_url, &shutdown_lease).await else {
+                return; // shutdown fired before leadership was won
+            };
+            is_leader.store(true, Ordering::Release);
+            metrics::gauge!("yagra_core_is_leader").set(1.0);
+            tracing::info!(core = %core_label, "acquired leadership — starting coordinator and background workers");
+            if let Err(e) = leader_work.await {
+                tracing::error!(error = %e, "leader startup failed — shutting down for restart");
+                shutdown_lease.cancel();
+                return;
+            }
+            leader::hold_until_lost(conn, &shutdown_lease).await;
+            if !shutdown_lease.is_cancelled() {
+                is_leader.store(false, Ordering::Release);
+                metrics::gauge!("yagra_core_is_leader").set(0.0);
+                tracing::error!(
+                    "lost leadership (PostgreSQL connection lost) — shutting down for restart"
+                );
+                shutdown_lease.cancel();
+            }
+        });
+    } else {
+        // Single active core: run all leader work inline before serving — byte-identical to pre-HA.
+        leader_work.await?;
+    }
+
     serve(state, &cfg.api_addr, metrics, shutdown).await
 }
 
@@ -673,6 +691,8 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
         public_dashboard: true,
+        // Skeleton has no leader election — always "ready".
+        is_leader: Arc::new(AtomicBool::new(true)),
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }
@@ -801,6 +821,110 @@ async fn consume_results<S>(
         .await;
     }
     tracing::warn!("result stream ended");
+}
+
+/// Leader-only refresh loop: keep the alert engine's config fresh. Rebuild the config-derived base
+/// only when the config generation changes (S6, [`config_gen`]); re-resolve time-dependent
+/// maintenance windows each cycle; reload classifier + event rules so edits apply without a restart.
+/// Runs until the shutdown token drops it. Spawned in `leader_work` (see `run_live`).
+#[allow(clippy::too_many_arguments)]
+async fn run_alert_config_refresh(
+    alerts: Arc<AlertManager>,
+    repo: Arc<NodeRepo>,
+    thresholds: Arc<ThresholdStore>,
+    maintenance: Arc<MaintenanceRepo>,
+    group_repo: Arc<groups::GroupRepo>,
+    classifier: Arc<classification::Classifier>,
+    classification: Arc<classification::ClassificationRepo>,
+    event_engine: Arc<events::EventEngine>,
+) {
+    // Cache the config-derived alert base keyed by the config generation, so the full node scan +
+    // meta/topology rebuild runs only after an actual config change (S6). Maintenance windows are
+    // time-dependent, so re-resolve them each cycle over the cached node list, and only swap the
+    // live config when the base or the in-maintenance set actually changed.
+    let mut cached_base: Option<(u64, AlertConfigBase)> = None;
+    let mut last_maintenance: Option<std::collections::BTreeSet<NodeId>> = None;
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let generation = config_gen::current();
+        let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
+        if base_changed {
+            cached_base = Some((generation, load_alert_config_base(&repo, &thresholds).await));
+        }
+        let base = &cached_base.as_ref().expect("alert base set above").1;
+        let in_maintenance =
+            resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
+        if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {
+            let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
+                .with_topology(base.topology.clone())
+                .with_maintenance(in_maintenance.clone());
+            alerts.set_config(config);
+            last_maintenance = Some(in_maintenance);
+        }
+        // Pick up classification-rule edits without a restart (also reloaded inline by the
+        // rule-edit handlers; this catches any drift / multi-instance future).
+        if let Err(e) = classifier.reload(&classification).await {
+            tracing::warn!(error = %e, "failed to refresh classification rules");
+        }
+        // Event rules + node address map (also reloaded inline after rule edits).
+        event_engine.reload(&repo).await;
+    }
+}
+
+/// Leader-only loop: snapshot the node-state counts every few minutes into PostgreSQL so the
+/// dashboard can chart "degrading vs recovering" over time, and prune old state snapshots + alert
+/// history + events past the retention window (the only place these tables are trimmed). Runs until
+/// the shutdown token drops it. Spawned in `leader_work` (see `run_live`).
+async fn run_fleet_health_timeline(
+    repo: Arc<NodeRepo>,
+    alerts: Arc<AlertManager>,
+    history: Arc<AlertHistoryStore>,
+    events_repo: Arc<events::EventRepo>,
+) {
+    const SNAPSHOT_SECS: u64 = 300;
+    const RETENTION_SECS: i64 = 90 * 86_400;
+    loop {
+        tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
+        let states = alerts.node_states();
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        for s in states.values() {
+            *counts.entry(s.as_str().to_owned()).or_insert(0) += 1;
+        }
+        let snapshot: Vec<(String, i64)> = counts.into_iter().collect();
+        if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
+            tracing::warn!(error = %e, "node-state snapshot failed");
+        }
+        if let Err(e) = repo.prune_state_snapshots(RETENTION_SECS).await {
+            tracing::warn!(error = %e, "prune state snapshots failed");
+        }
+        if let Err(e) = history.prune_old(RETENTION_SECS).await {
+            tracing::warn!(error = %e, "prune alert history failed");
+        }
+        // Passive events in PostgreSQL: matched rows follow alert-history retention, unmatched
+        // (rule-authoring material) are pruned at 24h — see events.rs constants. When the log store
+        // is enabled (ADR-024) unmatched rows never land in PostgreSQL, so this pruning naturally
+        // trims PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
+        if let Err(e) = events_repo.prune_old().await {
+            tracing::warn!(error = %e, "prune events failed");
+        }
+    }
+}
+
+/// Leader-only loop: reload notification routing (DB channels/rules) + mutes into the notifier every
+/// 30s so edits take effect without a restart (env channels stay always-on; expired mutes drop out).
+/// Runs until the shutdown token drops it. Spawned in `leader_work` (see `run_live`).
+async fn run_routing_refresh(
+    notifier: Arc<Notifier>,
+    notifications: Arc<NotificationRepo>,
+    maintenance: Arc<MaintenanceRepo>,
+    repo: Arc<NodeRepo>,
+    group_repo: Arc<groups::GroupRepo>,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        load_routing(&notifier, &notifications).await;
+        load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
+    }
 }
 
 /// Match one poll result on the single in-memory matcher: count it, attribute provenance, then
