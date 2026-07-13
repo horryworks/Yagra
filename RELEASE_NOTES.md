@@ -1,5 +1,25 @@
 # Release Notes
 
+## v0.1.13
+
+**Remote pollers survive a network partition.** A poller cut off from the central core keeps
+monitoring locally and backfills the metrics it collected once the link returns — so a WAN blip
+becomes a filled-in gap in your history, not a hole.
+
+### New Features
+- **Store-and-forward for remote pollers (on by default)** — when a poller loses its connection to
+  the core (a WAN outage, a firewall blip), it keeps polling its devices locally and buffers the
+  results instead of dropping them. On reconnect it bulk-replays them, and the core imports the
+  metrics at their original timestamps, so graphs and history fill in the outage window with no
+  false spike. Alerts are deliberately **not** replayed — alert evaluation resumes from "now", so a
+  reconnect never floods you with stale, already-resolved alerts. The buffer is bounded (an
+  in-memory ring plus an on-disk spill that survives a poller restart) and drops the oldest data
+  first, so it can never fill the poller's disk. Tune the caps — or turn it off — with the
+  `YAGRA_STORE_FORWARD*` settings (see `docker-compose.poller.yml`).
+- **Recent monitoring gaps on the Pollers page** — Settings ▸ Pollers now lists each window during
+  which the core lost contact with a poller (which poller, which pool, when, and for how long), so
+  you can see at a glance when monitoring was blind and that the metrics were backfilled.
+
 ## v0.1.12
 
 **Single sign-on and core high availability.** Sign in with your organization's identity provider,

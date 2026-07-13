@@ -27,6 +27,17 @@ pub fn results() -> String {
     format!("{ROOT}.results")
 }
 
+/// Subject pollers replay **buffered** results on after a core↔poller partition heals
+/// (store-and-forward, Phase 3). Kept **separate** from [`results`] on purpose: core imports these
+/// to the TSDB at their original `at_unix_ms` (backfill) but must **not** run alert evaluation over
+/// them (replaying a burst of stale samples would re-fire resolved alerts). The separate subject is
+/// also the N-1 safety valve — an older core that predates store-and-forward simply never subscribes
+/// here, so a newer poller's backfill is silently dropped (a metrics gap) instead of flooding alerts.
+#[must_use]
+pub fn results_backfill() -> String {
+    format!("{ROOT}.results.backfill")
+}
+
 /// Subject pollers publish passive events (syslog/traps) on, consumed by core.
 #[must_use]
 pub fn events() -> String {
@@ -116,6 +127,17 @@ mod tests {
     #[test]
     fn results_subject_is_stable() {
         assert_eq!(results(), "yagra.results");
+    }
+
+    #[test]
+    fn results_backfill_subject_is_stable_and_distinct() {
+        assert_eq!(results_backfill(), "yagra.results.backfill");
+        // Must not collide with the live subject — an old core subscribed to `yagra.results`
+        // must NOT receive backfill (that separation is the N-1 safety valve).
+        assert_ne!(results_backfill(), results());
+        // ...and it must not sit under a `yagra.results.*` wildcard the live consumer might use.
+        // The live consumer subscribes the exact token `yagra.results`, so `.backfill` is isolated.
+        assert!(results_backfill().starts_with("yagra.results."));
     }
 
     #[test]

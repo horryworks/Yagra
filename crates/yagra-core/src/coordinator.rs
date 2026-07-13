@@ -226,8 +226,11 @@ impl<B: SyncBus> Coordinator<B> {
     /// `needs_snapshot` is (re)armed when the poller is new, has a changed incarnation (restart),
     /// echoes an epoch that isn't ours, or echoes a `last_seq` that doesn't match what we've sent —
     /// each meaning the poller's set may be stale/gapped.
-    pub async fn observe_heartbeat(&self, hb: HeartbeatMsg, now: Instant) {
-        let (doc, do_pg) = {
+    ///
+    /// Returns `true` iff this beat closed a **monitoring gap** — a known poller reappearing after
+    /// its heartbeats had lapsed past the offline window (Phase 3, store-and-forward).
+    pub async fn observe_heartbeat(&self, hb: HeartbeatMsg, now: Instant) -> bool {
+        let (doc, do_pg, gap) = {
             let mut st = self.state.lock().expect("coordinator state poisoned");
             let epoch = self.epoch;
             let known = st.pollers.contains_key(&hb.poller_id);
@@ -262,6 +265,15 @@ impl<B: SyncBus> Coordinator<B> {
                 entry.pool = hb.pool.clone();
                 entry.version = hb.version.clone();
             }
+            // Detect an offline→online transition: a *known* poller whose last contact predates the
+            // offline window is reappearing, so the span since then was a monitoring gap. Computed
+            // before we overwrite `last_seen` below; recorded once per transition (one row per gap).
+            let offline_gap = if known {
+                let since = now.saturating_duration_since(entry.last_seen);
+                (since >= OFFLINE_AFTER).then_some(since)
+            } else {
+                None
+            };
             // Liveness + telemetry refresh regardless of new/known.
             entry.last_seen = now;
             entry.working_set_nodes = hb.working_set_nodes;
@@ -290,8 +302,30 @@ impl<B: SyncBus> Coordinator<B> {
                 results_total: hb.results_total,
                 seen_unix_ms: now_unix_ms(),
             };
-            (doc, do_pg)
+            (doc, do_pg, offline_gap)
         };
+        // A monitoring gap healed: record the window (store-and-forward backfills its metrics; alerts
+        // resume from "now"). One durable row per offline→online transition (Phase 3).
+        if let Some(since) = gap {
+            let ended_ms = now_unix_ms();
+            let started_ms =
+                ended_ms.saturating_sub(i64::try_from(since.as_millis()).unwrap_or(i64::MAX));
+            metrics::counter!("yagra_core_poller_gap_total").increment(1);
+            tracing::info!(
+                poller = %hb.poller_id,
+                pool = %hb.pool,
+                gap_secs = since.as_secs(),
+                "poller reappeared after a monitoring gap — store-and-forward backfills the window"
+            );
+            if let Some(repo) = &self.pollers_repo {
+                if let Err(e) = repo
+                    .insert_monitoring_gap(&hb.poller_id, &hb.pool, started_ms, ended_ms)
+                    .await
+                {
+                    tracing::warn!(error = %e, poller = %hb.poller_id, "failed to record monitoring gap");
+                }
+            }
+        }
         // Best-effort mirrors, outside the lock.
         self.volatile
             .record_poller(&hb.poller_id, &doc, REDIS_TTL)
@@ -313,6 +347,7 @@ impl<B: SyncBus> Coordinator<B> {
                 }
             }
         }
+        gap.is_some()
     }
 
     /// Observe an explicit snapshot request: upsert-or-create the entry and arm `needs_snapshot`
@@ -657,6 +692,42 @@ mod tests {
             listeners: Vec::new(),
             host: None,
         }
+    }
+
+    #[tokio::test]
+    async fn reappearing_poller_after_offline_window_records_one_gap() {
+        // Store-and-forward (Phase 3): a *known* poller whose heartbeats lapsed past the offline
+        // window and then resumed closed a monitoring gap — recorded exactly once per transition.
+        let (coord, _bus, _stats) = coordinator();
+        let inc = Uuid::from_u128(1);
+        let t0 = Instant::now();
+        // First contact: unknown poller → not a gap.
+        assert!(
+            !coord
+                .observe_heartbeat(heartbeat("edge-1", "default", inc), t0)
+                .await
+        );
+        // A beat within the offline window → still no gap.
+        let t1 = t0 + Duration::from_secs(5);
+        assert!(
+            !coord
+                .observe_heartbeat(heartbeat("edge-1", "default", inc), t1)
+                .await
+        );
+        // A beat AFTER the offline window elapsed → the poller reappeared: exactly one gap.
+        let t2 = t1 + OFFLINE_AFTER + Duration::from_secs(1);
+        assert!(
+            coord
+                .observe_heartbeat(heartbeat("edge-1", "default", inc), t2)
+                .await
+        );
+        // The very next beat is fresh → no new gap.
+        let t3 = t2 + Duration::from_secs(5);
+        assert!(
+            !coord
+                .observe_heartbeat(heartbeat("edge-1", "default", inc), t3)
+                .await
+        );
     }
 
     /// A heartbeat that echoes a poller that has already applied snapshot `seq` on `epoch` (so it

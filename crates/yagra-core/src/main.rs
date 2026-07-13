@@ -452,14 +452,26 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                         results,
                         alerts.clone(),
                         notify_tx,
-                        metrics_tx,
-                        meta_tx,
+                        metrics_tx.clone(),
+                        meta_tx.clone(),
                         history_tx,
                         history.clone(),
                         scheduler_stats.clone(),
                         meraki_inflight.clone(),
                         coordinator.clone(),
                     ),
+                );
+            }
+
+            // Backfill-result consumer (store-and-forward replay, Phase 3): a remote poller replays a
+            // partition's buffered results on the dedicated backfill subject; core imports the metrics
+            // at their original timestamp but NEVER runs alert evaluation over them. Leader-only, and
+            // shares the same VM/PG writers as the live consumer via cloned senders.
+            {
+                let backfill = Box::pin(bus.subscribe_results_backfill().await?);
+                spawn_cancellable(
+                    &shutdown,
+                    consume_results_backfill(backfill, metrics_tx, meta_tx),
                 );
             }
 
@@ -833,6 +845,85 @@ async fn consume_results<S>(
     tracing::warn!("result stream ended");
 }
 
+/// Drain **backfilled** poll results (store-and-forward replay, Phase 3) and persist only their
+/// metrics + interface metadata — **never** alert evaluation. A poller replays a partition's buffered
+/// results here on reconnect; core imports them to the TSDB at their original `at_unix_ms` so history
+/// fills at true time. Re-running the sample-count dwell machine over a stale burst would re-fire
+/// resolved alerts, so the alert/notify/history path is deliberately skipped (the separate subject is
+/// what routes them here — see [`yagra_bus::subjects::results_backfill`]). Leader-only, like the live
+/// consumer (fan-out subscribe; only the leader ingests). Returns when the stream ends.
+async fn consume_results_backfill<S>(
+    mut results: S,
+    metrics_tx: tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    meta_tx: tokio::sync::mpsc::Sender<MetaRecord>,
+) where
+    S: Stream<Item = PollResult> + Unpin,
+{
+    while let Some(result) = results.next().await {
+        metrics::counter!("yagra_core_backfill_results_total").increment(1);
+        persist_metrics_and_meta(&Arc::new(result), &metrics_tx, &meta_tx);
+    }
+    tracing::warn!("backfill result stream ended");
+}
+
+/// Persist a result's observational tiers: metric samples → the VM writer, interface + `sysDescr`
+/// identity metadata → the PG writer. Both are best-effort `try_send`s (shed-able, self-healing) and
+/// touch **no** alert state, so this runs for backfilled results too (store-and-forward, Phase 3) —
+/// the same metrics land at their original timestamp without re-driving the alert machine. Metadata
+/// only — names/aliases live in PostgreSQL, joined at query time (ADR-011).
+fn persist_metrics_and_meta(
+    result: &Arc<PollResult>,
+    metrics_tx: &tokio::sync::mpsc::Sender<Arc<PollResult>>,
+    meta_tx: &tokio::sync::mpsc::Sender<MetaRecord>,
+) {
+    // Metrics → VM writer. Shed-able: alerts are computed in-memory and never read VM back, so a
+    // dropped sample never loses an alert (best-effort observational tier, ADR-025).
+    if !result.samples.is_empty() {
+        match metrics_tx.try_send(Arc::clone(result)) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
+                    .increment(1);
+            }
+            Err(TrySendError::Closed(_)) => {}
+        }
+    }
+
+    // Interface metadata + `sysDescr` identity → PG meta writer. Shed-able and self-healing (both are
+    // re-emitted every poll). `identify()` is cheap in-memory work; only the PG UPDATE is offloaded.
+    let interfaces: Vec<OwnedIface> = result
+        .interfaces
+        .iter()
+        .map(|iface| {
+            (
+                i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
+                iface.if_name.clone(),
+                iface.if_alias.clone(),
+                iface.if_speed,
+            )
+        })
+        .collect();
+    let identity = result.sys_descr.as_deref().and_then(|descr| {
+        let id = yagra_discovery::identify(descr);
+        (id.vendor.is_some() || id.model.is_some()).then_some((id.vendor, id.model))
+    });
+    if !interfaces.is_empty() || identity.is_some() {
+        let rec = MetaRecord {
+            node_id: result.node_id.as_uuid(),
+            interfaces,
+            identity,
+        };
+        match meta_tx.try_send(rec) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "channel_full")
+                    .increment(1);
+            }
+            Err(TrySendError::Closed(_)) => {}
+        }
+    }
+}
+
 /// Leader-only refresh loop: keep the alert engine's config fresh. Rebuild the config-derived base
 /// only when the config generation changes (S6, [`config_gen`]); re-resolve time-dependent
 /// maintenance windows each cycle; reload classifier + event rules so edits apply without a restart.
@@ -977,53 +1068,9 @@ async fn ingest_result(
             .set((now_ms - result.at_unix_ms).max(0) as f64);
     }
 
-    // Metrics → VM writer. Shed-able: alerts are computed in-memory below and never read VM back,
-    // so a dropped sample never loses an alert (best-effort observational tier, ADR-025).
-    if !result.samples.is_empty() {
-        match metrics_tx.try_send(Arc::clone(&result)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                metrics::counter!("yagra_result_metrics_persist_dropped_total", "reason" => "channel_full")
-                    .increment(1);
-            }
-            Err(TrySendError::Closed(_)) => {}
-        }
-    }
-
-    // Interface metadata + `sysDescr` identity → PG meta writer. Shed-able and self-healing (both are
-    // re-emitted every poll). `identify()` is cheap in-memory work, kept on the matcher; only the PG
-    // UPDATE is offloaded. Metadata only — names/aliases live in PostgreSQL, joined at query time (ADR-011).
-    let interfaces: Vec<OwnedIface> = result
-        .interfaces
-        .iter()
-        .map(|iface| {
-            (
-                i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
-                iface.if_name.clone(),
-                iface.if_alias.clone(),
-                iface.if_speed,
-            )
-        })
-        .collect();
-    let identity = result.sys_descr.as_deref().and_then(|descr| {
-        let id = yagra_discovery::identify(descr);
-        (id.vendor.is_some() || id.model.is_some()).then_some((id.vendor, id.model))
-    });
-    if !interfaces.is_empty() || identity.is_some() {
-        let rec = MetaRecord {
-            node_id: result.node_id.as_uuid(),
-            interfaces,
-            identity,
-        };
-        match meta_tx.try_send(rec) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                metrics::counter!("yagra_result_meta_persist_dropped_total", "reason" => "channel_full")
-                    .increment(1);
-            }
-            Err(TrySendError::Closed(_)) => {}
-        }
-    }
+    // Metrics → VM writer + interface/identity metadata → PG writer. Shed-able/self-healing and
+    // alert-independent, so it's shared with the backfill path (`consume_results_backfill`).
+    persist_metrics_and_meta(&result, metrics_tx, meta_tx);
 
     // Alerts: evaluate synchronously in-memory (never shed — the loss-free matcher core), record each
     // lifecycle transition (batched via `history_tx`, inline fallback), and hand delivery to the
@@ -1905,6 +1952,43 @@ mod tests {
     use store::MetricPoint;
     use yagra_bus::{CheckOutcome, Sample};
     use yagra_common::{NodeId, SeriesKey};
+
+    #[tokio::test]
+    async fn backfill_consumer_persists_metrics_and_meta_only() {
+        // Store-and-forward (Phase 3): a backfilled result reaches the VM + meta writers (so history
+        // fills at its original timestamp) but the backfill consumer has no access to alert state at
+        // all — replaying a stale burst can never re-fire resolved alerts.
+        use yagra_bus::DiscoveredInterface;
+        use yagra_common::IfIndex;
+        let (metrics_tx, mut metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        let result = PollResult {
+            schema_version: 1,
+            job_id: uuid::Uuid::nil(),
+            node_id: NodeId::from(uuid::Uuid::nil()),
+            at_unix_ms: 1_000, // deliberately ancient — must NOT drive any "now" alert logic
+            outcome: CheckOutcome::Reachable,
+            samples: vec![Sample::gauge("icmp_rtt_ms", 3.0)],
+            interfaces: vec![DiscoveredInterface {
+                ifindex: IfIndex(1),
+                if_name: Some("eth0".into()),
+                if_alias: None,
+                if_speed: None,
+            }],
+            sys_descr: None,
+            poller_id: Some("edge-1".into()),
+            trace_context: Default::default(),
+        };
+        consume_results_backfill(futures::stream::iter(vec![result]), metrics_tx, meta_tx).await;
+        assert!(
+            metrics_rx.try_recv().is_ok(),
+            "backfilled metrics reach the VM writer"
+        );
+        assert!(
+            meta_rx.try_recv().is_ok(),
+            "backfilled interface metadata reaches the PG writer"
+        );
+    }
 
     /// A [`MetricStore`] whose `write_batch` succeeds or fails on demand, for exercising the VM
     /// writer's retry/spill bookkeeping without a network. The read methods are never hit here.

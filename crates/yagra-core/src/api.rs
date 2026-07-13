@@ -344,6 +344,8 @@ pub fn router(state: ApiState) -> Router {
         // Distributed poller pool (ADR-009/020): the fleet of registered pollers + per-pool summary.
         .route("/api/v1/pollers", get(list_pollers))
         .route("/api/v1/pollers/:id", delete(delete_poller))
+        // Store-and-forward (Phase 3): recent core↔poller visibility outages (monitoring gaps).
+        .route("/api/v1/monitoring-gaps", get(list_monitoring_gaps))
         .route("/api/v1/system-health", get(system_health))
         // Host self-observability: current CPU/load/mem/disk of core + each poller, and the trend
         // series behind the System Health "Host resources" charts.
@@ -2155,6 +2157,28 @@ async fn list_pollers(State(st): State<ApiState>, headers: HeaderMap) -> Respons
         Err(e) => tracing::error!(error = %e, "list nodes for pool summary failed"),
     }
     Json(build_pollers_response(inventory, live, node_pools)).into_response()
+}
+
+/// `GET /api/v1/monitoring-gaps` — recent core↔poller visibility outages (Phase 3, store-and-forward).
+/// Read-only self-monitoring data, secret-free, so it is `View`-gated like the other fleet views;
+/// skeleton mode (no coordinator/DB) returns the standard 503. Newest first, capped. A DB read error
+/// degrades to an empty list rather than failing the Pollers page.
+async fn list_monitoring_gaps(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let gaps = admin
+        .pollers
+        .list_monitoring_gaps(200)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "list monitoring gaps failed; returning empty");
+            Vec::new()
+        });
+    Json(gaps).into_response()
 }
 
 /// `DELETE /api/v1/pollers/:id` — remove a decommissioned poller from the durable inventory. A

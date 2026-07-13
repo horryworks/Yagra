@@ -22,6 +22,7 @@
 mod discovery;
 mod limiter;
 mod listeners;
+mod store_forward;
 mod worker;
 mod working_set;
 
@@ -140,6 +141,18 @@ async fn main() -> anyhow::Result<()> {
     let results_total = Arc::new(AtomicU64::new(0));
     let inflight = Arc::new(AtomicU64::new(0));
 
+    // Store-and-forward result sink (Phase 3): during a core↔poller partition it buffers results
+    // locally (bounded in-memory ring + on-disk spill) and replays them on reconnect onto the
+    // backfill subject, so a partition becomes a metrics gap that heals — not lost history. Default
+    // ON; `YAGRA_STORE_FORWARD=off` makes it a byte-identical pass-through (publish live, drop on
+    // failure). The drain task is spawned once the shutdown token exists (below).
+    let sf_bus: Arc<dyn yagra_bus::Bus> = bus.clone();
+    let sink = store_forward::StoreForwardSink::new(sf_bus, store_forward::SfConfig::from_env());
+    tracing::info!(
+        store_forward = sink.is_enabled(),
+        "store-and-forward result sink ready"
+    );
+
     // Graceful shutdown: SIGTERM/Ctrl-C cancels this token so the background loops stop and the
     // worker loop below returns, instead of the process being hard-killed mid-poll (ADR-017 rolling
     // upgrade). Install the signal handler once, up front.
@@ -152,6 +165,10 @@ async fn main() -> anyhow::Result<()> {
             shutdown.cancel();
         });
     }
+
+    // Store-and-forward replay loop: whenever the bus is connected and the buffer is non-empty, drain
+    // it oldest-first onto the backfill subject. A no-op while empty or disconnected (Phase 3).
+    spawn_cancellable(&shutdown, sink.clone().run_drain(shutdown.clone()));
 
     // Passive-event listeners (Phase 2): syslog / SNMP traps, enabled per site via env. They publish
     // EventMsgs on `yagra.events`; core does the rule matching. The returned labels advertise which
@@ -246,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         _ = worker::run_stream(
             unified,
-            bus,
+            sink,
             transport,
             limiter,
             Some(poller_id),

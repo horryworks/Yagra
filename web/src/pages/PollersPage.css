@@ -134,3 +134,20 @@
   margin: 0;
   font-size: var(--font-sm);
 }
+
+/* ============================================================ monitoring gaps (store-and-forward) */
+.poller-gaps {
+  margin-top: 24px;
+}
+
+.poller-gaps-title {
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.poller-gaps-note {
+  margin: 0 0 10px;
+  font-size: var(--font-sm);
+}

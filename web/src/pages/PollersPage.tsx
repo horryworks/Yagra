@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { PollerInfo, PoolSummary } from '../types/api';
+import type { MonitoringGap, PollerInfo, PoolSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -22,7 +22,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
-import { formatCount, formatUtil } from '../lib/format';
+import { formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
 import {
   buildPollerEnv,
   isValidPollerToken,
@@ -235,11 +235,63 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+const GAP_COLS = '1.4fr 120px 1fr 120px';
+
+/** Recent core↔poller visibility outages (store-and-forward, Phase 3). Each row is a window during
+ *  which core couldn't hear from the poller; if the poller stayed alive but partitioned, it backfills
+ *  the metrics for the window on reconnect (alerts are not backfilled). A compact subsection below the
+ *  fleet table, hidden entirely when there are none (gaps are the exception, not the norm). */
+function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
+  const { t } = useTranslation('system');
+  if (gaps.length === 0) return null;
+
+  const duration = (secs: number): string => {
+    if (secs < 60) return t('pollers.gaps.durSecs', { count: secs });
+    if (secs < 3600) return t('pollers.gaps.durMins', { count: Math.round(secs / 60) });
+    const h = Math.floor(secs / 3600);
+    const m = Math.round((secs % 3600) / 60);
+    return t('pollers.gaps.durHours', { hours: h, mins: m });
+  };
+
+  return (
+    <div className="poller-gaps">
+      <h2 className="poller-gaps-title">{t('pollers.gaps.title')}</h2>
+      <p className="muted poller-gaps-note">{t('pollers.gaps.note')}</p>
+      <div className="ytable">
+        <div className="ytable-scroll">
+          <div className="ytable-head" style={{ gridTemplateColumns: GAP_COLS }}>
+            <div className="ytable-h">{t('pollers.gaps.cols.poller')}</div>
+            <div className="ytable-h">{t('pollers.gaps.cols.pool')}</div>
+            <div className="ytable-h">{t('pollers.gaps.cols.window')}</div>
+            <div className="ytable-h right">{t('pollers.gaps.cols.duration')}</div>
+          </div>
+          {gaps.map((g) => (
+            <div className="ytable-row" style={{ gridTemplateColumns: GAP_COLS }} key={g.id}>
+              <div className="ytable-cell mono">{g.poller_id}</div>
+              <div className="ytable-cell">
+                <Badge tone="neutral">{g.pool}</Badge>
+              </div>
+              <div
+                className="ytable-cell"
+                title={`${formatExactTime(g.started_at)} → ${formatExactTime(g.ended_at)}`}
+              >
+                {relativeTime(g.ended_at)}
+              </div>
+              <div className="ytable-cell right mono">{duration(g.duration_secs)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PollersPage() {
   const { t } = useTranslation('system');
   const authed = useAuthStore((s) => s.authed);
   const [pollers, setPollers] = useState<PollerInfo[]>([]);
   const [pools, setPools] = useState<PoolSummary[]>([]);
+  const [gaps, setGaps] = useState<MonitoringGap[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
@@ -259,6 +311,12 @@ export function PollersPage() {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
       })
       .finally(() => setLoading(false));
+    // Monitoring gaps are best-effort context (store-and-forward, Phase 3) — a read error just leaves
+    // the section hidden; it must never block the fleet table.
+    api
+      .listMonitoringGaps()
+      .then(setGaps)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -376,6 +434,8 @@ export function PollersPage() {
               )}
             </div>
           </div>
+
+          <MonitoringGapsSection gaps={gaps} />
         </>
       )}
 

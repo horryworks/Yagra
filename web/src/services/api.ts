@@ -60,6 +60,7 @@ import type {
   NodeSearchResult,
   NodeStatus,
   NodeSummary,
+  MonitoringGap,
   NotificationChannel,
   PollerHealth,
   PollersResponse,
@@ -752,6 +753,10 @@ export const api = {
    *  unknown. ManageConfig-gated. */
   deletePoller: (id: string): Promise<void> =>
     request(`/pollers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Recent core↔poller visibility outages (Phase 3 store-and-forward). View-gated; degrades to an
+   *  empty list on a DB read error, and returns 503 (`admin_unavailable`) in skeleton mode. */
+  listMonitoringGaps: (): Promise<MonitoringGap[]> => request('/monitoring-gaps'),
 
   /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
   getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),

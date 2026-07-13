@@ -50,6 +50,30 @@ describe('api client', () => {
     expect(spy).toHaveBeenCalledWith('/api/v1/nodes/a%2Fb/metrics/m%20m');
   });
 
+  it('fetches recent monitoring gaps from the store-and-forward endpoint', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: 'g1',
+          poller_id: 'edge-1',
+          pool: 'tokyo',
+          started_at: '2026-07-14T00:00:00Z',
+          ended_at: '2026-07-14T00:05:00Z',
+          duration_secs: 300,
+          recorded_at: '2026-07-14T00:05:01Z',
+        },
+      ],
+    } as Response);
+    globalThis.fetch = spy;
+    const gaps = await api.listMonitoringGaps();
+    expect(spy).toHaveBeenCalledWith('/api/v1/monitoring-gaps');
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].poller_id).toBe('edge-1');
+    expect(gaps[0].duration_secs).toBe(300);
+  });
+
   it('builds the range path with query params', async () => {
     const spy = vi
       .fn()

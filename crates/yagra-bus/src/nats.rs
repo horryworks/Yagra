@@ -130,6 +130,30 @@ impl NatsBus {
         }))
     }
 
+    /// Subscribe to **backfilled** poll results — core side (store-and-forward, Phase 3). Plain
+    /// `.subscribe()` on the separate backfill subject, mirroring [`Self::subscribe_results`].
+    /// Malformed messages are skipped. Only a store-and-forward-aware core subscribes here; an older
+    /// core never does, which is what makes a newer poller's backfill degrade safely (dropped, not
+    /// alert-flooding).
+    pub async fn subscribe_results_backfill(
+        &self,
+    ) -> Result<impl Stream<Item = PollResult>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::results_backfill())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe results backfill: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<PollResult>(&msg.payload) {
+                Ok(result) => Some(result),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed backfill PollResult from bus");
+                    None
+                }
+            }
+        }))
+    }
+
     /// Subscribe to passive events — core side (single consumer, no queue group, same as
     /// results). Malformed messages are skipped.
     pub async fn subscribe_events(&self) -> Result<impl Stream<Item = EventMsg>, BusError> {
@@ -360,6 +384,15 @@ impl Bus for NatsBus {
             .map_err(|e| BusError::Publish(format!("publish result: {e}")))
     }
 
+    async fn publish_result_backfill(&self, result: PollResult) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&result)
+            .map_err(|e| BusError::Publish(format!("encode backfill result: {e}")))?;
+        self.client
+            .publish(subjects::results_backfill(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish backfill result: {e}")))
+    }
+
     async fn publish_event(&self, event: EventMsg) -> Result<(), BusError> {
         let payload = serde_json::to_vec(&event)
             .map_err(|e| BusError::Publish(format!("encode event: {e}")))?;
@@ -367,6 +400,14 @@ impl Bus for NatsBus {
             .publish(subjects::events(), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish event: {e}")))
+    }
+
+    fn is_connected(&self) -> bool {
+        // async-nats reconnects transparently; this is the only app-visible signal of a live link,
+        // and it's what the poller's store-and-forward sink gates buffering on (Phase 3). `Pending`
+        // (initial connect / mid-reconnect) counts as not-connected so we buffer rather than trust a
+        // publish that would sit in async-nats's pending buffer and be lost on a longer outage.
+        self.client.connection_state() == async_nats::connection::State::Connected
     }
 }
 

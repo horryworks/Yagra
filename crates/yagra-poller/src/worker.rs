@@ -7,6 +7,7 @@
 //! (ADR-012).
 
 use crate::limiter::PollLimiter;
+use crate::store_forward::StoreForwardSink;
 use futures::stream::{Stream, StreamExt};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::Instrument as _;
 use yagra_bus::{
-    Bus, CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
+    CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
     SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck, BUS_SCHEMA_VERSION,
 };
 use yagra_common::{
@@ -689,16 +690,15 @@ fn stamp_poller_id(result: &mut PollResult, poller_id: &Option<Arc<str>>) {
 /// `poller_id` (its sanitized id) is stamped onto every published result for provenance; the shared
 /// `results_total` counter is bumped on each successful publish and `inflight` tracks probes in
 /// flight — both feed the poller's heartbeat telemetry (ADR-009).
-pub async fn run_stream<B, S>(
+pub async fn run_stream<S>(
     mut jobs: S,
-    bus: Arc<B>,
+    sink: Arc<StoreForwardSink>,
     transport: Arc<dyn Transport>,
     limiter: Arc<PollLimiter>,
     poller_id: Option<Arc<str>>,
     results_total: Arc<AtomicU64>,
     inflight: Arc<AtomicU64>,
 ) where
-    B: Bus + 'static,
     S: Stream<Item = PollJob> + Unpin,
 {
     while let Some(job) = jobs.next().await {
@@ -709,7 +709,7 @@ pub async fn run_stream<B, S>(
             let Some(guard) = limiter.begin_global().await else {
                 continue; // shutdown
             };
-            let bus = bus.clone();
+            let sink = sink.clone();
             let transport = transport.clone();
             let poller_id = poller_id.clone();
             let results_total = results_total.clone();
@@ -734,11 +734,10 @@ pub async fn run_stream<B, S>(
                     for mut result in results {
                         stamp_poller_id(&mut result, &poller_id);
                         result.trace_context = ctx.clone();
-                        if let Err(err) = bus.publish_result(result).await {
-                            tracing::error!(error = %err, "failed to publish meraki poll result");
-                        } else {
-                            results_total.fetch_add(1, Ordering::Relaxed);
-                        }
+                        // Store-and-forward: publishes live when connected, else buffers for replay
+                        // (Phase 3). Infallible — the poll loop never blocks/errors on the return.
+                        sink.submit(result).await;
+                        results_total.fetch_add(1, Ordering::Relaxed);
                     }
                     inflight.fetch_sub(1, Ordering::Relaxed);
                 }
@@ -752,7 +751,7 @@ pub async fn run_stream<B, S>(
             tracing::debug!(target = %job.target, "skipping poll: previous still in flight");
             continue;
         };
-        let bus = bus.clone();
+        let sink = sink.clone();
         let transport = transport.clone();
         let poller_id = poller_id.clone();
         let results_total = results_total.clone();
@@ -775,11 +774,9 @@ pub async fn run_stream<B, S>(
                 stamp_poller_id(&mut result, &poller_id);
                 // Carry the poll span's context so core's result-ingest span joins this trace.
                 result.trace_context = yagra_telemetry::current_trace_context();
-                if let Err(err) = bus.publish_result(result).await {
-                    tracing::error!(error = %err, "failed to publish poll result");
-                } else {
-                    results_total.fetch_add(1, Ordering::Relaxed);
-                }
+                // Store-and-forward: live-publish when connected, else buffer for replay (Phase 3).
+                sink.submit(result).await;
+                results_total.fetch_add(1, Ordering::Relaxed);
                 inflight.fetch_sub(1, Ordering::Relaxed);
             }
             .instrument(span),
@@ -792,7 +789,7 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use uuid::Uuid;
-    use yagra_bus::{IcmpCheck, InMemoryBus, SnmpCheck};
+    use yagra_bus::{Bus, IcmpCheck, InMemoryBus, SnmpCheck};
     use yagra_common::NodeId;
     use yagra_transport::{FakeTransport, SnmpSample};
 
@@ -1331,7 +1328,7 @@ mod tests {
         let inflight = Arc::new(AtomicU64::new(0));
         tokio::spawn(run_stream(
             jobs,
-            bus.clone(),
+            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
             transport,
             limiter,
             None, // single-process skeleton: no poller id to stamp
@@ -1391,7 +1388,7 @@ mod tests {
         let job_stream = Box::pin(futures::stream::iter(jobs));
         tokio::spawn(run_stream(
             job_stream,
-            bus.clone(),
+            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
             transport,
             limiter,
             Some(poller_id),

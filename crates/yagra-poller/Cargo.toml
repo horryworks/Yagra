@@ -27,6 +27,8 @@ futures = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 uuid = { workspace = true }
+# NDJSON encode/decode for the store-and-forward disk spill (Phase 3).
+serde_json = { workspace = true }
 # Local scheduler stream + working-set jitter + hostname identity default (ADR-009/020).
 tokio-stream = { workspace = true }
 rand = { workspace = true }

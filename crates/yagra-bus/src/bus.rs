@@ -28,8 +28,22 @@ pub trait Bus: Send + Sync {
     async fn publish_job(&self, job: PollJob) -> Result<(), BusError>;
     /// Publish a poll result for core to consume.
     async fn publish_result(&self, result: PollResult) -> Result<(), BusError>;
+    /// Replay a **buffered** poll result on the store-and-forward subject after a partition heals
+    /// (Phase 3). Core imports these to the TSDB at their original timestamp but skips alert
+    /// evaluation (see [`crate::subjects::results_backfill`]). Defaulted to plain
+    /// [`Bus::publish_result`] so an implementation that has no separate channel still works; the
+    /// real transports override it.
+    async fn publish_result_backfill(&self, result: PollResult) -> Result<(), BusError> {
+        self.publish_result(result).await
+    }
     /// Publish a passive event (syslog/trap/webhook) for core to consume.
     async fn publish_event(&self, event: EventMsg) -> Result<(), BusError>;
+    /// Whether the bus is currently connected to its broker. The poller's store-and-forward sink
+    /// uses this to decide between live publish and local buffering (Phase 3). An in-process bus is
+    /// always connected; the NATS transport reflects its live connection state.
+    fn is_connected(&self) -> bool {
+        true
+    }
 }
 
 /// The working-set / control-plane side of the bus (ADR-009/020).
@@ -58,6 +72,10 @@ pub trait SyncBus: Send + Sync {
 pub struct InMemoryBus {
     jobs: broadcast::Sender<PollJob>,
     results: broadcast::Sender<PollResult>,
+    // Store-and-forward replay (Phase 3) — a *separate* channel from `results` so an in-memory
+    // consumer can assert backfill routing independently of the live path, mirroring how the NATS
+    // transport isolates the two on distinct subjects.
+    results_backfill: broadcast::Sender<PollResult>,
     events: broadcast::Sender<EventMsg>,
     // Control plane (ADR-009/020). `sync`/`pool_jobs` carry the routing key alongside the
     // message — the subscriber filters to its own poller id / pool, mirroring how the NATS
@@ -74,6 +92,7 @@ impl InMemoryBus {
     pub fn new(capacity: usize) -> Self {
         let (jobs, _) = broadcast::channel(capacity);
         let (results, _) = broadcast::channel(capacity);
+        let (results_backfill, _) = broadcast::channel(capacity);
         let (events, _) = broadcast::channel(capacity);
         let (heartbeats, _) = broadcast::channel(capacity);
         let (sync_requests, _) = broadcast::channel(capacity);
@@ -82,6 +101,7 @@ impl InMemoryBus {
         Self {
             jobs,
             results,
+            results_backfill,
             events,
             heartbeats,
             sync_requests,
@@ -100,6 +120,14 @@ impl InMemoryBus {
     #[must_use]
     pub fn subscribe_results(&self) -> broadcast::Receiver<PollResult> {
         self.results.subscribe()
+    }
+
+    /// Subscribe to **backfilled** poll results (core side, store-and-forward). Kept on its own
+    /// channel so the backfill consumer (metrics-only, no alert eval) is wired independently of the
+    /// live results consumer.
+    #[must_use]
+    pub fn subscribe_results_backfill(&self) -> broadcast::Receiver<PollResult> {
+        self.results_backfill.subscribe()
     }
 
     /// Subscribe to passive events (core side).
@@ -152,6 +180,11 @@ impl Bus for InMemoryBus {
 
     async fn publish_result(&self, result: PollResult) -> Result<(), BusError> {
         let _ = self.results.send(result);
+        Ok(())
+    }
+
+    async fn publish_result_backfill(&self, result: PollResult) -> Result<(), BusError> {
+        let _ = self.results_backfill.send(result);
         Ok(())
     }
 
@@ -230,6 +263,35 @@ mod tests {
         bus.publish_result(result.clone()).await.unwrap();
 
         assert_eq!(rx.recv().await.unwrap(), result);
+    }
+
+    #[tokio::test]
+    async fn backfill_result_reaches_only_the_backfill_subscriber() {
+        // Store-and-forward: a backfilled result must land on the backfill channel and NOT on the
+        // live results channel — that isolation is what keeps replayed samples out of alert eval.
+        let bus = InMemoryBus::new(8);
+        let mut live = bus.subscribe_results();
+        let mut backfill = bus.subscribe_results_backfill();
+
+        let result = PollResult {
+            schema_version: 1,
+            job_id: Uuid::nil(),
+            node_id: NodeId::from(Uuid::nil()),
+            at_unix_ms: 0,
+            outcome: CheckOutcome::Reachable,
+            samples: vec![Sample::gauge("icmp_rtt_ms", 7.0)],
+            interfaces: Vec::new(),
+            sys_descr: None,
+            poller_id: None,
+            trace_context: Default::default(),
+        };
+        bus.publish_result_backfill(result.clone()).await.unwrap();
+
+        assert_eq!(backfill.recv().await.unwrap(), result);
+        // The live consumer must see nothing on its channel.
+        assert!(live.try_recv().is_err());
+        // An in-process bus is always "connected".
+        assert!(Bus::is_connected(&bus));
     }
 
     #[tokio::test]

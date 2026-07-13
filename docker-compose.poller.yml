@@ -69,7 +69,23 @@ services:
       # At scale, sample: OTEL_TRACES_SAMPLER=parentbased_traceidratio, ..._ARG=0.01.
       # YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # ── Store-and-forward (Phase 3) ────────────────────────────────────────────────
+      # If the WAN to core drops, this poller keeps polling locally and buffers results,
+      # then bulk-replays them on reconnect so history has no hole (alerts are NOT
+      # backfilled — they resume from "now"). ON by default; the buffer is bounded
+      # (drop-oldest) and spills to the volume below so it survives a restart. The
+      # defaults suit a small box; raise the caps for a busy site, or set =off to disable.
+      YAGRA_STORE_FORWARD: ${YAGRA_STORE_FORWARD:-on}
+      YAGRA_STORE_FORWARD_MEM_MAX: ${YAGRA_STORE_FORWARD_MEM_MAX:-20000}
+      YAGRA_STORE_FORWARD_DISK_MAX_MB: ${YAGRA_STORE_FORWARD_DISK_MAX_MB:-512}
+      YAGRA_STORE_FORWARD_MAX_AGE_SECS: ${YAGRA_STORE_FORWARD_MAX_AGE_SECS:-86400}
+      YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB: ${YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB:-1024}
     volumes:
       # CA / server cert for the TLS bus (read-only). Place the cert the central operator
       # handed you here; YAGRA_BUS_CA_FILE points at it inside the container.
       - ${YAGRA_CERT_DIR:-./certs}:/etc/yagra/certs:ro
+      # Store-and-forward spill (Phase 3) — persists the result buffer across restarts.
+      - pollerbuf:/var/lib/yagra/buffer
+
+volumes:
+  pollerbuf:   # store-and-forward result buffer (Phase 3)

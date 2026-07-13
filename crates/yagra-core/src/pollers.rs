@@ -33,6 +33,28 @@ pub struct PollerRow {
     pub last_incarnation: Option<Uuid>,
 }
 
+/// One `monitoring_gaps` row (API shape). A gap is one core↔poller **visibility outage**: core
+/// stopped hearing from the poller (partition or the poller went down) and later saw it again. If the
+/// poller was alive but partitioned, its store-and-forward buffer backfills the metrics for the
+/// window on reconnect (Phase 3); alerts are *not* backfilled (they resume from "now").
+#[derive(Debug, Clone, Serialize)]
+pub struct MonitoringGapRow {
+    /// Row id.
+    pub id: Uuid,
+    /// The poller whose visibility lapsed.
+    pub poller_id: String,
+    /// Pool it serves.
+    pub pool: String,
+    /// Start of the gap window (RFC 3339 — core's last contact before the outage).
+    pub started_at: String,
+    /// End of the gap window (RFC 3339 — core heard from it again).
+    pub ended_at: String,
+    /// Gap length in seconds (UI convenience).
+    pub duration_secs: i64,
+    /// When core recorded the gap (RFC 3339).
+    pub recorded_at: String,
+}
+
 /// PostgreSQL-backed durable poller inventory (`pollers`).
 pub struct PollerRepo {
     pool: PgPool,
@@ -105,4 +127,62 @@ impl PollerRepo {
             .await?;
         Ok(res.rows_affected() > 0)
     }
+
+    /// Record one detected monitoring gap (a known poller reappeared after being offline). `started`
+    /// and `ended` are Unix milliseconds. Best-effort: a failed insert just means the gap isn't
+    /// listed. The coordinator calls this once per offline→online transition (one row per gap).
+    pub async fn insert_monitoring_gap(
+        &self,
+        poller_id: &str,
+        pool: &str,
+        started_ms: i64,
+        ended_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO monitoring_gaps (poller_id, pool, started_at_unix_ms, ended_at_unix_ms) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(poller_id)
+        .bind(pool)
+        .bind(started_ms)
+        .bind(ended_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The most recent monitoring gaps, newest first (capped). Powers the Pollers page's "Recent
+    /// monitoring gaps" section.
+    pub async fn list_monitoring_gaps(&self, limit: i64) -> anyhow::Result<Vec<MonitoringGapRow>> {
+        let rows = sqlx::query(
+            "SELECT id, poller_id, pool, started_at_unix_ms, ended_at_unix_ms, recorded_at \
+             FROM monitoring_gaps ORDER BY recorded_at DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 1000))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let started: i64 = row.try_get("started_at_unix_ms")?;
+                let ended: i64 = row.try_get("ended_at_unix_ms")?;
+                let recorded_at: DateTime<Utc> = row.try_get("recorded_at")?;
+                Ok(MonitoringGapRow {
+                    id: row.try_get("id")?,
+                    poller_id: row.try_get("poller_id")?,
+                    pool: row.try_get("pool")?,
+                    started_at: ms_to_rfc3339(started),
+                    ended_at: ms_to_rfc3339(ended),
+                    duration_secs: (ended - started).max(0) / 1000,
+                    recorded_at: recorded_at.to_rfc3339(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Format Unix milliseconds as RFC 3339 UTC (matching how the rest of this repo exposes timestamps).
+fn ms_to_rfc3339(ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ms)
+        .map(|d| d.to_rfc3339())
+        .unwrap_or_default()
 }

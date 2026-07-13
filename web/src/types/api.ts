@@ -726,6 +726,25 @@ export interface PollersResponse {
   pools: PoolSummary[];
 }
 
+/** One core↔poller visibility outage (`GET /api/v1/monitoring-gaps`, Phase 3 store-and-forward): a
+ *  span during which core could not hear from the poller. If the poller stayed alive but partitioned,
+ *  its local buffer backfills the metrics for the window on reconnect; alerts are not backfilled. */
+export interface MonitoringGap {
+  id: string;
+  /** The poller whose visibility lapsed. */
+  poller_id: string;
+  /** Pool it serves. */
+  pool: string;
+  /** Start of the gap window (RFC 3339 — core's last contact before the outage). */
+  started_at: string;
+  /** End of the gap window (RFC 3339 — core heard from it again). */
+  ended_at: string;
+  /** Gap length in seconds. */
+  duration_secs: number;
+  /** When core recorded the gap (RFC 3339). */
+  recorded_at: string;
+}
+
 /** Reachability of one Yagra backing dependency (no secrets — just a flag + label). */
 export interface DependencyHealth {
   reachable: boolean;

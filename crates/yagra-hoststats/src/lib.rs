@@ -183,6 +183,40 @@ fn statvfs_usage(_path: &Path) -> Option<(u64, u64)> {
     None
 }
 
+/// Bytes currently available to an unprivileged process on the filesystem containing `path`, via
+/// `statvfs(2)` (`f_bavail`, which excludes root-reserved blocks — the right measure for the
+/// non-root poller). `None` if the path can't be measured (missing / permission denied / non-unix).
+///
+/// The poller's store-and-forward spill (Phase 3) uses this as a host-disk safety floor: it stops
+/// spilling to disk when free space drops below a threshold, so the buffer can never fill the shared
+/// host disk (the remote poller runs with `network_mode: host`).
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)]
+#[must_use]
+pub fn available_bytes(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let cpath = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: identical contract to `statvfs_usage` — `stat` is a POD struct the kernel fully
+    // populates, `cpath` is a valid NUL-terminated C string that outlives the call, and we read
+    // `stat` only on success (rc == 0).
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) };
+    if rc != 0 {
+        return None;
+    }
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+/// No filesystem capacity available off-unix; store-and-forward then skips the free-space floor
+/// (byte-cap + write-error degradation still bound disk usage).
+#[cfg(not(unix))]
+#[must_use]
+pub fn available_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

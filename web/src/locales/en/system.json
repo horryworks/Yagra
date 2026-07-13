@@ -42,6 +42,19 @@
       "title": "No pollers yet",
       "sub": "Pollers appear here once they connect to the bus and send a heartbeat. Use <b>Register poller</b> for the remote-site setup snippet."
     },
+    "gaps": {
+      "title": "Recent monitoring gaps",
+      "note": "Windows when core lost contact with a poller. A poller that stayed up but was cut off backfills its metrics for the window on reconnect; alerts are not backfilled (they resume from now).",
+      "cols": {
+        "poller": "Poller",
+        "pool": "Pool",
+        "window": "When",
+        "duration": "Duration"
+      },
+      "durSecs": "{{count}}s",
+      "durMins": "{{count}}m",
+      "durHours": "{{hours}}h {{mins}}m"
+    },
     "remove": {
       "title": "Remove poller",
       "confirmText": "Remove poller <code>{{id}}</code> from the inventory? If it reconnects it will re-register automatically."

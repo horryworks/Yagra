@@ -70,6 +70,14 @@ services:
       # (core dispatch → poller poll → core ingest). At scale sample instead of tracing every
       # poll: OTEL_TRACES_SAMPLER=parentbased_traceidratio + OTEL_TRACES_SAMPLER_ARG=0.01.
       # YAGRA_OTEL_ENDPOINT: "http://jaeger:4318"
+      # Store-and-forward (Phase 3): buffers results locally during a core↔poller partition and
+      # replays them on reconnect. ON by default; the buffer is bounded (drop-oldest) and spills to
+      # the volume below so it survives a poller restart. Tune the caps or set =off to disable.
+      # YAGRA_STORE_FORWARD: "off"
+      # YAGRA_STORE_FORWARD_MEM_MAX: "20000"      # results held in memory before spilling to disk
+      # YAGRA_STORE_FORWARD_DISK_MAX_MB: "512"    # max on-disk spill (oldest dropped past this)
+      # YAGRA_STORE_FORWARD_MAX_AGE_SECS: "86400" # drop buffered results older than this at replay
+      # YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB: "1024"  # stop spilling if the fs free space is below
     ports:
       - "514:1514/udp"   # syslog intake
       - "162:1162/udp"   # SNMP trap intake
@@ -79,6 +87,9 @@ services:
     # with `network_mode: host` instead of the port mappings above.
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
+    volumes:
+      # Store-and-forward spill (Phase 3) — persists the buffer across poller restarts.
+      - pollerbuf:/var/lib/yagra/buffer
     # deploy: { replicas: 1 }  # scale out here when distributing polling
     restart: unless-stopped
 
@@ -158,3 +169,4 @@ volumes:
   pgdata:
   vmdata:
   vldata:
+  pollerbuf:   # store-and-forward result buffer (Phase 3)
