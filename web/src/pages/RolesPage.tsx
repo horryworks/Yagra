@@ -13,10 +13,12 @@ import { api, ApiError } from '../services/api';
 import type { RoleMatrix } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
+import { useIsMobileViewport } from '../lib/viewport';
 import './RolesPage.css';
 
 export function RolesPage() {
   const { t } = useTranslation('access');
+  const mobile = useIsMobileViewport();
   const [matrix, setMatrix] = useState<RoleMatrix | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,27 +61,35 @@ export function RolesPage() {
           </Card>
 
           <Card title={t('roles.matrixTitle')} className="roles-matrix-card">
-            <div
-              className="roles-matrix"
-              style={{ gridTemplateColumns: `minmax(220px, 2fr) repeat(${matrix.roles.length}, 1fr)` }}
-            >
-              <div className="roles-h roles-h-perm">{t('roles.privilege')}</div>
-              {matrix.roles.map((r) => (
-                <div className="roles-h roles-h-role" key={r.key}>
-                  {r.label}
-                </div>
-              ))}
+            {/* On mobile the fr columns would crush together, so widen to px-min tracks and let the
+                wrapper scroll sideways (the privilege column is pinned via sticky CSS). */}
+            <div className="roles-matrix-scroll">
+              <div
+                className="roles-matrix"
+                style={{
+                  gridTemplateColumns: mobile
+                    ? `minmax(200px, 1.6fr) repeat(${matrix.roles.length}, minmax(92px, 1fr))`
+                    : `minmax(220px, 2fr) repeat(${matrix.roles.length}, 1fr)`,
+                }}
+              >
+                <div className="roles-h roles-h-perm">{t('roles.privilege')}</div>
+                {matrix.roles.map((r) => (
+                  <div className="roles-h roles-h-role" key={r.key}>
+                    {r.label}
+                  </div>
+                ))}
 
-              {matrix.permissions.map((p) => (
-                <RowFragment
-                  key={p.key}
-                  permKey={p.key}
-                  label={p.label}
-                  description={p.description}
-                  roles={matrix.roles}
-                  t={t}
-                />
-              ))}
+                {matrix.permissions.map((p) => (
+                  <RowFragment
+                    key={p.key}
+                    permKey={p.key}
+                    label={p.label}
+                    description={p.description}
+                    roles={matrix.roles}
+                    t={t}
+                  />
+                ))}
+              </div>
             </div>
             <p className="muted roles-note">{t('roles.customNote')}</p>
           </Card>

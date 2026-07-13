@@ -120,3 +120,20 @@
   margin-top: 14px;
   font-size: var(--font-sm);
 }
+
+/* mobile (ADR-027 M2): the matrix outgrows ~390px once there are 3+ roles. Scroll it sideways and
+   pin the privilege column (left) so every row stays labelled. Matrix screens are the documented
+   horizontal-scroll opt-out (not card-ified). */
+html[data-viewport='mobile'] .roles-matrix-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-viewport='mobile'] .roles-h-perm,
+html[data-viewport='mobile'] .roles-cell-perm {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  box-shadow: inset -1px 0 0 var(--border-color);
+}

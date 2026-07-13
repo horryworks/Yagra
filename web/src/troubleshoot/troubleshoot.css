@@ -930,6 +930,29 @@
 }
 
 /* ============================================================
+   mobile (ADR-027 M2) — the two fluid breakpoints (1080/980) already collapse the run/anomaly rows
+   at ~390px, so this is touch/drawer polish only. Scoped to data-viewport='mobile' → desktop
+   unchanged. The `.ts-run` rows and `.ts-anom` cards need no extra rules here.
+   ============================================================ */
+html[data-viewport='mobile'] .ts-drawer {
+  width: 100%;
+  max-width: 100%;
+  padding-top: var(--safe-top);
+}
+
+/* Split Run button (ToolCard) → touch target. Scoped to the button, not the overloaded
+   `.ts-run-main` run-row column. */
+html[data-viewport='mobile'] .ts-run-split .ts-run-main,
+html[data-viewport='mobile'] .ts-run-split .ts-run-caret {
+  min-height: var(--touch-target);
+}
+
+/* Config bar fields stack full-width so scope/window/baseline aren't cramped two-up at ~390px. */
+html[data-viewport='mobile'] .ts-cfgbar .field {
+  min-width: 100%;
+}
+
+/* ============================================================
    Reduced motion — stop spinners/slides for motion-sensitive users
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

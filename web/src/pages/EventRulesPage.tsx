@@ -9,7 +9,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
@@ -179,22 +179,26 @@ export function EventRulesPage() {
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
-                        <IconButton
-                          title={r.enabled ? t('eventRules.disable') : t('eventRules.enable')}
-                          onClick={() => toggleEnabled(r)}
-                        >
-                          <PowerIcon />
-                        </IconButton>
-                        <IconButton title={t('eventRules.edit')} onClick={() => setEditing(r)}>
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton
-                          title={t('eventRules.delete')}
-                          danger
-                          onClick={() => setDeleting(r)}
-                        >
-                          <TrashIcon />
-                        </IconButton>
+                        <OverflowMenu
+                          actions={[
+                            {
+                              label: r.enabled ? t('eventRules.disable') : t('eventRules.enable'),
+                              icon: <PowerIcon />,
+                              onClick: () => toggleEnabled(r),
+                            },
+                            {
+                              label: t('eventRules.edit'),
+                              icon: <EditIcon />,
+                              onClick: () => setEditing(r),
+                            },
+                            {
+                              label: t('eventRules.delete'),
+                              icon: <TrashIcon />,
+                              danger: true,
+                              onClick: () => setDeleting(r),
+                            },
+                          ]}
+                        />
                       </span>
                     )}
                   </div>

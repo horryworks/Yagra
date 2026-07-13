@@ -52,7 +52,8 @@
     "reset": "Reset",
     "confirm": "Confirm",
     "retry": "Retry",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "more": "More actions"
   },
   "resultCount": "<b>{{shown}}</b> of {{total}} {{noun}}",
   "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",

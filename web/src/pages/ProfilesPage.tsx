@@ -19,7 +19,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
@@ -188,16 +188,21 @@ export function ProfilesPage() {
                           <div className="ytable-cell right">
                             {authed && (
                               <span className="ytable-actions">
-                                <IconButton title={t('profiles.editProfile')} onClick={() => setEditing(p)}>
-                                  <EditIcon />
-                                </IconButton>
-                                <IconButton
-                                  title={t('profiles.deleteProfile')}
-                                  danger
-                                  onClick={() => setDeleting(p)}
-                                >
-                                  <TrashIcon />
-                                </IconButton>
+                                <OverflowMenu
+                                  actions={[
+                                    {
+                                      label: t('profiles.editProfile'),
+                                      icon: <EditIcon />,
+                                      onClick: () => setEditing(p),
+                                    },
+                                    {
+                                      label: t('profiles.deleteProfile'),
+                                      icon: <TrashIcon />,
+                                      danger: true,
+                                      onClick: () => setDeleting(p),
+                                    },
+                                  ]}
+                                />
                               </span>
                             )}
                           </div>

@@ -26,7 +26,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, PowerIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
@@ -193,19 +193,23 @@ function ChannelsSection({
               <div className="ytable-cell right">
                 {authed && (
                   <span className="ytable-actions">
-                    <IconButton
-                      title={c.enabled ? t('routing.channels.disable') : t('routing.channels.enable')}
-                      onClick={() => toggle(c)}
-                    >
-                      <PowerIcon />
-                    </IconButton>
-                    <IconButton
-                      title={t('routing.channels.delete')}
-                      danger
-                      onClick={() => setDeleting(c)}
-                    >
-                      <TrashIcon />
-                    </IconButton>
+                    <OverflowMenu
+                      actions={[
+                        {
+                          label: c.enabled
+                            ? t('routing.channels.disable')
+                            : t('routing.channels.enable'),
+                          icon: <PowerIcon />,
+                          onClick: () => toggle(c),
+                        },
+                        {
+                          label: t('routing.channels.delete'),
+                          icon: <TrashIcon />,
+                          danger: true,
+                          onClick: () => setDeleting(c),
+                        },
+                      ]}
+                    />
                   </span>
                 )}
               </div>
@@ -497,19 +501,23 @@ function RulesSection({
               <div className="ytable-cell right">
                 {authed && (
                   <span className="ytable-actions">
-                    <IconButton
-                      title={r.enabled ? t('routing.rules.disable') : t('routing.rules.enable')}
-                      onClick={() => toggle(r)}
-                    >
-                      <PowerIcon />
-                    </IconButton>
-                    <IconButton
-                      title={t('routing.rules.delete')}
-                      danger
-                      onClick={() => setDeleting(r)}
-                    >
-                      <TrashIcon />
-                    </IconButton>
+                    <OverflowMenu
+                      actions={[
+                        {
+                          label: r.enabled
+                            ? t('routing.rules.disable')
+                            : t('routing.rules.enable'),
+                          icon: <PowerIcon />,
+                          onClick: () => toggle(r),
+                        },
+                        {
+                          label: t('routing.rules.delete'),
+                          icon: <TrashIcon />,
+                          danger: true,
+                          onClick: () => setDeleting(r),
+                        },
+                      ]}
+                    />
                   </span>
                 )}
               </div>

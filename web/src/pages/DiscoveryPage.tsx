@@ -251,12 +251,16 @@ export function DiscoveryPage() {
               const isImported = !!imported[c.address];
               return (
                 <div className="disco-row" key={c.address}>
-                  <input
-                    type="checkbox"
-                    checked={r.selected}
-                    disabled={isImported}
-                    onChange={(e) => patchRow(c.address, { selected: e.target.checked })}
-                  />
+                  {/* Wrapper is display:contents on desktop (input stays the grid cell) and a real
+                      sticky cell on mobile so the select column stays pinned during h-scroll. */}
+                  <div className="disco-check">
+                    <input
+                      type="checkbox"
+                      checked={r.selected}
+                      disabled={isImported}
+                      onChange={(e) => patchRow(c.address, { selected: e.target.checked })}
+                    />
+                  </div>
                   <span className="mono">
                     {c.address}{' '}
                     {isImported ? (

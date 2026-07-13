@@ -214,9 +214,15 @@ html[data-viewport='mobile'] .ytable-actions {
 }
 
 /* The scroll wrapper's desktop max-height cap is unnecessary once rows are cards and the pane/page
-   scrolls — let it grow so short lists don't get a nested scrollbar. */
+   scrolls — let it grow so short lists don't get a nested scrollbar. Also drop the overflow clip so
+   a card's ⋮ overflow-menu popover isn't cut off on the last rows. */
 html[data-viewport='mobile'] .ytable-scroll {
   max-height: none;
+  overflow: visible;
+}
+
+html[data-viewport='mobile'] .ytable {
+  overflow: visible;
 }
 
 /* ============================================================ cell vocabulary */
@@ -886,4 +892,30 @@ html[data-viewport='mobile'] .table-search input {
   text-transform: uppercase;
   color: var(--brand);
   border: var(--border-width) solid var(--brand);
+}
+
+/* mobile (ADR-027 M2): the single-line identity row crowds at ~390px. Wrap the role control +
+   actions onto their own full-width line, enlarge the role select to a touch target, and drop the
+   list's rounded overflow clip so the ⋮ overflow-menu popover isn't cut off on the last rows. */
+html[data-viewport='mobile'] .identity-list {
+  overflow: visible;
+}
+
+html[data-viewport='mobile'] .il-row {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+html[data-viewport='mobile'] .il-right {
+  flex: 1 1 100%;
+  justify-content: space-between;
+}
+
+html[data-viewport='mobile'] .il-right .role-select {
+  flex: 1;
+  height: var(--touch-target);
+}
+
+html[data-viewport='mobile'] .il-right .muted {
+  flex: 1;
 }

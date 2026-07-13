@@ -21,7 +21,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
@@ -580,12 +580,21 @@ export function CredentialsPage() {
                       <div className="ytable-cell right">
                         {authed && (
                           <span className="ytable-actions">
-                            <IconButton title={t('common:actions.edit')} onClick={() => setEditing(c)}>
-                              <EditIcon />
-                            </IconButton>
-                            <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(c)}>
-                              <TrashIcon />
-                            </IconButton>
+                            <OverflowMenu
+                              actions={[
+                                {
+                                  label: t('common:actions.edit'),
+                                  icon: <EditIcon />,
+                                  onClick: () => setEditing(c),
+                                },
+                                {
+                                  label: t('common:actions.delete'),
+                                  icon: <TrashIcon />,
+                                  danger: true,
+                                  onClick: () => setDeleting(c),
+                                },
+                              ]}
+                            />
                           </span>
                         )}
                       </div>

@@ -154,3 +154,15 @@ export function BellOffIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Vertical ellipsis (⋮) — the "more actions" overflow-menu trigger on mobile cards.
+ * The shared `base` sets fill:none, so the dots override fill explicitly. */
+export function MoreIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="5" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="19" r="1.7" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

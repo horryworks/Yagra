@@ -1,5 +1,26 @@
 # Release Notes
 
+## v0.1.10
+
+**Mobile WebUI polish (parity round 2)** — the settings and admin screens the phone layout hadn't
+reached yet now adapt cleanly: crowded row actions collapse behind a "⋯" menu, the user list becomes
+a stacked card, and the wide matrix / grid screens scroll instead of crushing their columns.
+
+### Improvements
+- **Row actions collapse into a "⋯" menu on phones** — on the Users list and the multi-action
+  settings lists (notification routing, credentials, monitoring profiles, event rules, event sources,
+  classification rules, and maintenance windows), a card's edit / enable / delete actions now collapse
+  behind a single overflow menu instead of crowding the card. Desktop keeps its inline action row.
+- **Comfortable Users list on phones** — each account restructures into a stacked card, with the role
+  control and actions on their own full-width row and a larger tap target for the role selector.
+- **Roles and Discovery screens scroll on phones** — the role-vs-privilege matrix and the discovery
+  import grid now scroll sideways with a pinned first column at phone widths, instead of squeezing
+  their columns until the controls are unusable.
+- **Troubleshoot fits the phone** — the analysis launch drawer goes full-width and the run controls
+  get larger touch targets on small screens.
+
+Desktop rendering is unchanged.
+
 ## v0.1.9
 
 **Phone support for the WebUI, scaling to tens of thousands of nodes, and a round of security

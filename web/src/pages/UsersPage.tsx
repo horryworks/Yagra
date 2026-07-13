@@ -16,7 +16,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
@@ -197,18 +197,28 @@ export function UsersPage() {
                       )}
                       {authed && (
                         <div className="il-actions">
-                          <IconButton
-                            title={u.enabled ? t('users.action.disable') : t('users.action.enable')}
-                            onClick={() => toggleEnabled(u)}
-                          >
-                            <PowerIcon />
-                          </IconButton>
-                          <IconButton title={t('users.action.changePassword')} onClick={() => setPwUser(u)}>
-                            <KeyIcon />
-                          </IconButton>
-                          <IconButton title={t('users.action.delete')} danger onClick={() => setDelUser(u)}>
-                            <TrashIcon />
-                          </IconButton>
+                          <OverflowMenu
+                            actions={[
+                              {
+                                label: u.enabled
+                                  ? t('users.action.disable')
+                                  : t('users.action.enable'),
+                                icon: <PowerIcon />,
+                                onClick: () => toggleEnabled(u),
+                              },
+                              {
+                                label: t('users.action.changePassword'),
+                                icon: <KeyIcon />,
+                                onClick: () => setPwUser(u),
+                              },
+                              {
+                                label: t('users.action.delete'),
+                                icon: <TrashIcon />,
+                                danger: true,
+                                onClick: () => setDelUser(u),
+                              },
+                            ]}
+                          />
                         </div>
                       )}
                     </div>

@@ -1,0 +1,62 @@
+/* Mobile "more actions" overflow menu (ADR-027 M2). Desktop renders a bare IconButton row, so
+   these styles only matter in mobile mode. Popover chrome mirrors `.ts-run-menu` (ToolCard). */
+
+.ovm {
+  position: relative;
+  display: inline-flex;
+}
+
+.ovm-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 176px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 4px;
+  z-index: 70;
+  box-shadow: 0 8px 24px var(--overlay);
+}
+
+.ovm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--touch-target);
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.ovm-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.ovm-item.danger {
+  color: var(--status-critical);
+}
+
+.ovm-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ovm-item-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ovm-item-icon svg {
+  width: 16px;
+  height: 16px;
+}

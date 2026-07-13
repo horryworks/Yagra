@@ -9,7 +9,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
 import './EventSourcesPage.css';
@@ -131,25 +131,33 @@ export function EventSourcesPage() {
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
-                        <IconButton title={t('eventSources.rotate')} onClick={() => rotate(r)}>
-                          <KeyIcon />
-                        </IconButton>
-                        <IconButton
-                          title={r.enabled ? t('eventSources.disable') : t('eventSources.enable')}
-                          onClick={() => toggleEnabled(r)}
-                        >
-                          <PowerIcon />
-                        </IconButton>
-                        <IconButton title={t('eventSources.edit')} onClick={() => setEditing(r)}>
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton
-                          title={t('eventSources.delete')}
-                          danger
-                          onClick={() => setDeleting(r)}
-                        >
-                          <TrashIcon />
-                        </IconButton>
+                        <OverflowMenu
+                          actions={[
+                            {
+                              label: t('eventSources.rotate'),
+                              icon: <KeyIcon />,
+                              onClick: () => rotate(r),
+                            },
+                            {
+                              label: r.enabled
+                                ? t('eventSources.disable')
+                                : t('eventSources.enable'),
+                              icon: <PowerIcon />,
+                              onClick: () => toggleEnabled(r),
+                            },
+                            {
+                              label: t('eventSources.edit'),
+                              icon: <EditIcon />,
+                              onClick: () => setEditing(r),
+                            },
+                            {
+                              label: t('eventSources.delete'),
+                              icon: <TrashIcon />,
+                              danger: true,
+                              onClick: () => setDeleting(r),
+                            },
+                          ]}
+                        />
                       </span>
                     )}
                   </div>

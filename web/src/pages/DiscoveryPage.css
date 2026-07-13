@@ -126,3 +126,41 @@
   color: var(--status-critical);
   font-size: var(--font-sm);
 }
+
+/* The select-column wrapper is inert on desktop (the checkbox stays the grid cell as before). */
+.disco-check {
+  display: contents;
+}
+
+/* mobile (ADR-027 M2): the 6-column editable grid needs ~900px, so scroll it sideways rather than
+   crush the name input + selects, and pin the select-checkbox column. Grid screens are the
+   documented horizontal-scroll opt-out (not card-ified); the 16px input rule (M0) blocks iOS zoom. */
+html[data-viewport='mobile'] .disco-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-viewport='mobile'] .disco-head,
+html[data-viewport='mobile'] .disco-row {
+  grid-template-columns: 40px 150px 200px 150px 150px 170px;
+  width: max-content;
+}
+
+html[data-viewport='mobile'] .disco-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  box-shadow: inset -1px 0 0 var(--border-color);
+}
+
+html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  box-shadow: inset -1px 0 0 var(--border-color);
+}

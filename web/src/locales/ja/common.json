@@ -52,7 +52,8 @@
     "reset": "リセット",
     "confirm": "確認",
     "retry": "再試行",
-    "refresh": "更新"
+    "refresh": "更新",
+    "more": "その他の操作"
   },
   "resultCount": "全 {{total}} {{noun}}中 <b>{{shown}}</b> 件",
   "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",

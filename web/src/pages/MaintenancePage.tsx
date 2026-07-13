@@ -17,7 +17,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
@@ -234,15 +234,23 @@ export function MaintenancePage() {
                     <div className="ytable-cell right">
                       {authed && (
                         <span className="ytable-actions">
-                          <IconButton
-                            title={w.enabled ? t('maintenance.actions.disable') : t('maintenance.actions.enable')}
-                            onClick={() => setEnabled(w.id, !w.enabled)}
-                          >
-                            <PowerIcon />
-                          </IconButton>
-                          <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(w)}>
-                            <TrashIcon />
-                          </IconButton>
+                          <OverflowMenu
+                            actions={[
+                              {
+                                label: w.enabled
+                                  ? t('maintenance.actions.disable')
+                                  : t('maintenance.actions.enable'),
+                                icon: <PowerIcon />,
+                                onClick: () => setEnabled(w.id, !w.enabled),
+                              },
+                              {
+                                label: t('common:actions.delete'),
+                                icon: <TrashIcon />,
+                                danger: true,
+                                onClick: () => setDeleting(w),
+                              },
+                            ]}
+                          />
                         </span>
                       )}
                     </div>

@@ -20,7 +20,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
-import { IconButton } from '../components/ui/IconButton';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
@@ -182,18 +182,26 @@ export function ClassificationRulesPage() {
                   <div className="ytable-cell right">
                     {authed && (
                       <span className="ytable-actions">
-                        <IconButton
-                          title={r.enabled ? t('rules.disable') : t('rules.enable')}
-                          onClick={() => toggleEnabled(r)}
-                        >
-                          <PowerIcon />
-                        </IconButton>
-                        <IconButton title={t('rules.editRule')} onClick={() => setEditing(r)}>
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton title={t('rules.deleteRule')} danger onClick={() => setDeleting(r)}>
-                          <TrashIcon />
-                        </IconButton>
+                        <OverflowMenu
+                          actions={[
+                            {
+                              label: r.enabled ? t('rules.disable') : t('rules.enable'),
+                              icon: <PowerIcon />,
+                              onClick: () => toggleEnabled(r),
+                            },
+                            {
+                              label: t('rules.editRule'),
+                              icon: <EditIcon />,
+                              onClick: () => setEditing(r),
+                            },
+                            {
+                              label: t('rules.deleteRule'),
+                              icon: <TrashIcon />,
+                              danger: true,
+                              onClick: () => setDeleting(r),
+                            },
+                          ]}
+                        />
                       </span>
                     )}
                   </div>
