@@ -36,8 +36,7 @@ import type {
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { useRangeStore } from '../../store';
-
-const STATUS_REFRESH_MS = 15_000;
+import { useRefreshTick } from '../../lib/refreshTick';
 
 interface Props {
   node: NodeDetail;
@@ -136,6 +135,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
   const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
+  const tick = useRefreshTick();
   const [up, setUp] = useState<number | null>(null);
   const [statusCode, setStatusCode] = useState<number | null>(null);
   const [certDays, setCertDays] = useState<number | null>(null);
@@ -166,12 +166,10 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
       });
     };
     load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, range]);
+  }, [nodeId, range, tick]);
 
   const code = statusCode == null ? null : Math.round(statusCode);
   const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
@@ -250,6 +248,7 @@ function MerakiHealth({
   device: NonNullable<NodeDetail['meraki_device']>;
 }) {
   const { t } = useTranslation('nodes');
+  const tick = useRefreshTick();
   const [up, setUp] = useState<number | null>(null);
   const [clients, setClients] = useState<number | null>(null);
   const [sent, setSent] = useState<number | null>(null);
@@ -272,12 +271,10 @@ function MerakiHealth({
       });
     };
     load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId]);
+  }, [nodeId, tick]);
 
   const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
 
@@ -639,6 +636,7 @@ function SessionHealth({
     values: [],
   });
   const [win, setWin] = useState<[number, number] | null>(null);
+  const tick = useRefreshTick();
 
   useEffect(() => {
     let cancelled = false;
@@ -661,12 +659,10 @@ function SessionHealth({
       });
     };
     load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, session.metric, session.agg, range]);
+  }, [nodeId, session.metric, session.agg, range, tick]);
 
   const fmt = (v: number) => `${formatCount(v)}${unit}`;
   return (
@@ -708,6 +704,7 @@ function CpuHealth({
     values: [],
   });
   const [win, setWin] = useState<[number, number] | null>(null);
+  const tick = useRefreshTick();
 
   useEffect(() => {
     let cancelled = false;
@@ -726,12 +723,10 @@ function CpuHealth({
       });
     };
     load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, metric, range]);
+  }, [nodeId, metric, range, tick]);
 
   return (
     <div className="nd-health-metric">
@@ -777,6 +772,7 @@ function MemHealth({
     values: [],
   });
   const [win, setWin] = useState<[number, number] | null>(null);
+  const tick = useRefreshTick();
 
   useEffect(() => {
     let cancelled = false;
@@ -811,12 +807,10 @@ function MemHealth({
       });
     };
     load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, mem, range]);
+  }, [nodeId, mem, range, tick]);
 
   // Headline: absolute used / total when we have a trustworthy total, else a bare usage %.
   const absolute = usedBytes != null && totalBytes != null;

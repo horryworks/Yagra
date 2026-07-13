@@ -10,6 +10,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
+import { useRefreshTick } from '../../lib/refreshTick';
 import type {
   CredentialSummary,
   InterfaceRow,
@@ -32,7 +33,6 @@ import { SetParentModal } from '../SetParentModal/SetParentModal';
 import './NodeDetail.css';
 
 const METRIC = 'icmp_rtt_ms';
-const STATUS_REFRESH_MS = 15_000;
 const RTT_WINDOW_SECS = 30 * 60;
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -70,6 +70,7 @@ export function NodeDetail({
   onDeleted,
 }: Props) {
   const { t } = useTranslation('nodes');
+  const tick = useRefreshTick();
   const activeTab = TABS.includes(tab) ? tab : 'overview';
   const [node, setNode] = useState<NodeDetailData | null>(null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
@@ -101,43 +102,46 @@ export function NodeDetail({
     };
   }, [nodeId, refreshNonce]);
 
-  // Live data: status + RTT history + interfaces, refreshed on an interval.
+  // Blank the live panes when the node changes (or after an edit) so a switch never flashes the
+  // previous node's readings. A periodic refresh must NOT blank — that would flicker every tick —
+  // so the reset is its own effect keyed on identity, separate from the load below.
   useEffect(() => {
-    let cancelled = false;
     setStatus(null);
     setSeries({ timestamps: [], values: [] });
     setIfLoaded(false);
-    const load = () => {
-      const to = Math.floor(Date.now() / 1000);
-      api
-        .getNodeStatus(nodeId)
-        .then((s) => !cancelled && setStatus(s))
-        .catch(() => undefined);
-      api
-        .getNodeMetricRange(nodeId, METRIC, { from: to - RTT_WINDOW_SECS, to })
-        .then((r) => !cancelled && setSeries(pointsToSeries(r.points)))
-        .catch(() => undefined);
-      api
-        .listNodeInterfaces(nodeId)
-        .then((r) => {
-          if (cancelled) return;
-          setInterfaces(r);
-          setIfError(null);
-          setIfLoaded(true);
-        })
-        .catch((e: unknown) => {
-          if (cancelled) return;
-          setIfError(errMsg(e, t('err.loadInterfaces')));
-          setIfLoaded(true);
-        });
-    };
-    load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
+  }, [nodeId, refreshNonce]);
+
+  // Live data: status + RTT history + interfaces. Loads on node change and on every shared refresh
+  // tick (S24 — one clock for the whole detail instead of a per-card setInterval). Each tick re-runs
+  // this effect, so its cleanup cancels an in-flight round before the next one starts.
+  useEffect(() => {
+    let cancelled = false;
+    const to = Math.floor(Date.now() / 1000);
+    api
+      .getNodeStatus(nodeId)
+      .then((s) => !cancelled && setStatus(s))
+      .catch(() => undefined);
+    api
+      .getNodeMetricRange(nodeId, METRIC, { from: to - RTT_WINDOW_SECS, to })
+      .then((r) => !cancelled && setSeries(pointsToSeries(r.points)))
+      .catch(() => undefined);
+    api
+      .listNodeInterfaces(nodeId)
+      .then((r) => {
+        if (cancelled) return;
+        setInterfaces(r);
+        setIfError(null);
+        setIfLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setIfError(errMsg(e, t('err.loadInterfaces')));
+        setIfLoaded(true);
+      });
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, refreshNonce, t]);
+  }, [nodeId, refreshNonce, tick, t]);
 
   // Collection-set count for the Collection tab badge (the profile's attached templates).
   useEffect(() => {

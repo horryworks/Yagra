@@ -20,9 +20,9 @@ import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
 import { usePrefsStore } from '../../prefs';
 import { useIsMobileViewport } from '../../lib/viewport';
+import { useRefreshTick } from '../../lib/refreshTick';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
 
-const STATUS_REFRESH_MS = 15_000;
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
 const SPARK_STEP_SECS = 120;
@@ -290,30 +290,33 @@ function InterfaceDock({
   // Taller charts on a phone so the interface detail actually fills the screen (the dock is capped
   // at 50dvh; two ~160px charts + head land near that half-screen budget).
   const chartHeight = useIsMobileViewport() ? 164 : 132;
+  const tick = useRefreshTick();
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
   const [win, setWin] = useState<[number, number] | null>(null);
 
+  // Blank the charts when a different interface / range is selected (not on a tick refresh, which
+  // would flash the charts empty every 15s).
+  useEffect(() => {
+    setSeries(null);
+  }, [nodeId, row.ifindex, range]);
+
+  // Fetch the series on selection/range change and on every shared refresh tick (S24 — the whole
+  // node detail shares one clock instead of a per-card setInterval).
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      const { from, to } = resolveRange(range);
-      api
-        .getInterfaceSeries(nodeId, row.ifindex, { from, to })
-        .then((s) => {
-          if (cancelled) return;
-          setSeries(s);
-          setWin([from, to]);
-        })
-        .catch(() => undefined);
-    };
-    setSeries(null);
-    load();
-    const id = setInterval(load, STATUS_REFRESH_MS);
+    const { from, to } = resolveRange(range);
+    api
+      .getInterfaceSeries(nodeId, row.ifindex, { from, to })
+      .then((s) => {
+        if (cancelled) return;
+        setSeries(s);
+        setWin([from, to]);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [nodeId, row.ifindex, range]);
+  }, [nodeId, row.ifindex, range, tick]);
 
   const ts = series?.timestamps ?? [];
   const hasData = ts.length > 0;
