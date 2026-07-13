@@ -86,6 +86,9 @@
 
 .widgetframe-handle {
   cursor: grab;
+  /* The dnd-kit TouchSensor drives the reorder off this handle; claim the touch so the browser
+     doesn't scroll instead. No-op for mouse — desktop drag is unchanged. */
+  touch-action: none;
 }
 
 .widgetframe-handle:hover {
@@ -178,4 +181,29 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Touch: the header edit controls can't be hover-revealed and the dense 24/18px hit areas are too
+   small for a finger, so grow them to the touch-target floor. Scoped to coarse pointers, so mouse
+   users keep the compact chrome. */
+@media (hover: none) {
+  .widgetframe-remove,
+  .widgetframe-handle,
+  .widgetframe-resize {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+  .widgetframe-resize {
+    opacity: 1; /* always visible — nothing to reveal on hover */
+  }
+}
+
+/* On a phone the board collapses to one full-width column with natural heights (MyDashboardPage.css
+   ≤720px drops span + row-span), so drag-to-resize can't change anything visible. Hide the grip
+   there rather than leave a dead control; reorder (the useful phone edit) still works via the
+   handle. */
+@media (max-width: 720px) {
+  .widgetframe-resize {
+    display: none;
+  }
 }

@@ -9,7 +9,8 @@ import { useTranslation } from 'react-i18next';
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -69,8 +70,13 @@ export function MyDashboardPage() {
     return () => clearTimeout(t);
   }, [status]);
 
+  // Split the pointer into per-input sensors so touch and mouse can activate differently. Mouse:
+  // a 4px drag starts a reorder (unchanged desktop feel). Touch: a 250ms press-and-hold arms the
+  // drag (a `distance` constraint would hijack vertical scroll on a phone) — a normal swipe still
+  // scrolls the board. Keyboard reordering is unchanged.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 

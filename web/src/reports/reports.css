@@ -239,3 +239,39 @@
   background: var(--accent-color);
   transition: width var(--transition);
 }
+
+/* ── Mobile reflow ─────────────────────────────────────────────────────────────────────────────
+   Desktop rendering is untouched: layout-mode rules are scoped to html[data-viewport='mobile'] and
+   touch affordances to (hover:none). The builder/schedule forms live in the shared Modal, which is
+   already a bottom-sheet on mobile — these rules only fix what the sheet can't: cramped side-by-side
+   setting fields and mouse-sized hit targets. */
+
+/* The three report tabs scroll sideways rather than wrap/crush on a narrow phone. */
+html[data-viewport='mobile'] .rp-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html[data-viewport='mobile'] .rp-tabs::-webkit-scrollbar {
+  display: none;
+}
+html[data-viewport='mobile'] .rp-tab {
+  flex: 0 0 auto;
+}
+
+/* Builder section settings sit side-by-side (min-width:140px) on desktop; on a phone sheet give each
+   its own full-width row so the number/select controls aren't squeezed. */
+html[data-viewport='mobile'] .rb-setting {
+  min-width: 100%;
+}
+
+/* Touch: the report tab strip and the builder's dense ↑/↓/× icon buttons need real tap targets. */
+@media (hover: none) {
+  .rp-tab {
+    min-height: var(--touch-target);
+  }
+  .rb-icon {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+}

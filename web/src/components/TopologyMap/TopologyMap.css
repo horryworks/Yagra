@@ -48,6 +48,16 @@
   border-color: var(--accent-color);
 }
 
+/* Touch: pinch-zoom works on the surface, but the on-screen fit/zoom controls still need a real
+   tap target (the 28px chrome is mouse-sized). Coarse-pointer only — mouse chrome is unchanged. */
+@media (hover: none) {
+  .topomap-ctl {
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+    font-size: var(--font-md);
+  }
+}
+
 /* ---- edges ---- */
 .topomap-edge {
   stroke: var(--border-color);

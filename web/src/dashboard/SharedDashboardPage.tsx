@@ -11,7 +11,8 @@ import { Trans, useTranslation } from 'react-i18next';
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -75,8 +76,11 @@ export function SharedDashboardPage() {
     return () => clearTimeout(t);
   }, [status]);
 
+  // Mouse: 4px drag starts a reorder (unchanged). Touch: 250ms press-and-hold arms it so a normal
+  // swipe still scrolls the board rather than dragging a tile. Keyboard reordering is unchanged.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
