@@ -8,6 +8,15 @@ yanked = "warn"
 # Only flag unmaintained crates we depend on directly (we can act on those);
 # transitive ones (e.g. csnmp -> derivative, RUSTSEC-2024-0388) are upstream's call.
 unmaintained = "workspace"
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack": a timing side-channel in the `rsa` crate. No fixed
+    # version exists upstream. Pulled transitively by `openidconnect` (RS256 ID-token verification,
+    # ADR-010 OIDC login). The attack recovers a key via RSA *private-key* operations
+    # (PKCS#1 v1.5 decryption); as an OIDC relying party Yagra only *verifies* ID-token signatures
+    # with the IdP's *public* key and never performs RSA private-key decryption/signing, so this
+    # code path is not reachable. Re-evaluate if `rsa` ships a fix or openidconnect drops it.
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 version = 2

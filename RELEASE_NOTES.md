@@ -1,5 +1,30 @@
 # Release Notes
 
+## v0.1.12
+
+**Single sign-on and core high availability.** Sign in with your organization's identity provider,
+and run more than one core so a single failure doesn't stop monitoring.
+
+### New Features
+- **Sign in with SSO (OpenID Connect)** — connect an external identity provider (Google Workspace,
+  Microsoft Entra, Okta, Keycloak, …) so people log in with your organization's SSO alongside local
+  accounts. Configure a provider under Settings ▸ Auth (issuer, client ID, client secret, redirect
+  URI, scopes) and map IdP groups to Yagra roles; accounts are provisioned automatically on first
+  sign-in and their role follows the IdP on every login. The client secret is encrypted at rest and
+  never shown again, and the "Continue with SSO" button appears on the login screen once a provider
+  is enabled.
+- **Core high availability (opt-in)** — run multiple `yagra-core` instances against the same
+  PostgreSQL / Redis / NATS / VictoriaMetrics and only one (the leader, elected via a PostgreSQL
+  advisory lock) drives scheduling, polling, and alerting; the others stand by and take over
+  automatically within seconds if the leader fails — no double-polling or duplicate notifications.
+  Enable with `YAGRA_ENABLE_HA`; route API/web traffic to the active core via the new `/readyz`
+  readiness probe. Off by default, so single-core deployments are byte-for-byte unchanged.
+
+### Performance
+- **Node detail refreshes on one shared timer** — the node detail view previously ran up to seven
+  independent 15-second refresh loops on a single node; these are now consolidated into one shared
+  tick, and polling pauses while the browser tab is hidden and catches up immediately on return.
+
 ## v0.1.11
 
 **Mobile WebUI polish (parity round 3)** — the remaining screens whose interactions still needed a
