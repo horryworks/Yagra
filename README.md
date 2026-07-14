@@ -6,7 +6,7 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.13.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
+> Status: **v0.1.14.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -18,8 +18,11 @@ polling**. Users access it through the WebUI.
 > restart. The WebUI switches between **English and 日本語** on the fly across most screens, and
 > **SNMPv3** nodes collect per-interface metrics via a GETBULK table walk. Users can now sign in with
 > **single sign-on (OpenID Connect)** alongside local accounts, and the **core runs highly
-> available** — multiple instances with automatic leader election and failover (opt-in). HA stores
-> remain a configuration step away, not a rewrite.
+> available** — multiple instances with automatic leader election and failover (opt-in). In an HA
+> set, **user sessions can be shared across cores** (opt-in) so a failover no longer forces re-login,
+> and **remote pollers on an exposed bus can be scoped to their own pool's credentials** (opt-in),
+> narrowing what a compromised poller can reach. HA stores remain a configuration step away, not a
+> rewrite.
 
 ## Components
 

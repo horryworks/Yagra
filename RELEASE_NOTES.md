@@ -1,5 +1,34 @@
 # Release Notes
 
+## v0.1.14
+
+**Hardening for multi-core and distributed deployments.** Sessions now survive a core failover, and
+each remote poller can be handed only the credentials for its own pool — tightening the message bus
+for sites that run pollers across the network. Both changes are opt-in; a default single-node install
+behaves exactly as before.
+
+### New Features
+- **Sessions survive a core failover (opt-in)** — in a high-availability setup, mount a shared
+  session signing key on each `yagra-core` (`YAGRA_SESSION_KEY_FILE`) and a login is accepted on
+  every core and survives a core restart or failover, so an HA failover no longer signs everyone out.
+  Logging out, disabling a user, changing a role, or resetting a password takes effect across all
+  cores right away. Without a key, sessions behave exactly as before (per-core tokens).
+
+### Bug Fixes
+- **Metric backfill now works on a secured remote bus** — on a NATS bus with TLS and authentication,
+  a reconnecting remote poller was not allowed to publish its buffered metrics, so store-and-forward
+  backfill (new in v0.1.13) could not replay over a secured bus. Pollers may now publish to the
+  backfill channel, so the outage-window metrics fill in as intended. Plaintext single-node buses
+  were unaffected.
+
+### Security
+- **Per-poller credentials on the message bus (opt-in)** — when you expose the NATS bus to remote
+  pollers, core can now issue each poller its own credential scoped to just that poller's pool, so a
+  poller only receives the jobs and device credentials for its **own** pool instead of every poller
+  sharing one bus account with fleet-wide reach. This significantly narrows what a single compromised
+  remote poller can see. Enable it alongside the bus TLS+auth setup; it is off by default and the
+  shared-account behavior is unchanged until you turn it on.
+
 ## v0.1.13
 
 **Remote pollers survive a network partition.** A poller cut off from the central core keeps
