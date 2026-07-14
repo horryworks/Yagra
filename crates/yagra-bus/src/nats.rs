@@ -46,6 +46,29 @@ fn redact_url(url: &str) -> String {
     }
 }
 
+/// Split a NATS URL into `(url_without_userinfo, password)`. Mirrors [`redact_url`]'s authority
+/// parsing but also returns the password so the poller can re-supply it explicitly alongside its own
+/// id as the username (ADR-030). `tls://poller:secret@host:4222` → (`tls://host:4222`, `Some("secret")`);
+/// a URL with no userinfo (single-node plaintext) → (unchanged, `None`).
+fn split_userinfo_password(url: &str) -> (String, Option<String>) {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (Some(s), r),
+        None => (None, url),
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let (userinfo, host) = match authority.rsplit_once('@') {
+        Some((u, h)) => (Some(u), h),
+        None => (None, authority),
+    };
+    let password = userinfo.and_then(|ui| ui.split_once(':').map(|(_, p)| p.to_owned()));
+    let clean = match scheme {
+        Some(s) => format!("{s}://{host}{tail}"),
+        None => format!("{host}{tail}"),
+    };
+    (clean, password)
+}
+
 /// A [`Bus`] over NATS.
 pub struct NatsBus {
     client: Client,
@@ -83,11 +106,58 @@ impl NatsBus {
         })
     }
 
+    /// Connect and present this poller's **own identity** to core's Auth Callout (ADR-030): the
+    /// connection username becomes `poller_id` (what the callout scopes `yagra.poller.assign.{id}` to)
+    /// and the connection name becomes `pool`. The password (bootstrap secret) is taken from the URL
+    /// userinfo and re-supplied explicitly so the *username* is the poller id rather than the shared
+    /// `poller` — the callout keys the scope on it. The userinfo is stripped from the URL so the
+    /// explicit credential wins. On the plaintext single-node bus the URL has no userinfo, so no
+    /// credential is presented (only the harmless connection name) — behaviour matches
+    /// [`Self::connect_opts`] there, and a server without auth callout simply ignores user/name.
+    pub async fn connect_opts_identified(
+        url: &str,
+        ca_file: Option<&std::path::Path>,
+        poller_id: &str,
+        pool: &str,
+    ) -> Result<Self, BusError> {
+        let mut opts = async_nats::ConnectOptions::new().name(pool.to_owned());
+        if let Some(ca) = ca_file {
+            opts = opts.add_root_certificates(ca.to_path_buf());
+        }
+        let (clean_url, password) = split_userinfo_password(url);
+        if let Some(pass) = password {
+            opts = opts.user_and_password(poller_id.to_owned(), pass);
+        }
+        let client = opts
+            .connect(&clean_url)
+            .await
+            .map_err(|e| BusError::Publish(format!("nats connect {}: {e}", redact_url(url))))?;
+        tracing::info!(
+            url = %redact_url(url),
+            tls = ca_file.is_some(),
+            poller = %poller_id,
+            pool = %pool,
+            "connected to NATS bus (identified)"
+        );
+        Ok(Self {
+            client,
+            job_subject: subjects::jobs_for_pool(DEFAULT_POOL),
+        })
+    }
+
     /// Route published jobs to a specific pool's subject (defaults to [`DEFAULT_POOL`]).
     #[must_use]
     pub fn with_pool(mut self, pool: &str) -> Self {
         self.job_subject = subjects::jobs_for_pool(pool);
         self
+    }
+
+    /// A clone of the underlying NATS client, for control-plane traffic that doesn't fit the [`Bus`]
+    /// job/result seam — specifically core's Auth Callout responder, which request-replies on the
+    /// NATS system subject `$SYS.REQ.USER.AUTH` (ADR-030). `async_nats::Client` is a cheap Arc handle.
+    #[must_use]
+    pub fn client(&self) -> Client {
+        self.client.clone()
     }
 
     /// Subscribe (in a queue group) to every pool's jobs — poller side. Malformed
@@ -453,7 +523,34 @@ impl SyncBus for NatsBus {
 
 #[cfg(test)]
 mod tests {
-    use super::redact_url;
+    use super::{redact_url, split_userinfo_password};
+
+    #[test]
+    fn splits_userinfo_password_from_url() {
+        // The remote form: password extracted, userinfo stripped so an explicit username can win.
+        assert_eq!(
+            split_userinfo_password("tls://poller:s3cret@nats.example.com:4222"),
+            (
+                "tls://nats.example.com:4222".to_owned(),
+                Some("s3cret".to_owned())
+            )
+        );
+        // Single-node plaintext: no userinfo, no password, URL unchanged.
+        assert_eq!(
+            split_userinfo_password("nats://nats:4222"),
+            ("nats://nats:4222".to_owned(), None)
+        );
+        // User-only userinfo (no colon) → no password, still stripped.
+        assert_eq!(
+            split_userinfo_password("nats://user@host:4222"),
+            ("nats://host:4222".to_owned(), None)
+        );
+        // A password containing ':' keeps everything after the first colon.
+        assert_eq!(
+            split_userinfo_password("tls://poller:a:b@host:4222"),
+            ("tls://host:4222".to_owned(), Some("a:b".to_owned()))
+        );
+    }
 
     #[test]
     fn redacts_userinfo_credentials() {

@@ -4378,6 +4378,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "yagra-authz"
+version = "0.1.13"
+dependencies = [
+ "data-encoding",
+ "nkeys",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "yagra-bus",
+]
+
+[[package]]
 name = "yagra-bus"
 version = "0.1.13"
 dependencies = [
@@ -4407,6 +4420,7 @@ name = "yagra-core"
 version = "0.1.13"
 dependencies = [
  "anyhow",
+ "async-nats",
  "async-trait",
  "axum",
  "chrono",
@@ -4430,6 +4444,7 @@ dependencies = [
  "tracing",
  "uuid",
  "yagra-alert",
+ "yagra-authz",
  "yagra-bus",
  "yagra-common",
  "yagra-discovery",

@@ -78,11 +78,21 @@ services:
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       # Structured-log level (info so KEK/credential/scheduler events are visible).
       RUST_LOG: ${RUST_LOG:-info}
+      # Per-poller credential scoping via Auth Callout (ADR-030). Enable only with the remote-bus
+      # TLS+auth setup (see the `nats` service, step 6). Core signs each poller a scoped NATS JWT
+      # using the account SEED mounted below; the account is $G by default (must match the server's
+      # auth_callout account). Core also validates the poller bootstrap secret against this password.
+      # YAGRA_NATS_CALLOUT_SEED_FILE: /etc/yagra/callout/account.seed
+      # YAGRA_NATS_CALLOUT_ACCOUNT: ${YAGRA_NATS_CALLOUT_ACCOUNT:-$G}
+      # YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:?set the poller bus password in .env}
     volumes:
       - kekdata:/kek:ro
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend (capacity only — core never writes here).
       - vmdata:/hostfs/vm:ro
+      # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
+      # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
+      # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
     ports:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped
@@ -175,10 +185,17 @@ services:
     #        - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro   volume mount.
     #   5. Hand ./certs/server-cert.pem (public cert only) to each remote poller as its
     #      YAGRA_BUS_CA_FILE (see docker-compose.poller.yml).
+    #   6. (RECOMMENDED, ADR-030) Scope credentials per poller: generate an account nkey pair
+    #      (`nk -gen account -pubout`), give core the SEED file + YAGRA_NATS_CALLOUT_SEED_FILE
+    #      (see the `core` service below), set YAGRA_NATS_CALLOUT_ISSUER=<the A... public key>
+    #      here, and uncomment the `auth_callout` block in docker/nats/nats-server.conf. Then a
+    #      compromised poller can only read its OWN pool's device credentials, not the fleet's.
     # command: ["-js", "-c", "/etc/nats/nats-server.conf"]
     # environment:
     #   YAGRA_NATS_CORE_PASSWORD: ${YAGRA_NATS_CORE_PASSWORD:?set a core bus password in .env}
     #   YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:?set a poller bus password in .env}
+    #   # Step 6 only (per-poller scoping): the account PUBLIC key core logs on startup.
+    #   YAGRA_NATS_CALLOUT_ISSUER: ${YAGRA_NATS_CALLOUT_ISSUER:?set the callout account public key}
     # volumes:
     #   - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
     #   - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro

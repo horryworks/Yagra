@@ -68,6 +68,21 @@ pub struct Config {
     /// Human-readable identifier for this core instance, for HA logs / diagnostics
     /// (`YAGRA_CORE_ID`). Not required; `None` falls back to a generic label in logs.
     pub core_id: Option<String>,
+    /// Path to the mounted **account nkey seed** file used by the NATS Auth Callout responder to sign
+    /// per-poller-scoped user JWTs (ADR-030). Like the KEK (`YAGRA_KEK_FILE`), the *path* is the env
+    /// var; the secret itself is a mounted file, never an env var (security.md/ADR-018). `None` (unset)
+    /// ⇒ the callout responder is not started and NATS falls back to its static account config
+    /// (byte-identical to today). Consumed by `run_live`.
+    pub nats_callout_seed_file: Option<String>,
+    /// The NATS account minted poller users are placed into (the user JWT audience,
+    /// `YAGRA_NATS_CALLOUT_ACCOUNT`). Must match the server's `auth_callout` account. Defaults to the
+    /// implicit global account `$G`.
+    pub nats_callout_account: String,
+    /// The shared poller **bootstrap secret** the callout validates a connecting poller against
+    /// (`YAGRA_NATS_POLLER_PASSWORD`, already injected on the remote-bus deployment). `None` ⇒ the
+    /// callout cannot authenticate anyone, so the responder is not started. The trust anchor is
+    /// swappable later (platform workload identity) without changing this wiring.
+    pub nats_poller_password: Option<String>,
 }
 
 impl Config {
@@ -92,6 +107,14 @@ impl Config {
             // HA (ADR-016): opt-in. Unset ⇒ single-core behavior, no advisory lock.
             enable_ha: parse_bool(std::env::var("YAGRA_ENABLE_HA").ok()),
             core_id: parse_optional(std::env::var("YAGRA_CORE_ID").ok()),
+            // Auth Callout (ADR-030): opt-in. Both the seed file and the bootstrap secret must be
+            // present for the responder to start; otherwise NATS uses its static account config.
+            nats_callout_seed_file: parse_optional(
+                std::env::var("YAGRA_NATS_CALLOUT_SEED_FILE").ok(),
+            ),
+            nats_callout_account: parse_optional(std::env::var("YAGRA_NATS_CALLOUT_ACCOUNT").ok())
+                .unwrap_or_else(|| "$G".to_owned()),
+            nats_poller_password: parse_optional(std::env::var("YAGRA_NATS_POLLER_PASSWORD").ok()),
         })
     }
 }

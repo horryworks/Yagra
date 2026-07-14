@@ -15,6 +15,7 @@ mod analysis;
 mod api;
 mod audit;
 mod auth;
+mod authcallout;
 mod classification;
 mod collection;
 mod config;
@@ -229,6 +230,47 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let cache = core_host.clone();
         let pool = repo.pool().clone();
         spawn_cancellable(&shutdown, run_host_collector(store, cache, pool));
+    }
+
+    // Per-poller NATS credential scoping via Auth Callout (ADR-030). When a callout account seed is
+    // mounted AND the poller bootstrap secret is set, run core as the NATS auth service on EVERY core
+    // (queue-subscribed, not leader-gated) so authentication survives a failover. Unset ⇒ NATS uses
+    // its static account config and this is a no-op — byte-identical to today's deployments.
+    if let (Some(seed_path), Some(secret)) = (
+        cfg.nats_callout_seed_file.as_deref(),
+        cfg.nats_poller_password.clone(),
+    ) {
+        match std::fs::read_to_string(seed_path) {
+            Ok(seed) => {
+                match yagra_authz::AccountSigner::from_seed(
+                    seed.trim(),
+                    cfg.nats_callout_account.clone(),
+                ) {
+                    Ok(signer) => {
+                        // The issuer public key is NOT a secret — the operator pastes it into the
+                        // NATS `auth_callout { issuer }` config, so surface it on startup.
+                        tracing::info!(
+                            issuer = %signer.issuer_public_key(),
+                            account = %cfg.nats_callout_account,
+                            "auth-callout enabled (ADR-030) — set this issuer in nats-server.conf auth_callout"
+                        );
+                        spawn_cancellable(
+                            &shutdown,
+                            authcallout::run_auth_callout(bus.client(), Arc::new(signer), secret),
+                        );
+                    }
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        "auth-callout: invalid account seed; per-poller credential scoping disabled"
+                    ),
+                }
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                path = %seed_path,
+                "auth-callout: cannot read seed file; per-poller credential scoping disabled"
+            ),
+        }
     }
 
     // Discovery: a runner that publishes sweep jobs (shared with the API) + a consumer that folds

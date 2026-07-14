@@ -24,6 +24,7 @@ members = [
     "crates/yagra-secrets",
     "crates/yagra-transport",
     "crates/yagra-bus",
+    "crates/yagra-authz",
     "crates/yagra-topology",
     "crates/yagra-discovery",
     "crates/yagra-alert",
@@ -121,6 +122,12 @@ aes-gcm = "0.10"
 sha2 = "0.10"
 # Password hashing for local auth (Argon2, pure Rust)
 argon2 = "0.5"
+# NATS Auth Callout (ADR-030): ed25519 nkey signing so core can mint per-poller-scoped NATS user JWTs
+# (poller-scoped credentials). Already in the tree transitively via async-nats; promoted to a direct
+# workspace dep for yagra-authz. Pure Rust (ed25519-dalek), no NASM.
+nkeys = "0.4"
+# RFC 4648 base64url / base32 for the NATS JWT wire format (yagra-authz). Already transitively present.
+data-encoding = "2"
 # External IdP login (OIDC authorization-code + PKCE, ADR-010 Phase 3). Handles discovery, PKCE,
 # code exchange, and ID-token signature/claim validation per spec. TLS rides the in-tree reqwest
 # (rustls) — `default-features = false` + explicit `rustls-tls` keeps native-tls/openssl/NASM out.

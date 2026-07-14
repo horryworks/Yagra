@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 yagra-common = { path = "../yagra-common" }
 yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+# Per-poller NATS credential scoping via Auth Callout (ADR-030): mints scoped user JWTs.
+yagra-authz = { path = "../yagra-authz" }
 yagra-topology = { path = "../yagra-topology" }
 yagra-alert = { path = "../yagra-alert" }
 yagra-discovery = { path = "../yagra-discovery" }
@@ -42,6 +44,9 @@ async-trait = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 tokio-stream = { workspace = true }
+# Direct NATS client for the Auth Callout responder (`$SYS.REQ.USER.AUTH` request-reply, ADR-030).
+# Already in the tree via yagra-bus's `nats` feature; named directly here for the client handle.
+async-nats = { workspace = true }
 lettre = { workspace = true }
 openidconnect = { workspace = true }
 

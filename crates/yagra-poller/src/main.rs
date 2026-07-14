@@ -121,8 +121,10 @@ async fn main() -> anyhow::Result<()> {
     // Remote pollers pin the server cert with a CA file (TLS mandatory across trust boundaries,
     // security.md / ADR-020); the single-node plaintext path leaves it unset.
     let ca_file = env_nonempty("YAGRA_BUS_CA_FILE").map(PathBuf::from);
-    // Tolerate NATS coming up after the poller (compose has no health gate).
-    let bus = Arc::new(connect_bus(&bus_url, ca_file.as_deref()).await?);
+    // Tolerate NATS coming up after the poller (compose has no health gate). The poller presents its
+    // own id/pool so core's Auth Callout can scope its credentials (ADR-030); harmless on no-auth.
+    let bus =
+        Arc::new(connect_bus(&bus_url, ca_file.as_deref(), &identity.id, &identity.pool).await?);
 
     let queue =
         std::env::var("YAGRA_POLLER_QUEUE").unwrap_or_else(|_| yagra_bus::POLLER_QUEUE.to_owned());
@@ -537,11 +539,17 @@ fn env_f64(key: &str, default: f64) -> f64 {
 
 /// Connect to NATS, retrying with a fixed backoff so startup ordering doesn't matter. `ca_file`
 /// pins the server certificate for the remote-poller TLS path (`None` = plaintext single-node).
-async fn connect_bus(url: &str, ca_file: Option<&Path>) -> anyhow::Result<NatsBus> {
+/// `poller_id`/`pool` are presented to core's Auth Callout for per-poller credential scoping (ADR-030).
+async fn connect_bus(
+    url: &str,
+    ca_file: Option<&Path>,
+    poller_id: &str,
+    pool: &str,
+) -> anyhow::Result<NatsBus> {
     const MAX_ATTEMPTS: u32 = 30;
     let mut attempt = 0;
     loop {
-        match NatsBus::connect_opts(url, ca_file).await {
+        match NatsBus::connect_opts_identified(url, ca_file, poller_id, pool).await {
             Ok(bus) => return Ok(bus),
             Err(e) if attempt < MAX_ATTEMPTS => {
                 attempt += 1;

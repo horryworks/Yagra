@@ -1,0 +1,24 @@
+[package]
+name = "yagra-authz"
+description = "Yagra-authz — NATS Auth Callout credential scoping: mints per-poller-scoped NATS user JWTs (ADR-030)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Subject naming is reused from yagra-bus so the callout's allow-list can NEVER drift from what the
+# poller actually subscribes to (drift = a silent scoping hole). Default features only: the `subjects`
+# module is pure and needs no `nats` feature, so async-nats is NOT pulled into this crate.
+yagra-bus = { path = "../yagra-bus" }
+# ed25519 nkey signing (the account key that signs minted user JWTs / the auth response).
+nkeys = { workspace = true }
+# RFC 4648 base64url (JWT segments) + base32 (the NATS `jti` hash).
+data-encoding = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# sha2 for the NATS `jti` claim (base32(sha256(claims))).
+sha2 = { workspace = true }
+thiserror = { workspace = true }
