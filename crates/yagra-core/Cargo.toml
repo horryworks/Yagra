@@ -33,6 +33,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
+# Stateless signed session tokens for Core HA active/active (ADR-016 Increment 2a): HMAC-SHA256
+# signing + base64url claim encoding. Both already in the tree; named directly for `token.rs`.
+hmac = { workspace = true }
+data-encoding = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }

@@ -14,9 +14,13 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sqlx::{PgPool, Row};
+use tokio::sync::mpsc;
 use uuid::Uuid;
+use yagra_bus::AuthRevoke;
 use yagra_common::{Permission, Principal, Role, Scope};
 use yagra_secrets::password::{hash_password, verify_password};
+
+use crate::token::{self, Claims, TokenSigner};
 
 /// Idle session lifetime: a token unused for this long is expired and purged on next touch.
 /// Sliding window — each authorized request refreshes it — so an active operator stays logged in
@@ -50,22 +54,91 @@ pub struct Session {
     last_seen: Instant,
 }
 
-/// In-memory bearer-token → session store.
+/// The revocation denylist for stateless signed tokens (Core HA active/active, ADR-016 Increment
+/// 2a). A signed token is self-validating, so logout / account-disable must be recorded here to take
+/// effect before the token's own expiry. Entries self-prune once past their bounding expiry.
+#[derive(Default)]
+struct Denylist {
+    /// Individually-revoked tokens: SHA-256 hex → the token's own `exp` (Unix seconds).
+    tokens: HashMap<String, u64>,
+    /// User-wide revocations: uid → (cutoff `iat`, entry expiry). Tokens for the user issued at or
+    /// before `cutoff` are denied until the entry expires.
+    users: HashMap<Uuid, (u64, u64)>,
+}
+
+impl Denylist {
+    /// Whether the given claims/token are currently revoked (checked after signature + `exp`).
+    fn is_denied(&self, claims: &Claims, token_hash: &str, now: u64) -> bool {
+        if self.tokens.get(token_hash).is_some_and(|&exp| exp > now) {
+            return true;
+        }
+        self.users
+            .get(&claims.uid)
+            .is_some_and(|&(cutoff, exp)| exp > now && claims.iat <= cutoff)
+    }
+}
+
+/// Bearer-token → session store.
+///
+/// Two modes, selected by whether a signing key is configured:
+/// - **Opaque (default / single-core, byte-identical to pre-HA):** a random 64-hex token backed by
+///   the in-memory `sessions` map (lost on restart, not shared across cores).
+/// - **Signed (Core HA active/active, ADR-016 Increment 2a):** a stateless HMAC-signed token
+///   verified synchronously on any core that shares the key; revocation rides the `denylist` +
+///   `revoke_sink` (fanned out on `yagra.auth.revoke`, persisted to `auth_revocations`).
 pub struct SessionStore {
     sessions: Mutex<HashMap<String, Session>>,
+    /// When set, tokens are stateless signed tokens instead of opaque map entries.
+    signer: Option<TokenSigner>,
+    /// Revocation denylist (signed mode only).
+    denylist: Mutex<Denylist>,
+    /// Sink to the background revocation writer (persist to PG + fan out on the bus). `None` in
+    /// opaque mode — nothing to propagate.
+    revoke_sink: Option<mpsc::UnboundedSender<AuthRevoke>>,
 }
 
 impl SessionStore {
-    /// New empty store.
+    /// New empty store in **opaque** mode (byte-identical to pre-HA: in-memory, per-process tokens).
     #[must_use]
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            signer: None,
+            denylist: Mutex::new(Denylist::default()),
+            revoke_sink: None,
         }
     }
 
-    /// Mint a fresh opaque token for `principal` (account `user_id`, logged in as `username`).
+    /// New store in **signed** mode (Core HA active/active): mint/verify stateless HMAC tokens and
+    /// propagate revocations through `revoke_sink`.
+    #[must_use]
+    pub fn with_signer(
+        signer: TokenSigner,
+        revoke_sink: mpsc::UnboundedSender<AuthRevoke>,
+    ) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            signer: Some(signer),
+            denylist: Mutex::new(Denylist::default()),
+            revoke_sink: Some(revoke_sink),
+        }
+    }
+
+    /// Mint a fresh token for `principal` (account `user_id`, logged in as `username`). Signed mode
+    /// returns a stateless HMAC token (no map entry); opaque mode stores a random token in memory.
     pub fn issue(&self, user_id: Uuid, principal: Principal, username: &str) -> String {
+        if let Some(signer) = &self.signer {
+            let iat = token::unix_now();
+            let claims = Claims {
+                uid: user_id,
+                principal,
+                username: username.to_owned(),
+                iat,
+                // No sliding idle window for a stateless token — the absolute lifetime is the bound.
+                exp: iat + SESSION_ABSOLUTE_TTL.as_secs(),
+            };
+            return signer.sign(&claims);
+        }
         let token = random_token();
         let now = Instant::now();
         self.sessions
@@ -84,10 +157,19 @@ impl SessionStore {
         token
     }
 
-    /// Resolve a token to its session, enforcing the idle + absolute TTL. An expired token is
-    /// purged and treated as a miss; a live token has its idle window refreshed (sliding).
+    /// Resolve a token to its session. A signed token is verified (signature + absolute `exp` +
+    /// denylist) with no I/O; an opaque token is looked up in the in-memory map, enforcing the idle
+    /// + absolute TTL (an expired token is purged, a live one has its idle window refreshed).
     #[must_use]
     pub fn lookup(&self, token: &str) -> Option<Session> {
+        // Signed mode: a signed-shaped token is verified statelessly. An opaque-shaped token here is
+        // a legacy in-memory token minted by another/older core — fall through to the map (a miss
+        // for a cross-core token ⇒ a clean 401 → re-login during a rolling upgrade).
+        if let Some(signer) = &self.signer {
+            if token::is_signed_shape(token) {
+                return self.lookup_signed(token, signer);
+            }
+        }
         let now = Instant::now();
         let mut map = self.sessions.lock().expect("sessions mutex poisoned");
         let s = map.get(token)?;
@@ -102,22 +184,121 @@ impl SessionStore {
         Some(session.clone())
     }
 
-    /// Revoke a single token (server-side logout). No-op if unknown.
+    /// Verify a signed token: signature, absolute expiry, then the revocation denylist. All in-
+    /// memory / CPU-only, so the API `authorize()` path stays synchronous.
+    fn lookup_signed(&self, token: &str, signer: &TokenSigner) -> Option<Session> {
+        let claims = signer.verify(token)?;
+        let now = token::unix_now();
+        if claims.exp <= now {
+            return None; // expired
+        }
+        let hash = token::token_hash(token);
+        if self
+            .denylist
+            .lock()
+            .expect("denylist mutex poisoned")
+            .is_denied(&claims, &hash, now)
+        {
+            return None; // logged out / user revoked
+        }
+        Some(Session {
+            principal: claims.principal,
+            username: claims.username,
+            user_id: claims.uid,
+            // Instants are cosmetic for signed tokens (validity comes from `claims.exp`); the
+            // downstream callers read only principal/username/user_id.
+            issued_at: Instant::now(),
+            last_seen: Instant::now(),
+        })
+    }
+
+    /// Revoke a single token (server-side logout). Opaque mode drops the in-memory entry; signed mode
+    /// records the token hash in the denylist and propagates it (bus fan-out + durable table).
     pub fn revoke_token(&self, token: &str) {
         self.sessions
             .lock()
             .expect("sessions mutex poisoned")
             .remove(token);
+        if let Some(signer) = &self.signer {
+            if token::is_signed_shape(token) {
+                let exp = signer
+                    .verify(token)
+                    .map(|c| c.exp)
+                    .unwrap_or_else(|| token::unix_now() + SESSION_ABSOLUTE_TTL.as_secs());
+                self.propagate(AuthRevoke::Token {
+                    hash: token::token_hash(token),
+                    exp_unix: exp,
+                });
+            }
+        }
     }
 
-    /// Revoke every session belonging to `user_id` — called when the account is disabled,
-    /// demoted, password-reset, or deleted, so those admin controls take effect on already-issued
-    /// tokens instead of only on future logins. Returns how many sessions were dropped.
+    /// Revoke every session belonging to `user_id` — called when the account is disabled, demoted,
+    /// password-reset, or deleted, so those admin controls take effect on already-issued tokens
+    /// instead of only on future logins. Opaque mode drops the in-memory sessions (returns the count);
+    /// signed mode records a user-wide denylist cutoff and propagates it.
     pub fn revoke_user(&self, user_id: Uuid) -> usize {
-        let mut map = self.sessions.lock().expect("sessions mutex poisoned");
-        let before = map.len();
-        map.retain(|_, s| s.user_id != user_id);
-        before - map.len()
+        let dropped = {
+            let mut map = self.sessions.lock().expect("sessions mutex poisoned");
+            let before = map.len();
+            map.retain(|_, s| s.user_id != user_id);
+            before - map.len()
+        };
+        if self.signer.is_some() {
+            let now = token::unix_now();
+            self.propagate(AuthRevoke::User {
+                uid: user_id,
+                cutoff_iat: now,
+                exp_unix: now + SESSION_ABSOLUTE_TTL.as_secs(),
+            });
+        }
+        dropped
+    }
+
+    /// Apply a revocation locally, then push it to the writer for durable persist + bus fan-out.
+    fn propagate(&self, revoke: AuthRevoke) {
+        self.apply_local(&revoke);
+        if let Some(tx) = &self.revoke_sink {
+            // Non-blocking; a closed channel (shutdown) is ignored — the local denylist already
+            // reflects the revocation on this core.
+            let _ = tx.send(revoke);
+        }
+    }
+
+    /// Apply a revocation received from another core (bus) or loaded from the durable table on
+    /// startup — updates the local denylist only (no re-propagation, so there is no fan-out loop).
+    pub fn apply_remote_revoke(&self, revoke: &AuthRevoke) {
+        self.apply_local(revoke);
+    }
+
+    fn apply_local(&self, revoke: &AuthRevoke) {
+        let mut d = self.denylist.lock().expect("denylist mutex poisoned");
+        match revoke {
+            AuthRevoke::Token { hash, exp_unix } => {
+                d.tokens.insert(hash.clone(), *exp_unix);
+            }
+            AuthRevoke::User {
+                uid,
+                cutoff_iat,
+                exp_unix,
+            } => {
+                d.users
+                    .entry(*uid)
+                    .and_modify(|(c, e)| {
+                        *c = (*c).max(*cutoff_iat);
+                        *e = (*e).max(*exp_unix);
+                    })
+                    .or_insert((*cutoff_iat, *exp_unix));
+            }
+        }
+    }
+
+    /// Drop denylist entries whose bounding expiry has passed (bounded memory). Called periodically.
+    pub fn prune_denylist(&self) {
+        let now = token::unix_now();
+        let mut d = self.denylist.lock().expect("denylist mutex poisoned");
+        d.tokens.retain(|_, exp| *exp > now);
+        d.users.retain(|_, (_, exp)| *exp > now);
     }
 
     /// Authorize a request: require a valid token whose principal has `perm`.
@@ -141,6 +322,91 @@ impl Default for SessionStore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Durable revocations (Core HA active/active, ADR-016 Increment 2a) ────────────────────────────
+// A signed token outlives the process that minted it, so its revocation must be durable too — else a
+// restart/failover would silently un-revoke a logged-out token. The `auth_revocations` table (mig
+// 0046) is the source of truth a core cold-loads on start; the in-memory denylist is the hot path.
+
+/// Upsert a revocation into the durable table (keep the strictest cutoff/expiry on conflict).
+pub async fn persist_revocation(pool: &PgPool, revoke: &AuthRevoke) -> Result<(), sqlx::Error> {
+    match revoke {
+        AuthRevoke::Token { hash, exp_unix } => {
+            sqlx::query(
+                "INSERT INTO auth_revocations (kind, key, cutoff_iat, expires_at) \
+                 VALUES ('token', $1, NULL, to_timestamp($2)) \
+                 ON CONFLICT (kind, key) DO UPDATE \
+                 SET expires_at = GREATEST(auth_revocations.expires_at, EXCLUDED.expires_at)",
+            )
+            .bind(hash)
+            .bind(*exp_unix as i64)
+            .execute(pool)
+            .await?;
+        }
+        AuthRevoke::User {
+            uid,
+            cutoff_iat,
+            exp_unix,
+        } => {
+            sqlx::query(
+                "INSERT INTO auth_revocations (kind, key, cutoff_iat, expires_at) \
+                 VALUES ('user', $1, $2, to_timestamp($3)) \
+                 ON CONFLICT (kind, key) DO UPDATE \
+                 SET cutoff_iat = GREATEST(auth_revocations.cutoff_iat, EXCLUDED.cutoff_iat), \
+                     expires_at = GREATEST(auth_revocations.expires_at, EXCLUDED.expires_at)",
+            )
+            .bind(uid.to_string())
+            .bind(*cutoff_iat as i64)
+            .bind(*exp_unix as i64)
+            .execute(pool)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Load all still-valid revocations from the durable table (called on startup so a restarted /
+/// promoted core honors revocations made while it wasn't the writer).
+pub async fn load_active_revocations(pool: &PgPool) -> Result<Vec<AuthRevoke>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT kind, key, cutoff_iat, extract(epoch FROM expires_at)::bigint AS exp_unix \
+         FROM auth_revocations WHERE expires_at > now()",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let kind: String = row.get("kind");
+        let key: String = row.get("key");
+        let exp_unix = row.get::<i64, _>("exp_unix").max(0) as u64;
+        match kind.as_str() {
+            "token" => out.push(AuthRevoke::Token {
+                hash: key,
+                exp_unix,
+            }),
+            "user" => {
+                let cutoff_iat = row.try_get::<i64, _>("cutoff_iat").unwrap_or(0).max(0) as u64;
+                if let Ok(uid) = Uuid::parse_str(&key) {
+                    out.push(AuthRevoke::User {
+                        uid,
+                        cutoff_iat,
+                        exp_unix,
+                    });
+                }
+            }
+            _ => {} // unknown kind (forward-compat) — ignored
+        }
+    }
+    Ok(out)
+}
+
+/// Delete expired rows from the durable table (bounded growth). Called periodically.
+pub async fn prune_revocations(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM auth_revocations WHERE expires_at <= now()")
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }
 
 /// Failed logins tolerated per account before the exponential lockout engages.
@@ -280,10 +546,17 @@ impl Default for LoginThrottle {
     }
 }
 
-/// A session token is exactly 64 lowercase-hex chars (32 bytes). Cheap shape check at the auth
-/// edge so malformed `Authorization` headers are rejected before the session-map lookup.
+/// Cheap shape check at the auth edge so malformed `Authorization` headers are rejected before the
+/// session-map lookup / signature verification. Accepts either an **opaque** token (exactly 64
+/// lowercase-hex chars) or a **signed** token (`y2.` prefix, bounded length, no whitespace) — both
+/// coexist during a rolling upgrade (ADR-016 Increment 2a).
 fn is_well_formed_token(token: &str) -> bool {
-    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+    if token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return true;
+    }
+    token::is_signed_shape(token)
+        && token.len() <= 4096
+        && !token.bytes().any(|b| b.is_ascii_whitespace())
 }
 
 /// 32 random bytes, hex-encoded — an opaque, unguessable session token.
@@ -814,5 +1087,185 @@ mod tests {
         );
         assert_ne!(a, b);
         assert_eq!(a.len(), 64);
+    }
+
+    // ── Signed-token mode (Core HA active/active, ADR-016 Increment 2a) ──────────────────────
+
+    const TEST_KEY: [u8; 32] = [3u8; 32];
+
+    fn signed_store() -> (SessionStore, mpsc::UnboundedReceiver<AuthRevoke>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            SessionStore::with_signer(TokenSigner::new(TEST_KEY), tx),
+            rx,
+        )
+    }
+
+    fn sign_at(uid: Uuid, iat: u64) -> String {
+        TokenSigner::new(TEST_KEY).sign(&Claims {
+            uid,
+            principal: Principal::new(Role::Operator, Scope::All),
+            username: "u".into(),
+            iat,
+            exp: iat + 3600,
+        })
+    }
+
+    #[test]
+    fn signed_token_is_stateless_and_authorizes_by_role() {
+        let (store, _rx) = signed_store();
+        let uid = Uuid::new_v4();
+        let token = store.issue(uid, Principal::new(Role::Operator, Scope::All), "op");
+        assert!(token::is_signed_shape(&token));
+        let s = store
+            .authorize(Some(&token), Permission::AckAlerts)
+            .expect("operator can ack");
+        assert_eq!(s.user_id, uid);
+        assert_eq!(s.username, "op");
+        assert!(matches!(
+            store.authorize(Some(&token), Permission::ManageConfig),
+            Err(AuthError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn signed_token_verifies_on_another_core_with_the_same_key_but_not_a_different_key() {
+        let (a, _ra) = signed_store();
+        let token = a.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "v",
+        );
+
+        // A second "core" sharing the key accepts the token minted on the first.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let same_key = SessionStore::with_signer(TokenSigner::new(TEST_KEY), tx);
+        assert!(same_key.authorize(Some(&token), Permission::View).is_ok());
+
+        // A core with a different key rejects it (Invalid, not a panic).
+        let (tx2, _rx2) = mpsc::unbounded_channel();
+        let other_key = SessionStore::with_signer(TokenSigner::new([9u8; 32]), tx2);
+        assert!(matches!(
+            other_key.authorize(Some(&token), Permission::View),
+            Err(AuthError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn logout_denies_a_signed_token_and_enqueues_a_token_revocation() {
+        let (store, mut rx) = signed_store();
+        let token = store.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Operator, Scope::All),
+            "op",
+        );
+        assert!(store.authorize(Some(&token), Permission::View).is_ok());
+
+        store.revoke_token(&token);
+        assert!(matches!(
+            store.authorize(Some(&token), Permission::View),
+            Err(AuthError::Invalid)
+        ));
+        // The revocation is enqueued (token *hash*, never the token) for durable persist + fan-out.
+        match rx.try_recv() {
+            Ok(AuthRevoke::Token { hash, .. }) => assert_eq!(hash, token::token_hash(&token)),
+            other => panic!("expected a token revocation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revoke_user_denies_tokens_issued_at_or_before_the_cutoff_only() {
+        let (store, _rx) = signed_store();
+        let uid = Uuid::new_v4();
+        let now = token::unix_now();
+
+        let old = sign_at(uid, now - 100);
+        assert!(store.authorize(Some(&old), Permission::View).is_ok());
+
+        store.revoke_user(uid); // cutoff ≈ now
+
+        // The pre-cutoff token is now denied...
+        assert!(matches!(
+            store.authorize(Some(&old), Permission::View),
+            Err(AuthError::Invalid)
+        ));
+        // ...a token issued well after the cutoff (a fresh login) still works...
+        let future = sign_at(uid, now + 100);
+        assert!(store.authorize(Some(&future), Permission::View).is_ok());
+        // ...and a different user is unaffected.
+        let other = sign_at(Uuid::new_v4(), now - 100);
+        assert!(store.authorize(Some(&other), Permission::View).is_ok());
+    }
+
+    #[test]
+    fn remote_revocation_denies_locally_without_re_enqueue() {
+        let (store, mut rx) = signed_store();
+        let token = store.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Operator, Scope::All),
+            "op",
+        );
+        // Simulate a revocation fanned out from another core.
+        store.apply_remote_revoke(&AuthRevoke::Token {
+            hash: token::token_hash(&token),
+            exp_unix: token::unix_now() + 3600,
+        });
+        assert!(matches!(
+            store.authorize(Some(&token), Permission::View),
+            Err(AuthError::Invalid)
+        ));
+        // Applying a *remote* revocation must not re-enqueue it (no fan-out loop).
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn an_expired_revocation_does_not_deny_a_live_token() {
+        let (store, _rx) = signed_store();
+        let uid = Uuid::new_v4();
+        let now = token::unix_now();
+        let tok = sign_at(uid, now);
+        // A user-revoke whose bounding expiry already passed must not affect a live token.
+        store.apply_remote_revoke(&AuthRevoke::User {
+            uid,
+            cutoff_iat: now + 10,
+            exp_unix: now.saturating_sub(1),
+        });
+        assert!(store.authorize(Some(&tok), Permission::View).is_ok());
+        store.prune_denylist(); // must not panic
+    }
+
+    #[test]
+    fn opaque_mode_is_unchanged_and_rejects_malformed_bearers() {
+        // Byte-identical default: no signer ⇒ 64-hex opaque tokens, in-memory.
+        let store = SessionStore::new();
+        let t = store.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "v",
+        );
+        assert_eq!(t.len(), 64);
+        assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(store.authorize(Some(&t), Permission::View).is_ok());
+        // The well-formed-token edge still rejects junk and a missing bearer.
+        assert!(matches!(
+            store.authorize(Some("not a token"), Permission::View),
+            Err(AuthError::Invalid)
+        ));
+        assert!(matches!(
+            store.authorize(None, Permission::View),
+            Err(AuthError::Missing)
+        ));
+    }
+
+    #[test]
+    fn n_minus_1_opaque_token_on_a_signed_core_is_a_clean_invalid_not_a_panic() {
+        // During a rolling upgrade a signed-mode core may receive an opaque token minted in another
+        // core's memory: it isn't in this core's map ⇒ clean 401 → re-login (no panic).
+        let (store, _rx) = signed_store();
+        let stray_opaque = "a".repeat(64);
+        assert!(matches!(
+            store.authorize(Some(&stray_opaque), Permission::View),
+            Err(AuthError::Invalid)
+        ));
     }
 }

@@ -11,8 +11,8 @@
 
 use crate::bus::{Bus, BusError, SyncBus};
 use crate::messages::{
-    DiscoveryJob, DiscoveryResult, EventMsg, HeartbeatMsg, PollJob, PollResult, SyncMsg,
-    SyncRequest,
+    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, HeartbeatMsg, PollJob, PollResult,
+    SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -237,6 +237,40 @@ impl NatsBus {
                 Ok(event) => Some(event),
                 Err(e) => {
                     tracing::warn!(error = %e, "dropping malformed EventMsg from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    // ── Core⇄core control plane (ADR-016 Increment 2 — active/active API) ────────────
+
+    /// Publish a session-revocation notice to every other core — core side (Core HA active/active,
+    /// ADR-016 Increment 2a). Plain publish on the shared [`subjects::auth_revoke`] fan-out subject.
+    pub async fn publish_auth_revoke(&self, msg: &AuthRevoke) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(msg)
+            .map_err(|e| BusError::Publish(format!("encode auth revoke: {e}")))?;
+        self.client
+            .publish(subjects::auth_revoke(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish auth revoke: {e}")))
+    }
+
+    /// Subscribe to session-revocation notices from other cores — core side (fan-out, every core
+    /// receives every revocation). Malformed messages are skipped. Additive: an N-1 core never
+    /// subscribes here, so a revocation simply doesn't reach it live — the durable `auth_revocations`
+    /// table it cold-loads on start is the backstop.
+    pub async fn subscribe_auth_revoke(&self) -> Result<impl Stream<Item = AuthRevoke>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::auth_revoke())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe auth revoke: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<AuthRevoke>(&msg.payload) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed AuthRevoke from bus");
                     None
                 }
             }

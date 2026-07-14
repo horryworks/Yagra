@@ -120,6 +120,10 @@ metrics-exporter-prometheus = "0.16"
 aes-gcm = "0.10"
 # Webhook ingest-token hashing (already in the tree via the crypto stack)
 sha2 = "0.10"
+# HMAC-SHA256 for stateless signed session tokens (Core HA active/active, ADR-016 Increment 2a).
+# Already in the tree transitively (sqlx-postgres enables it); promoted to a direct workspace dep.
+# `Mac::verify_slice` is constant-time. Pure Rust, no NASM.
+hmac = "0.12"
 # Password hashing for local auth (Argon2, pure Rust)
 argon2 = "0.5"
 # NATS Auth Callout (ADR-030): ed25519 nkey signing so core can mint per-poller-scoped NATS user JWTs

@@ -44,6 +44,7 @@ mod secrets;
 mod sink;
 mod store;
 mod thresholds;
+mod token;
 mod url_check;
 mod volatile;
 
@@ -656,7 +657,68 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         coordinator: coordinator.clone(),
         pollers: poller_repo.clone(),
     }));
-    let sessions = Arc::new(SessionStore::new());
+    // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
+    // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
+    // core sharing the key verifies synchronously — the Core HA active/active session substrate
+    // (ADR-016 Increment 2a). Revocation rides a per-core denylist fed by the durable
+    // `auth_revocations` table (cold-loaded here) and the `yagra.auth.revoke` bus fan-out.
+    let sessions = if let Some(key_path) = cfg.session_key_file.as_deref() {
+        // Fail-closed: a configured-but-unreadable/invalid key aborts startup (don't silently
+        // downgrade to per-core sessions under a multi-core expectation). The key is never logged.
+        let key = token::load_session_key(key_path)?;
+        tracing::info!(
+            path = %key_path,
+            "signed session tokens enabled (ADR-016 Increment 2a) — sessions verify on any core sharing the key"
+        );
+        let (revoke_tx, revoke_rx) =
+            tokio::sync::mpsc::unbounded_channel::<yagra_bus::AuthRevoke>();
+        let store = Arc::new(SessionStore::with_signer(
+            token::TokenSigner::new(key),
+            revoke_tx,
+        ));
+        // Cold-load durable revocations so a restart / promotion honors prior logouts & disables.
+        match auth::load_active_revocations(&repo.pool()).await {
+            Ok(list) => {
+                let n = list.len();
+                for r in &list {
+                    store.apply_remote_revoke(r);
+                }
+                if n > 0 {
+                    tracing::info!(
+                        count = n,
+                        "loaded active session revocations from auth_revocations"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to load session revocations (continuing)"),
+        }
+        // These run on EVERY core (not leader-gated) so a revocation is durable + reaches all cores,
+        // and every core honors revocations made elsewhere — required once reads go active/active.
+        {
+            let bus = bus.clone();
+            let pool = repo.pool().clone();
+            spawn_cancellable(&shutdown, run_auth_revoke_writer(revoke_rx, bus, pool));
+        }
+        {
+            let bus = bus.clone();
+            let store = store.clone();
+            spawn_cancellable(&shutdown, run_auth_revoke_subscriber(bus, store));
+        }
+        {
+            let store = store.clone();
+            let pool = repo.pool().clone();
+            spawn_cancellable(&shutdown, run_revocation_pruner(store, pool));
+        }
+        store
+    } else {
+        if cfg.enable_ha {
+            tracing::warn!(
+                "HA enabled without YAGRA_SESSION_KEY_FILE — sessions remain per-core in-memory \
+                 (fine for active/passive; set a key file for the coming active/active read scale-out)"
+            );
+        }
+        Arc::new(SessionStore::new())
+    };
     // External-IdP login (OIDC, ADR-010 Phase 3): provider store (envelope-encrypted secret) + the
     // in-memory in-flight authorization map.
     let oidc = Some(Arc::new(oidc::OidcRepo::from_env(repo.pool())));
@@ -763,6 +825,56 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
 
 /// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
 const HOST_SAMPLE_SECS: u64 = 15;
+
+/// Drain locally-produced session revocations (logout / user disable-demote-reset-delete): persist
+/// each to the durable `auth_revocations` table so it survives restart/failover, then fan it out on
+/// `yagra.auth.revoke` so every other core denies the token too (Core HA active/active, ADR-016
+/// Increment 2a). Runs on every core. Loops until the channel closes on shutdown.
+async fn run_auth_revoke_writer(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<yagra_bus::AuthRevoke>,
+    bus: Arc<NatsBus>,
+    pool: sqlx::PgPool,
+) {
+    while let Some(revoke) = rx.recv().await {
+        // Persist first (durable source of truth), then fan out (best-effort live propagation).
+        if let Err(e) = auth::persist_revocation(&pool, &revoke).await {
+            tracing::warn!(error = %e, "failed to persist session revocation");
+        }
+        if let Err(e) = bus.publish_auth_revoke(&revoke).await {
+            tracing::warn!(error = %e, "failed to fan out session revocation to other cores");
+        }
+    }
+}
+
+/// Apply session revocations fanned out by other cores to this core's in-memory denylist so a token
+/// revoked anywhere is denied here (Core HA active/active, ADR-016 Increment 2a). Runs on every core.
+async fn run_auth_revoke_subscriber(bus: Arc<NatsBus>, sessions: Arc<SessionStore>) {
+    let stream = match bus.subscribe_auth_revoke().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "auth-revoke subscribe failed; cross-core session revocation is DOWN");
+            return;
+        }
+    };
+    tokio::pin!(stream);
+    while let Some(revoke) = stream.next().await {
+        sessions.apply_remote_revoke(&revoke);
+    }
+}
+
+/// Periodically drop expired denylist entries (in-memory) and expired rows (durable table) so both
+/// stay bounded. Hourly is ample — entries live at most the token absolute TTL (24h).
+async fn run_revocation_pruner(sessions: Arc<SessionStore>, pool: sqlx::PgPool) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        sessions.prune_denylist();
+        if let Err(e) = auth::prune_revocations(&pool).await {
+            tracing::debug!(error = %e, "session-revocation table prune failed");
+        }
+    }
+}
 
 /// Sample core's own host every [`HOST_SAMPLE_SECS`]: refresh the shared latest-sample cache (read
 /// by `GET /api/v1/system/hosts`) and persist the `yagra_host_*` series to the TSDB. Also records

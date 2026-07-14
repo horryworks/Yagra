@@ -83,6 +83,13 @@ pub struct Config {
     /// callout cannot authenticate anyone, so the responder is not started. The trust anchor is
     /// swappable later (platform workload identity) without changing this wiring.
     pub nats_poller_password: Option<String>,
+    /// Path to the mounted **session signing key** file (`YAGRA_SESSION_KEY_FILE`, 32 bytes / 64 hex).
+    /// When set, logins mint stateless HMAC-signed session tokens that any core sharing the key can
+    /// verify — the Core HA active/active session substrate (ADR-016 Increment 2a). Like the KEK
+    /// (`YAGRA_KEK_FILE`), the *path* is the env var; the key is a mounted file, never an env var
+    /// (security.md/ADR-018). `None` (unset) ⇒ opaque per-process tokens, **byte-identical to today**.
+    /// A configured-but-unreadable/invalid key is a hard startup error (fail-closed).
+    pub session_key_file: Option<String>,
 }
 
 impl Config {
@@ -115,6 +122,9 @@ impl Config {
             nats_callout_account: parse_optional(std::env::var("YAGRA_NATS_CALLOUT_ACCOUNT").ok())
                 .unwrap_or_else(|| "$G".to_owned()),
             nats_poller_password: parse_optional(std::env::var("YAGRA_NATS_POLLER_PASSWORD").ok()),
+            // Signed session tokens (ADR-016 Increment 2a): opt-in via a mounted key file. Unset ⇒
+            // opaque per-process tokens (byte-identical to today).
+            session_key_file: parse_optional(std::env::var("YAGRA_SESSION_KEY_FILE").ok()),
         })
     }
 }

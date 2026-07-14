@@ -368,6 +368,36 @@ pub struct WorkingSetDelta {
     pub removes: Vec<NodeId>,
 }
 
+/// A session-revocation notice fanned out **core→core** on [`crate::subjects::auth_revoke`]
+/// (Core HA active/active, ADR-016 Increment 2a). Stateless signed session tokens are self-
+/// validating, so logout / account-disable must be broadcast to every core's in-memory denylist
+/// (and persisted to `auth_revocations`) to take effect. Tagged so a future variant never breaks an
+/// N-1 core (unknown tag ⇒ the message is skipped). Carries only a token **hash** or a user id and
+/// timestamps — never a raw token or password (security.md).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AuthRevoke {
+    /// Revoke one specific signed token (server-side logout). `hash` is the SHA-256 hex of the token;
+    /// `exp_unix` is the token's own expiry, after which the denylist entry self-prunes.
+    Token {
+        /// SHA-256 hex of the revoked token (never the token itself).
+        hash: String,
+        /// Unix seconds after which the entry can be dropped (the token's own `exp`).
+        exp_unix: u64,
+    },
+    /// Revoke every token for `uid` issued at or before `cutoff_iat` — the account was disabled,
+    /// demoted, password-reset, or deleted. `exp_unix` bounds how long the entry is retained (the
+    /// maximum lifetime of any token that could still be in flight).
+    User {
+        /// The affected user's id.
+        uid: Uuid,
+        /// Deny tokens whose `iat` is ≤ this (Unix seconds); a fresh login after this is allowed.
+        cutoff_iat: u64,
+        /// Unix seconds after which the entry can be dropped.
+        exp_unix: u64,
+    },
+}
+
 /// How often a poller publishes a [`HeartbeatMsg`] (seconds). One shared home for the cadence so
 /// the poller's beat interval (Yagra-poller) and core's liveness judgment (Yagra-core) can't drift
 /// (ADR-009).
@@ -1725,6 +1755,38 @@ mod tests {
             bytes.len() < 900_000,
             "snapshot chunk of {SNAPSHOT_CHUNK_NODES} nodes was {} bytes",
             bytes.len()
+        );
+    }
+
+    #[test]
+    fn auth_revoke_round_trips_both_variants() {
+        let token = AuthRevoke::Token {
+            hash: "deadbeef".into(),
+            exp_unix: 1_800_000_000,
+        };
+        let user = AuthRevoke::User {
+            uid: Uuid::new_v4(),
+            cutoff_iat: 1_700_000_000,
+            exp_unix: 1_700_086_400,
+        };
+        for msg in [token, user] {
+            let bytes = serde_json::to_vec(&msg).unwrap();
+            assert_eq!(serde_json::from_slice::<AuthRevoke>(&bytes).unwrap(), msg);
+        }
+    }
+
+    #[test]
+    fn auth_revoke_tag_is_stable_and_tolerates_unknown_fields() {
+        // The wire tag must stay `kind` (a consumer keys on it) and unknown fields are ignored
+        // (N-1 tolerance, ADR-017 — we never use deny_unknown_fields).
+        let json = r#"{"kind":"token","hash":"abc","exp_unix":42,"future_field":true}"#;
+        let msg: AuthRevoke = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            msg,
+            AuthRevoke::Token {
+                hash: "abc".into(),
+                exp_unix: 42
+            }
         );
     }
 }

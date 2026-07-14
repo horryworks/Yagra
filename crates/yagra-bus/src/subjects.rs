@@ -88,6 +88,19 @@ pub fn discovery_jobs_for_pool(pool: &str) -> String {
     format!("{ROOT}.discovery.jobs.{pool}")
 }
 
+// ── Core⇄core control plane (ADR-016 Increment 2 — active/active API) ────────────────
+
+/// Subject a core publishes **session-revocation** notices on (logout / user disable-demote-reset-
+/// delete), consumed by every *other* core so a stateless signed token revoked on one core is denied
+/// on all (Core HA active/active, ADR-016 Increment 2a). Plain `.subscribe()` fan-out — every core
+/// receives every revocation. Additive: an N-1 core never subscribes here, so nothing breaks; the
+/// durable `auth_revocations` table is the source of truth a restarted/promoted core cold-loads from.
+/// Carries only token *hashes* / user ids — never a raw token or password (security.md).
+#[must_use]
+pub fn auth_revoke() -> String {
+    format!("{ROOT}.auth.revoke")
+}
+
 /// Make `raw` a legal single NATS subject token: keep `[A-Za-z0-9_-]`, replace every other
 /// character (notably the dots in an FQDN — NATS treats `.` as a token separator) with `-`. An
 /// empty input maps to `"unknown"` so the subject never collapses to an empty token.
@@ -176,5 +189,15 @@ mod tests {
     #[test]
     fn sanitize_token_maps_empty_to_unknown() {
         assert_eq!(sanitize_token(""), "unknown");
+    }
+
+    #[test]
+    fn auth_revoke_subject_is_stable_and_distinct() {
+        assert_eq!(auth_revoke(), "yagra.auth.revoke");
+        // Additive core⇄core subject: must not collide with any poller-facing subject namespace.
+        assert_ne!(auth_revoke(), results());
+        assert_ne!(auth_revoke(), events());
+        assert!(!auth_revoke().starts_with("yagra.jobs"));
+        assert!(!auth_revoke().starts_with("yagra.poller"));
     }
 }

@@ -78,6 +78,11 @@ services:
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       # Structured-log level (info so KEK/credential/scheduler events are visible).
       RUST_LOG: ${RUST_LOG:-info}
+      # Signed session tokens (Core HA active/active session substrate, ADR-016 Increment 2a). Mount
+      # a shared 32-byte key (same key on every core in an HA set) so a login on one core is accepted
+      # on all cores and survives a restart/failover. Unset ⇒ opaque per-process tokens (today's
+      # behavior). Uncomment together with the session-key volume mount below.
+      # YAGRA_SESSION_KEY_FILE: /etc/yagra/session/session.key
       # Per-poller credential scoping via Auth Callout (ADR-030). Enable only with the remote-bus
       # TLS+auth setup (see the `nats` service, step 6). Core signs each poller a scoped NATS JWT
       # using the account SEED mounted below; the account is $G by default (must match the server's
@@ -93,6 +98,9 @@ services:
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
+      # Session signing key (ADR-016 Increment 2a) — mount the shared key read-only (a secret, like
+      # the KEK). Every core in an HA set mounts the SAME key. Uncomment with YAGRA_SESSION_KEY_FILE.
+      # - ${YAGRA_SESSION_KEY_DIR:-./session}:/etc/yagra/session:ro
     ports:
       - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
     restart: unless-stopped
