@@ -1117,6 +1117,9 @@ export interface EventRow {
   hostname: string | null;
   app_name: string | null;
   trap_oid: string | null;
+  /** Well-known MIB name for `trap_oid` (e.g. `linkDown`), resolved server-side; null for
+   *  syslog/webhook events or an OID outside the curated set. */
+  trap_name: string | null;
   varbinds: Array<[string, string]> | null;
   message: string;
   matched_rule_id: string | null;

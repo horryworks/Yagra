@@ -57,8 +57,13 @@ export function eventColumns(
       header: t('alerts:eventLog.cols.message'),
       width: '2fr',
       render: (r) => (
-        <span className="mono events-msg" title={r.message}>
-          {r.message}
+        <span className="events-msg-cell" title={r.message}>
+          {r.trap_name && (
+            <Badge tone="info" title={r.trap_oid ?? undefined}>
+              {r.trap_name}
+            </Badge>
+          )}
+          <span className="mono events-msg">{r.message}</span>
         </span>
       ),
     },
@@ -99,6 +104,11 @@ export function eventCard(
     <div className="ev-card">
       <div className="ev-card-meta">
         <Badge tone="neutral">{r.kind}</Badge>
+        {r.trap_name && (
+          <Badge tone="info" title={r.trap_oid ?? undefined}>
+            {r.trap_name}
+          </Badge>
+        )}
         {r.action !== 'none' && (
           <Badge tone={ACTION_TONE[r.action]}>{t(`alerts:eventLog.action.${r.action}`)}</Badge>
         )}

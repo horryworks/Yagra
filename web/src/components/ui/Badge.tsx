@@ -6,6 +6,19 @@ import './Badge.css';
 
 type Tone = 'neutral' | 'critical' | 'warning' | 'up' | 'info';
 
-export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>;
+export function Badge({
+  tone = 'neutral',
+  title,
+  children,
+}: {
+  tone?: Tone;
+  /** Optional native tooltip (e.g. the raw OID behind a resolved trap name). */
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span className={`badge badge-${tone}`} title={title}>
+      {children}
+    </span>
+  );
 }

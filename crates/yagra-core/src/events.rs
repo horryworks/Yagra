@@ -24,6 +24,7 @@
 //! In-memory lifecycle state (active event alerts, match counters) is lost on core
 //! restart — the next matching event re-fires, consistent with the active-alert map.
 
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -39,7 +40,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_bus::{EventKind, EventMsg};
-use yagra_common::{CheckId, NodeId, NodeState, Severity};
+use yagra_common::{trap_oid_name, CheckId, NodeId, NodeState, Severity};
 use yagra_telemetry::CancellationToken;
 
 use crate::alerts::{check_id, AlertManager, Notifier, NotifyAction};
@@ -147,6 +148,9 @@ pub struct EventRow {
     pub hostname: Option<String>,
     pub app_name: Option<String>,
     pub trap_oid: Option<String>,
+    /// Well-known MIB name for `trap_oid` (e.g. `linkDown`), derived at read time; `None`
+    /// for syslog/webhook events or an OID outside the curated set.
+    pub trap_name: Option<String>,
     pub varbinds: Option<serde_json::Value>,
     pub message: String,
     pub matched_rule_id: Option<Uuid>,
@@ -536,6 +540,11 @@ impl EventRepo {
         .await?;
         rows.into_iter()
             .map(|row| {
+                let trap_oid: Option<String> = row.try_get("trap_oid")?;
+                let trap_name = trap_oid
+                    .as_deref()
+                    .and_then(trap_oid_name)
+                    .map(str::to_owned);
                 Ok(EventRow {
                     id: row.try_get("id")?,
                     kind: row.try_get("kind")?,
@@ -549,7 +558,8 @@ impl EventRepo {
                     syslog_severity: row.try_get("syslog_severity")?,
                     hostname: row.try_get("hostname")?,
                     app_name: row.try_get("app_name")?,
-                    trap_oid: row.try_get("trap_oid")?,
+                    trap_oid,
+                    trap_name,
                     varbinds: row.try_get("varbinds")?,
                     message: row.try_get("message")?,
                     matched_rule_id: row.try_get("matched_rule_id")?,
@@ -985,16 +995,25 @@ impl EventEngine {
             }
         };
 
+        // For SNMP traps, prepend the resolved MIB name to the text rules match against, so a
+        // rule (built-in or user-authored) can match by name (`linkDown`) as well as by raw OID.
+        // The stored/displayed message is untouched; matching only sees the enriched copy, and
+        // resolution is centralized in core so it works regardless of poller version (N-1 safe).
+        let haystack: Cow<str> = match (msg.kind, msg.trap_oid.as_deref().and_then(trap_oid_name)) {
+            (EventKind::Trap, Some(name)) => Cow::Owned(format!("{name} {}", msg.message)),
+            _ => Cow::Borrowed(msg.message.as_str()),
+        };
+
         for rule in snap
             .rules
             .iter()
             .filter(|r| r.applies(msg.kind, source, node))
         {
-            let fire_hit = rule.matcher.matches(&msg.message);
+            let fire_hit = rule.matcher.matches(&haystack);
             let clear_hit = rule
                 .clear_matcher
                 .as_ref()
-                .is_some_and(|m| m.matches(&msg.message));
+                .is_some_and(|m| m.matches(&haystack));
             if !fire_hit && !clear_hit {
                 continue;
             }
@@ -1722,6 +1741,27 @@ mod tests {
         }
     }
 
+    /// Mirrors what the poller publishes for an SNMP trap: `message` begins with the raw
+    /// identity OID (`render_message`), and `trap_oid` carries that identity for name resolution.
+    fn trap_msg(trap_oid: &str) -> EventMsg {
+        EventMsg {
+            schema_version: 1,
+            event_id: Uuid::new_v4(),
+            kind: EventKind::Trap,
+            at_unix_ms: 1_000,
+            source_ip: Some("10.0.0.1".parse().unwrap()),
+            pool: None,
+            message: format!("{trap_oid} 1.3.6.1.2.1.2.2.1.1.4=4;"),
+            facility: None,
+            syslog_severity: None,
+            hostname: None,
+            app_name: None,
+            trap_oid: Some(trap_oid.into()),
+            varbinds: vec![("1.3.6.1.2.1.2.2.1.1.4".into(), "4".into())],
+            truncated: false,
+        }
+    }
+
     fn set_rules(engine: &EventEngine, rules: Vec<CompiledRule>) {
         engine.snapshot.write().unwrap().rules = rules;
     }
@@ -1779,6 +1819,44 @@ mod tests {
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 4_000);
         assert_eq!(p.row_action, "fired");
         assert_eq!(fires(&p).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plan_matches_trap_by_resolved_name() {
+        let engine = engine_for_plan();
+        let node = Uuid::new_v4();
+        // A built-in-style rule matches the MIB *name*, not the raw OID (source-scoped to traps).
+        let mut stored = stored_rule("linkDown", "warning");
+        stored.source_kind = Some("trap".into());
+        stored.clear_pattern = Some("linkUp".into());
+        set_rules(&engine, vec![compile_rule(&stored).unwrap()]);
+
+        // The wire message is the raw OID — "linkDown" is never in it — yet the rule fires,
+        // because core enriches the match text with the resolved name (yagra_common::trap_oid_name).
+        let down = trap_msg("1.3.6.1.6.3.1.1.5.3");
+        assert!(!down.message.contains("linkDown"));
+        let p = engine.plan(&down, None, node, 1_000);
+        assert_eq!(p.row_action, "fired");
+        assert_eq!(fires(&p).len(), 1);
+        assert_eq!(engine.alerts.active_alerts().len(), 1);
+
+        // The linkUp trap (a different OID) resolves via the clear pattern's resolved name.
+        let p = engine.plan(&trap_msg("1.3.6.1.6.3.1.1.5.4"), None, node, 2_000);
+        assert_eq!(p.row_action, "cleared");
+        assert_eq!(resolves(&p), 1);
+        assert!(engine.alerts.active_alerts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn plan_unknown_trap_oid_still_matches_by_raw_oid() {
+        let engine = engine_for_plan();
+        let node = Uuid::new_v4();
+        // A vendor trap outside the curated name set: a rule can still match its numeric OID,
+        // which is always present in the message (enrichment is additive, never a replacement).
+        let stored = stored_rule("1.3.6.1.4.1.9.9.43.2.0.1", "warning");
+        set_rules(&engine, vec![compile_rule(&stored).unwrap()]);
+        let p = engine.plan(&trap_msg("1.3.6.1.4.1.9.9.43.2.0.1"), None, node, 1_000);
+        assert_eq!(p.row_action, "fired");
     }
 
     #[tokio::test]

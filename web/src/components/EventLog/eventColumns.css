@@ -1,12 +1,25 @@
 /* Event-log message cell: truncate with ellipsis (full text on hover via title). Shared by the
    Events page and the NodeDetail Events tab through the eventColumns factory. */
 
+/* Message cell: an optional trap-name badge (kept at full width) followed by the ellipsized
+   message text. Flex so the badge stays intact and only the text truncates. */
+.events-msg-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .events-msg {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.events-msg-cell .events-msg {
+  flex: 1;
 }
 
 /* Mobile event card (ADR-027 M2, via eventCard() → DataTable renderCard). Only renders in mobile

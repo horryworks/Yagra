@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use uuid::Uuid;
+use yagra_common::trap_oid_name;
 
 use crate::events::{EventFilter, EventRow, PersistRecord};
 
@@ -227,6 +228,10 @@ fn parse_ndjson_row(line: &str) -> Option<EventRow> {
         syslog_severity: get("syslog_severity").and_then(|s| s.parse().ok()),
         hostname: get("hostname"),
         app_name: get("app_name"),
+        trap_name: get("trap_oid")
+            .as_deref()
+            .and_then(trap_oid_name)
+            .map(str::to_owned),
         trap_oid: get("trap_oid"),
         varbinds: get("varbinds").and_then(|s| serde_json::from_str(&s).ok()),
         message,
@@ -326,6 +331,11 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
         syslog_severity: m.syslog_severity.map(i16::from),
         hostname: m.hostname.clone(),
         app_name: m.app_name.clone(),
+        trap_name: m
+            .trap_oid
+            .as_deref()
+            .and_then(trap_oid_name)
+            .map(str::to_owned),
         trap_oid: m.trap_oid.clone(),
         varbinds,
         message: m.message.clone(),
