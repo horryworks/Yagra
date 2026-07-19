@@ -3,58 +3,150 @@
 // pill + age. Triage-only per §3.2 — NO Ack *control* here (Yagra holds no ack action; that's
 // external PagerDuty/JSM). The `acked` pill is a READ-ONLY indicator mirrored inbound from the
 // external tool (ADR-015). The optional actions slot is for Mute / "open in external tool" only.
+//
+// The full triage screen (no `limit`) VIRTUALIZES: a major outage can spike active alerts into
+// the thousands, and ui-conventions require alert lists to stay usable at tens of thousands of
+// rows (windowed DOM, not "render everything"). The capped dashboard-widget path (`limit`) is a
+// small fixed slice and renders inline, unchanged.
 
+import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { formatTimestamp, severityColorVar } from '../lib/format';
+import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
 import './AlertRows.css';
+
+type SortedAlert = ReturnType<typeof sortedAlerts>[number];
 
 interface Props {
   /** Cap the number of rows (e.g. dashboard widget). */
   limit?: number;
   /** Per-row actions (Mute / open external). Triage-only — never an Ack. */
-  actions?: (alert: ReturnType<typeof sortedAlerts>[number]) => ReactNode;
+  actions?: (alert: SortedAlert) => ReactNode;
   empty?: ReactNode;
+}
+
+const rowKey = (a: SortedAlert) => `${a.node}|${a.check}|${a.severity}`;
+
+const ROW_PX = 30; // desktop --row-h; virtualizer size hint (rows are measured, so it's only a hint)
+const CARD_PX = 96; // taller wrapped row on mobile before it is measured
+
+/** Virtualizer props threaded to a row when it lives inside the windowed scroll region. */
+interface VProps {
+  index: number;
+  translateY: number;
+  measureRef: (el: HTMLElement | null) => void;
+}
+
+// One source of truth for a row's markup — shared by the capped (dashboard) and the virtualized
+// (full triage) paths. In the virtualized path the row is absolutely positioned (see AlertRows.css)
+// and carries the `data-index` + measure ref + translate offset the virtualizer drives.
+function AlertRow({
+  a,
+  actions,
+  v,
+}: {
+  a: SortedAlert;
+  actions?: (alert: SortedAlert) => ReactNode;
+  v?: VProps;
+}) {
+  const { t } = useTranslation('alerts');
+  return (
+    <div
+      className="alertrow"
+      data-index={v?.index}
+      ref={v?.measureRef}
+      style={v ? { transform: `translateY(${v.translateY}px)` } : undefined}
+    >
+      <span className="alertrow-dot" style={{ background: severityColorVar(a.severity) }} />
+      <span className="alertrow-node mono">{a.node}</span>
+      <span className="alertrow-check">{a.check}</span>
+      {a.root_cause && <span className="alertrow-cause muted">← {a.root_cause}</span>}
+      {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
+      {a.acked && (
+        <span
+          className="alertrow-acked"
+          title={t('acked.title', {
+            source: a.acked.source,
+            by: a.acked.by,
+            note: a.acked.note ? t('acked.note', { note: a.acked.note }) : '',
+          })}
+        >
+          {t('row.acked')}
+        </span>
+      )}
+      <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
+      {actions && <span className="alertrow-actions">{actions(a)}</span>}
+    </div>
+  );
+}
+
+// Full triage list: window the DOM with @tanstack/react-virtual (same idiom as the shared
+// DataTable) so only the visible slice mounts. Rows are absolutely positioned inside a bounded,
+// scrollable region and measured so both the fixed desktop row and the taller wrapped mobile row
+// position correctly.
+function VirtualAlertRows({
+  alerts,
+  actions,
+}: {
+  alerts: SortedAlert[];
+  actions?: (alert: SortedAlert) => ReactNode;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const cardMode = useViewportMode() === 'mobile';
+  const virtualizer = useVirtualizer({
+    count: alerts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => (cardMode ? CARD_PX : ROW_PX),
+    overscan: 12,
+  });
+
+  return (
+    <div className="alertrows-scroll" ref={scrollRef}>
+      <div className="alertrows-body" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const a = alerts[vi.index];
+          return (
+            <AlertRow
+              key={rowKey(a)}
+              a={a}
+              actions={actions}
+              v={{
+                index: vi.index,
+                translateY: vi.start,
+                measureRef: virtualizer.measureElement,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function AlertRows({ limit, actions, empty }: Props) {
   const { t } = useTranslation('alerts');
   const alerts = useAlertStore((s) => s.alerts);
-  const all = sortedAlerts(alerts);
-  const list = limit ? all.slice(0, limit) : all;
+  // Sort once per store change, not on every SSE-driven render.
+  const all = useMemo(() => sortedAlerts(alerts), [alerts]);
 
   if (all.length === 0) {
     return <p className="alertrows-empty">{empty ?? t('active.empty')}</p>;
   }
 
-  return (
-    <div className="alertrows">
-      {list.map((a) => (
-        <div className="alertrow" key={`${a.node}|${a.check}|${a.severity}`}>
-          <span className="alertrow-dot" style={{ background: severityColorVar(a.severity) }} />
-          <span className="alertrow-node mono">{a.node}</span>
-          <span className="alertrow-check">{a.check}</span>
-          {a.root_cause && (
-            <span className="alertrow-cause muted">← {a.root_cause}</span>
-          )}
-          {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
-          {a.acked && (
-            <span
-              className="alertrow-acked"
-              title={t('acked.title', {
-                source: a.acked.source,
-                by: a.acked.by,
-                note: a.acked.note ? t('acked.note', { note: a.acked.note }) : '',
-              })}
-            >
-              {t('row.acked')}
-            </span>
-          )}
-          <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
-          {actions && <span className="alertrow-actions">{actions(a)}</span>}
-        </div>
-      ))}
-    </div>
-  );
+  // Capped use (dashboard widget): a small fixed slice — render inline so the widget keeps its
+  // natural height (no bounded scroll region).
+  if (limit) {
+    return (
+      <div className="alertrows">
+        {all.slice(0, limit).map((a) => (
+          <AlertRow key={rowKey(a)} a={a} actions={actions} />
+        ))}
+      </div>
+    );
+  }
+
+  return <VirtualAlertRows alerts={all} actions={actions} />;
 }

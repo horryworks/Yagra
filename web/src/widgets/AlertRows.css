@@ -3,6 +3,30 @@
   flex-direction: column;
 }
 
+/* Virtualized full triage list (ActiveAlertsPage): a bounded, scrollable region whose rows are
+   absolutely positioned and windowed by @tanstack/react-virtual (see AlertRows.tsx) so a
+   thousands-strong outage renders only the visible slice. The capped dashboard-widget path
+   (.alertrows) is untouched and renders in normal flow. */
+.alertrows-scroll {
+  position: relative;
+  overflow-y: auto;
+  /* Bound the region so windowing engages; dvh handles the iOS URL bar (vh fallback above it). */
+  max-height: 70vh;
+  max-height: 70dvh;
+}
+
+.alertrows-body {
+  position: relative;
+  width: 100%;
+}
+
+.alertrows-scroll .alertrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
 .alertrow {
   display: flex;
   align-items: center;

@@ -283,15 +283,26 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 loop {
                     tokio::select! {
                         () = sd.cancelled() => break,
-                        _ = ticker.tick() => match crate::ipasn::IpAsnDb::load(std::path::Path::new(&path)) {
-                            Ok(db) if !db.is_empty() => {
-                                let ranges = db.len();
-                                *handle.write().unwrap() = Some(db);
-                                tracing::info!(ranges, "IP→ASN dataset reloaded (ADR-031)");
+                        _ = ticker.tick() => {
+                            // Offload the blocking file read + parse/sort of the ~500k-row iptoasn TSV
+                            // onto the blocking pool so a reload tick never stalls a Tokio worker
+                            // (same discipline as the store-and-forward disk read).
+                            let p = path.clone();
+                            let loaded = tokio::task::spawn_blocking(move || {
+                                crate::ipasn::IpAsnDb::load(std::path::Path::new(&p))
+                            })
+                            .await;
+                            match loaded {
+                                Ok(Ok(db)) if !db.is_empty() => {
+                                    let ranges = db.len();
+                                    *handle.write().unwrap() = Some(db);
+                                    tracing::info!(ranges, "IP→ASN dataset reloaded (ADR-031)");
+                                }
+                                Ok(Ok(_)) => tracing::warn!("IP→ASN reload read 0 ranges — keeping previous table"),
+                                Ok(Err(e)) => tracing::warn!(error = %e, "IP→ASN reload failed — keeping previous table"),
+                                Err(e) => tracing::warn!(error = %e, "IP→ASN reload task panicked — keeping previous table"),
                             }
-                            Ok(_) => tracing::warn!("IP→ASN reload read 0 ranges — keeping previous table"),
-                            Err(e) => tracing::warn!(error = %e, "IP→ASN reload failed — keeping previous table"),
-                        },
+                        }
                     }
                 }
             });
