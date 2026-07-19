@@ -220,6 +220,7 @@ function flowParams(
   if (opts.proto != null) params.set('proto', String(opts.proto));
   if (opts.port != null) params.set('port', String(opts.port));
   if (opts.peer) params.set('peer', opts.peer);
+  if (opts.asn != null) params.set('asn', String(opts.asn));
   if (opts.dir) params.set('dir', opts.dir);
   return params.toString();
 }

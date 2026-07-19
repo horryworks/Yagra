@@ -100,11 +100,12 @@ export interface FlowAsAgg {
   flows: number;
 }
 
-/** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer). */
+/** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer / AS). */
 export interface FlowFilters {
   proto?: number;
   port?: number;
   peer?: string;
+  asn?: number;
 }
 
 /** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). */

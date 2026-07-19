@@ -1272,6 +1272,7 @@ struct FlowRangeQuery {
     proto: Option<String>,
     port: Option<String>,
     peer: Option<String>,
+    asn: Option<String>,
     dir: Option<String>,
 }
 
@@ -1303,6 +1304,7 @@ fn flow_query_params(node_id: Uuid, q: &FlowRangeQuery) -> crate::flowstore::Flo
             .peer
             .as_deref()
             .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok()),
+        asn: q.asn.as_deref().and_then(|s| s.trim().parse::<u32>().ok()),
     }
 }
 
@@ -9544,10 +9546,28 @@ mod tests {
 
         // Protocol filter (UDP) narrows to AS 13335 only.
         let resp = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
                         "/api/v1/nodes/{node}/flow/top-as?from=0&to=100000&proto=17"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["asn"], 13335);
+
+        // AS filter narrows to just that ASN (drill-down from the Top-AS card).
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/nodes/{node}/flow/top-as?from=0&to=100000&asn=13335"
                     ))
                     .body(Body::empty())
                     .unwrap(),

@@ -80,6 +80,8 @@ pub struct FlowQuery {
     pub dst_port: Option<u16>,
     /// Optional peer filter — rows where this address is the source or the destination.
     pub peer: Option<IpAddr>,
+    /// Optional AS filter — rows where this ASN is the source or the destination AS (0 = unknown).
+    pub asn: Option<u32>,
 }
 
 /// Which AS side a top-AS query aggregates on. A typed enum (never interpolated raw) so only a
@@ -291,6 +293,9 @@ fn flow_filters_sql(q: &FlowQuery) -> String {
     if let Some(peer) = q.peer {
         let ip = ip_to_ch(peer);
         s.push_str(&format!(" AND (src_ip = '{ip}' OR dst_ip = '{ip}')"));
+    }
+    if let Some(asn) = q.asn {
+        s.push_str(&format!(" AND (src_as = {asn} OR dst_as = {asn})"));
     }
     s
 }
@@ -642,6 +647,7 @@ impl InMemoryFlowStore {
                     && q.dst_port.is_none_or(|port| r.dst_port == port)
                     && q.peer
                         .is_none_or(|peer| r.src_ip == peer || r.dst_ip == peer)
+                    && q.asn.is_none_or(|a| r.src_as == a || r.dst_as == a)
             })
             .cloned()
             .collect()
@@ -794,6 +800,7 @@ impl FlowStore for InMemoryFlowStore {
             proto: q.proto,
             dst_port: None,
             peer: None,
+            asn: None,
         };
         use std::collections::BTreeMap;
         let mut agg: BTreeMap<(i64, u8), (u64, u64)> = BTreeMap::new();
@@ -892,6 +899,7 @@ mod tests {
             proto: None,
             dst_port: None,
             peer: None,
+            asn: None,
         };
         let talkers = store.top_talkers(&q).await.unwrap();
         assert_eq!(talkers[0].addr, "10.0.0.2");
@@ -977,6 +985,7 @@ mod tests {
             proto: None,
             dst_port: None,
             peer: None,
+            asn: None,
         };
         let top = store.top_as(&q, AsDir::Dst).await.unwrap();
         assert_eq!(top.len(), 2);
@@ -1001,5 +1010,17 @@ mod tests {
         let ports = store.top_ports(&q_peer).await.unwrap();
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].port, 53);
+
+        // AS filter narrows every view to flows touching that ASN (as src or dst).
+        let q_asn = FlowQuery {
+            asn: Some(13335),
+            ..q
+        };
+        let as_only = store.top_as(&q_asn, AsDir::Dst).await.unwrap();
+        assert_eq!(as_only.len(), 1);
+        assert_eq!(as_only[0].asn, 13335);
+        let talkers = store.top_talkers(&q_asn).await.unwrap();
+        assert_eq!(talkers.len(), 1);
+        assert_eq!(talkers[0].addr, "10.0.0.3"); // only the Cloudflare-bound flow survives
     }
 }

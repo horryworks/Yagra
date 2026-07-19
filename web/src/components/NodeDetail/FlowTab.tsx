@@ -109,6 +109,8 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const [peerInput, setPeerInput] = useState('');
   const [port, setPort] = useState('');
   const [peer, setPeer] = useState('');
+  // AS filter (set only by clicking a Top-AS row; no typed input, so a single committed value).
+  const [asn, setAsn] = useState('');
   const [loading, setLoading] = useState(true);
   const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,19 +152,21 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     [port],
   );
   const applyProto = useCallback((p: string) => setProto((cur) => toggleFilterValue(cur, p)), []);
+  const applyAsn = useCallback((a: string) => setAsn((cur) => toggleFilterValue(cur, a)), []);
   const clearFilters = useCallback(() => {
     setProto('');
     setPortInput('');
     setPort('');
     setPeerInput('');
     setPeer('');
+    setAsn('');
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     const { from, to } = resolveRange(range);
     // Build the typed filter set; blank / invalid values are omitted (two or more ⇒ ANDed).
-    const filters = buildFlowFilters({ proto, port, peer });
+    const filters = buildFlowFilters({ proto, port, peer, asn });
 
     setLoading(true);
     setError(null);
@@ -205,7 +209,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     return () => {
       cancelled = true;
     };
-  }, [node.id, range, tick, t, proto, port, peer, asDir]);
+  }, [node.id, range, tick, t, proto, port, peer, asn, asDir]);
 
   const trend = useMemo(() => buildTrend(series), [series]);
   const talkerRows = useMemo(() => toRows(talkers, (x) => x.addr, (x) => x.bytes), [talkers]);
@@ -319,8 +323,8 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     protos.length === 0 &&
     asAgg.length === 0;
 
-  // The trend reads the proto-only rollup, so port/peer narrow only the tabular + Sankey views.
-  const showChartHint = Boolean(port.trim() || peer.trim());
+  // The trend reads the proto-only rollup, so port/peer/AS narrow only the tabular + Sankey views.
+  const showChartHint = Boolean(port.trim() || peer.trim() || asn.trim());
 
   // Active-filter chips (one per set filter) — click ✕ to remove one, or "Clear filters" for all.
   const chips: { key: string; label: string; mono?: boolean; onRemove: () => void }[] = [];
@@ -344,6 +348,12 @@ export function FlowTab({ node }: { node: NodeDetail }) {
         setPort('');
         setPortInput('');
       },
+    });
+  if (asn)
+    chips.push({
+      key: 'asn',
+      label: asn === '0' ? t('flow.as.unknown') : `AS${asn}`,
+      onRemove: () => setAsn(''),
     });
 
   return (
@@ -443,7 +453,11 @@ export function FlowTab({ node }: { node: NodeDetail }) {
                   </button>
                 </div>
               </div>
-              <RankedBars rows={asRows} empty={t('flow.none')} />
+              <RankedBars
+                rows={asRows}
+                empty={t('flow.none')}
+                onRowClick={(i) => applyAsn(String(asAgg[i].asn))}
+              />
             </section>
           </div>
 

@@ -11,19 +11,23 @@ export interface FlowFilterInputs {
   proto: string;
   port: string;
   peer: string;
+  asn: string;
 }
 
 /**
  * Assemble the typed filter set for the flow API from the raw inputs. Blank / invalid values are
  * omitted (so an unset filter never reaches the query); when two or more survive, the API ANDs them.
+ * `asn` accepts 0 (the "unknown AS" bucket) — only a non-numeric/empty value is dropped.
  */
-export function buildFlowFilters({ proto, port, peer }: FlowFilterInputs): FlowFilters {
+export function buildFlowFilters({ proto, port, peer, asn }: FlowFilterInputs): FlowFilters {
   const filters: FlowFilters = {};
   const protoNum = proto ? Number(proto) : NaN;
   if (Number.isInteger(protoNum)) filters.proto = protoNum;
   const portNum = port ? Number(port) : NaN;
   if (Number.isInteger(portNum) && portNum >= 0 && portNum <= 65535) filters.port = portNum;
   if (peer.trim()) filters.peer = peer.trim();
+  const asnNum = asn ? Number(asn) : NaN;
+  if (Number.isInteger(asnNum) && asnNum >= 0) filters.asn = asnNum;
   return filters;
 }
 
