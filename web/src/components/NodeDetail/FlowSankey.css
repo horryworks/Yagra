@@ -23,3 +23,14 @@
   font-size: var(--font-sm);
   fill: var(--text-secondary);
 }
+
+/* Click-to-filter: clicking a src/dst node drills into that peer. */
+.flow-sankey-g.clickable {
+  cursor: pointer;
+}
+.flow-sankey-g.clickable:hover .flow-sankey-node {
+  fill: var(--text-secondary);
+}
+.flow-sankey-g.clickable:hover .flow-sankey-label {
+  fill: var(--text-primary);
+}

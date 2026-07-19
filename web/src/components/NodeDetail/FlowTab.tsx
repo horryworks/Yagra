@@ -6,7 +6,7 @@
 // the shared RangeControl window + refresh tick, MetricChart, RankedBars, DataTable, and Field
 // controls so it matches every other detail surface.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import { formatBytes } from '../../lib/format';
@@ -14,7 +14,6 @@ import { useRefreshTick } from '../../lib/refreshTick';
 import type {
   FlowAsAgg,
   FlowConversation,
-  FlowFilters,
   FlowPoint,
   FlowPortAgg,
   FlowProtoAgg,
@@ -27,6 +26,7 @@ import { DataTable, type Column } from '../ui/DataTable';
 import { Select, TextInput } from '../ui/Field';
 import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
+import { buildFlowFilters, toggleFilterValue } from './flowFilters';
 import './FlowTab.css';
 
 const TOP_N = 10;
@@ -129,16 +129,40 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     return () => clearTimeout(id);
   }, [portInput, peerInput]);
 
+  // Click-to-filter: a Top-N row / conversation cell / Sankey node sets the matching filter (and a
+  // second click on the already-active value clears it), writing the same state the typed bar drives
+  // — including the input mirror, so the bar and the chips stay in sync. Clicks are discrete, so
+  // they commit immediately (no debounce).
+  const applyPeer = useCallback(
+    (addr: string) => {
+      const next = toggleFilterValue(peer, addr);
+      setPeerInput(next);
+      setPeer(next);
+    },
+    [peer],
+  );
+  const applyPort = useCallback(
+    (p: string) => {
+      const next = toggleFilterValue(port, p);
+      setPortInput(next);
+      setPort(next);
+    },
+    [port],
+  );
+  const applyProto = useCallback((p: string) => setProto((cur) => toggleFilterValue(cur, p)), []);
+  const clearFilters = useCallback(() => {
+    setProto('');
+    setPortInput('');
+    setPort('');
+    setPeerInput('');
+    setPeer('');
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const { from, to } = resolveRange(range);
-    // Build the typed filter set; blank / invalid values are simply omitted.
-    const filters: FlowFilters = {};
-    const protoNum = proto ? Number(proto) : NaN;
-    if (Number.isInteger(protoNum)) filters.proto = protoNum;
-    const portNum = port ? Number(port) : NaN;
-    if (Number.isInteger(portNum) && portNum >= 0 && portNum <= 65535) filters.port = portNum;
-    if (peer.trim()) filters.peer = peer.trim();
+    // Build the typed filter set; blank / invalid values are omitted (two or more ⇒ ANDed).
+    const filters = buildFlowFilters({ proto, port, peer });
 
     setLoading(true);
     setError(null);
@@ -211,13 +235,21 @@ export function FlowTab({ node }: { node: NodeDetail }) {
         key: 'src',
         header: t('flow.col.source'),
         width: '1fr',
-        render: (r) => <span className="mono">{r.src}</span>,
+        render: (r) => (
+          <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.src)}>
+            <span className="mono">{r.src}</span>
+          </button>
+        ),
       },
       {
         key: 'dst',
         header: t('flow.col.destination'),
         width: '1fr',
-        render: (r) => <span className="mono">{r.dst}</span>,
+        render: (r) => (
+          <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.dst)}>
+            <span className="mono">{r.dst}</span>
+          </button>
+        ),
       },
       {
         key: 'bytes',
@@ -234,7 +266,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
         render: (r) => r.packets.toLocaleString(),
       },
     ],
-    [t],
+    [t, applyPeer],
   );
 
   const filterBar = (
@@ -290,12 +322,57 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   // The trend reads the proto-only rollup, so port/peer narrow only the tabular + Sankey views.
   const showChartHint = Boolean(port.trim() || peer.trim());
 
+  // Active-filter chips (one per set filter) — click ✕ to remove one, or "Clear filters" for all.
+  const chips: { key: string; label: string; mono?: boolean; onRemove: () => void }[] = [];
+  if (peer)
+    chips.push({
+      key: 'peer',
+      label: peer,
+      mono: true,
+      onRemove: () => {
+        setPeer('');
+        setPeerInput('');
+      },
+    });
+  if (proto)
+    chips.push({ key: 'proto', label: protoName(Number(proto)), onRemove: () => setProto('') });
+  if (port)
+    chips.push({
+      key: 'port',
+      label: portLabel(Number(port)),
+      onRemove: () => {
+        setPort('');
+        setPortInput('');
+      },
+    });
+
   return (
     <div className="nd-flow">
       <div className="nd-flow-toolbar">
         {filterBar}
         <RangeControl value={range} onChange={setRange} />
       </div>
+      {chips.length > 0 && (
+        <div className="nd-flow-chips">
+          <span className="nd-flow-chips-label">{t('flow.filter.active')}</span>
+          {chips.map((c) => (
+            <span className="nd-flow-chip" key={c.key}>
+              <span className={c.mono ? 'mono' : undefined}>{c.label}</span>
+              <button
+                type="button"
+                className="nd-flow-chip-x"
+                aria-label={t('flow.filter.remove')}
+                onClick={c.onRemove}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <button type="button" className="nd-flow-chips-clear" onClick={clearFilters}>
+            {t('flow.filter.clear')}
+          </button>
+        </div>
+      )}
       {error && <p className="nd-flow-error">{error}</p>}
 
       {isEmpty ? (
@@ -322,15 +399,27 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           <div className="nd-flow-grid">
             <section className="nd-flow-card">
               <h3 className="nd-flow-h">{t('flow.topTalkers')}</h3>
-              <RankedBars rows={talkerRows} empty={t('flow.none')} />
+              <RankedBars
+                rows={talkerRows}
+                empty={t('flow.none')}
+                onRowClick={(i) => applyPeer(talkers[i].addr)}
+              />
             </section>
             <section className="nd-flow-card">
               <h3 className="nd-flow-h">{t('flow.topProtocols')}</h3>
-              <RankedBars rows={protoRows} empty={t('flow.none')} />
+              <RankedBars
+                rows={protoRows}
+                empty={t('flow.none')}
+                onRowClick={(i) => applyProto(String(protos[i].proto))}
+              />
             </section>
             <section className="nd-flow-card">
               <h3 className="nd-flow-h">{t('flow.topPorts')}</h3>
-              <RankedBars rows={portRows} empty={t('flow.none')} />
+              <RankedBars
+                rows={portRows}
+                empty={t('flow.none')}
+                onRowClick={(i) => applyPort(String(ports[i].port))}
+              />
             </section>
             <section className="nd-flow-card">
               <div className="nd-flow-card-head">
@@ -361,7 +450,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           <section className="nd-flow-sankey">
             <h3 className="nd-flow-h">{t('flow.sankey')}</h3>
             {convos.length > 0 ? (
-              <FlowSankey conversations={convos} />
+              <FlowSankey conversations={convos} onNodeClick={applyPeer} />
             ) : (
               <p className="nd-flow-muted">{t('flow.none')}</p>
             )}

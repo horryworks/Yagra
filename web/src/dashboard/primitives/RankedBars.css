@@ -14,6 +14,19 @@
   gap: 10px;
 }
 
+/* Clickable drill-down rows (e.g. Flow-tab Top-N → filter). Hover/focus feedback only. */
+.rankedbar.clickable {
+  cursor: pointer;
+}
+.rankedbar.clickable:hover .rankedbar-label {
+  color: var(--text-primary);
+}
+.rankedbar.clickable:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-color);
+  border-radius: var(--radius-sm);
+}
+
 .rankedbar-label {
   font-size: var(--font-sm);
   color: var(--text-secondary);

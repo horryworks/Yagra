@@ -141,7 +141,14 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
   return { width: VIEW_W, height, bands, nodes: [...srcCol.nodes, ...dstCol.nodes] };
 }
 
-export function FlowSankey({ conversations }: { conversations: FlowConversation[] }) {
+export function FlowSankey({
+  conversations,
+  onNodeClick,
+}: {
+  conversations: FlowConversation[];
+  /** When set, clicking a column node (a src/dst host) drills into that peer. */
+  onNodeClick?: (ip: string) => void;
+}) {
   const model = useMemo(() => buildSankey(conversations), [conversations]);
   if (!model) return null;
   return (
@@ -157,7 +164,11 @@ export function FlowSankey({ conversations }: { conversations: FlowConversation[
         </path>
       ))}
       {model.nodes.map((n) => (
-        <g key={n.key}>
+        <g
+          key={n.key}
+          className={onNodeClick ? 'flow-sankey-g clickable' : undefined}
+          onClick={onNodeClick ? () => onNodeClick(n.label) : undefined}
+        >
           <rect
             className="flow-sankey-node"
             x={num(n.x)}

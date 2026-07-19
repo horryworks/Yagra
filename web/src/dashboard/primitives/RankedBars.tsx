@@ -23,18 +23,37 @@ interface Props {
   max?: number;
   /** Message when there are no rows. */
   empty?: string;
+  /** When set, rows become clickable drill-downs (keyboard-operable); receives the row's index. */
+  onRowClick?: (index: number) => void;
 }
 
-export function RankedBars({ rows, max, empty }: Props) {
+export function RankedBars({ rows, max, empty, onRowClick }: Props) {
   const { t } = useTranslation('dashboard');
   if (rows.length === 0) return <p className="muted">{empty ?? t('primitives.rankedBars.empty')}</p>;
   const peak = max ?? Math.max(...rows.map((r) => r.value), 0);
+  const clickable = Boolean(onRowClick);
   return (
     <ul className="rankedbars">
-      {rows.map((r) => {
+      {rows.map((r, i) => {
         const pct = peak > 0 ? Math.max(0, Math.min(100, (r.value / peak) * 100)) : 0;
         return (
-          <li className="rankedbar" key={r.label}>
+          <li
+            className={clickable ? 'rankedbar clickable' : 'rankedbar'}
+            key={r.label}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onClick={onRowClick ? () => onRowClick(i) : undefined}
+            onKeyDown={
+              onRowClick
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onRowClick(i);
+                    }
+                  }
+                : undefined
+            }
+          >
             <span className="rankedbar-label" title={r.label}>
               {r.label}
             </span>
