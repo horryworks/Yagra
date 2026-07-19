@@ -197,22 +197,35 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // once from a mounted iptoasn.com TSV. A missing/unreadable file logs and disables enrichment
     // (non-fatal) so a stale path never takes core down. Shared by the writer (IP→AS) and the flow
     // API (AS→name).
-    let ipasn: Option<Arc<crate::ipasn::IpAsnDb>> = cfg.ipasn_db_path.as_deref().and_then(|p| {
-        match crate::ipasn::IpAsnDb::load(std::path::Path::new(p)) {
-            Ok(db) if db.is_empty() => {
-                tracing::warn!(path = p, "IP→ASN dataset loaded 0 ranges — AS enrichment disabled");
-                None
+    let ipasn_initial: Option<Arc<crate::ipasn::IpAsnDb>> =
+        cfg.ipasn_db_path.as_deref().and_then(|p| {
+            match crate::ipasn::IpAsnDb::load(std::path::Path::new(p)) {
+                Ok(db) if db.is_empty() => {
+                    tracing::warn!(
+                        path = p,
+                        "IP→ASN dataset loaded 0 ranges — AS enrichment disabled"
+                    );
+                    None
+                }
+                Ok(db) => {
+                    tracing::info!(
+                        ranges = db.len(),
+                        path = p,
+                        "IP→ASN enrichment enabled (ADR-031)"
+                    );
+                    Some(db)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = p, "IP→ASN dataset load failed — AS enrichment disabled");
+                    None
+                }
             }
-            Ok(db) => {
-                tracing::info!(ranges = db.len(), path = p, "IP→ASN enrichment enabled (ADR-031)");
-                Some(db)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, path = p, "IP→ASN dataset load failed — AS enrichment disabled");
-                None
-            }
-        }
-    });
+        });
+    // Hot-swappable handle shared by the writer (IP→AS) and flow API (AS→name). A background reloader
+    // (below, when YAGRA_IPASN_RELOAD_SECS > 0) can replace it without a restart, so an external
+    // updater refreshing the file keeps the table current (ADR-031).
+    let ipasn: crate::ipasn::IpAsnHandle =
+        std::sync::Arc::new(std::sync::RwLock::new(ipasn_initial));
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
@@ -252,6 +265,38 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // HTTP server, so a rolling upgrade drains in-flight work instead of being killed mid-write
     // (ADR-017). `serve` (end of `run`) installs the signal handler that cancels this token.
     let shutdown = CancellationToken::new();
+
+    // IP→ASN periodic reloader (ADR-031): when enabled, re-read the dataset from disk every
+    // `ipasn_reload_secs` and hot-swap it in, so an external updater (the compose `ipasn-updater`
+    // sidecar writing to a shared volume) keeps the table fresh without restarting core. Runs on every
+    // core (leader and standbys) since the flow API resolves names everywhere. A failed/empty reload
+    // keeps the previous table. Also recovers if the file appeared only after startup.
+    if let Some(path) = cfg.ipasn_db_path.clone() {
+        if cfg.ipasn_reload_secs > 0 {
+            let handle = ipasn.clone();
+            let sd = shutdown.clone();
+            let secs = cfg.ipasn_reload_secs;
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(secs));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                ticker.tick().await; // consume the immediate first tick
+                loop {
+                    tokio::select! {
+                        () = sd.cancelled() => break,
+                        _ = ticker.tick() => match crate::ipasn::IpAsnDb::load(std::path::Path::new(&path)) {
+                            Ok(db) if !db.is_empty() => {
+                                let ranges = db.len();
+                                *handle.write().unwrap() = Some(db);
+                                tracing::info!(ranges, "IP→ASN dataset reloaded (ADR-031)");
+                            }
+                            Ok(_) => tracing::warn!("IP→ASN reload read 0 ranges — keeping previous table"),
+                            Err(e) => tracing::warn!(error = %e, "IP→ASN reload failed — keeping previous table"),
+                        },
+                    }
+                }
+            });
+        }
+    }
 
     // HA leader election (ADR-016): every leader-only background task (coordinator consumers, the
     // result-ingest → alert/notify/persist chain, the event pipeline, the schedulers, and the
@@ -862,7 +907,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         store: sink,
         logs: None,
         flows: None,
-        ipasn: None,
+        ipasn: crate::ipasn::empty_handle(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
@@ -1370,7 +1415,7 @@ async fn run_flow_writer<S>(
     mut flows: S,
     store: Arc<dyn FlowStore>,
     repo: Arc<NodeRepo>,
-    ipasn: Option<Arc<crate::ipasn::IpAsnDb>>,
+    ipasn: crate::ipasn::IpAsnHandle,
     shutdown: CancellationToken,
 ) where
     S: Stream<Item = FlowBatch> + Unpin,
@@ -1418,12 +1463,14 @@ async fn run_flow_writer<S>(
                     tracing::debug!(exporter = %batch.exporter_ip, "flow batch from unmapped exporter — dropped");
                     continue;
                 };
+                // Snapshot the hot-swappable IP→ASN table once per batch (not per record).
+                let ipasn_now = ipasn.read().unwrap().clone();
                 for rec in &batch.records {
                     // Enrich only the zeros: the exporter's own BGP view is authoritative, the
                     // offline IP→ASN table only fills in AS the device couldn't provide (ADR-031).
                     let mut src_as = rec.src_as;
                     let mut dst_as = rec.dst_as;
-                    if let Some(db) = &ipasn {
+                    if let Some(db) = &ipasn_now {
                         if src_as == 0 {
                             src_as = db.lookup(rec.src_ip).unwrap_or(0);
                         }

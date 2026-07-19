@@ -57,14 +57,14 @@ services:
       # to disable flow monitoring (the flow API then 503s; nothing else is affected).
       YAGRA_CLICKHOUSE_URL: ${YAGRA_CLICKHOUSE_URL-http://clickhouse:8123}
       YAGRA_FLOW_RETENTION_DAYS: ${YAGRA_FLOW_RETENTION_DAYS:-30}
-      # Offline IP→ASN enrichment for flow AS (ADR-031 Increment 3, no runtime egress). Most non-BGP
-      # exporters (incl. our lab USG) send AS=0; with an iptoasn.com TSV mounted, core fills those
-      # zeros at write time and resolves AS names in the flow top-AS view. Enrichment is forward-only
-      # (existing rows keep AS=0). Fetch once (updates = replace the file + restart core):
-      #   mkdir -p ./data/ipasn && curl -s https://iptoasn.com/data/ip2asn-combined.tsv.gz \
-      #     | gunzip > ./data/ipasn/ip2asn.tsv
-      # Enabled together with the ipasn volume mount below.
-      YAGRA_IPASN_DB: /data/ipasn/ip2asn.tsv
+      # Offline IP→ASN enrichment for flow AS (ADR-031). Most non-BGP exporters (incl. our lab USG)
+      # send AS=0; core fills those zeros at write time and resolves AS names in the flow top-AS view.
+      # The dataset lives in the shared `ipasndata` volume, kept fresh by the `ipasn-updater` sidecar
+      # (below) — core itself never reaches the internet. Enrichment is forward-only (existing rows
+      # keep AS=0). core hot-reloads the file every YAGRA_IPASN_RELOAD_SECS with NO restart, so a
+      # refresh by the updater takes effect on its own. Set YAGRA_IPASN_DB empty in .env to disable.
+      YAGRA_IPASN_DB: ${YAGRA_IPASN_DB-/data/ipasn/ip2asn.tsv}
+      YAGRA_IPASN_RELOAD_SECS: ${YAGRA_IPASN_RELOAD_SECS:-21600}
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
@@ -109,12 +109,11 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend (capacity only — core never writes here).
       - vmdata:/hostfs/vm:ro
-      # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only. Sourced from a HOST-ABSOLUTE path
-      # OUTSIDE the runner checkout on purpose: the deploy job's `git clean` wipes untracked files in
-      # the checkout dir, so a `./data/ipasn` there vanishes on every redeploy. On the test host place
-      # ip2asn.tsv at /home/horry/yagra-data/ipasn/ (fetch cmd under YAGRA_IPASN_DB above). If the dir
-      # is absent the mount is an empty dir and core logs a warning + runs with enrichment off.
-      - /home/horry/yagra-data/ipasn:/data/ipasn:ro
+      # Offline IP→ASN dataset (ADR-031) — read-only, from the named `ipasndata` volume that the
+      # `ipasn-updater` sidecar writes. A named volume persists across redeploys and is untouched by
+      # the runner's `git clean` (no host path). If the file is absent core just runs enrichment off
+      # and hot-loads it once the updater populates the volume.
+      - ipasndata:/data/ipasn:ro
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
@@ -270,9 +269,41 @@ services:
       - chdata:/var/lib/clickhouse
     restart: unless-stopped
 
+  # IP→ASN dataset updater (ADR-031) — keeps the offline enrichment table fresh, entirely in Docker
+  # (no host cron / host path). Periodically fetches the public-domain iptoasn.com TSV into the shared
+  # `ipasndata` volume with an atomic write; core mounts the same volume read-only and hot-reloads it
+  # (YAGRA_IPASN_RELOAD_SECS) with no restart. This container is the ONLY component that reaches the
+  # internet for enrichment — core never does. Air-gapped / no enrichment? Remove this service (and
+  # unset YAGRA_IPASN_DB on core). Tune cadence via YAGRA_IPASN_REFRESH_SECS (default weekly); it also
+  # fetches once on start. $$ escapes keep the shell vars for the container, not compose.
+  ipasn-updater:
+    image: alpine:3.20
+    restart: unless-stopped
+    environment:
+      YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}
+      YAGRA_IPASN_URL: ${YAGRA_IPASN_URL:-https://iptoasn.com/data/ip2asn-combined.tsv.gz}
+    volumes:
+      - ipasndata:/data/ipasn
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl >/dev/null 2>&1 || true
+        while true; do
+          echo "ipasn-updater: fetching $$YAGRA_IPASN_URL"
+          if curl -fsSL "$$YAGRA_IPASN_URL" | gunzip > /data/ipasn/ip2asn.tsv.tmp && [ -s /data/ipasn/ip2asn.tsv.tmp ]; then
+            mv /data/ipasn/ip2asn.tsv.tmp /data/ipasn/ip2asn.tsv
+            echo "ipasn-updater: wrote $$(wc -l < /data/ipasn/ip2asn.tsv) rows"
+          else
+            echo "ipasn-updater: fetch failed — keeping previous"; rm -f /data/ipasn/ip2asn.tsv.tmp
+          fi
+          sleep "$$YAGRA_IPASN_REFRESH_SECS"
+        done
+
 volumes:
   pgdata:
   vmdata:
   vldata:
+  ipasndata:  # offline IP→ASN dataset (ADR-031) — written by ipasn-updater, read by core
   chdata:    # ClickHouse flow store (ADR-031)
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts

@@ -74,6 +74,11 @@ pub struct Config {
     /// the flow API; when unset, AS is export-provided only (byte-identical to Increment 2). Loaded
     /// once at startup — no runtime egress. Consumed by `run_live`.
     pub ipasn_db_path: Option<String>,
+    /// How often (seconds) to reload the IP→ASN dataset from `ipasn_db_path` **without a restart**
+    /// (`YAGRA_IPASN_RELOAD_SECS`, ADR-031). Default `0` ⇒ load once at startup (no reload task).
+    /// Pairs with an external updater refreshing the file (e.g. the compose `ipasn-updater` sidecar
+    /// writing to a shared volume) so the table never goes stale. Consumed by `run_live`.
+    pub ipasn_reload_secs: u64,
     /// High-availability leader election (ADR-016). Default `false`: single active core, all
     /// background work runs unconditionally (byte-identical to pre-HA behavior). When `true`, this
     /// core races for a PostgreSQL advisory lock and runs the coordinator + ingest + alert/notify
@@ -133,6 +138,10 @@ impl Config {
             ),
             // IP→ASN enrichment (ADR-031 Increment 3): opt-in. Unset ⇒ AS is export-provided only.
             ipasn_db_path: parse_optional(std::env::var("YAGRA_IPASN_DB").ok()),
+            ipasn_reload_secs: std::env::var("YAGRA_IPASN_RELOAD_SECS")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0),
             // HA (ADR-016): opt-in. Unset ⇒ single-core behavior, no advisory lock.
             enable_ha: parse_bool(std::env::var("YAGRA_ENABLE_HA").ok()),
             core_id: parse_optional(std::env::var("YAGRA_CORE_ID").ok()),

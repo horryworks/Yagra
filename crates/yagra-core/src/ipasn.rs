@@ -42,6 +42,17 @@ pub struct IpAsnDb {
     names: HashMap<u32, String>,
 }
 
+/// Shared, hot-swappable handle to the loaded table. `None` ⇒ enrichment off. A background reloader
+/// (`YAGRA_IPASN_RELOAD_SECS`) can swap in a freshly-fetched table without restarting core, so an
+/// external updater (e.g. the compose `ipasn-updater` sidecar) keeps the data current (ADR-031).
+pub type IpAsnHandle = Arc<std::sync::RwLock<Option<Arc<IpAsnDb>>>>;
+
+/// An empty handle (enrichment off) — for skeleton mode and tests.
+#[must_use]
+pub fn empty_handle() -> IpAsnHandle {
+    Arc::new(std::sync::RwLock::new(None))
+}
+
 impl IpAsnDb {
     /// Load an iptoasn TSV from `path` (plain text; gunzip the `.gz` download first). Returns an
     /// `Arc` so it can be shared by the writer and the API without cloning the tables.

@@ -145,9 +145,11 @@ pub struct ApiState {
     /// flow-query endpoints serve top talkers/conversations/ports/protocols/trend; `None` (default-OFF)
     /// makes those endpoints return `503 service_unavailable`.
     pub flows: Option<Arc<dyn crate::flowstore::FlowStore>>,
-    /// Offline IP→ASN table (ADR-031 Increment 3). `Some` when `YAGRA_IPASN_DB` is configured — then
-    /// the flow top-AS endpoint resolves AS numbers to organization names; `None` leaves names unset.
-    pub ipasn: Option<Arc<crate::ipasn::IpAsnDb>>,
+    /// Offline IP→ASN table (ADR-031 Increment 3), behind a hot-swappable handle so a periodic
+    /// reloader can refresh it without a restart. Holds `Some` when `YAGRA_IPASN_DB` is configured —
+    /// then the flow top-AS endpoint resolves AS numbers to organization names; `None` leaves names
+    /// unset.
+    pub ipasn: crate::ipasn::IpAsnHandle,
     /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
     pub host_sample: CoreHostSample,
     /// Inventory read seam.
@@ -1446,7 +1448,9 @@ async fn get_node_flow_top_as(
     let dir = flow_as_dir(&q);
     match store.top_as(&fq, dir).await {
         Ok(mut rows) => {
-            if let Some(db) = &st.ipasn {
+            // Snapshot the hot-swappable table (a reloader may swap it concurrently).
+            let db = st.ipasn.read().unwrap().clone();
+            if let Some(db) = &db {
                 for r in &mut rows {
                     if r.asn != 0 {
                         r.name = db.name_of(r.asn).map(str::to_owned);
@@ -9291,7 +9295,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
-            ipasn: None,
+            ipasn: crate::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9321,7 +9325,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
-            ipasn: None,
+            ipasn: crate::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9349,7 +9353,7 @@ mod tests {
             store: Arc::new(InMemorySink::default()),
             logs: None,
             flows: None,
-            ipasn: None,
+            ipasn: crate::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
