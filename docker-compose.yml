@@ -72,10 +72,14 @@ services:
       # Rate limits (events/sec): per source IP and across all sources.
       # YAGRA_EVENT_RATE_PER_SOURCE: "50"
       # YAGRA_EVENT_RATE_GLOBAL: "500"
-      # Flow collector (ADR-031): receive NetFlow v9 / IPFIX exports, edge-aggregate to top-N per
+      # Flow collector (ADR-031): receive NetFlow v5/v9 / IPFIX exports, edge-aggregate to top-N per
       # bucket, and publish to core (which writes ClickHouse). Unset = disabled. Point your devices'
       # flow export at this poller's :2055. Tunables: bucket width / top-N / flow rate caps.
       YAGRA_FLOW_BIND: 0.0.0.0:2055
+      # sFlow v5 (ADR-031 Increment 2): packet-sampling export on its own port. Off by default —
+      # uncomment (and publish :6343 below) to receive sFlow. Counts are sampling-rate-scaled
+      # estimates; shares the flow buckets/top-N/rate caps with NetFlow.
+      # YAGRA_SFLOW_BIND: 0.0.0.0:6343
       # YAGRA_FLOW_BUCKET_SECS: "60"       # aggregation window (bucket) in seconds
       # YAGRA_FLOW_TOP_N: "500"            # top flows kept per exporter per bucket
       # YAGRA_FLOW_RATE_PER_SOURCE: "1000" # flow datagrams/sec per source IP
@@ -95,7 +99,8 @@ services:
     ports:
       - "514:1514/udp"   # syslog intake
       - "162:1162/udp"   # SNMP trap intake
-      - "2055:2055/udp"  # NetFlow / IPFIX flow intake (ADR-031)
+      - "2055:2055/udp"  # NetFlow v5/v9 / IPFIX flow intake (ADR-031)
+      # - "6343:6343/udp"  # sFlow intake (ADR-031 Increment 2) — enable with YAGRA_SFLOW_BIND above
     # NOTE: with Docker bridge networking, verify device source IPs survive the port
     # mapping (conntrack DNAT usually preserves them; the userland proxy may not).
     # Event→node correlation keys on the source IP — if it's rewritten, run the poller

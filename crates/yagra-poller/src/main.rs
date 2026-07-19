@@ -431,9 +431,11 @@ async fn spawn_event_listeners(
 ) -> Vec<String> {
     let syslog_bind = env_nonempty("YAGRA_SYSLOG_BIND");
     let trap_bind = env_nonempty("YAGRA_TRAP_BIND");
-    // Flow collector (Phase 3, ADR-031) — NetFlow v9 / IPFIX on `YAGRA_FLOW_BIND`, off if unset.
+    // Flow collector (Phase 3, ADR-031) — NetFlow v5/v9 / IPFIX on `YAGRA_FLOW_BIND` (:2055-style),
+    // sFlow v5 on `YAGRA_SFLOW_BIND` (:6343). Both off if unset; both feed the same aggregator.
     let flow_bind = env_nonempty("YAGRA_FLOW_BIND");
-    if syslog_bind.is_none() && trap_bind.is_none() && flow_bind.is_none() {
+    let sflow_bind = env_nonempty("YAGRA_SFLOW_BIND");
+    if syslog_bind.is_none() && trap_bind.is_none() && flow_bind.is_none() && sflow_bind.is_none() {
         return Vec::new();
     }
 
@@ -509,11 +511,13 @@ async fn spawn_event_listeners(
         }
     }
 
-    if let Some(bind) = flow_bind {
+    if flow_bind.is_some() || sflow_bind.is_some() {
         // Flow gets its own rate limiter (own env knobs): a flow datagram carries many records, so
         // it must not be counted against the syslog/trap event budget or starve it. Caps are on
         // datagrams/second per source, not records. Edge top-N aggregation (ADR-031) is the real
-        // cardinality control; this is just the storm front door.
+        // cardinality control; this is just the storm front door. NetFlow and sFlow share one
+        // limiter, one aggregator `state`, and one flush ticker — a device exporting both merges
+        // per-exporter, and there is one bucket cadence per poller.
         let flow_per_source = env_f64("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
         let flow_global = env_f64("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
         let flow_now_ms = std::time::SystemTime::now()
@@ -527,30 +531,67 @@ async fn spawn_event_listeners(
         let top_n = env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
         let bucket_secs = u32::try_from(env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
         let state = Arc::new(std::sync::Mutex::new(flow::FlowState::new(top_n)));
-        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
-            Ok(socks) => {
-                let n = socks.len();
-                tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v9 / IPFIX)");
-                labels.push(format!("flow:{bind}"));
-                for sock in socks {
-                    spawn_cancellable(
-                        shutdown,
-                        flow::run_flow_listener(sock, state.clone(), flow_limiter.clone()),
-                    );
+        let mut any_bound = false;
+
+        if let Some(bind) = flow_bind {
+            match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
+                Ok(socks) => {
+                    let n = socks.len();
+                    tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v5/v9 / IPFIX)");
+                    labels.push(format!("flow:{bind}"));
+                    any_bound = true;
+                    for sock in socks {
+                        spawn_cancellable(
+                            shutdown,
+                            flow::run_flow_listener(
+                                sock,
+                                state.clone(),
+                                flow_limiter.clone(),
+                                flow::FlowProto::Netflow,
+                            ),
+                        );
+                    }
                 }
-                // One flush ticker publishes per-exporter FlowBatches every bucket.
-                spawn_cancellable(
-                    shutdown,
-                    flow::run_flow_flusher(
-                        bus.clone(),
-                        state.clone(),
-                        poller_id.to_owned(),
-                        pool_defaulted.to_owned(),
-                        bucket_secs,
-                    ),
-                );
+                Err(e) => tracing::error!(%bind, error = %e, "failed to bind flow listener"),
             }
-            Err(e) => tracing::error!(%bind, error = %e, "failed to bind flow listener"),
+        }
+
+        if let Some(bind) = sflow_bind {
+            match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
+                Ok(socks) => {
+                    let n = socks.len();
+                    tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "sflow listener enabled (sFlow v5)");
+                    labels.push(format!("sflow:{bind}"));
+                    any_bound = true;
+                    for sock in socks {
+                        spawn_cancellable(
+                            shutdown,
+                            flow::run_flow_listener(
+                                sock,
+                                state.clone(),
+                                flow_limiter.clone(),
+                                flow::FlowProto::Sflow,
+                            ),
+                        );
+                    }
+                }
+                Err(e) => tracing::error!(%bind, error = %e, "failed to bind sflow listener"),
+            }
+        }
+
+        // One flush ticker publishes per-exporter FlowBatches every bucket — spawned only if at
+        // least one protocol socket bound (nothing to flush otherwise).
+        if any_bound {
+            spawn_cancellable(
+                shutdown,
+                flow::run_flow_flusher(
+                    bus.clone(),
+                    state.clone(),
+                    poller_id.to_owned(),
+                    pool_defaulted.to_owned(),
+                    bucket_secs,
+                ),
+            );
         }
     }
 

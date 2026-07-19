@@ -30,6 +30,7 @@ import { InterfacesTab } from './InterfacesTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
 import { FlowTab } from './FlowTab';
+import { normalizeNodeDetailTab } from './tabs';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import './NodeDetail.css';
 
@@ -37,8 +38,6 @@ const METRIC = 'icmp_rtt_ms';
 const RTT_WINDOW_SECS = 30 * 60;
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
-
-const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
 
 interface Props {
   nodeId: string;
@@ -72,7 +71,7 @@ export function NodeDetail({
 }: Props) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
-  const activeTab = TABS.includes(tab) ? tab : 'overview';
+  const activeTab = normalizeNodeDetailTab(tab);
   const [node, setNode] = useState<NodeDetailData | null>(null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({

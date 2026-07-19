@@ -17,8 +17,8 @@ pub mod syslog;
 pub mod trap;
 
 pub use flow::{
-    parse_flow_export, AggregatedFlow, ExporterBatch, ExporterBuckets, FlowAggregator, FlowError,
-    FlowTemplates, RawFlow, DEFAULT_FLOW_TOP_N,
+    parse_flow_export, parse_sflow, AggregatedFlow, ExporterBatch, ExporterBuckets, FlowAggregator,
+    FlowError, FlowTemplates, RawFlow, DEFAULT_FLOW_TOP_N,
 };
 pub use ratelimit::SourceLimiter;
 pub use syslog::{parse_syslog, SyslogEvent, SyslogFormat};

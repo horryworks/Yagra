@@ -14,8 +14,10 @@
 //! **Robustness contract** (same as [`crate::trap`]): every input is an attacker-controlled
 //! datagram. Parsing never panics — all reads are bounds-checked, malformed input returns `Err` or
 //! is skipped, and output counts are bounded ([`MAX_RECORDS_PER_DATAGRAM`], the template/key caps).
-//! NetFlow v5 and sFlow are handled in a later increment; unknown versions return
-//! [`FlowError::UnsupportedVersion`].
+//! [`parse_flow_export`] handles the collector-port formats — NetFlow v5 (fixed-format), NetFlow v9,
+//! and IPFIX; unknown versions return [`FlowError::UnsupportedVersion`]. sFlow rides a **separate
+//! datagram shape on its own port** and is decoded by [`parse_sflow`], including sampling-rate scale
+//! correction, so both feed the same [`RawFlow`] downstream.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -216,6 +218,12 @@ impl<'a> Reader<'a> {
         self.buf.len().saturating_sub(self.pos)
     }
 
+    fn u8(&mut self) -> Option<u8> {
+        let b = *self.buf.get(self.pos)?;
+        self.pos += 1;
+        Some(b)
+    }
+
     fn u16(&mut self) -> Option<u16> {
         let end = self.pos.checked_add(2)?;
         let v = u16::from_be_bytes([*self.buf.get(self.pos)?, *self.buf.get(self.pos + 1)?]);
@@ -273,10 +281,75 @@ pub fn parse_flow_export(
     }
     let version = u16::from_be_bytes([datagram[0], datagram[1]]);
     match version {
+        5 => parse_netflow_v5(datagram),
         9 => parse_netflow_v9(templates, exporter, datagram),
         10 => parse_ipfix(templates, exporter, datagram),
         other => Err(FlowError::UnsupportedVersion(other)),
     }
+}
+
+/// Parse a NetFlow **v5** datagram (fixed-format, no templates — older Cisco). The 24-byte header is
+/// followed by `count` fixed 48-byte records. If the header's sampling interval is set (low 14 bits
+/// of `sampling_interval`, top 2 = mode), byte/packet counts are scaled by it so a sampled v5
+/// exporter isn't undercounted — matching sFlow's estimate semantics. Never panics.
+fn parse_netflow_v5(datagram: &[u8]) -> Result<Vec<RawFlow>, FlowError> {
+    const V5_HEADER: usize = 24;
+    const V5_RECORD: usize = 48;
+    if datagram.len() < V5_HEADER {
+        return Err(FlowError::Truncated);
+    }
+    let count = u16::from_be_bytes([datagram[2], datagram[3]]) as usize;
+    // Sampling interval: low 14 bits carry the 1-in-N rate (top 2 bits are the mode). 0/1 ⇒ none.
+    let sampling = u16::from_be_bytes([datagram[22], datagram[23]]) & 0x3fff;
+    let scale = u64::from(sampling.max(1));
+
+    let mut reader = Reader::new(&datagram[V5_HEADER..]);
+    let mut out = Vec::new();
+    let max = count.min(MAX_RECORDS_PER_DATAGRAM);
+    for _ in 0..max {
+        let Some(rec) = reader.take(V5_RECORD) else {
+            break; // truncated trailer — keep what we have
+        };
+        if let Some(flow) = decode_v5_record(rec, scale) {
+            out.push(flow);
+        }
+    }
+    Ok(out)
+}
+
+/// Decode one 48-byte NetFlow v5 record. Reads fields at their fixed offsets via the bounds-checked
+/// [`Reader`]; the AS/mask trailer is ignored (destination-AS is a later increment).
+fn decode_v5_record(rec: &[u8], scale: u64) -> Option<RawFlow> {
+    let mut r = Reader::new(rec);
+    let src = r.take(4)?;
+    let src_ip = IpAddr::V4(Ipv4Addr::new(src[0], src[1], src[2], src[3]));
+    let dst = r.take(4)?;
+    let dst_ip = IpAddr::V4(Ipv4Addr::new(dst[0], dst[1], dst[2], dst[3]));
+    r.take(4)?; // nexthop
+    let if_index = u32::from(r.u16()?); // input ifIndex
+    r.u16()?; // output ifIndex
+    let packets = u64::from(r.u32()?); // dPkts
+    let bytes = u64::from(r.u32()?); // dOctets
+    r.u32()?; // first (switched)
+    r.u32()?; // last (switched)
+    let src_port = r.u16()?;
+    let dst_port = r.u16()?;
+    r.u8()?; // pad1
+    r.u8()?; // tcp_flags
+    let proto = r.u8()?;
+    let tos = r.u8()?;
+    // Remaining src_as/dst_as/src_mask/dst_mask/pad2 are ignored this increment.
+    Some(RawFlow {
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        proto,
+        tos,
+        if_index,
+        bytes: bytes.saturating_mul(scale),
+        packets: packets.saturating_mul(scale),
+    })
 }
 
 fn parse_netflow_v9(
@@ -534,6 +607,242 @@ fn ipv6_from(val: &[u8]) -> IpAddr {
     let mut octets = [0u8; 16];
     octets.copy_from_slice(&val[..16]);
     IpAddr::V6(Ipv6Addr::from(octets))
+}
+
+// ── sFlow v5 ──────────────────────────────────────────────────────────────────────────
+// sFlow rides its own UDP port (:6343) with a wholly different datagram shape: a header followed by
+// N *samples*. We decode flow samples (standard format 1 and expanded format 3) that carry a *raw
+// sampled packet header*, extract the 5-tuple from that header, and scale byte/packet counts by the
+// sample's 1-in-N sampling rate to estimate real traffic. Counter samples and unknown formats are
+// skipped by their declared length. Every read is bounds-checked; parsing never panics.
+
+/// Upper bound on samples decoded from one sFlow datagram (a crafted-packet backstop).
+const MAX_SFLOW_SAMPLES: usize = 1_024;
+/// Upper bound on flow records decoded from one sFlow sample.
+const MAX_SFLOW_RECORDS: usize = 256;
+
+// sFlow sample formats (enterprise 0).
+const SFLOW_FLOW_SAMPLE: u32 = 1;
+const SFLOW_FLOW_SAMPLE_EXPANDED: u32 = 3;
+// sFlow flow-record format we decode (enterprise 0).
+const SFLOW_RAW_PACKET_HEADER: u32 = 1;
+// Sampled-header link/network protocols.
+const SFLOW_HEADER_ETHERNET: u32 = 1;
+const SFLOW_HEADER_IPV4: u32 = 11;
+const SFLOW_HEADER_IPV6: u32 = 12;
+
+/// Parse an sFlow **v5** datagram, returning the decoded [`RawFlow`]s with byte/packet counts
+/// already scaled by each flow sample's sampling rate. Stateless (no template cache). Non-flow
+/// samples and unknown record formats are skipped by length. Never panics.
+pub fn parse_sflow(datagram: &[u8]) -> Result<Vec<RawFlow>, FlowError> {
+    let mut r = Reader::new(datagram);
+    let version = r.u32().ok_or(FlowError::Truncated)?;
+    if version != 5 {
+        // Only sFlow v5 is defined/deployed; anything else is unsupported.
+        return Err(FlowError::UnsupportedVersion(
+            u16::try_from(version).unwrap_or(u16::MAX),
+        ));
+    }
+    let agent_type = r.u32().ok_or(FlowError::Truncated)?;
+    let agent_len = match agent_type {
+        1 => 4,  // IPv4 agent address
+        2 => 16, // IPv6 agent address
+        other => {
+            return Err(FlowError::Malformed(format!(
+                "sflow agent addr type {other}"
+            )))
+        }
+    };
+    r.take(agent_len).ok_or(FlowError::Truncated)?; // agent address (unused — core keys on peer IP)
+    r.u32().ok_or(FlowError::Truncated)?; // sub_agent_id
+    r.u32().ok_or(FlowError::Truncated)?; // sequence_number
+    r.u32().ok_or(FlowError::Truncated)?; // uptime
+    let num_samples = r.u32().ok_or(FlowError::Truncated)? as usize;
+
+    let mut out = Vec::new();
+    for _ in 0..num_samples.min(MAX_SFLOW_SAMPLES) {
+        let (Some(sample_type), Some(sample_len)) = (r.u32(), r.u32()) else {
+            break;
+        };
+        let Some(body) = r.take(sample_len as usize) else {
+            break; // truncated trailer — stop, keep what we have
+        };
+        // Low 12 bits = format, high 20 = enterprise number (0 for standard samples).
+        if (sample_type >> 12) == 0 {
+            match sample_type & 0x0fff {
+                SFLOW_FLOW_SAMPLE => {
+                    let _ = decode_sflow_flow_sample(body, false, &mut out);
+                }
+                SFLOW_FLOW_SAMPLE_EXPANDED => {
+                    let _ = decode_sflow_flow_sample(body, true, &mut out);
+                }
+                _ => { /* counter/other sample — skip (already consumed by length) */ }
+            }
+        }
+        if out.len() >= MAX_RECORDS_PER_DATAGRAM {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Decode one sFlow flow sample body (compact `format 1` or `expanded` `format 3`), appending a
+/// [`RawFlow`] per raw-packet-header record. Returns `None` only on a truncated body (caller ignores
+/// — the sample is simply dropped).
+fn decode_sflow_flow_sample(body: &[u8], expanded: bool, out: &mut Vec<RawFlow>) -> Option<()> {
+    let mut r = Reader::new(body);
+    r.u32()?; // sequence_number
+    r.take(if expanded { 8 } else { 4 })?; // source_id (expanded: type + index)
+    let sampling_rate = r.u32()?;
+    r.u32()?; // sample_pool
+    r.u32()?; // drops
+              // input/output ifIndex: 4 bytes each (compact) or format+value 8 bytes each (expanded).
+    let input_if = if expanded {
+        r.u32()?; // input_format
+        let v = r.u32()?; // input_value (ifIndex)
+        r.u32()?; // output_format
+        r.u32()?; // output_value
+        v
+    } else {
+        let v = r.u32()?; // input ifIndex
+        r.u32()?; // output ifIndex
+        v
+    };
+    let num_records = r.u32()?;
+    let rate = u64::from(sampling_rate.max(1));
+    for _ in 0..(num_records as usize).min(MAX_SFLOW_RECORDS) {
+        let (Some(flow_format), Some(rec_len)) = (r.u32(), r.u32()) else {
+            break;
+        };
+        let Some(rec_body) = r.take(rec_len as usize) else {
+            break;
+        };
+        if (flow_format >> 12) == 0 && (flow_format & 0x0fff) == SFLOW_RAW_PACKET_HEADER {
+            if let Some(flow) = decode_sflow_raw_header(rec_body, rate, input_if) {
+                out.push(flow);
+            }
+        }
+        if out.len() >= MAX_RECORDS_PER_DATAGRAM {
+            break;
+        }
+    }
+    Some(())
+}
+
+/// Decode a raw-packet-header flow record into a [`RawFlow`], scaling counts by `rate`. `frame_length`
+/// is the *original* packet length (pre-sampling), so `bytes ≈ frame_length × rate` and one sample
+/// represents `rate` packets.
+fn decode_sflow_raw_header(body: &[u8], rate: u64, if_index: u32) -> Option<RawFlow> {
+    let mut r = Reader::new(body);
+    let header_protocol = r.u32()?;
+    let frame_length = r.u32()?;
+    r.u32()?; // stripped
+    let header_length = r.u32()? as usize;
+    let header = r.take(header_length)?; // the sampled packet header bytes
+    let (src_ip, dst_ip, src_port, dst_port, proto, tos) =
+        parse_sampled_5tuple(header_protocol, header)?;
+    Some(RawFlow {
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        proto,
+        tos,
+        if_index,
+        bytes: u64::from(frame_length).saturating_mul(rate),
+        packets: rate,
+    })
+}
+
+/// Extract `(src, dst, src_port, dst_port, proto, tos)` from a raw sampled packet header.
+/// `header_protocol` selects the layer the header starts at (Ethernet / IPv4 / IPv6). Bounds-checked;
+/// returns `None` (record dropped) on anything it can't decode — never panics.
+fn parse_sampled_5tuple(
+    header_protocol: u32,
+    header: &[u8],
+) -> Option<(IpAddr, IpAddr, u16, u16, u8, u8)> {
+    match header_protocol {
+        SFLOW_HEADER_ETHERNET => {
+            let (ethertype, l3) = strip_ethernet(header)?;
+            match ethertype {
+                0x0800 => parse_ipv4_header(l3),
+                0x86DD => parse_ipv6_header(l3),
+                _ => None,
+            }
+        }
+        SFLOW_HEADER_IPV4 => parse_ipv4_header(header),
+        SFLOW_HEADER_IPV6 => parse_ipv6_header(header),
+        _ => None,
+    }
+}
+
+/// Skip the Ethernet II header and any 802.1Q/802.1ad VLAN tags, returning the inner ethertype and
+/// the remaining L3 bytes.
+fn strip_ethernet(buf: &[u8]) -> Option<(u16, &[u8])> {
+    let mut r = Reader::new(buf);
+    r.take(12)?; // dst + src MAC
+    let mut ethertype = r.u16()?;
+    // Walk stacked VLAN tags (each: TCI(2) + inner ethertype(2)); bound the walk.
+    let mut guard = 0;
+    while (ethertype == 0x8100 || ethertype == 0x88A8) && guard < 4 {
+        r.u16()?; // TCI
+        ethertype = r.u16()?;
+        guard += 1;
+    }
+    let n = r.remaining();
+    let rest = r.take(n)?;
+    Some((ethertype, rest))
+}
+
+/// Decode an IPv4 header's 5-tuple contributions. `buf` starts at the IP header.
+fn parse_ipv4_header(buf: &[u8]) -> Option<(IpAddr, IpAddr, u16, u16, u8, u8)> {
+    if buf.len() < 20 {
+        return None;
+    }
+    if buf[0] >> 4 != 4 {
+        return None;
+    }
+    let ihl = usize::from(buf[0] & 0x0f) * 4;
+    if ihl < 20 || buf.len() < ihl {
+        return None;
+    }
+    let tos = buf[1];
+    let proto = buf[9];
+    let src = IpAddr::V4(Ipv4Addr::new(buf[12], buf[13], buf[14], buf[15]));
+    let dst = IpAddr::V4(Ipv4Addr::new(buf[16], buf[17], buf[18], buf[19]));
+    let (src_port, dst_port) = l4_ports(proto, buf.get(ihl..).unwrap_or(&[]));
+    Some((src, dst, src_port, dst_port, proto, tos))
+}
+
+/// Decode an IPv6 base header's 5-tuple contributions. Extension headers are not walked — if the
+/// next header isn't a transport we recognise, ports are 0 (the src/dst/proto flow is still useful).
+fn parse_ipv6_header(buf: &[u8]) -> Option<(IpAddr, IpAddr, u16, u16, u8, u8)> {
+    if buf.len() < 40 {
+        return None;
+    }
+    // Traffic class spans the low nibble of byte 0 and the high nibble of byte 1.
+    let tclass = ((buf[0] & 0x0f) << 4) | (buf[1] >> 4);
+    let next_header = buf[6];
+    let mut src_o = [0u8; 16];
+    let mut dst_o = [0u8; 16];
+    src_o.copy_from_slice(&buf[8..24]);
+    dst_o.copy_from_slice(&buf[24..40]);
+    let src = IpAddr::V6(Ipv6Addr::from(src_o));
+    let dst = IpAddr::V6(Ipv6Addr::from(dst_o));
+    let (src_port, dst_port) = l4_ports(next_header, buf.get(40..).unwrap_or(&[]));
+    Some((src, dst, src_port, dst_port, next_header, tclass))
+}
+
+/// TCP(6)/UDP(17) carry src/dst ports in the first 4 L4 bytes; any other protocol has no ports.
+fn l4_ports(proto: u8, l4: &[u8]) -> (u16, u16) {
+    if (proto == 6 || proto == 17) && l4.len() >= 4 {
+        (
+            u16::from_be_bytes([l4[0], l4[1]]),
+            u16::from_be_bytes([l4[2], l4[3]]),
+        )
+    } else {
+        (0, 0)
+    }
 }
 
 // ── Edge top-N aggregator ───────────────────────────────────────────────────────────
@@ -1000,11 +1309,11 @@ mod tests {
     #[test]
     fn unsupported_version_errs() {
         let mut t = FlowTemplates::new();
-        // NetFlow v5 (version 5) is a later increment.
-        let pkt = [0u8, 5, 0, 0];
+        // NetFlow v1 (version 1) is not decoded (v5/v9/IPFIX are).
+        let pkt = [0u8, 1, 0, 0];
         assert_eq!(
             parse_flow_export(&mut t, v4(1, 1, 1, 1), &pkt),
-            Err(FlowError::UnsupportedVersion(5))
+            Err(FlowError::UnsupportedVersion(1))
         );
     }
 
@@ -1024,6 +1333,10 @@ mod tests {
             vec![
                 0, 10, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0,
             ], // v10 bogus msg_len + set_len 0
+            vec![0, 5, 0, 10, 0, 0, 0, 0], // v5, count 10, truncated before the 24-byte header
+            vec![
+                0, 5, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ], // v5 full header claiming 5 records, zero record bytes
             (0..255u8).cycle().take(600).collect(),
         ];
         for c in cases {
@@ -1102,5 +1415,357 @@ mod tests {
             let _ = parse_flow_export(&mut t, exporter, &pkt);
         }
         assert!(t.len() <= 4);
+    }
+
+    // ── NetFlow v5 ──
+
+    /// One NetFlow v5 test record: (src, dst, sport, dport, proto, tos, input_if, dPkts, dOctets).
+    type Nf5Rec = (Ipv4Addr, Ipv4Addr, u16, u16, u8, u8, u16, u32, u32);
+
+    /// Build a NetFlow v5 datagram. `sampling` is the raw 16-bit header field (low 14 bits = interval).
+    fn nf5_packet(records: &[Nf5Rec], sampling: u16) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&5u16.to_be_bytes()); // version
+        pkt.extend_from_slice(&(records.len() as u16).to_be_bytes()); // count
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // sys_uptime
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // unix_secs
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // unix_nsecs
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // flow_sequence
+        pkt.push(0); // engine_type
+        pkt.push(0); // engine_id
+        pkt.extend_from_slice(&sampling.to_be_bytes()); // sampling_interval
+        for (src, dst, sp, dp, proto, tos, input, dpkts, doctets) in records {
+            pkt.extend_from_slice(&src.octets());
+            pkt.extend_from_slice(&dst.octets());
+            pkt.extend_from_slice(&[0u8; 4]); // nexthop
+            pkt.extend_from_slice(&input.to_be_bytes()); // input
+            pkt.extend_from_slice(&0u16.to_be_bytes()); // output
+            pkt.extend_from_slice(&dpkts.to_be_bytes()); // dPkts
+            pkt.extend_from_slice(&doctets.to_be_bytes()); // dOctets
+            pkt.extend_from_slice(&0u32.to_be_bytes()); // first
+            pkt.extend_from_slice(&0u32.to_be_bytes()); // last
+            pkt.extend_from_slice(&sp.to_be_bytes()); // srcport
+            pkt.extend_from_slice(&dp.to_be_bytes()); // dstport
+            pkt.push(0); // pad1
+            pkt.push(0); // tcp_flags
+            pkt.push(*proto); // prot
+            pkt.push(*tos); // tos
+            pkt.extend_from_slice(&0u16.to_be_bytes()); // src_as
+            pkt.extend_from_slice(&0u16.to_be_bytes()); // dst_as
+            pkt.push(0); // src_mask
+            pkt.push(0); // dst_mask
+            pkt.extend_from_slice(&0u16.to_be_bytes()); // pad2
+        }
+        pkt
+    }
+
+    #[test]
+    fn netflow_v5_decodes_fixed_records() {
+        let exporter = v4(192, 168, 1, 1);
+        let recs = [
+            (
+                Ipv4Addr::new(10, 0, 0, 5),
+                Ipv4Addr::new(8, 8, 8, 8),
+                40000u16,
+                443u16,
+                6u8,
+                0u8,
+                3u16,
+                10u32,
+                5000u32,
+            ),
+            (
+                Ipv4Addr::new(10, 0, 0, 6),
+                Ipv4Addr::new(1, 1, 1, 1),
+                40001u16,
+                53u16,
+                17u8,
+                0u8,
+                3u16,
+                2u32,
+                200u32,
+            ),
+        ];
+        let pkt = nf5_packet(&recs, 0);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, exporter, &pkt).unwrap();
+        assert_eq!(flows.len(), 2);
+        assert_eq!(flows[0].src_ip, v4(10, 0, 0, 5));
+        assert_eq!(flows[0].dst_ip, v4(8, 8, 8, 8));
+        assert_eq!(flows[0].dst_port, 443);
+        assert_eq!(flows[0].proto, 6);
+        assert_eq!(flows[0].if_index, 3);
+        assert_eq!(flows[0].bytes, 5000);
+        assert_eq!(flows[0].packets, 10);
+        assert_eq!(flows[1].proto, 17);
+        assert_eq!(flows[1].bytes, 200);
+        // v5 is fixed-format — no template cached.
+        assert_eq!(t.len(), 0);
+    }
+
+    #[test]
+    fn netflow_v5_applies_sampling_scale() {
+        let exporter = v4(192, 168, 1, 1);
+        let recs = [(
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(8, 8, 8, 8),
+            1u16,
+            2u16,
+            6u8,
+            0u8,
+            1u16,
+            4u32,
+            1000u32,
+        )];
+        // Interval 100 in the low 14 bits (top 2 bits = mode, set here to exercise masking).
+        let pkt = nf5_packet(&recs, 0xC000 | 100);
+        let mut t = FlowTemplates::new();
+        let flows = parse_flow_export(&mut t, exporter, &pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].bytes, 1000 * 100);
+        assert_eq!(flows[0].packets, 4 * 100);
+    }
+
+    // ── sFlow v5 ──
+
+    /// A 20-byte IPv4 header + 4 TCP port bytes (+ padding of the TCP header).
+    fn ipv4_tcp(src: Ipv4Addr, dst: Ipv4Addr, sport: u16, dport: u16) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.push(0x45); // version 4, IHL 5
+        h.push(0x00); // tos
+        h.extend_from_slice(&40u16.to_be_bytes()); // total length (unused)
+        h.extend_from_slice(&0u16.to_be_bytes()); // id
+        h.extend_from_slice(&0u16.to_be_bytes()); // flags/frag
+        h.push(64); // ttl
+        h.push(6); // proto = TCP
+        h.extend_from_slice(&0u16.to_be_bytes()); // checksum
+        h.extend_from_slice(&src.octets());
+        h.extend_from_slice(&dst.octets());
+        h.extend_from_slice(&sport.to_be_bytes());
+        h.extend_from_slice(&dport.to_be_bytes());
+        h.extend_from_slice(&[0u8; 12]); // rest of the TCP header
+        h
+    }
+
+    /// A 40-byte IPv6 header + 4 UDP port bytes.
+    fn ipv6_udp(src: Ipv6Addr, dst: Ipv6Addr, sport: u16, dport: u16) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.push(0x60); // version 6, traffic-class hi nibble 0
+        h.push(0x00); // traffic-class lo / flow label
+        h.extend_from_slice(&0u16.to_be_bytes()); // flow label
+        h.extend_from_slice(&16u16.to_be_bytes()); // payload length
+        h.push(17); // next header = UDP
+        h.push(64); // hop limit
+        h.extend_from_slice(&src.octets());
+        h.extend_from_slice(&dst.octets());
+        h.extend_from_slice(&sport.to_be_bytes());
+        h.extend_from_slice(&dport.to_be_bytes());
+        h.extend_from_slice(&[0u8; 4]); // udp length + checksum
+        h
+    }
+
+    /// Wrap an L3 payload in an Ethernet II header, inserting `vlan_tags` 802.1Q tags.
+    fn eth(ethertype: u16, payload: &[u8], vlan_tags: usize) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // dst MAC
+        h.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]); // src MAC
+        for _ in 0..vlan_tags {
+            h.extend_from_slice(&0x8100u16.to_be_bytes()); // TPID
+            h.extend_from_slice(&0x000au16.to_be_bytes()); // TCI (VLAN 10)
+        }
+        h.extend_from_slice(&ethertype.to_be_bytes());
+        h.extend_from_slice(payload);
+        h
+    }
+
+    /// Build an sFlow v5 datagram carrying one flow sample with one raw-packet-header record.
+    fn sflow_datagram(
+        sample_type: u32,
+        expanded: bool,
+        sampling_rate: u32,
+        input_if: u32,
+        header_protocol: u32,
+        header: &[u8],
+        frame_length: u32,
+    ) -> Vec<u8> {
+        // Raw-packet-header flow record body.
+        let mut rec_body = Vec::new();
+        rec_body.extend_from_slice(&header_protocol.to_be_bytes());
+        rec_body.extend_from_slice(&frame_length.to_be_bytes());
+        rec_body.extend_from_slice(&0u32.to_be_bytes()); // stripped
+        rec_body.extend_from_slice(&(header.len() as u32).to_be_bytes());
+        rec_body.extend_from_slice(header);
+        while rec_body.len() % 4 != 0 {
+            rec_body.push(0); // pad to 4-byte boundary
+        }
+        let mut record = Vec::new();
+        record.extend_from_slice(&1u32.to_be_bytes()); // flow_format = raw packet header
+        record.extend_from_slice(&(rec_body.len() as u32).to_be_bytes());
+        record.extend_from_slice(&rec_body);
+
+        // Flow sample body.
+        let mut sample = Vec::new();
+        sample.extend_from_slice(&0u32.to_be_bytes()); // sequence_number
+        if expanded {
+            sample.extend_from_slice(&0u32.to_be_bytes()); // source_id type
+            sample.extend_from_slice(&0u32.to_be_bytes()); // source_id index
+        } else {
+            sample.extend_from_slice(&0u32.to_be_bytes()); // source_id
+        }
+        sample.extend_from_slice(&sampling_rate.to_be_bytes());
+        sample.extend_from_slice(&0u32.to_be_bytes()); // sample_pool
+        sample.extend_from_slice(&0u32.to_be_bytes()); // drops
+        if expanded {
+            sample.extend_from_slice(&0u32.to_be_bytes()); // input_format
+            sample.extend_from_slice(&input_if.to_be_bytes()); // input_value
+            sample.extend_from_slice(&0u32.to_be_bytes()); // output_format
+            sample.extend_from_slice(&0u32.to_be_bytes()); // output_value
+        } else {
+            sample.extend_from_slice(&input_if.to_be_bytes()); // input
+            sample.extend_from_slice(&0u32.to_be_bytes()); // output
+        }
+        sample.extend_from_slice(&1u32.to_be_bytes()); // num_records
+        sample.extend_from_slice(&record);
+
+        // Datagram header + one sample.
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&5u32.to_be_bytes()); // version
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // agent addr type = IPv4
+        pkt.extend_from_slice(&[192, 168, 1, 1]); // agent address
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // sub_agent_id
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // sequence_number
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // uptime
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // num_samples
+        pkt.extend_from_slice(&sample_type.to_be_bytes());
+        pkt.extend_from_slice(&(sample.len() as u32).to_be_bytes());
+        pkt.extend_from_slice(&sample);
+        pkt
+    }
+
+    #[test]
+    fn sflow_flow_sample_decodes_and_scales() {
+        let header = eth(
+            0x0800,
+            &ipv4_tcp(
+                Ipv4Addr::new(10, 0, 0, 5),
+                Ipv4Addr::new(8, 8, 8, 8),
+                12345,
+                443,
+            ),
+            0,
+        );
+        let pkt = sflow_datagram(SFLOW_FLOW_SAMPLE, false, 1000, 7, 1, &header, 1500);
+        let flows = parse_sflow(&pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].src_ip, v4(10, 0, 0, 5));
+        assert_eq!(flows[0].dst_ip, v4(8, 8, 8, 8));
+        assert_eq!(flows[0].src_port, 12345);
+        assert_eq!(flows[0].dst_port, 443);
+        assert_eq!(flows[0].proto, 6);
+        assert_eq!(flows[0].if_index, 7);
+        // Scaled by the 1-in-1000 sampling rate.
+        assert_eq!(flows[0].bytes, 1500 * 1000);
+        assert_eq!(flows[0].packets, 1000);
+    }
+
+    #[test]
+    fn sflow_expanded_flow_sample_decodes() {
+        let header = eth(
+            0x0800,
+            &ipv4_tcp(
+                Ipv4Addr::new(172, 16, 0, 9),
+                Ipv4Addr::new(1, 1, 1, 1),
+                5555,
+                53,
+            ),
+            0,
+        );
+        let pkt = sflow_datagram(SFLOW_FLOW_SAMPLE_EXPANDED, true, 512, 42, 1, &header, 590);
+        let flows = parse_sflow(&pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].src_ip, v4(172, 16, 0, 9));
+        assert_eq!(flows[0].dst_port, 53);
+        assert_eq!(flows[0].if_index, 42);
+        assert_eq!(flows[0].bytes, 590 * 512);
+        assert_eq!(flows[0].packets, 512);
+    }
+
+    #[test]
+    fn sflow_decodes_vlan_tagged_and_ipv6() {
+        // 802.1Q-tagged IPv4/TCP.
+        let vlan = eth(
+            0x0800,
+            &ipv4_tcp(
+                Ipv4Addr::new(10, 1, 2, 3),
+                Ipv4Addr::new(10, 4, 5, 6),
+                1000,
+                80,
+            ),
+            1,
+        );
+        let pkt = sflow_datagram(SFLOW_FLOW_SAMPLE, false, 100, 1, 1, &vlan, 200);
+        let flows = parse_sflow(&pkt).unwrap();
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].src_ip, v4(10, 1, 2, 3));
+        assert_eq!(flows[0].dst_port, 80);
+
+        // IPv6/UDP inside Ethernet.
+        let src6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let dst6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
+        let v6 = eth(0x86DD, &ipv6_udp(src6, dst6, 4444, 123), 0);
+        let pkt6 = sflow_datagram(SFLOW_FLOW_SAMPLE, false, 100, 1, 1, &v6, 300);
+        let flows6 = parse_sflow(&pkt6).unwrap();
+        assert_eq!(flows6.len(), 1);
+        assert_eq!(flows6[0].src_ip, IpAddr::V6(src6));
+        assert_eq!(flows6[0].dst_ip, IpAddr::V6(dst6));
+        assert_eq!(flows6[0].dst_port, 123);
+        assert_eq!(flows6[0].proto, 17);
+    }
+
+    #[test]
+    fn sflow_counter_sample_is_skipped() {
+        // A counter sample (format 2) is skipped by length — no flows, no error.
+        let header = eth(
+            0x0800,
+            &ipv4_tcp(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2), 1, 2),
+            0,
+        );
+        let pkt = sflow_datagram(2, false, 1000, 1, 1, &header, 100);
+        let flows = parse_sflow(&pkt).unwrap();
+        assert!(flows.is_empty());
+    }
+
+    #[test]
+    fn sflow_wrong_version_errs() {
+        let pkt = [0u8, 0, 0, 4, 0, 0, 0, 1]; // version 4
+        assert_eq!(parse_sflow(&pkt), Err(FlowError::UnsupportedVersion(4)));
+    }
+
+    #[test]
+    fn sflow_hostile_inputs_never_panic() {
+        let cases: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0, 0, 0, 5],                   // version only
+            vec![0, 0, 0, 5, 0, 0, 0, 9],       // unknown agent addr type
+            vec![0, 0, 0, 5, 0, 0, 0, 1, 1, 2], // v4 agent type, truncated address
+            {
+                // Valid header claiming a huge sample with a huge length.
+                let mut v = vec![
+                    0, 0, 0, 5, // version
+                    0, 0, 0, 1, // agent type v4
+                    192, 168, 1, 1, // agent ip
+                    0, 0, 0, 0, // sub agent
+                    0, 0, 0, 0, // seq
+                    0, 0, 0, 0, // uptime
+                    0xff, 0xff, 0xff, 0xff, // num_samples (huge)
+                ];
+                v.extend_from_slice(&[0, 0, 0, 1, 0xff, 0xff, 0xff, 0xff]); // sample type 1, len huge
+                v
+            },
+            (0..255u8).cycle().take(500).collect(),
+        ];
+        for c in cases {
+            let _ = parse_sflow(&c);
+        }
     }
 }

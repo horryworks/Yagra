@@ -16,10 +16,34 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use yagra_bus::{Bus, FlowBatch, FlowRecord, BUS_SCHEMA_VERSION};
-use yagra_ingest::{parse_flow_export, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter};
+use yagra_ingest::{
+    parse_flow_export, parse_sflow, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter,
+};
 
 /// Flow datagrams beyond this are rejected outright (a NetFlow/IPFIX export never approaches it).
 const FLOW_BUF_BYTES: usize = 64 * 1024;
+
+/// Which flow-export wire format a listener socket speaks. NetFlow v5/v9 and IPFIX share the
+/// template-based [`parse_flow_export`] path (and the :2055-style collector port); sFlow rides its
+/// own datagram shape on its own port (:6343) via [`parse_sflow`]. Both decode to `RawFlow` and feed
+/// the same per-exporter aggregator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowProto {
+    /// NetFlow v5 / v9 / IPFIX (template-based; edge template cache used).
+    Netflow,
+    /// sFlow v5 (packet-sampling; sampling-rate scaled at parse time).
+    Sflow,
+}
+
+impl FlowProto {
+    /// Low-cardinality metric label for this protocol.
+    fn label(self) -> &'static str {
+        match self {
+            FlowProto::Netflow => "netflow",
+            FlowProto::Sflow => "sflow",
+        }
+    }
+}
 
 /// Shared, mutation-only edge state for the flow listeners: the template cache (learned from
 /// template FlowSets) and the per-exporter top-N aggregators. Held behind a `std::sync::Mutex`; the
@@ -41,12 +65,14 @@ impl FlowState {
 }
 
 /// Run one flow-listener reader loop until the socket errors persistently. Received datagrams are
-/// rate-limited, parsed, and folded into `state`; nothing is published here (the flush ticker does
-/// that).
+/// rate-limited, parsed according to `proto` (NetFlow/IPFIX vs sFlow), and folded into `state`;
+/// nothing is published here (the flush ticker does that). NetFlow and sFlow readers can share one
+/// `state` — both decode to `RawFlow` and merge into the same per-exporter aggregator.
 pub async fn run_flow_listener(
     sock: UdpSocket,
     state: Arc<Mutex<FlowState>>,
     limiter: Arc<Mutex<SourceLimiter>>,
+    proto: FlowProto,
 ) {
     let mut buf = vec![0u8; FLOW_BUF_BYTES];
     loop {
@@ -57,7 +83,8 @@ pub async fn run_flow_listener(
                 continue;
             }
         };
-        metrics::counter!("yagra_flow_datagrams_received_total").increment(1);
+        metrics::counter!("yagra_flow_datagrams_received_total", "proto" => proto.label())
+            .increment(1);
         if len >= FLOW_BUF_BYTES {
             metrics::counter!("yagra_flow_datagrams_dropped_total", "reason" => "oversize")
                 .increment(1);
@@ -74,7 +101,11 @@ pub async fn run_flow_listener(
         let outcome = {
             let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
             let FlowState { templates, buckets } = &mut *guard;
-            match parse_flow_export(templates, exporter, &buf[..len]) {
+            let parsed = match proto {
+                FlowProto::Netflow => parse_flow_export(templates, exporter, &buf[..len]),
+                FlowProto::Sflow => parse_sflow(&buf[..len]),
+            };
+            match parsed {
                 Ok(flows) => {
                     let n = flows.len();
                     for f in flows {
@@ -88,11 +119,13 @@ pub async fn run_flow_listener(
         match outcome {
             Ok(n) => {
                 if n > 0 {
-                    metrics::counter!("yagra_flow_records_total").increment(n as u64);
+                    metrics::counter!("yagra_flow_records_total", "proto" => proto.label())
+                        .increment(n as u64);
                 }
             }
             Err(FlowError::UnsupportedVersion(_)) => {
-                // NetFlow v5 / sFlow are a later increment; unknown versions are counted, not noisy.
+                // A version this proto's parser doesn't handle (e.g. NetFlow v1, or a non-5 sFlow);
+                // counted, not noisy.
                 metrics::counter!("yagra_flow_datagrams_dropped_total", "reason" => "unsupported_version")
                     .increment(1);
             }
@@ -250,7 +283,12 @@ mod tests {
 
         let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = sock.local_addr().unwrap();
-        tokio::spawn(run_flow_listener(sock, state.clone(), limiter()));
+        tokio::spawn(run_flow_listener(
+            sock,
+            state.clone(),
+            limiter(),
+            FlowProto::Netflow,
+        ));
         // 1-second bucket so the test flushes quickly.
         tokio::spawn(run_flow_flusher(
             bus.clone(),
@@ -279,6 +317,120 @@ mod tests {
         assert_eq!(batch.records[0].bytes, 4096);
     }
 
+    /// Build a minimal sFlow v5 datagram: one compact flow sample carrying one raw Ethernet/IPv4/TCP
+    /// packet header, sampled 1-in-`rate`.
+    fn sflow_one_tcp(
+        src: Ipv4Addr,
+        dst: Ipv4Addr,
+        dport: u16,
+        rate: u32,
+        frame_len: u32,
+    ) -> Vec<u8> {
+        // Ethernet II + IPv4 + TCP ports.
+        let mut header = Vec::new();
+        header.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // dst MAC
+        header.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]); // src MAC
+        header.extend_from_slice(&0x0800u16.to_be_bytes()); // ethertype IPv4
+        header.push(0x45); // v4, IHL 5
+        header.push(0x00); // tos
+        header.extend_from_slice(&40u16.to_be_bytes()); // total length
+        header.extend_from_slice(&[0u8; 4]); // id + flags/frag
+        header.push(64); // ttl
+        header.push(6); // proto TCP
+        header.extend_from_slice(&0u16.to_be_bytes()); // checksum
+        header.extend_from_slice(&src.octets());
+        header.extend_from_slice(&dst.octets());
+        header.extend_from_slice(&1234u16.to_be_bytes()); // src port
+        header.extend_from_slice(&dport.to_be_bytes()); // dst port
+        header.extend_from_slice(&[0u8; 12]); // rest of TCP header
+
+        let mut rec_body = Vec::new();
+        rec_body.extend_from_slice(&1u32.to_be_bytes()); // header_protocol = ethernet
+        rec_body.extend_from_slice(&frame_len.to_be_bytes());
+        rec_body.extend_from_slice(&0u32.to_be_bytes()); // stripped
+        rec_body.extend_from_slice(&(header.len() as u32).to_be_bytes());
+        rec_body.extend_from_slice(&header);
+        while rec_body.len() % 4 != 0 {
+            rec_body.push(0);
+        }
+        let mut record = Vec::new();
+        record.extend_from_slice(&1u32.to_be_bytes()); // flow_format = raw packet header
+        record.extend_from_slice(&(rec_body.len() as u32).to_be_bytes());
+        record.extend_from_slice(&rec_body);
+
+        let mut sample = Vec::new();
+        sample.extend_from_slice(&0u32.to_be_bytes()); // seq
+        sample.extend_from_slice(&0u32.to_be_bytes()); // source_id
+        sample.extend_from_slice(&rate.to_be_bytes()); // sampling_rate
+        sample.extend_from_slice(&0u32.to_be_bytes()); // sample_pool
+        sample.extend_from_slice(&0u32.to_be_bytes()); // drops
+        sample.extend_from_slice(&1u32.to_be_bytes()); // input ifIndex
+        sample.extend_from_slice(&0u32.to_be_bytes()); // output ifIndex
+        sample.extend_from_slice(&1u32.to_be_bytes()); // num_records
+        sample.extend_from_slice(&record);
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&5u32.to_be_bytes()); // version
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // agent addr type v4
+        pkt.extend_from_slice(&[192, 168, 1, 1]); // agent ip
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // sub_agent_id
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // seq
+        pkt.extend_from_slice(&0u32.to_be_bytes()); // uptime
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // num_samples
+        pkt.extend_from_slice(&1u32.to_be_bytes()); // sample type = flow sample
+        pkt.extend_from_slice(&(sample.len() as u32).to_be_bytes());
+        pkt.extend_from_slice(&sample);
+        pkt
+    }
+
+    /// End-to-end over a real UDP socket for the sFlow path: sFlow datagram in → scaled FlowBatch out.
+    #[tokio::test]
+    async fn sflow_datagram_becomes_flow_batch() {
+        let bus = Arc::new(InMemoryBus::new(8));
+        let mut flows = bus.subscribe_flows();
+        let state = Arc::new(Mutex::new(FlowState::new(500)));
+
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = sock.local_addr().unwrap();
+        tokio::spawn(run_flow_listener(
+            sock,
+            state.clone(),
+            limiter(),
+            FlowProto::Sflow,
+        ));
+        tokio::spawn(run_flow_flusher(
+            bus.clone(),
+            state.clone(),
+            "edge-1".into(),
+            "default".into(),
+            1,
+        ));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let pkt = sflow_one_tcp(
+            Ipv4Addr::new(10, 0, 0, 9),
+            Ipv4Addr::new(8, 8, 4, 4),
+            443,
+            1000,
+            1500,
+        );
+        client.send_to(&pkt, addr).await.unwrap();
+
+        let batch = tokio::time::timeout(std::time::Duration::from_secs(5), flows.recv())
+            .await
+            .expect("flow batch within timeout")
+            .unwrap();
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(
+            batch.records[0].dst_ip,
+            IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4))
+        );
+        assert_eq!(batch.records[0].dst_port, 443);
+        // Byte/packet counts are scaled by the 1-in-1000 sampling rate.
+        assert_eq!(batch.records[0].bytes, 1500 * 1000);
+        assert_eq!(batch.records[0].packets, 1000);
+    }
+
     #[tokio::test]
     async fn garbage_datagram_is_dropped_without_publishing() {
         let bus = Arc::new(InMemoryBus::new(8));
@@ -287,7 +439,12 @@ mod tests {
 
         let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = sock.local_addr().unwrap();
-        tokio::spawn(run_flow_listener(sock, state.clone(), limiter()));
+        tokio::spawn(run_flow_listener(
+            sock,
+            state.clone(),
+            limiter(),
+            FlowProto::Netflow,
+        ));
         tokio::spawn(run_flow_flusher(
             bus.clone(),
             state.clone(),

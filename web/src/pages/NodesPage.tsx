@@ -49,6 +49,7 @@ import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
+import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
@@ -68,8 +69,6 @@ const UNGROUPED = '__ungrouped__';
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 
 const GROUP_TYPES: GroupType[] = ['site', 'region', 'device_type', 'service', 'generic'];
-
-const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
 
 /** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
  *  every group that is open AND visible (all its ancestors open) — i.e. its expanded content is
@@ -160,7 +159,7 @@ export function NodesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selected: TreeSelection = parseSelection(searchParams.get('sel'));
   const tabParam = searchParams.get('tab') ?? '';
-  const tab = TABS.includes(tabParam) ? tabParam : 'overview';
+  const tab = normalizeNodeDetailTab(tabParam);
   const [filter, setFilter] = useState('');
 
   // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).

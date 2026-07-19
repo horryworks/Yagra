@@ -129,10 +129,13 @@ services:
       # (2026-07-11 load test). Raise per site for chassis-scale syslog/trap storms.
       YAGRA_EVENT_RATE_PER_SOURCE: ${YAGRA_EVENT_RATE_PER_SOURCE:-200}
       YAGRA_EVENT_RATE_GLOBAL: ${YAGRA_EVENT_RATE_GLOBAL:-5000}
-      # Flow collector (ADR-031): receive NetFlow v9 / IPFIX, edge-aggregate to top-N/bucket, and
+      # Flow collector (ADR-031): receive NetFlow v5/v9 / IPFIX, edge-aggregate to top-N/bucket, and
       # publish to core (→ ClickHouse). Set YAGRA_FLOW_BIND empty in .env to disable. Point devices'
       # flow export at this poller's :2055.
       YAGRA_FLOW_BIND: ${YAGRA_FLOW_BIND-0.0.0.0:2055}
+      # sFlow v5 (ADR-031 Increment 2): off by default — set YAGRA_SFLOW_BIND=0.0.0.0:6343 in .env to
+      # receive sFlow (counts are sampling-rate-scaled estimates; shares the flow buckets/caps).
+      YAGRA_SFLOW_BIND: ${YAGRA_SFLOW_BIND-}
       YAGRA_FLOW_BUCKET_SECS: ${YAGRA_FLOW_BUCKET_SECS:-60}
       YAGRA_FLOW_TOP_N: ${YAGRA_FLOW_TOP_N:-500}
       # Optional: OpenTelemetry OTLP/HTTP endpoint (unset = logs only). Same collector as core.
@@ -143,7 +146,8 @@ services:
     ports:
       - "${YAGRA_SYSLOG_PORT:-514}:1514/udp"   # syslog intake
       - "${YAGRA_TRAP_PORT:-162}:1162/udp"     # SNMP trap intake
-      - "${YAGRA_FLOW_PORT:-2055}:2055/udp"    # NetFlow / IPFIX flow intake (ADR-031)
+      - "${YAGRA_FLOW_PORT:-2055}:2055/udp"    # NetFlow v5/v9 / IPFIX flow intake (ADR-031)
+      - "${YAGRA_SFLOW_PORT:-6343}:6343/udp"   # sFlow intake (ADR-031 Increment 2; bind via YAGRA_SFLOW_BIND)
     # NOTE: event→node correlation keys on the datagram source IP. If Docker's bridge
     # networking rewrites it on this host, switch the poller to `network_mode: host`.
     cap_add:

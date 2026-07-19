@@ -12,8 +12,7 @@ import { useAuthStore } from '../store';
 import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
-
-const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
+import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();
@@ -24,7 +23,7 @@ export function NodeDetailPage() {
   // to Overview.
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') ?? '';
-  const tab = TABS.includes(tabParam) ? tabParam : 'overview';
+  const tab = normalizeNodeDetailTab(tabParam);
   const setTab = (next: string) => {
     const params = new URLSearchParams(searchParams);
     params.set('tab', next);
