@@ -30,6 +30,13 @@ services:
       YAGRA_CLICKHOUSE_URL: http://clickhouse:8123
       # Flow retention in days (ClickHouse TTL). Default 30.
       # YAGRA_FLOW_RETENTION_DAYS: "30"
+      # Optional offline IP→ASN enrichment for flow AS (ADR-031 Increment 3, default-OFF). Non-BGP
+      # exporters send AS=0; when this points at an iptoasn.com TSV, core fills those zeros and shows
+      # AS names. Fetch once (no runtime egress; update = replace + restart):
+      #   mkdir -p ./data/ipasn && curl -s https://iptoasn.com/data/ip2asn-combined.tsv.gz \
+      #     | gunzip > ./data/ipasn/ip2asn.tsv
+      # Uncomment together with the ipasn volume mount below.
+      # YAGRA_IPASN_DB: /data/ipasn/ip2asn.tsv
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): filesystems core reports
       # capacity for. `root` = the container rootfs; `metrics` = the VictoriaMetrics data volume
       # (mounted read-only below) so the metrics-storage disk trend is visible. Database growth is
@@ -51,6 +58,8 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend. Read-only: core only measures capacity, never writes here.
       - vmdata:/hostfs/vm:ro
+      # Offline IP→ASN dataset (ADR-031 Increment 3) — mount read-only; uncomment with YAGRA_IPASN_DB.
+      # - ./data/ipasn:/data/ipasn:ro
     # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does
     restart: unless-stopped
 

@@ -145,6 +145,9 @@ pub struct ApiState {
     /// flow-query endpoints serve top talkers/conversations/ports/protocols/trend; `None` (default-OFF)
     /// makes those endpoints return `503 service_unavailable`.
     pub flows: Option<Arc<dyn crate::flowstore::FlowStore>>,
+    /// Offline IP→ASN table (ADR-031 Increment 3). `Some` when `YAGRA_IPASN_DB` is configured — then
+    /// the flow top-AS endpoint resolves AS numbers to organization names; `None` leaves names unset.
+    pub ipasn: Option<Arc<crate::ipasn::IpAsnDb>>,
     /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
     pub host_sample: CoreHostSample,
     /// Inventory read seam.
@@ -309,6 +312,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/nodes/:node_id/flow/protocols",
             get(get_node_flow_protocols),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/flow/top-as",
+            get(get_node_flow_top_as),
         )
         .route(
             "/api/v1/collection-templates",
@@ -1254,12 +1261,18 @@ async fn get_node_metric_range(
 // ── Flow analysis (ADR-031) ──────────────────────────────────────────────────
 
 /// Time-window + limit query for the flow endpoints. `from`/`to` are Unix seconds (defaulting to
-/// the trailing hour); `limit` caps top-N rows.
+/// the trailing hour); `limit` caps top-N rows. `proto`/`port`/`peer` are optional drill-down
+/// filters and `dir` selects the AS side for the top-AS endpoint — all parsed into strong types
+/// (unparseable values are ignored), so no untrusted string reaches the store query.
 #[derive(Deserialize)]
 struct FlowRangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     limit: Option<u32>,
+    proto: Option<String>,
+    port: Option<String>,
+    peer: Option<String>,
+    dir: Option<String>,
 }
 
 /// 503 when flow monitoring is disabled (no ClickHouse flow store configured).
@@ -1283,6 +1296,21 @@ fn flow_query_params(node_id: Uuid, q: &FlowRangeQuery) -> crate::flowstore::Flo
         from_unix_ms: from.saturating_mul(1000),
         to_unix_ms: to.saturating_mul(1000),
         limit,
+        // Parse into strong types; anything unparseable is simply ignored (no raw string in SQL).
+        proto: q.proto.as_deref().and_then(|s| s.trim().parse::<u8>().ok()),
+        dst_port: q.port.as_deref().and_then(|s| s.trim().parse::<u16>().ok()),
+        peer: q
+            .peer
+            .as_deref()
+            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok()),
+    }
+}
+
+/// Which AS side the top-AS endpoint aggregates on (`dir=src`; default destination).
+fn flow_as_dir(q: &FlowRangeQuery) -> crate::flowstore::AsDir {
+    match q.dir.as_deref() {
+        Some("src") => crate::flowstore::AsDir::Src,
+        _ => crate::flowstore::AsDir::Dst,
     }
 }
 
@@ -1310,6 +1338,7 @@ async fn get_node_flow_series(
         node_id: fq.node_id,
         from_unix_ms: fq.from_unix_ms,
         to_unix_ms: fq.to_unix_ms,
+        proto: fq.proto,
     };
     match store.series(&sq).await {
         Ok(points) => Json(points).into_response(),
@@ -1394,6 +1423,37 @@ async fn get_node_flow_protocols(
     match store.top_protocols(&fq).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => flow_query_failed("protocols", &e),
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/top-as` — top autonomous systems by bytes (`dir=src|dst`,
+/// default `dst`). AS numbers come from the store; names are resolved from the IP→ASN table here.
+async fn get_node_flow_top_as(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    let dir = flow_as_dir(&q);
+    match store.top_as(&fq, dir).await {
+        Ok(mut rows) => {
+            if let Some(db) = &st.ipasn {
+                for r in &mut rows {
+                    if r.asn != 0 {
+                        r.name = db.name_of(r.asn).map(str::to_owned);
+                    }
+                }
+            }
+            Json(rows).into_response()
+        }
+        Err(e) => flow_query_failed("top-as", &e),
     }
 }
 
@@ -9229,6 +9289,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
+            ipasn: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9258,6 +9319,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
+            ipasn: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9285,6 +9347,7 @@ mod tests {
             store: Arc::new(InMemorySink::default()),
             logs: None,
             flows: None,
+            ipasn: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9429,6 +9492,72 @@ mod tests {
         let json = body_json(resp).await;
         assert_eq!(json[0]["addr"], "10.0.0.2");
         assert_eq!(json[0]["bytes"], 5000);
+    }
+
+    #[tokio::test]
+    async fn flow_top_as_ranks_and_filters() {
+        // Endpoint shape + ordering + protocol filter (AS-name resolution is covered by the
+        // `ipasn` unit tests; here `st.ipasn` is None so names stay unset).
+        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        let node = Uuid::from_u128(9);
+        let store = InMemoryFlowStore::default();
+        let mk = |dst: &str, dst_as: u32, proto: u8, bytes: u64| FlowRow {
+            node_id: node,
+            ts_unix_ms: 1_000_000,
+            exporter_ip: "192.168.1.1".parse().unwrap(),
+            if_index: 2,
+            src_ip: "10.0.0.2".parse().unwrap(),
+            dst_ip: dst.parse().unwrap(),
+            src_port: 40000,
+            dst_port: 443,
+            proto,
+            tos: 0,
+            src_as: 0,
+            dst_as,
+            bytes,
+            packets: bytes / 100,
+            flows: 1,
+        };
+        store
+            .insert_batch(&[mk("8.8.8.8", 15169, 6, 5000), mk("1.1.1.1", 13335, 17, 100)])
+            .await
+            .unwrap();
+
+        let mut st = state_with(Arc::new(InMemorySink::default()));
+        st.flows = Some(Arc::new(store));
+        let app = router(st);
+        // Default dir = dst: AS 15169 (5000) ranks above AS 13335 (100).
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/flow/top-as?from=0&to=100000"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json[0]["asn"], 15169);
+        assert_eq!(json[0]["bytes"], 5000);
+
+        // Protocol filter (UDP) narrows to AS 13335 only.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/nodes/{node}/flow/top-as?from=0&to=100000&proto=17"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["asn"], 13335);
     }
 
     #[test]

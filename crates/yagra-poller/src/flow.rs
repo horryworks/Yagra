@@ -177,8 +177,8 @@ pub async fn run_flow_flusher<B: Bus>(
                     proto: a.proto,
                     tos: a.tos,
                     if_index: a.if_index,
-                    src_as: 0, // reserved — ADR-031 Increment 3
-                    dst_as: 0,
+                    src_as: a.src_as, // export-provided AS (0 = unknown); core enriches zeros
+                    dst_as: a.dst_as,
                     bytes: a.bytes,
                     packets: a.packets,
                     flows: a.flows,
@@ -239,8 +239,8 @@ mod tests {
 
     /// Build a minimal NetFlow v9 datagram with one template + one data record.
     fn nf9_one_record(src: Ipv4Addr, dst: Ipv4Addr, bytes: u32) -> Vec<u8> {
-        // IPV4_SRC(8,4) IPV4_DST(12,4) L4_DST_PORT(11,2) PROTOCOL(4,1) IN_BYTES(1,4)
-        let fields: [(u16, u16); 5] = [(8, 4), (12, 4), (11, 2), (4, 1), (1, 4)];
+        // IPV4_SRC(8,4) IPV4_DST(12,4) L4_DST_PORT(11,2) PROTOCOL(4,1) IN_BYTES(1,4) DST_AS(17,4)
+        let fields: [(u16, u16); 6] = [(8, 4), (12, 4), (11, 2), (4, 1), (1, 4), (17, 4)];
         let mut tmpl = Vec::new();
         tmpl.extend_from_slice(&256u16.to_be_bytes());
         tmpl.extend_from_slice(&(fields.len() as u16).to_be_bytes());
@@ -259,6 +259,7 @@ mod tests {
         data.extend_from_slice(&443u16.to_be_bytes());
         data.push(6);
         data.extend_from_slice(&bytes.to_be_bytes());
+        data.extend_from_slice(&15169u32.to_be_bytes()); // dst_as (Google)
         let mut data_set = Vec::new();
         data_set.extend_from_slice(&256u16.to_be_bytes());
         data_set.extend_from_slice(&((4 + data.len()) as u16).to_be_bytes());
@@ -315,6 +316,8 @@ mod tests {
         );
         assert_eq!(batch.records[0].dst_port, 443);
         assert_eq!(batch.records[0].bytes, 4096);
+        // Export-provided destination AS survives the AggregatedFlow → FlowRecord mapping.
+        assert_eq!(batch.records[0].dst_as, 15169);
     }
 
     /// Build a minimal sFlow v5 datagram: one compact flow sample carrying one raw Ethernet/IPv4/TCP

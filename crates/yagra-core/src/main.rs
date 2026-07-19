@@ -26,6 +26,7 @@ mod events;
 mod flowstore;
 mod groups;
 mod history;
+mod ipasn;
 mod leader;
 mod logstore;
 mod maintenance;
@@ -191,6 +192,27 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             "ClickHouse flow store enabled (ADR-031)"
         );
     }
+
+    // Offline IP→ASN table for flow AS enrichment (ADR-031 Increment 3). Opt-in/default-OFF: loaded
+    // once from a mounted iptoasn.com TSV. A missing/unreadable file logs and disables enrichment
+    // (non-fatal) so a stale path never takes core down. Shared by the writer (IP→AS) and the flow
+    // API (AS→name).
+    let ipasn: Option<Arc<crate::ipasn::IpAsnDb>> = cfg.ipasn_db_path.as_deref().and_then(|p| {
+        match crate::ipasn::IpAsnDb::load(std::path::Path::new(p)) {
+            Ok(db) if db.is_empty() => {
+                tracing::warn!(path = p, "IP→ASN dataset loaded 0 ranges — AS enrichment disabled");
+                None
+            }
+            Ok(db) => {
+                tracing::info!(ranges = db.len(), path = p, "IP→ASN enrichment enabled (ADR-031)");
+                Some(db)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = p, "IP→ASN dataset load failed — AS enrichment disabled");
+                None
+            }
+        }
+    });
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
@@ -460,6 +482,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let events_repo = events_repo.clone();
         let logs = logs.clone();
         let flows = flows.clone();
+        let ipasn = ipasn.clone();
         let thresholds = thresholds.clone();
         let maintenance = maintenance.clone();
         let group_repo = group_repo.clone();
@@ -562,6 +585,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                     flow_stream,
                     flow_store,
                     repo.clone(),
+                    ipasn.clone(),
                     shutdown.clone(),
                 ));
             }
@@ -762,6 +786,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         store,
         logs,
         flows,
+        ipasn: ipasn.clone(),
         host_sample: core_host,
         nodes,
         alerts,
@@ -837,6 +862,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         store: sink,
         logs: None,
         flows: None,
+        ipasn: None,
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
@@ -1344,6 +1370,7 @@ async fn run_flow_writer<S>(
     mut flows: S,
     store: Arc<dyn FlowStore>,
     repo: Arc<NodeRepo>,
+    ipasn: Option<Arc<crate::ipasn::IpAsnDb>>,
     shutdown: CancellationToken,
 ) where
     S: Stream<Item = FlowBatch> + Unpin,
@@ -1392,6 +1419,18 @@ async fn run_flow_writer<S>(
                     continue;
                 };
                 for rec in &batch.records {
+                    // Enrich only the zeros: the exporter's own BGP view is authoritative, the
+                    // offline IP→ASN table only fills in AS the device couldn't provide (ADR-031).
+                    let mut src_as = rec.src_as;
+                    let mut dst_as = rec.dst_as;
+                    if let Some(db) = &ipasn {
+                        if src_as == 0 {
+                            src_as = db.lookup(rec.src_ip).unwrap_or(0);
+                        }
+                        if dst_as == 0 {
+                            dst_as = db.lookup(rec.dst_ip).unwrap_or(0);
+                        }
+                    }
                     buf.push(FlowRow {
                         node_id,
                         ts_unix_ms: batch.bucket_start_ms,
@@ -1403,8 +1442,8 @@ async fn run_flow_writer<S>(
                         dst_port: rec.dst_port,
                         proto: rec.proto,
                         tos: rec.tos,
-                        src_as: rec.src_as,
-                        dst_as: rec.dst_as,
+                        src_as,
+                        dst_as,
                         bytes: rec.bytes,
                         packets: rec.packets,
                         flows: rec.flows,

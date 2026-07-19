@@ -68,6 +68,12 @@ pub struct Config {
     /// Flow retention in days for the ClickHouse TTL (`YAGRA_FLOW_RETENTION_DAYS`, ADR-031).
     /// Defaults to [`crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS`] when unset/invalid.
     pub flow_retention_days: u32,
+    /// Path to an offline IP→ASN dataset (iptoasn.com TSV) for flow AS enrichment
+    /// (`YAGRA_IPASN_DB`, ADR-031 Increment 3). Optional and **default-OFF**: when set and readable,
+    /// core enriches flow records whose exporter carried no AS (`AS = 0`) and resolves AS names in
+    /// the flow API; when unset, AS is export-provided only (byte-identical to Increment 2). Loaded
+    /// once at startup — no runtime egress. Consumed by `run_live`.
+    pub ipasn_db_path: Option<String>,
     /// High-availability leader election (ADR-016). Default `false`: single active core, all
     /// background work runs unconditionally (byte-identical to pre-HA behavior). When `true`, this
     /// core races for a PostgreSQL advisory lock and runs the coordinator + ingest + alert/notify
@@ -125,6 +131,8 @@ impl Config {
             flow_retention_days: parse_retention_days(
                 std::env::var("YAGRA_FLOW_RETENTION_DAYS").ok(),
             ),
+            // IP→ASN enrichment (ADR-031 Increment 3): opt-in. Unset ⇒ AS is export-provided only.
+            ipasn_db_path: parse_optional(std::env::var("YAGRA_IPASN_DB").ok()),
             // HA (ADR-016): opt-in. Unset ⇒ single-core behavior, no advisory lock.
             enable_ha: parse_bool(std::env::var("YAGRA_ENABLE_HA").ok()),
             core_id: parse_optional(std::env::var("YAGRA_CORE_ID").ok()),

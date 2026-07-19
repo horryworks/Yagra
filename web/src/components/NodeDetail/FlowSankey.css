@@ -1,0 +1,25 @@
+/* Hand-rolled SVG Sankey for the Flow tab (ADR-031). Theme-aware; colors come from the shared
+   series palette (inline `fill`), everything else from theme variables. */
+.flow-sankey {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.flow-sankey-band {
+  fill-opacity: 0.4;
+  transition: fill-opacity 0.15s ease;
+}
+.flow-sankey-band:hover {
+  fill-opacity: 0.85;
+}
+
+.flow-sankey-node {
+  fill: var(--text-tertiary);
+}
+
+.flow-sankey-label {
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  fill: var(--text-secondary);
+}

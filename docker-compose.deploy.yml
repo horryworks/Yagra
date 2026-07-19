@@ -57,6 +57,13 @@ services:
       # to disable flow monitoring (the flow API then 503s; nothing else is affected).
       YAGRA_CLICKHOUSE_URL: ${YAGRA_CLICKHOUSE_URL-http://clickhouse:8123}
       YAGRA_FLOW_RETENTION_DAYS: ${YAGRA_FLOW_RETENTION_DAYS:-30}
+      # Optional offline IP→ASN enrichment for flow AS (ADR-031 Increment 3, default-OFF, no runtime
+      # egress). Most non-BGP exporters send AS=0; when this points at an iptoasn.com TSV, core fills
+      # those zeros and resolves AS names in the flow API. Fetch once (updates = replace + restart):
+      #   mkdir -p ./data/ipasn && curl -s https://iptoasn.com/data/ip2asn-combined.tsv.gz \
+      #     | gunzip > ./data/ipasn/ip2asn.tsv
+      # Uncomment together with the ipasn volume mount below.
+      # YAGRA_IPASN_DB: /data/ipasn/ip2asn.tsv
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
@@ -101,6 +108,8 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend (capacity only — core never writes here).
       - vmdata:/hostfs/vm:ro
+      # Offline IP→ASN dataset (ADR-031 Increment 3) — mount read-only; uncomment with YAGRA_IPASN_DB.
+      # - ./data/ipasn:/data/ipasn:ro
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro

@@ -10,7 +10,24 @@
 
 .nd-flow-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Drill-down filters (protocol / destination port / peer). */
+.nd-flow-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nd-flow-filters .field {
+  max-width: 150px;
+}
+.nd-flow-filters .nd-flow-port {
+  max-width: 110px;
 }
 
 .nd-flow-error {
@@ -34,8 +51,23 @@
 
 .nd-flow-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
+}
+
+/* Card header row: title + optional inline control (the AS src/dst toggle). */
+.nd-flow-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Sankey (src→dst ribbons) — shown alongside the exact conversations table. */
+.nd-flow-sankey {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .nd-flow-card {

@@ -90,6 +90,23 @@ export interface FlowPoint {
   packets: number;
 }
 
+/** An autonomous-system aggregate (`/nodes/:id/flow/top-as`). `asn` 0 = unknown; `name` when
+ *  the IP→ASN table resolves it (else `null`). */
+export interface FlowAsAgg {
+  asn: number;
+  name?: string | null;
+  bytes: number;
+  packets: number;
+  flows: number;
+}
+
+/** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer). */
+export interface FlowFilters {
+  proto?: number;
+  port?: number;
+  peer?: string;
+}
+
 /** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). */
 export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' | 'discards';
 

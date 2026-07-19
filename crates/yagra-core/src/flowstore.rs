@@ -50,9 +50,9 @@ pub struct FlowRow {
     pub proto: u8,
     /// ToS / DSCP byte.
     pub tos: u8,
-    /// Source AS (reserved; Increment 3).
+    /// Source AS (0 = unknown; export-provided or enriched from the IP→ASN table).
     pub src_as: u32,
-    /// Destination AS (reserved; Increment 3).
+    /// Destination AS (0 = unknown).
     pub dst_as: u32,
     /// Bytes over the bucket.
     pub bytes: u64,
@@ -62,7 +62,8 @@ pub struct FlowRow {
     pub flows: u32,
 }
 
-/// A top-N flow query: one node, a time window, and a result cap.
+/// A top-N flow query: one node, a time window, a result cap, and optional drill-down filters.
+/// Filters are strongly typed (never raw strings) so nothing device-supplied is interpolated.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowQuery {
     /// Node whose flows to query.
@@ -73,9 +74,36 @@ pub struct FlowQuery {
     pub to_unix_ms: i64,
     /// Max rows to return (clamped).
     pub limit: u32,
+    /// Optional IP-protocol filter.
+    pub proto: Option<u8>,
+    /// Optional destination-port filter.
+    pub dst_port: Option<u16>,
+    /// Optional peer filter — rows where this address is the source or the destination.
+    pub peer: Option<IpAddr>,
 }
 
-/// A flow trend query: one node and a time window (5-minute rollup granularity).
+/// Which AS side a top-AS query aggregates on. A typed enum (never interpolated raw) so only a
+/// fixed column name reaches SQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsDir {
+    /// Source AS (`src_as`).
+    Src,
+    /// Destination AS (`dst_as`).
+    Dst,
+}
+
+impl AsDir {
+    /// The ClickHouse column this direction selects — a fixed identifier, safe to interpolate.
+    fn column(self) -> &'static str {
+        match self {
+            AsDir::Src => "src_as",
+            AsDir::Dst => "dst_as",
+        }
+    }
+}
+
+/// A flow trend query: one node and a time window (5-minute rollup granularity). The rollup carries
+/// only `proto`, so of the fact-table filters only a protocol filter can apply to the trend.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowSeriesQuery {
     /// Node whose trend to query.
@@ -84,6 +112,8 @@ pub struct FlowSeriesQuery {
     pub from_unix_ms: i64,
     /// Window end (Unix ms, inclusive).
     pub to_unix_ms: i64,
+    /// Optional IP-protocol filter (the only fact-table filter the rollup supports).
+    pub proto: Option<u8>,
 }
 
 /// A top-talker: one host address with summed traffic.
@@ -140,6 +170,22 @@ pub struct FlowProtoAgg {
     pub flows: u64,
 }
 
+/// An autonomous-system aggregate. `asn = 0` means unknown (the UI labels it accordingly). `name`
+/// is resolved from the IP→ASN table at the API layer (the store leaves it `None`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowAsAgg {
+    /// Autonomous-system number (0 = unknown).
+    pub asn: u32,
+    /// AS organization name, if resolvable.
+    pub name: Option<String>,
+    /// Bytes.
+    pub bytes: u64,
+    /// Packets.
+    pub packets: u64,
+    /// Distinct flows.
+    pub flows: u64,
+}
+
 /// A trend point: bytes/packets for one protocol at one 5-minute bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FlowPoint {
@@ -173,6 +219,9 @@ pub trait FlowStore: Send + Sync {
     async fn top_ports(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowPortAgg>>;
     /// Traffic by IP protocol.
     async fn top_protocols(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowProtoAgg>>;
+    /// Top autonomous systems by bytes, on the `dir` side (`asn` numbers only; names filled by the
+    /// API). `asn = 0` (unknown) is included.
+    async fn top_as(&self, q: &FlowQuery, dir: AsDir) -> anyhow::Result<Vec<FlowAsAgg>>;
     /// Bytes/packets over time, per protocol, at 5-minute granularity (from the rollup MV).
     async fn series(&self, q: &FlowSeriesQuery) -> anyhow::Result<Vec<FlowPoint>>;
 }
@@ -226,6 +275,24 @@ fn j_str(v: &Value, k: &str) -> String {
 /// Clamp a window to whole seconds `[from, to]` for interpolation into `toDateTime(...)`.
 fn window_secs(from_unix_ms: i64, to_unix_ms: i64) -> (i64, i64) {
     (from_unix_ms.div_euclid(1000), to_unix_ms.div_euclid(1000))
+}
+
+/// Build the optional fact-table filter fragment (`AND …`) for a [`FlowQuery`]. Only typed values
+/// are interpolated: `proto`/`dst_port` are integers and `peer` is a validated [`IpAddr`] rendered
+/// via [`ip_to_ch`] — no device-supplied string ever reaches SQL.
+fn flow_filters_sql(q: &FlowQuery) -> String {
+    let mut s = String::new();
+    if let Some(p) = q.proto {
+        s.push_str(&format!(" AND proto = {p}"));
+    }
+    if let Some(port) = q.dst_port {
+        s.push_str(&format!(" AND dst_port = {port}"));
+    }
+    if let Some(peer) = q.peer {
+        let ip = ip_to_ch(peer);
+        s.push_str(&format!(" AND (src_ip = '{ip}' OR dst_ip = '{ip}')"));
+    }
+    s
 }
 
 // ─── ClickHouse (live) ────────────────────────────────────────────────────────────────
@@ -391,10 +458,11 @@ impl FlowStore for ChStore {
     async fn top_talkers(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowTalker>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
+        let filters = flow_filters_sql(q);
         let sql = format!(
             "SELECT src_ip AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to})
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
              GROUP BY src_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
             q.node_id
         );
@@ -414,10 +482,11 @@ impl FlowStore for ChStore {
     async fn top_conversations(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowConversation>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
+        let filters = flow_filters_sql(q);
         let sql = format!(
             "SELECT src_ip AS s, dst_ip AS d, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to})
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
              GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
             q.node_id
         );
@@ -438,10 +507,11 @@ impl FlowStore for ChStore {
     async fn top_ports(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowPortAgg>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
+        let filters = flow_filters_sql(q);
         let sql = format!(
             "SELECT dst_port AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to})
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
              GROUP BY dst_port ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
             q.node_id
         );
@@ -461,10 +531,11 @@ impl FlowStore for ChStore {
     async fn top_protocols(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowProtoAgg>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 256);
+        let filters = flow_filters_sql(q);
         let sql = format!(
             "SELECT proto AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to})
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
              GROUP BY proto ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
             q.node_id
         );
@@ -481,12 +552,43 @@ impl FlowStore for ChStore {
             .collect())
     }
 
+    async fn top_as(&self, q: &FlowQuery, dir: AsDir) -> anyhow::Result<Vec<FlowAsAgg>> {
+        let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
+        let limit = q.limit.clamp(1, 1000);
+        let col = dir.column(); // fixed identifier ("src_as" | "dst_as")
+        let filters = flow_filters_sql(q);
+        let sql = format!(
+            "SELECT {col} AS asn, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
+             FROM flow_records
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY asn ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
+            q.node_id
+        );
+        Ok(self
+            .query_json(&sql)
+            .await?
+            .iter()
+            .map(|v| FlowAsAgg {
+                asn: j_u64(v, "asn") as u32,
+                name: None, // resolved by the API layer
+                bytes: j_u64(v, "bytes"),
+                packets: j_u64(v, "packets"),
+                flows: j_u64(v, "flows"),
+            })
+            .collect())
+    }
+
     async fn series(&self, q: &FlowSeriesQuery) -> anyhow::Result<Vec<FlowPoint>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
+        // The rollup carries only proto, so only a protocol filter can apply to the trend.
+        let proto_filter = q
+            .proto
+            .map(|p| format!(" AND proto = {p}"))
+            .unwrap_or_default();
         let sql = format!(
             "SELECT toUnixTimestamp(ts) AS t, proto, sum(bytes) AS bytes, sum(packets) AS packets
              FROM flow_rollup_5m
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to})
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){proto_filter}
              GROUP BY t, proto ORDER BY t ASC FORMAT JSONEachRow",
             q.node_id
         );
@@ -536,6 +638,10 @@ impl InMemoryFlowStore {
                 r.node_id == q.node_id
                     && r.ts_unix_ms >= q.from_unix_ms
                     && r.ts_unix_ms <= q.to_unix_ms
+                    && q.proto.is_none_or(|p| r.proto == p)
+                    && q.dst_port.is_none_or(|port| r.dst_port == port)
+                    && q.peer
+                        .is_none_or(|peer| r.src_ip == peer || r.dst_ip == peer)
             })
             .cloned()
             .collect()
@@ -651,12 +757,43 @@ impl FlowStore for InMemoryFlowStore {
         Ok(out)
     }
 
+    async fn top_as(&self, q: &FlowQuery, dir: AsDir) -> anyhow::Result<Vec<FlowAsAgg>> {
+        use std::collections::HashMap;
+        let mut agg: HashMap<u32, (u64, u64, u64)> = HashMap::new();
+        for r in self.in_window(q) {
+            let asn = match dir {
+                AsDir::Src => r.src_as,
+                AsDir::Dst => r.dst_as,
+            };
+            let e = agg.entry(asn).or_default();
+            e.0 += r.bytes;
+            e.1 += r.packets;
+            e.2 += u64::from(r.flows);
+        }
+        let mut out: Vec<FlowAsAgg> = agg
+            .into_iter()
+            .map(|(asn, (bytes, packets, flows))| FlowAsAgg {
+                asn,
+                name: None,
+                bytes,
+                packets,
+                flows,
+            })
+            .collect();
+        out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
+        out.truncate(q.limit.clamp(1, 1000) as usize);
+        Ok(out)
+    }
+
     async fn series(&self, q: &FlowSeriesQuery) -> anyhow::Result<Vec<FlowPoint>> {
         let fq = FlowQuery {
             node_id: q.node_id,
             from_unix_ms: q.from_unix_ms,
             to_unix_ms: q.to_unix_ms,
             limit: u32::MAX,
+            proto: q.proto,
+            dst_port: None,
+            peer: None,
         };
         use std::collections::BTreeMap;
         let mut agg: BTreeMap<(i64, u8), (u64, u64)> = BTreeMap::new();
@@ -752,6 +889,9 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
         };
         let talkers = store.top_talkers(&q).await.unwrap();
         assert_eq!(talkers[0].addr, "10.0.0.2");
@@ -789,6 +929,7 @@ mod tests {
             node_id: node,
             from_unix_ms: 0,
             to_unix_ms: 1_000_000,
+            proto: None,
         };
         let pts = store.series(&q).await.unwrap();
         assert_eq!(pts.len(), 2);
@@ -797,5 +938,68 @@ mod tests {
         assert_eq!(pts[0].bytes, 200);
         assert_eq!(pts[1].ts_unix_ms, 600_000);
         assert_eq!(pts[1].proto, 17);
+    }
+
+    /// A `FlowRow` with an explicit source/destination AS.
+    fn row_as(
+        node: Uuid,
+        src: &str,
+        dst: &str,
+        port: u16,
+        proto: u8,
+        bytes: u64,
+        dst_as: u32,
+    ) -> FlowRow {
+        let mut r = row(node, src, dst, port, proto, bytes, 1_000);
+        r.dst_as = dst_as;
+        r
+    }
+
+    #[tokio::test]
+    async fn in_memory_top_as_groups_and_filters() {
+        let node = Uuid::from_u128(1);
+        let store = InMemoryFlowStore::default();
+        store
+            .insert_batch(&[
+                row_as(node, "10.0.0.2", "8.8.8.8", 443, 6, 1000, 15169), // Google
+                row_as(node, "10.0.0.2", "8.8.4.4", 443, 6, 500, 15169),  // same AS, folds
+                row_as(node, "10.0.0.3", "1.1.1.1", 53, 17, 300, 13335),  // Cloudflare (UDP/53)
+            ])
+            .await
+            .unwrap();
+
+        // Top destination AS: 15169 (1500) then 13335 (300).
+        let q = FlowQuery {
+            node_id: node,
+            from_unix_ms: 0,
+            to_unix_ms: 10_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+        };
+        let top = store.top_as(&q, AsDir::Dst).await.unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].asn, 15169);
+        assert_eq!(top[0].bytes, 1500);
+        assert_eq!(top[1].asn, 13335);
+
+        // Protocol filter (UDP) narrows to just the Cloudflare AS.
+        let q_udp = FlowQuery {
+            proto: Some(17),
+            ..q
+        };
+        let udp = store.top_as(&q_udp, AsDir::Dst).await.unwrap();
+        assert_eq!(udp.len(), 1);
+        assert_eq!(udp[0].asn, 13335);
+
+        // Peer filter (a specific destination host) narrows the port view.
+        let q_peer = FlowQuery {
+            peer: Some("1.1.1.1".parse().unwrap()),
+            ..q
+        };
+        let ports = store.top_ports(&q_peer).await.unwrap();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].port, 53);
     }
 }

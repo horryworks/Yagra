@@ -1,8 +1,10 @@
 // NodeDetail ▸ Flow tab (ADR-031): traffic-flow analysis for this node — a bytes-over-time trend
-// (per protocol), Top-N talkers / protocols / destination ports, and a top-conversations table.
-// Data comes from the flow-query API (ClickHouse behind core); when flow monitoring isn't enabled
-// the endpoints 503 and this renders a "not configured" hint. Reuses the shared RangeControl window
-// + refresh tick, MetricChart, RankedBars, and DataTable so it matches every other detail surface.
+// (per protocol), Top-N talkers / protocols / destination ports / autonomous systems, a src→dst
+// Sankey, and a conversations table. Drill-down filters (protocol / destination port / peer)
+// narrow every fact-table view. Data comes from the flow-query API (ClickHouse behind core); when
+// flow monitoring isn't enabled the endpoints 503 and this renders a "not configured" hint. Reuses
+// the shared RangeControl window + refresh tick, MetricChart, RankedBars, DataTable, and Field
+// controls so it matches every other detail surface.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +12,9 @@ import { api, ApiError } from '../../services/api';
 import { formatBytes } from '../../lib/format';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
+  FlowAsAgg,
   FlowConversation,
+  FlowFilters,
   FlowPoint,
   FlowPortAgg,
   FlowProtoAgg,
@@ -20,7 +24,9 @@ import type {
 import { MetricChart, PALETTE, type ChartSeries } from '../MetricChart/MetricChart';
 import { RankedBars, type RankedRow } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
+import { Select, TextInput } from '../ui/Field';
 import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
+import { FlowSankey } from './FlowSankey';
 import './FlowTab.css';
 
 const TOP_N = 10;
@@ -95,6 +101,14 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
+  // Filter inputs. `proto`/`asDir` commit immediately (selects); `port`/`peer` are debounced from
+  // their raw inputs so typing doesn't refetch on every keystroke.
+  const [proto, setProto] = useState('');
+  const [asDir, setAsDir] = useState<'src' | 'dst'>('dst');
+  const [portInput, setPortInput] = useState('');
+  const [peerInput, setPeerInput] = useState('');
+  const [port, setPort] = useState('');
+  const [peer, setPeer] = useState('');
   const [loading, setLoading] = useState(true);
   const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,23 +117,43 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const [convos, setConvos] = useState<FlowConversation[]>([]);
   const [ports, setPorts] = useState<FlowPortAgg[]>([]);
   const [protos, setProtos] = useState<FlowProtoAgg[]>([]);
+  const [asAgg, setAsAgg] = useState<FlowAsAgg[]>([]);
   const [xRange, setXRange] = useState<[number, number] | undefined>(undefined);
+
+  // Debounce the free-text filters (port/peer) so a fetch fires ~once the operator stops typing.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setPort(portInput);
+      setPeer(peerInput);
+    }, 350);
+    return () => clearTimeout(id);
+  }, [portInput, peerInput]);
 
   useEffect(() => {
     let cancelled = false;
     const { from, to } = resolveRange(range);
+    // Build the typed filter set; blank / invalid values are simply omitted.
+    const filters: FlowFilters = {};
+    const protoNum = proto ? Number(proto) : NaN;
+    if (Number.isInteger(protoNum)) filters.proto = protoNum;
+    const portNum = port ? Number(port) : NaN;
+    if (Number.isInteger(portNum) && portNum >= 0 && portNum <= 65535) filters.port = portNum;
+    if (peer.trim()) filters.peer = peer.trim();
+
     setLoading(true);
     setError(null);
     void Promise.allSettled([
-      api.getNodeFlowSeries(node.id, { from, to }),
-      api.getNodeFlowTopTalkers(node.id, { from, to, limit: TOP_N }),
-      api.getNodeFlowConversations(node.id, { from, to, limit: TOP_N }),
-      api.getNodeFlowTopPorts(node.id, { from, to, limit: TOP_N }),
-      api.getNodeFlowProtocols(node.id, { from, to }),
-    ]).then(([sRes, tRes, cRes, pRes, prRes]) => {
+      api.getNodeFlowSeries(node.id, { from, to, ...filters }),
+      api.getNodeFlowTopTalkers(node.id, { from, to, limit: TOP_N, ...filters }),
+      api.getNodeFlowConversations(node.id, { from, to, limit: TOP_N, ...filters }),
+      api.getNodeFlowTopPorts(node.id, { from, to, limit: TOP_N, ...filters }),
+      api.getNodeFlowProtocols(node.id, { from, to, ...filters }),
+      api.getNodeFlowTopAs(node.id, { from, to, limit: TOP_N, dir: asDir, ...filters }),
+    ]).then(([sRes, tRes, cRes, pRes, prRes, aRes]) => {
       if (cancelled) return;
       // Flow disabled ⇒ every call 503s with `flow_unavailable`: show the "not configured" state.
-      const rejected = [sRes, tRes, cRes, pRes, prRes].find((r) => r.status === 'rejected') as
+      const results = [sRes, tRes, cRes, pRes, prRes, aRes];
+      const rejected = results.find((r) => r.status === 'rejected') as
         | PromiseRejectedResult
         | undefined;
       if (rejected?.reason instanceof ApiError && rejected.reason.code === 'flow_unavailable') {
@@ -133,6 +167,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
       if (cRes.status === 'fulfilled') setConvos(cRes.value);
       if (pRes.status === 'fulfilled') setPorts(pRes.value);
       if (prRes.status === 'fulfilled') setProtos(prRes.value);
+      if (aRes.status === 'fulfilled') setAsAgg(aRes.value);
       setError(
         rejected
           ? rejected.reason instanceof ApiError
@@ -146,7 +181,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     return () => {
       cancelled = true;
     };
-  }, [node.id, range, tick, t]);
+  }, [node.id, range, tick, t, proto, port, peer, asDir]);
 
   const trend = useMemo(() => buildTrend(series), [series]);
   const talkerRows = useMemo(() => toRows(talkers, (x) => x.addr, (x) => x.bytes), [talkers]);
@@ -155,6 +190,20 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     [protos],
   );
   const portRows = useMemo(() => toRows(ports, (x) => portLabel(x.port), (x) => x.bytes), [ports]);
+  const asRows = useMemo(
+    () =>
+      toRows(
+        asAgg,
+        (x) =>
+          x.asn === 0
+            ? t('flow.as.unknown')
+            : x.name
+              ? `AS${x.asn} · ${x.name}`
+              : `AS${x.asn}`,
+        (x) => x.bytes,
+      ),
+    [asAgg, t],
+  );
 
   const convoColumns: Column<FlowConversation>[] = useMemo(
     () => [
@@ -188,6 +237,39 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     [t],
   );
 
+  const filterBar = (
+    <div className="nd-flow-filters">
+      <Select
+        value={proto}
+        onChange={(e) => setProto(e.target.value)}
+        aria-label={t('flow.filter.proto')}
+      >
+        <option value="">{t('flow.filter.allProtos')}</option>
+        {Object.entries(PROTO_NAMES).map(([n, name]) => (
+          <option key={n} value={n}>
+            {name}
+          </option>
+        ))}
+      </Select>
+      <TextInput
+        className="nd-flow-port"
+        type="number"
+        min={0}
+        max={65535}
+        placeholder={t('flow.filter.port')}
+        value={portInput}
+        onChange={(e) => setPortInput(e.target.value)}
+        aria-label={t('flow.filter.port')}
+      />
+      <TextInput
+        placeholder={t('flow.filter.peer')}
+        value={peerInput}
+        onChange={(e) => setPeerInput(e.target.value)}
+        aria-label={t('flow.filter.peer')}
+      />
+    </div>
+  );
+
   if (disabled) {
     return (
       <div className="nd-flow">
@@ -202,11 +284,16 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     talkers.length === 0 &&
     convos.length === 0 &&
     ports.length === 0 &&
-    protos.length === 0;
+    protos.length === 0 &&
+    asAgg.length === 0;
+
+  // The trend reads the proto-only rollup, so port/peer narrow only the tabular + Sankey views.
+  const showChartHint = Boolean(port.trim() || peer.trim());
 
   return (
     <div className="nd-flow">
       <div className="nd-flow-toolbar">
+        {filterBar}
         <RangeControl value={range} onChange={setRange} />
       </div>
       {error && <p className="nd-flow-error">{error}</p>}
@@ -229,6 +316,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
             ) : (
               <p className="nd-flow-muted">{t('flow.noTrend')}</p>
             )}
+            {showChartHint && <p className="nd-flow-muted">{t('flow.filter.chartHint')}</p>}
           </section>
 
           <div className="nd-flow-grid">
@@ -244,7 +332,40 @@ export function FlowTab({ node }: { node: NodeDetail }) {
               <h3 className="nd-flow-h">{t('flow.topPorts')}</h3>
               <RankedBars rows={portRows} empty={t('flow.none')} />
             </section>
+            <section className="nd-flow-card">
+              <div className="nd-flow-card-head">
+                <h3 className="nd-flow-h">{t('flow.topAs')}</h3>
+                <div className="rc-seg" role="group" aria-label={t('flow.as.direction')}>
+                  <button
+                    type="button"
+                    className={`rc-seg-btn${asDir === 'dst' ? ' active' : ''}`}
+                    aria-pressed={asDir === 'dst'}
+                    onClick={() => setAsDir('dst')}
+                  >
+                    {t('flow.as.dstDir')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`rc-seg-btn${asDir === 'src' ? ' active' : ''}`}
+                    aria-pressed={asDir === 'src'}
+                    onClick={() => setAsDir('src')}
+                  >
+                    {t('flow.as.srcDir')}
+                  </button>
+                </div>
+              </div>
+              <RankedBars rows={asRows} empty={t('flow.none')} />
+            </section>
           </div>
+
+          <section className="nd-flow-sankey">
+            <h3 className="nd-flow-h">{t('flow.sankey')}</h3>
+            {convos.length > 0 ? (
+              <FlowSankey conversations={convos} />
+            ) : (
+              <p className="nd-flow-muted">{t('flow.none')}</p>
+            )}
+          </section>
 
           <section className="nd-flow-convos">
             <h3 className="nd-flow-h">{t('flow.conversations')}</h3>

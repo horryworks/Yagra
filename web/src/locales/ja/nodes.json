@@ -115,12 +115,27 @@
     "topTalkers": "トップトーカー",
     "topProtocols": "プロトコル",
     "topPorts": "宛先ポート上位",
+    "topAs": "AS 上位",
+    "sankey": "会話フロー",
     "conversations": "会話上位",
     "col": {
       "source": "送信元",
       "destination": "宛先",
       "bytes": "バイト",
       "packets": "パケット"
+    },
+    "as": {
+      "unknown": "AS 不明",
+      "direction": "AS の向き",
+      "srcDir": "送信元",
+      "dstDir": "宛先"
+    },
+    "filter": {
+      "proto": "プロトコル",
+      "allProtos": "すべてのプロトコル",
+      "port": "宛先ポート",
+      "peer": "相手 IP",
+      "chartHint": "ポート／相手フィルタは表と図のみを絞り込みます。推移グラフは全トラフィックを表示します。"
     },
     "none": "この期間のフローデータはありません。",
     "noTrend": "この期間のトラフィック推移はありません。",
