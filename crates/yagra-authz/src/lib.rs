@@ -70,10 +70,13 @@ pub fn allow_list(scope: &PollerScope) -> Permissions {
     Permissions {
         // Poller → core. A fixed set; `results.backfill` is included (store-and-forward, ADR — the
         // shared static account historically omitted it, which blocked backfill on the remote bus).
+        // `flows` is the edge-aggregated flow-batch subject (ADR-031): a remote-site poller running a
+        // flow listener publishes here, so it must be granted or its batches are rejected on the bus.
         publish: vec![
             subjects::results(),
             subjects::results_backfill(),
             subjects::events(),
+            subjects::flows(),
             subjects::discovery_results(),
             subjects::heartbeat(),
             subjects::sync_request(),
@@ -507,9 +510,11 @@ mod tests {
             assert_ne!(s, "yagra.jobs.>");
             assert_ne!(s, "yagra.jobs.*");
         }
-        // Publish set includes results.backfill (the store-and-forward valve).
+        // Publish set includes results.backfill (the store-and-forward valve) and flows (ADR-031 —
+        // a remote-site poller running a flow listener must be able to publish edge-aggregated batches).
         assert!(perms.publish.contains(&"yagra.results".to_owned()));
         assert!(perms.publish.contains(&"yagra.results.backfill".to_owned()));
+        assert!(perms.publish.contains(&"yagra.flows".to_owned()));
         assert!(perms.publish.contains(&"yagra.poller.heartbeat".to_owned()));
     }
 

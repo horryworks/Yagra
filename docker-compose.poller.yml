@@ -63,6 +63,19 @@ services:
       # defaults (200 / 5000 msg/s). Raise for a site with chassis-scale syslog/trap volume.
       YAGRA_EVENT_RATE_PER_SOURCE: ${YAGRA_EVENT_RATE_PER_SOURCE:-200}
       YAGRA_EVENT_RATE_GLOBAL: ${YAGRA_EVENT_RATE_GLOBAL:-5000}
+      # ── Flow collector (ADR-031; optional) ─────────────────────────────────────────
+      # Receive this site's NetFlow v5/v9 / IPFIX, edge-aggregate to top-N/bucket, and
+      # publish to core (→ ClickHouse). With host networking the container binds the host
+      # port directly (:2055), so point this site's devices' flow export at this poller.
+      # Set YAGRA_FLOW_BIND empty to disable. sFlow is off unless YAGRA_SFLOW_BIND=:6343.
+      # NOTE: on a secured remote bus with Auth Callout on (ADR-030), the poller's scoped
+      # credential must allow publishing `yagra.flows` — granted in yagra-authz's allow-list
+      # (and in the static `poller` account in docker/nats/nats-server.conf) so flow batches
+      # aren't rejected. Older core/nats configs without that grant will drop remote flow.
+      YAGRA_FLOW_BIND: ${YAGRA_FLOW_BIND-0.0.0.0:2055}
+      YAGRA_SFLOW_BIND: ${YAGRA_SFLOW_BIND-}
+      YAGRA_FLOW_BUCKET_SECS: ${YAGRA_FLOW_BUCKET_SECS:-60}
+      YAGRA_FLOW_TOP_N: ${YAGRA_FLOW_TOP_N:-500}
       # ── Distributed tracing (optional) ─────────────────────────────────────────────
       # Export this remote poller's poll spans to a central OTLP collector (reachable from
       # the site — its own endpoint/TLS, separate from the NATS bus). Unset = logs only.
