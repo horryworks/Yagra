@@ -109,10 +109,12 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend (capacity only — core never writes here).
       - vmdata:/hostfs/vm:ro
-      # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only; place ip2asn.tsv under ./data/ipasn
-      # on the host (see YAGRA_IPASN_DB above). If a redeploy's git clean wipes this untracked dir,
-      # switch to a host-absolute source path outside the checkout.
-      - ./data/ipasn:/data/ipasn:ro
+      # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only. Sourced from a HOST-ABSOLUTE path
+      # OUTSIDE the runner checkout on purpose: the deploy job's `git clean` wipes untracked files in
+      # the checkout dir, so a `./data/ipasn` there vanishes on every redeploy. On the test host place
+      # ip2asn.tsv at /home/horry/yagra-data/ipasn/ (fetch cmd under YAGRA_IPASN_DB above). If the dir
+      # is absent the mount is an empty dir and core logs a warning + runs with enrichment off.
+      - /home/horry/yagra-data/ipasn:/data/ipasn:ro
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
