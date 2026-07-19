@@ -1,5 +1,38 @@
 # Release Notes
 
+## v0.1.15
+
+**See what your traffic is doing.** Yagra now collects and analyzes network **flow** records — NetFlow,
+IPFIX, and sFlow — so alongside the health monitoring you already had you can see the top talkers,
+ports, protocols, and autonomous systems moving traffic across your network. Incoming SNMP traps are
+decoded to readable names too, and the active-alerts screen stays smooth even during a large outage.
+
+### New Features
+- **Traffic-flow monitoring (NetFlow v5/v9, IPFIX, sFlow v5)** — point your devices' flow export at a
+  poller (`:2055` for NetFlow/IPFIX, `:6343` for sFlow) and Yagra collects, edge-aggregates (top-N per
+  time bucket), and stores the records in a dedicated **ClickHouse** flow store (1-month retention,
+  loss-tolerant). Each node gains a **Flow** tab — top talkers, top ports, top protocols, and a
+  conversation **Sankey** diagram — and you can click any talker / port / protocol to filter. Flow is
+  opt-in per poller and entirely separate from metrics: leave it off and nothing changes.
+- **Autonomous-system (AS) enrichment for flows** — flow endpoints are resolved to their **AS number
+  and name** from an offline IP→ASN table, with a **Top AS** card and drill-down (click an AS to filter
+  its flows) and an AS-level conversation view. Exporters that don't send AS themselves (most non-BGP
+  devices) are filled in automatically. The dataset is kept fresh entirely inside Docker by an updater
+  sidecar and **hot-reloaded** into the running core with no restart. Enrichment is opt-in.
+- **Remote-site pollers can collect flow** — a poller at a branch site can receive local flow exports
+  and forward them to the core over the (authenticated) bus, so flow works in the same distributed
+  poller topology as polling.
+- **SNMP trap names** — incoming SNMP traps (v1/v2c) now resolve the trap OID to a **human-readable
+  name**, ship with a set of **built-in trap event rules**, and show a trap badge, so a trap arrives as
+  a named event instead of a raw OID.
+
+### Improvements
+- **Active Alerts stays responsive during a major outage** — the active-alerts triage list is now
+  virtualized (windowed), so thousands of simultaneous alerts render only the rows on screen instead of
+  the entire list, keeping the page smooth exactly when you need it.
+- **Smoother flow-enrichment refresh** — the periodic reload of the IP→ASN dataset no longer briefly
+  stalls the core; the large table is now parsed off the async runtime.
+
 ## v0.1.14
 
 **Hardening for multi-core and distributed deployments.** Sessions now survive a core failover, and

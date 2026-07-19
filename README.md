@@ -6,13 +6,17 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.14.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
+> Status: **v0.1.15.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
 > branch sites, assigned by location affinity and failed over automatically. A remote poller now
 > **rides out a network partition**: it keeps polling locally, buffers results, and **backfills the
-> metrics** for the outage when the link returns (alerts resume from "now", never replayed). Every
+> metrics** for the outage when the link returns (alerts resume from "now", never replayed).
+> Yagra now **collects traffic-flow records** (NetFlow v5/v9, IPFIX, and sFlow) into a dedicated
+> ClickHouse store and surfaces per-node **top talkers, ports, protocols, and AS-level conversations**,
+> with offline **IP→ASN enrichment** naming the autonomous systems behind the traffic; incoming
+> **SNMP traps are decoded to human-readable names** with built-in trap rules. Every
 > binary exports **OpenTelemetry traces** (opt-in) and now reports **host-resource trends** (CPU /
 > load / memory / disk) for the core and each poller in System Health, and shuts down gracefully on
 > restart. The WebUI switches between **English and 日本語** on the fly across most screens, and
