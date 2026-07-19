@@ -69,7 +69,7 @@ const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 
 const GROUP_TYPES: GroupType[] = ['site', 'region', 'device_type', 'service', 'generic'];
 
-const TABS = ['overview', 'interfaces', 'collection', 'events'];
+const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
 
 /** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
  *  every group that is open AND visible (all its ancestors open) — i.e. its expanded content is
