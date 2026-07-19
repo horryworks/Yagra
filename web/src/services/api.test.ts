@@ -879,6 +879,33 @@ describe('api client', () => {
     );
   });
 
+  it('builds the flow endpoint paths with from/to and an optional limit (ADR-031)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.getNodeFlowSeries('n1', { from: 100, to: 200 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/nodes/n1/flow/series?from=100&to=200');
+    await api.getNodeFlowTopTalkers('n1', { from: 100, to: 200, limit: 10 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/nodes/n1/flow/top-talkers?from=100&to=200&limit=10');
+    await api.getNodeFlowConversations('n1', { from: 100, to: 200, limit: 5 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/nodes/n1/flow/conversations?from=100&to=200&limit=5');
+    await api.getNodeFlowTopPorts('n1', { from: 100, to: 200 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/nodes/n1/flow/top-ports?from=100&to=200');
+    await api.getNodeFlowProtocols('n1', { from: 100, to: 200 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/nodes/n1/flow/protocols?from=100&to=200');
+  });
+
+  it('surfaces the flow-disabled 503 as a typed flow_unavailable error', async () => {
+    mockFetch(503, {
+      error: { code: 'flow_unavailable', message: 'flow monitoring is not enabled' },
+    });
+    await expect(api.getNodeFlowTopTalkers('n1', { from: 0, to: 1 })).rejects.toMatchObject({
+      code: 'flow_unavailable',
+      status: 503,
+    });
+  });
+
   it('creates a PagerDuty notification channel with a tagged config', async () => {
     const spy = vi
       .fn()

@@ -11,10 +11,15 @@
 //! never panic — syslog parsing is infallible (worst case: raw fallback), trap parsing
 //! returns `Err` on anything malformed, and both clip output to fixed size caps.
 
+pub mod flow;
 pub mod ratelimit;
 pub mod syslog;
 pub mod trap;
 
+pub use flow::{
+    parse_flow_export, AggregatedFlow, ExporterBatch, ExporterBuckets, FlowAggregator, FlowError,
+    FlowTemplates, RawFlow, DEFAULT_FLOW_TOP_N,
+};
 pub use ratelimit::SourceLimiter;
 pub use syslog::{parse_syslog, SyslogEvent, SyslogFormat};
 pub use trap::{build_inform_response, parse_trap, TrapError, TrapEvent};

@@ -14,7 +14,7 @@ services:
       context: .
       dockerfile: docker/yagra-core.Dockerfile
     image: ghcr.io/horryworks/yagra-core:dev
-    depends_on: [postgres, redis, nats, victoriametrics, victorialogs]
+    depends_on: [postgres, redis, nats, victoriametrics, victorialogs, clickhouse]
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
@@ -24,6 +24,12 @@ services:
       # written to VictoriaLogs; PostgreSQL then keeps only alert-linked rows. Unset this to keep
       # events entirely in PostgreSQL (backward-compatible).
       YAGRA_LOGS_URL: http://victorialogs:9428
+      # Flow store (ADR-031, the 4th store — traffic-flow tier). ClickHouse holds edge-aggregated
+      # NetFlow/IPFIX flow records (1-month TTL, loss-tolerant). Unset this to disable flow
+      # monitoring entirely — the flow API then returns 503 and existing features are unaffected.
+      YAGRA_CLICKHOUSE_URL: http://clickhouse:8123
+      # Flow retention in days (ClickHouse TTL). Default 30.
+      # YAGRA_FLOW_RETENTION_DAYS: "30"
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): filesystems core reports
       # capacity for. `root` = the container rootfs; `metrics` = the VictoriaMetrics data volume
       # (mounted read-only below) so the metrics-storage disk trend is visible. Database growth is
@@ -66,6 +72,14 @@ services:
       # Rate limits (events/sec): per source IP and across all sources.
       # YAGRA_EVENT_RATE_PER_SOURCE: "50"
       # YAGRA_EVENT_RATE_GLOBAL: "500"
+      # Flow collector (ADR-031): receive NetFlow v9 / IPFIX exports, edge-aggregate to top-N per
+      # bucket, and publish to core (which writes ClickHouse). Unset = disabled. Point your devices'
+      # flow export at this poller's :2055. Tunables: bucket width / top-N / flow rate caps.
+      YAGRA_FLOW_BIND: 0.0.0.0:2055
+      # YAGRA_FLOW_BUCKET_SECS: "60"       # aggregation window (bucket) in seconds
+      # YAGRA_FLOW_TOP_N: "500"            # top flows kept per exporter per bucket
+      # YAGRA_FLOW_RATE_PER_SOURCE: "1000" # flow datagrams/sec per source IP
+      # YAGRA_FLOW_RATE_GLOBAL: "20000"    # flow datagrams/sec across all sources
       # Distributed tracing (OpenTelemetry): match core's setting to trace a poll end to end
       # (core dispatch → poller poll → core ingest). At scale sample instead of tracing every
       # poll: OTEL_TRACES_SAMPLER=parentbased_traceidratio + OTEL_TRACES_SAMPLER_ARG=0.01.
@@ -81,6 +95,7 @@ services:
     ports:
       - "514:1514/udp"   # syslog intake
       - "162:1162/udp"   # SNMP trap intake
+      - "2055:2055/udp"  # NetFlow / IPFIX flow intake (ADR-031)
     # NOTE: with Docker bridge networking, verify device source IPs survive the port
     # mapping (conntrack DNAT usually preserves them; the userland proxy may not).
     # Event→node correlation keys on the source IP — if it's rewritten, run the poller
@@ -150,6 +165,22 @@ services:
       - vldata:/victoria-logs-data
     restart: unless-stopped
 
+  # Flow store — ClickHouse (ADR-031, the 4th store). Column-oriented store for edge-aggregated
+  # NetFlow/IPFIX flow records: high-cardinality tuples the TSDB can't hold, kept with a 1-month
+  # TTL (loss-tolerant tier). core creates the schema/rollup MV on startup and writes over HTTP
+  # (:8123). Internal only (no host mapping). ClickHouse is I/O + page-cache heavy — split it onto
+  # a dedicated VM/node pool at scale (change YAGRA_CLICKHOUSE_URL only).
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      # Single-node MVP: the default user, no password, reachable from the internal network.
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - chdata:/var/lib/clickhouse
+    restart: unless-stopped
+
   # ── OpenTelemetry trace collector (optional; self-observability) ──
   # Off by default: only starts with `docker compose --profile tracing up`. Jaeger all-in-one
   # receives OTLP (HTTP :4318) from core/poller and renders traces at http://localhost:16686.
@@ -169,4 +200,5 @@ volumes:
   pgdata:
   vmdata:
   vldata:
+  chdata:      # ClickHouse flow store (ADR-031)
   pollerbuf:   # store-and-forward result buffer (Phase 3)

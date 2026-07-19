@@ -13,7 +13,7 @@ import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 
-const TABS = ['overview', 'interfaces', 'collection', 'events'];
+const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
 
 export function NodeDetailPage() {
   const { t } = useTranslation();

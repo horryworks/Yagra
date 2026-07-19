@@ -1,0 +1,78 @@
+/* NodeDetail ▸ Flow tab (ADR-031). Trend chart on top, a responsive Top-N card grid, then a
+   fixed-height conversations table (its own virtual scroll). All colors/fonts via theme vars. */
+
+.nd-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.nd-flow-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.nd-flow-error {
+  margin: 0;
+  color: var(--status-critical);
+  font-size: var(--font-sm);
+}
+
+.nd-flow-empty,
+.nd-flow-muted {
+  margin: 0;
+  padding: 24px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  text-align: center;
+}
+
+.nd-flow-trend {
+  min-height: 220px;
+}
+
+.nd-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.nd-flow-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.nd-flow-h {
+  margin: 0;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.nd-flow-convos {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Bounded height so the virtualized DataTable scrolls internally within the scrolling tab body. */
+.nd-flow-table {
+  display: flex;
+  flex-direction: column;
+  height: 360px;
+  min-height: 0;
+}
+
+/* Below the two-column split, stack the Top-N cards so each stays readable. */
+@media (max-width: 860px) {
+  .nd-flow-grid {
+    grid-template-columns: 1fr;
+  }
+}

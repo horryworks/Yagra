@@ -48,6 +48,48 @@ export interface TopEntry {
   value: number;
 }
 
+// ── Flow analysis (ADR-031) — mirror the Rust `flowstore` DTOs ──
+/** A top-talker: one host address with summed traffic (`/nodes/:id/flow/top-talkers`). */
+export interface FlowTalker {
+  addr: string;
+  bytes: number;
+  packets: number;
+  flows: number;
+}
+
+/** A src→dst conversation with summed traffic (`/nodes/:id/flow/conversations`). */
+export interface FlowConversation {
+  src: string;
+  dst: string;
+  bytes: number;
+  packets: number;
+  flows: number;
+}
+
+/** A destination-port aggregate (`/nodes/:id/flow/top-ports`). */
+export interface FlowPortAgg {
+  port: number;
+  bytes: number;
+  packets: number;
+  flows: number;
+}
+
+/** A protocol aggregate (`/nodes/:id/flow/protocols`). `proto` is the IP protocol number. */
+export interface FlowProtoAgg {
+  proto: number;
+  bytes: number;
+  packets: number;
+  flows: number;
+}
+
+/** A trend point: bytes/packets for one protocol at one 5-minute bucket (`/nodes/:id/flow/series`). */
+export interface FlowPoint {
+  ts_unix_ms: number;
+  proto: number;
+  bytes: number;
+  packets: number;
+}
+
 /** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). */
 export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' | 'discards';
 

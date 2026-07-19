@@ -5,7 +5,9 @@
 //! broadcast channels — used for tests and the single-process walking skeleton. A NATS
 //! implementation (the production path) slots in behind the same trait later.
 
-use crate::messages::{EventMsg, HeartbeatMsg, PollJob, PollResult, SyncMsg, SyncRequest};
+use crate::messages::{
+    EventMsg, FlowBatch, HeartbeatMsg, PollJob, PollResult, SyncMsg, SyncRequest,
+};
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -38,6 +40,13 @@ pub trait Bus: Send + Sync {
     }
     /// Publish a passive event (syslog/trap/webhook) for core to consume.
     async fn publish_event(&self, event: EventMsg) -> Result<(), BusError>;
+    /// Publish an edge-aggregated flow batch (NetFlow/IPFIX/sFlow) for core to write to ClickHouse
+    /// (ADR-031). Best-effort, loss-tolerant tier: a failed publish is dropped, not buffered.
+    /// Defaulted to a no-op `Ok` so an implementation without a flow channel still compiles; the
+    /// real transports override it.
+    async fn publish_flows(&self, _batch: FlowBatch) -> Result<(), BusError> {
+        Ok(())
+    }
     /// Whether the bus is currently connected to its broker. The poller's store-and-forward sink
     /// uses this to decide between live publish and local buffering (Phase 3). An in-process bus is
     /// always connected; the NATS transport reflects its live connection state.
@@ -77,6 +86,9 @@ pub struct InMemoryBus {
     // transport isolates the two on distinct subjects.
     results_backfill: broadcast::Sender<PollResult>,
     events: broadcast::Sender<EventMsg>,
+    // Edge-aggregated flow batches (Phase 3, ADR-031) — a separate channel from `events` mirroring
+    // how the NATS transport isolates flow on its own `yagra.flows` subject.
+    flows: broadcast::Sender<FlowBatch>,
     // Control plane (ADR-009/020). `sync`/`pool_jobs` carry the routing key alongside the
     // message — the subscriber filters to its own poller id / pool, mirroring how the NATS
     // transport isolates them via per-poller / per-pool subjects.
@@ -94,6 +106,7 @@ impl InMemoryBus {
         let (results, _) = broadcast::channel(capacity);
         let (results_backfill, _) = broadcast::channel(capacity);
         let (events, _) = broadcast::channel(capacity);
+        let (flows, _) = broadcast::channel(capacity);
         let (heartbeats, _) = broadcast::channel(capacity);
         let (sync_requests, _) = broadcast::channel(capacity);
         let (sync, _) = broadcast::channel(capacity);
@@ -103,6 +116,7 @@ impl InMemoryBus {
             results,
             results_backfill,
             events,
+            flows,
             heartbeats,
             sync_requests,
             sync,
@@ -134,6 +148,12 @@ impl InMemoryBus {
     #[must_use]
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventMsg> {
         self.events.subscribe()
+    }
+
+    /// Subscribe to edge-aggregated flow batches (core side, ADR-031).
+    #[must_use]
+    pub fn subscribe_flows(&self) -> broadcast::Receiver<FlowBatch> {
+        self.flows.subscribe()
     }
 
     /// Subscribe to poller heartbeats (core side).
@@ -190,6 +210,11 @@ impl Bus for InMemoryBus {
 
     async fn publish_event(&self, event: EventMsg) -> Result<(), BusError> {
         let _ = self.events.send(event);
+        Ok(())
+    }
+
+    async fn publish_flows(&self, batch: FlowBatch) -> Result<(), BusError> {
+        let _ = self.flows.send(batch);
         Ok(())
     }
 }
@@ -320,6 +345,41 @@ mod tests {
         bus.publish_event(event.clone()).await.unwrap();
 
         assert_eq!(rx.recv().await.unwrap(), event);
+    }
+
+    #[tokio::test]
+    async fn published_flow_batch_reaches_subscriber() {
+        use crate::messages::{FlowBatch, FlowRecord, BUS_SCHEMA_VERSION};
+
+        let bus = InMemoryBus::new(8);
+        let mut rx = bus.subscribe_flows();
+
+        let batch = FlowBatch {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: "default".into(),
+            exporter_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            bucket_start_ms: 60_000,
+            bucket_secs: 60,
+            records: vec![FlowRecord {
+                src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+                dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+                src_port: 12345,
+                dst_port: 443,
+                proto: 6,
+                tos: 0,
+                if_index: 2,
+                src_as: 0,
+                dst_as: 0,
+                bytes: 4096,
+                packets: 8,
+                flows: 3,
+            }],
+            dropped: 0,
+        };
+        bus.publish_flows(batch.clone()).await.unwrap();
+
+        assert_eq!(rx.recv().await.unwrap(), batch);
     }
 
     #[tokio::test]

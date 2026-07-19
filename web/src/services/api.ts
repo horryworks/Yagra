@@ -32,6 +32,11 @@ import type {
   FleetCoverage,
   FleetGroupSummary,
   FleetSummary,
+  FlowConversation,
+  FlowPoint,
+  FlowPortAgg,
+  FlowProtoAgg,
+  FlowTalker,
   GroupNodesResult,
   GroupType,
   InterfaceHeatmap,
@@ -196,6 +201,13 @@ function jsonBody(method: string, body: unknown): RequestInit {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   };
+}
+
+/** Build the from/to(/limit) query string shared by the flow endpoints (ADR-031). */
+function flowParams(opts: { from: number; to: number; limit?: number }): string {
+  const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  return params.toString();
 }
 
 /** Public client bootstrap config (no secrets). */
@@ -1079,6 +1091,40 @@ export const api = {
   /** Manually close an active event alert (identity mirrors the alert wire shape). */
   closeEventAlert: (node: string, check: string): Promise<void> =>
     request('/events/alerts/close', jsonBody('POST', { node, check })),
+
+  // ── Flow analysis (ADR-031) — served only when a ClickHouse flow store is configured; the
+  // endpoints 503 (`flow_unavailable`) otherwise. `from`/`to` are unix seconds. ──
+  /** Bytes/packets over time per protocol (trend) for a node/window. */
+  getNodeFlowSeries: (nodeId: string, opts: { from: number; to: number }): Promise<FlowPoint[]> =>
+    request(`/nodes/${encodeURIComponent(nodeId)}/flow/series?${flowParams(opts)}`),
+
+  /** Top source hosts by bytes. */
+  getNodeFlowTopTalkers: (
+    nodeId: string,
+    opts: { from: number; to: number; limit?: number },
+  ): Promise<FlowTalker[]> =>
+    request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-talkers?${flowParams(opts)}`),
+
+  /** Top src→dst conversations by bytes. */
+  getNodeFlowConversations: (
+    nodeId: string,
+    opts: { from: number; to: number; limit?: number },
+  ): Promise<FlowConversation[]> =>
+    request(`/nodes/${encodeURIComponent(nodeId)}/flow/conversations?${flowParams(opts)}`),
+
+  /** Top destination ports by bytes. */
+  getNodeFlowTopPorts: (
+    nodeId: string,
+    opts: { from: number; to: number; limit?: number },
+  ): Promise<FlowPortAgg[]> =>
+    request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-ports?${flowParams(opts)}`),
+
+  /** Traffic by IP protocol. */
+  getNodeFlowProtocols: (
+    nodeId: string,
+    opts: { from: number; to: number; limit?: number },
+  ): Promise<FlowProtoAgg[]> =>
+    request(`/nodes/${encodeURIComponent(nodeId)}/flow/protocols?${flowParams(opts)}`),
 
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),

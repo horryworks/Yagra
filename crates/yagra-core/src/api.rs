@@ -141,6 +141,10 @@ pub struct ApiState {
     /// Event log store (ADR-024). `Some` when VictoriaLogs is configured — then event search
     /// reads from it and it holds the full firehose; `None` keeps events entirely in PostgreSQL.
     pub logs: Option<Arc<dyn LogStore>>,
+    /// Flow store (ADR-031, the traffic-flow tier). `Some` when ClickHouse is configured — then the
+    /// flow-query endpoints serve top talkers/conversations/ports/protocols/trend; `None` (default-OFF)
+    /// makes those endpoints return `503 service_unavailable`.
+    pub flows: Option<Arc<dyn crate::flowstore::FlowStore>>,
     /// Core's own latest host-resource sample (CPU/load/mem/disk), for the System Health page.
     pub host_sample: CoreHostSample,
     /// Inventory read seam.
@@ -284,6 +288,27 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
             get(get_interface_series),
+        )
+        // Flow analysis (ADR-031) — served only when a ClickHouse flow store is configured.
+        .route(
+            "/api/v1/nodes/:node_id/flow/series",
+            get(get_node_flow_series),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/flow/top-talkers",
+            get(get_node_flow_top_talkers),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/flow/conversations",
+            get(get_node_flow_conversations),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/flow/top-ports",
+            get(get_node_flow_top_ports),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/flow/protocols",
+            get(get_node_flow_protocols),
         )
         .route(
             "/api/v1/collection-templates",
@@ -1224,6 +1249,152 @@ async fn get_node_metric_range(
         points,
     })
     .into_response()
+}
+
+// ── Flow analysis (ADR-031) ──────────────────────────────────────────────────
+
+/// Time-window + limit query for the flow endpoints. `from`/`to` are Unix seconds (defaulting to
+/// the trailing hour); `limit` caps top-N rows.
+#[derive(Deserialize)]
+struct FlowRangeQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    limit: Option<u32>,
+}
+
+/// 503 when flow monitoring is disabled (no ClickHouse flow store configured).
+fn flow_unavailable() -> Response {
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "flow_unavailable",
+        "flow monitoring is not enabled (no ClickHouse flow store configured)".to_owned(),
+    )
+}
+
+/// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` comes typed from the
+/// path; the window is converted to ms and the limit clamped — no untrusted string ever reaches the
+/// store query.
+fn flow_query_params(node_id: Uuid, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
+    let to = q.to.unwrap_or_else(now_unix_s);
+    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
+    let limit = q.limit.unwrap_or(20).clamp(1, 1000);
+    crate::flowstore::FlowQuery {
+        node_id,
+        from_unix_ms: from.saturating_mul(1000),
+        to_unix_ms: to.saturating_mul(1000),
+        limit,
+    }
+}
+
+/// Map a flow-store error to a 500 without leaking the internal error to the client (security.md).
+fn flow_query_failed(what: &str, e: &anyhow::Error) -> Response {
+    tracing::warn!(error = %e, "flow {what} query failed");
+    internal("flow query failed")
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/series` — bytes/packets over time per protocol (trend).
+async fn get_node_flow_series(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    let sq = crate::flowstore::FlowSeriesQuery {
+        node_id: fq.node_id,
+        from_unix_ms: fq.from_unix_ms,
+        to_unix_ms: fq.to_unix_ms,
+    };
+    match store.series(&sq).await {
+        Ok(points) => Json(points).into_response(),
+        Err(e) => flow_query_failed("series", &e),
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/top-talkers` — top source hosts by bytes.
+async fn get_node_flow_top_talkers(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    match store.top_talkers(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("top-talkers", &e),
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/conversations` — top src→dst conversations by bytes.
+async fn get_node_flow_conversations(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    match store.top_conversations(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("conversations", &e),
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/top-ports` — top destination ports by bytes.
+async fn get_node_flow_top_ports(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    match store.top_ports(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("top-ports", &e),
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/flow/protocols` — traffic by IP protocol.
+async fn get_node_flow_protocols(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(node_id, &q);
+    match store.top_protocols(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("protocols", &e),
+    }
 }
 
 /// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
@@ -2242,6 +2413,9 @@ struct SystemHealth {
     /// VictoriaLogs (event log, ADR-024) — `/health`. Reported reachable when not configured
     /// (events then live in PostgreSQL), so an unconfigured log store never degrades `overall`.
     logs: DependencyHealth,
+    /// ClickHouse (flow store, ADR-031) — `/ping`. Reported reachable when not configured
+    /// (flow monitoring off), so an unconfigured flow store never degrades `overall`.
+    flow: DependencyHealth,
     /// NATS bus — inferred from a recent scheduler sweep (publish+consume working), not a direct ping.
     bus: DependencyHealth,
 }
@@ -2292,6 +2466,19 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         },
     };
 
+    // Flow store (ADR-031): ping ClickHouse when configured. When unset, flow monitoring is off, so
+    // report reachable with a clarifying detail (never degrades `overall`).
+    let flow = match st.flows.as_ref() {
+        Some(flow_store) => DependencyHealth {
+            reachable: flow_store.healthy().await,
+            detail: "ClickHouse (flow store)".to_owned(),
+        },
+        None => DependencyHealth {
+            reachable: true,
+            detail: "ClickHouse not configured (flow monitoring off)".to_owned(),
+        },
+    };
+
     // PostgreSQL and the bus signal both depend on the live write side. In skeleton mode there is
     // no DB and no poll loop, so both are reported unreachable (not an error).
     let (postgres, bus) = match st.admin.as_ref() {
@@ -2332,7 +2519,12 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         ),
     };
 
-    let overall = if postgres.reachable && tsdb.reachable && logs.reachable && bus.reachable {
+    let overall = if postgres.reachable
+        && tsdb.reachable
+        && logs.reachable
+        && flow.reachable
+        && bus.reachable
+    {
         "ok"
     } else {
         "degraded"
@@ -2342,6 +2534,7 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         postgres,
         tsdb,
         logs,
+        flow,
         bus,
     })
     .into_response()
@@ -9035,6 +9228,7 @@ mod tests {
         ApiState {
             store,
             logs: None,
+            flows: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9063,6 +9257,7 @@ mod tests {
         let state = ApiState {
             store,
             logs: None,
+            flows: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9089,6 +9284,7 @@ mod tests {
         let state = ApiState {
             store: Arc::new(InMemorySink::default()),
             logs: None,
+            flows: None,
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(AlertManager::new()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -9167,6 +9363,72 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let json = body_json(resp).await;
         assert_eq!(json["error"]["code"], "metric_not_found");
+    }
+
+    #[tokio::test]
+    async fn flow_endpoint_returns_503_when_flow_store_disabled() {
+        // Default state has `flows: None` (default-OFF) — the flow API must 503, not 500/panic.
+        let node = Uuid::nil();
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/flow/top-talkers"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "flow_unavailable");
+    }
+
+    #[tokio::test]
+    async fn flow_top_talkers_returns_data_when_enabled() {
+        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        let node = Uuid::from_u128(7);
+        let store = InMemoryFlowStore::default();
+        let mk = |src: &str, bytes: u64| FlowRow {
+            node_id: node,
+            ts_unix_ms: 1_000_000,
+            exporter_ip: "192.168.1.1".parse().unwrap(),
+            if_index: 2,
+            src_ip: src.parse().unwrap(),
+            dst_ip: "8.8.8.8".parse().unwrap(),
+            src_port: 40000,
+            dst_port: 443,
+            proto: 6,
+            tos: 0,
+            src_as: 0,
+            dst_as: 0,
+            bytes,
+            packets: bytes / 100,
+            flows: 1,
+        };
+        store
+            .insert_batch(&[mk("10.0.0.2", 5000), mk("10.0.0.3", 100)])
+            .await
+            .unwrap();
+
+        let mut st = state_with(Arc::new(InMemorySink::default()));
+        st.flows = Some(Arc::new(store));
+        let app = router(st);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/nodes/{node}/flow/top-talkers?from=0&to=100000"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json[0]["addr"], "10.0.0.2");
+        assert_eq!(json[0]["bytes"], 5000);
     }
 
     #[test]

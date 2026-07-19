@@ -40,7 +40,7 @@ const SYSLOG_BUF_BYTES: usize = 8 * 1024;
 /// Trap datagrams beyond this are rejected outright.
 const TRAP_BUF_BYTES: usize = 64 * 1024;
 
-fn now_unix_ms() -> i64 {
+pub(crate) fn now_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -187,7 +187,7 @@ pub async fn run_trap_listener<B: Bus>(
 /// `.await` (S22). Poison-tolerant: a limiter never panics while holding the lock, but if some
 /// future change ever did, recovering the inner value keeps intake alive rather than crashing
 /// every reader.
-fn allow(limiter: &Mutex<SourceLimiter>, source: IpAddr) -> bool {
+pub(crate) fn allow(limiter: &Mutex<SourceLimiter>, source: IpAddr) -> bool {
     limiter
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

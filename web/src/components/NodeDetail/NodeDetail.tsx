@@ -29,6 +29,7 @@ import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
+import { FlowTab } from './FlowTab';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import './NodeDetail.css';
 
@@ -37,7 +38,7 @@ const RTT_WINDOW_SECS = 30 * 60;
 
 const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
-const TABS = ['overview', 'interfaces', 'collection', 'events'];
+const TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'];
 
 interface Props {
   nodeId: string;
@@ -266,6 +267,7 @@ export function NodeDetail({
           { key: 'interfaces', label: t('tabs.interfaces'), n: interfaces.length || null, warn: ifWarn },
           { key: 'collection', label: t('tabs.collection'), n: collCount, warn: collWarn },
           { key: 'events', label: t('tabs.events') },
+          { key: 'flow', label: t('tabs.flow') },
         ].map((tb) => (
           <button
             key={tb.key}
@@ -302,6 +304,7 @@ export function NodeDetail({
         )}
         {activeTab === 'collection' && <CollectionTab node={node} canEdit={canEdit} />}
         {activeTab === 'events' && <EventsTab node={node} />}
+        {activeTab === 'flow' && <FlowTab node={node} />}
       </div>
 
       {editingBindings && (

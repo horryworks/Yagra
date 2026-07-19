@@ -1058,6 +1058,75 @@ pub struct EventMsg {
     pub truncated: bool,
 }
 
+// ── Flow records (Phase 3, ADR-031) — edge-received NetFlow/IPFIX/sFlow, pre-aggregated ─────
+
+/// A batch of edge-aggregated flow records for one bucket window, published on `yagra.flows`
+/// for core to write to ClickHouse (ADR-031).
+///
+/// The poller receives raw NetFlow/IPFIX/sFlow datagrams, folds identical 5-tuples within the
+/// bucket window, and keeps only the **top-N by bytes** — so the high-cardinality flow tuple
+/// stays bounded on the wire and **never reaches the TSDB** (the cardinality invariant that
+/// motivates the whole ADR). Flow is a best-effort, loss-tolerant tier (ADR-017): a failed
+/// publish is dropped, not buffered. All detail fields are `#[serde(default)]` for N/N-1
+/// tolerance. Core resolves `exporter_ip` → node via its own inventory, so the poller need not
+/// know which node an exporter maps to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlowBatch {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Poller that received and aggregated the flows.
+    pub poller_id: String,
+    /// Pool the poller belongs to.
+    pub pool: String,
+    /// Source address of the export datagrams (the monitored device). Core maps this to a node.
+    pub exporter_ip: IpAddr,
+    /// Bucket start as Unix time in milliseconds (UTC), aligned to `bucket_secs`.
+    pub bucket_start_ms: i64,
+    /// Aggregation window width in seconds (e.g. 60).
+    pub bucket_secs: u32,
+    /// Top-N aggregated records for this bucket, ordered by bytes descending.
+    pub records: Vec<FlowRecord>,
+    /// Count of distinct flows dropped/folded beyond the top-N (or key) cap (observability).
+    #[serde(default)]
+    pub dropped: u32,
+}
+
+/// One aggregated flow within a [`FlowBatch`]: a 5-tuple (+ ingress ifIndex / ToS) with summed
+/// byte/packet/flow counts over the bucket window. Addresses are `IpAddr` (v4 or v6 — never
+/// assume v4). `src_as`/`dst_as` are reserved for a later increment (`0` = unknown until then).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowRecord {
+    /// Source address.
+    pub src_ip: IpAddr,
+    /// Destination address.
+    pub dst_ip: IpAddr,
+    /// Source transport port (0 for non-port protocols).
+    pub src_port: u16,
+    /// Destination transport port (0 for non-port protocols).
+    pub dst_port: u16,
+    /// IP protocol number (6 = TCP, 17 = UDP, 1 = ICMP, …).
+    pub proto: u8,
+    /// IP type-of-service / DSCP byte, if the exporter provided it.
+    #[serde(default)]
+    pub tos: u8,
+    /// Ingress interface ifIndex, if the exporter provided it (`0` = unknown).
+    #[serde(default)]
+    pub if_index: u32,
+    /// Source autonomous-system number (reserved; ADR-031 Increment 3, `0` = unknown).
+    #[serde(default)]
+    pub src_as: u32,
+    /// Destination autonomous-system number (reserved; ADR-031 Increment 3, `0` = unknown).
+    #[serde(default)]
+    pub dst_as: u32,
+    /// Bytes observed over the bucket window.
+    pub bytes: u64,
+    /// Packets observed over the bucket window.
+    pub packets: u64,
+    /// Number of original flow records folded into this row.
+    pub flows: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1402,6 +1471,74 @@ mod tests {
             let tag = serde_json::to_string(&kind).unwrap();
             assert_eq!(tag, format!("\"{}\"", kind.as_str()));
         }
+    }
+
+    #[test]
+    fn flow_batch_round_trips_through_json() {
+        let batch = FlowBatch {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: "default".into(),
+            exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            bucket_start_ms: 1_700_000_000_000,
+            bucket_secs: 60,
+            records: vec![FlowRecord {
+                src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+                dst_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+                src_port: 40000,
+                dst_port: 443,
+                proto: 6,
+                tos: 0,
+                if_index: 2,
+                src_as: 0,
+                dst_as: 0,
+                bytes: 8192,
+                packets: 12,
+                flows: 4,
+            }],
+            dropped: 7,
+        };
+        let json = serde_json::to_string(&batch).unwrap();
+        let back: FlowBatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(batch, back);
+    }
+
+    #[test]
+    fn minimal_flow_record_defaults_optional_fields() {
+        // N/N-1 (ADR-017): a producer that predates tos/if_index/as fields still deserializes.
+        let json = r#"{
+            "src_ip": "10.0.0.2",
+            "dst_ip": "2001:db8::1",
+            "src_port": 40000,
+            "dst_port": 443,
+            "proto": 6,
+            "bytes": 8192,
+            "packets": 12,
+            "flows": 4,
+            "future_field": "ignored"
+        }"#;
+        let rec: FlowRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.tos, 0);
+        assert_eq!(rec.if_index, 0);
+        assert_eq!(rec.src_as, 0);
+        assert_eq!(rec.dst_as, 0);
+        assert!(rec.dst_ip.is_ipv6()); // v6 addresses parse (never assume v4)
+    }
+
+    #[test]
+    fn minimal_flow_batch_defaults_version_and_dropped() {
+        let json = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "exporter_ip": "192.168.1.1",
+            "bucket_start_ms": 0,
+            "bucket_secs": 60,
+            "records": []
+        }"#;
+        let batch: FlowBatch = serde_json::from_str(json).unwrap();
+        assert_eq!(batch.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        assert_eq!(batch.dropped, 0); // defaulted
+        assert!(batch.records.is_empty());
     }
 
     #[test]

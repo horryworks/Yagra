@@ -59,6 +59,15 @@ pub struct Config {
     /// from and written to VictoriaLogs (PostgreSQL then keeps only alert-linked rows); when unset,
     /// events stay entirely in PostgreSQL (backward-compatible). Consumed by `run_live`.
     pub logs_url: Option<String>,
+    /// ClickHouse HTTP base URL for the flow store (ADR-031, the 4th store — traffic-flow tier).
+    /// Optional and **independent of the live/skeleton decision**, additive/default-OFF: when set,
+    /// core subscribes to `yagra.flows`, ensures the ClickHouse schema, and serves the flow-query
+    /// API; when unset, the flow receiver is disabled and the API returns `service_unavailable`
+    /// (byte-identical to pre-flow behavior). Consumed by `run_live`.
+    pub flow_url: Option<String>,
+    /// Flow retention in days for the ClickHouse TTL (`YAGRA_FLOW_RETENTION_DAYS`, ADR-031).
+    /// Defaults to [`crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS`] when unset/invalid.
+    pub flow_retention_days: u32,
     /// High-availability leader election (ADR-016). Default `false`: single active core, all
     /// background work runs unconditionally (byte-identical to pre-HA behavior). When `true`, this
     /// core races for a PostgreSQL advisory lock and runs the coordinator + ingest + alert/notify
@@ -111,6 +120,11 @@ impl Config {
             redis_url: parse_optional(std::env::var("YAGRA_REDIS_URL").ok()),
             // Optional, independent of live/skeleton: unset ⇒ events stay in PostgreSQL (ADR-024).
             logs_url: parse_optional(std::env::var("YAGRA_LOGS_URL").ok()),
+            // Flow store (ADR-031): opt-in. Unset ⇒ flow receiver/API disabled (default-OFF).
+            flow_url: parse_optional(std::env::var("YAGRA_CLICKHOUSE_URL").ok()),
+            flow_retention_days: parse_retention_days(
+                std::env::var("YAGRA_FLOW_RETENTION_DAYS").ok(),
+            ),
             // HA (ADR-016): opt-in. Unset ⇒ single-core behavior, no advisory lock.
             enable_ha: parse_bool(std::env::var("YAGRA_ENABLE_HA").ok()),
             core_id: parse_optional(std::env::var("YAGRA_CORE_ID").ok()),
@@ -133,6 +147,15 @@ impl Config {
 /// trimmed value. Keeps a blank `YAGRA_REDIS_URL=` from being treated as a real URL.
 fn parse_optional(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+/// Parse the flow-retention days (`YAGRA_FLOW_RETENTION_DAYS`), defaulting on unset/invalid and
+/// clamping to a sane band so a typo can't set a 0-day (immediate-expiry) or absurd TTL.
+fn parse_retention_days(raw: Option<String>) -> u32 {
+    raw.and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .map(|n| n.clamp(1, 3650))
+        .unwrap_or(crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS)
 }
 
 /// Parse a boolean flag. Truthy: `1`/`true`/`yes`/`on` (case-insensitive); everything

@@ -42,6 +42,7 @@ services:
       nats: { condition: service_started }
       victoriametrics: { condition: service_started }
       victorialogs: { condition: service_started }
+      clickhouse: { condition: service_started }
       kek-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
@@ -51,6 +52,11 @@ services:
       # Event log store (ADR-024): passive events searched from + written to VictoriaLogs;
       # PostgreSQL keeps only alert-linked rows. Unset to keep events entirely in PostgreSQL.
       YAGRA_LOGS_URL: http://victorialogs:9428
+      # Flow store (ADR-031, the 4th store — traffic-flow tier). ClickHouse holds edge-aggregated
+      # NetFlow/IPFIX records (1-month TTL, loss-tolerant). Set YAGRA_CLICKHOUSE_URL empty in .env
+      # to disable flow monitoring (the flow API then 503s; nothing else is affected).
+      YAGRA_CLICKHOUSE_URL: ${YAGRA_CLICKHOUSE_URL-http://clickhouse:8123}
+      YAGRA_FLOW_RETENTION_DAYS: ${YAGRA_FLOW_RETENTION_DAYS:-30}
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
@@ -123,6 +129,12 @@ services:
       # (2026-07-11 load test). Raise per site for chassis-scale syslog/trap storms.
       YAGRA_EVENT_RATE_PER_SOURCE: ${YAGRA_EVENT_RATE_PER_SOURCE:-200}
       YAGRA_EVENT_RATE_GLOBAL: ${YAGRA_EVENT_RATE_GLOBAL:-5000}
+      # Flow collector (ADR-031): receive NetFlow v9 / IPFIX, edge-aggregate to top-N/bucket, and
+      # publish to core (→ ClickHouse). Set YAGRA_FLOW_BIND empty in .env to disable. Point devices'
+      # flow export at this poller's :2055.
+      YAGRA_FLOW_BIND: ${YAGRA_FLOW_BIND-0.0.0.0:2055}
+      YAGRA_FLOW_BUCKET_SECS: ${YAGRA_FLOW_BUCKET_SECS:-60}
+      YAGRA_FLOW_TOP_N: ${YAGRA_FLOW_TOP_N:-500}
       # Optional: OpenTelemetry OTLP/HTTP endpoint (unset = logs only). Same collector as core.
       YAGRA_OTEL_ENDPOINT: ${YAGRA_OTEL_ENDPOINT:-}
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-}
@@ -131,6 +143,7 @@ services:
     ports:
       - "${YAGRA_SYSLOG_PORT:-514}:1514/udp"   # syslog intake
       - "${YAGRA_TRAP_PORT:-162}:1162/udp"     # SNMP trap intake
+      - "${YAGRA_FLOW_PORT:-2055}:2055/udp"    # NetFlow / IPFIX flow intake (ADR-031)
     # NOTE: event→node correlation keys on the datagram source IP. If Docker's bridge
     # networking rewrites it on this host, switch the poller to `network_mode: host`.
     cap_add:
@@ -226,8 +239,22 @@ services:
       - vldata:/victoria-logs-data
     restart: unless-stopped
 
+  # Flow store — ClickHouse (ADR-031, the 4th store). Edge-aggregated NetFlow/IPFIX records with a
+  # 1-month TTL (loss-tolerant tier). core creates the schema on startup and writes over HTTP :8123.
+  # Internal only. I/O + page-cache heavy — split onto a dedicated node at scale (URL change only).
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - chdata:/var/lib/clickhouse
+    restart: unless-stopped
+
 volumes:
   pgdata:
   vmdata:
   vldata:
+  chdata:    # ClickHouse flow store (ADR-031)
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts

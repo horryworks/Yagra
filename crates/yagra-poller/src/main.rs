@@ -20,6 +20,7 @@
 //! bus blips (that continuity is the point of the working-set model).
 
 mod discovery;
+mod flow;
 mod limiter;
 mod listeners;
 mod store_forward;
@@ -175,7 +176,8 @@ async fn main() -> anyhow::Result<()> {
     // Passive-event listeners (Phase 2): syslog / SNMP traps, enabled per site via env. They publish
     // EventMsgs on `yagra.events`; core does the rule matching. The returned labels advertise which
     // ones actually bound (heartbeat telemetry).
-    let listener_labels = spawn_event_listeners(&bus, &shutdown).await;
+    let listener_labels =
+        spawn_event_listeners(&bus, &shutdown, &identity.id, &identity.pool).await;
 
     // Discovery sweeps run alongside polling and need the same raw-socket ICMP + SNMP transport. A
     // new core publishes them pool-scoped; an old core (or poll-now path) uses the legacy subject —
@@ -424,10 +426,14 @@ async fn run_heartbeat_loop<B>(
 async fn spawn_event_listeners(
     bus: &Arc<yagra_bus::NatsBus>,
     shutdown: &CancellationToken,
+    poller_id: &str,
+    pool_defaulted: &str,
 ) -> Vec<String> {
     let syslog_bind = env_nonempty("YAGRA_SYSLOG_BIND");
     let trap_bind = env_nonempty("YAGRA_TRAP_BIND");
-    if syslog_bind.is_none() && trap_bind.is_none() {
+    // Flow collector (Phase 3, ADR-031) — NetFlow v9 / IPFIX on `YAGRA_FLOW_BIND`, off if unset.
+    let flow_bind = env_nonempty("YAGRA_FLOW_BIND");
+    if syslog_bind.is_none() && trap_bind.is_none() && flow_bind.is_none() {
         return Vec::new();
     }
 
@@ -500,6 +506,51 @@ async fn spawn_event_listeners(
                 }
             }
             Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
+        }
+    }
+
+    if let Some(bind) = flow_bind {
+        // Flow gets its own rate limiter (own env knobs): a flow datagram carries many records, so
+        // it must not be counted against the syslog/trap event budget or starve it. Caps are on
+        // datagrams/second per source, not records. Edge top-N aggregation (ADR-031) is the real
+        // cardinality control; this is just the storm front door.
+        let flow_per_source = env_f64("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
+        let flow_global = env_f64("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
+        let flow_now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let flow_limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
+            flow_per_source,
+            flow_global,
+            flow_now_ms,
+        )));
+        let top_n = env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
+        let bucket_secs = u32::try_from(env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
+        let state = Arc::new(std::sync::Mutex::new(flow::FlowState::new(top_n)));
+        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v9 / IPFIX)");
+                labels.push(format!("flow:{bind}"));
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        flow::run_flow_listener(sock, state.clone(), flow_limiter.clone()),
+                    );
+                }
+                // One flush ticker publishes per-exporter FlowBatches every bucket.
+                spawn_cancellable(
+                    shutdown,
+                    flow::run_flow_flusher(
+                        bus.clone(),
+                        state.clone(),
+                        poller_id.to_owned(),
+                        pool_defaulted.to_owned(),
+                        bucket_secs,
+                    ),
+                );
+            }
+            Err(e) => tracing::error!(%bind, error = %e, "failed to bind flow listener"),
         }
     }
 

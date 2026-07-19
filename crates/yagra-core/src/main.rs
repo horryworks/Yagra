@@ -23,6 +23,7 @@ mod config_gen;
 mod dashboard;
 mod discovery;
 mod events;
+mod flowstore;
 mod groups;
 mod history;
 mod leader;
@@ -51,7 +52,7 @@ mod volatile;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
@@ -66,6 +67,7 @@ use config::Config;
 use coordinator::Coordinator;
 use dashboard::{DashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
+use flowstore::{ChStore, FlowRow, FlowStore};
 use futures::stream::{Stream, StreamExt};
 use history::AlertHistoryStore;
 use logstore::{LogStore, VlStore};
@@ -83,7 +85,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use volatile::VolatileStore;
 use yagra_alert::Alert;
-use yagra_bus::{JobSpec, NatsBus, PollResult, DEFAULT_POOL};
+use yagra_bus::{FlowBatch, JobSpec, NatsBus, PollResult, DEFAULT_POOL};
 use yagra_common::NodeId;
 use yagra_topology::Topology;
 
@@ -174,6 +176,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         .map(|u| Arc::new(VlStore::new(u)) as Arc<dyn LogStore>);
     if logs.is_some() {
         tracing::info!("VictoriaLogs event log store enabled");
+    }
+
+    // Flow store (ADR-031, the 4th store — traffic-flow tier). Optional/default-OFF: when a
+    // ClickHouse URL is set, core subscribes to `yagra.flows`, writes flow records, and serves the
+    // flow-query API; when unset the flow receiver is disabled and the API returns 503. On the read
+    // side this client is on `ApiState` for all cores; the writer runs leader-only (in `leader_work`).
+    let flows: Option<Arc<dyn FlowStore>> = cfg.flow_url.as_deref().map(|u| {
+        Arc::new(ChStore::with_retention(u, cfg.flow_retention_days)) as Arc<dyn FlowStore>
+    });
+    if flows.is_some() {
+        tracing::info!(
+            retention_days = cfg.flow_retention_days,
+            "ClickHouse flow store enabled (ADR-031)"
+        );
     }
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
@@ -443,6 +459,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let event_engine = event_engine.clone();
         let events_repo = events_repo.clone();
         let logs = logs.clone();
+        let flows = flows.clone();
         let thresholds = thresholds.clone();
         let maintenance = maintenance.clone();
         let group_repo = group_repo.clone();
@@ -533,6 +550,22 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 );
             }
             spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
+
+            // Flow pipeline (ADR-031, Phase 3): ensure the ClickHouse schema, then consume
+            // `yagra.flows` and batch-write to ClickHouse (leader-only, so exactly one writer
+            // persists). Best-effort, loss-tolerant tier — insert failures are dropped, never
+            // buffered. Absent when no ClickHouse URL is configured (default-OFF).
+            if let Some(flow_store) = flows.clone() {
+                ensure_flow_schema(&flow_store).await;
+                let flow_stream = Box::pin(bus.subscribe_flows().await?);
+                tokio::spawn(run_flow_writer(
+                    flow_stream,
+                    flow_store,
+                    repo.clone(),
+                    shutdown.clone(),
+                ));
+            }
+
             tokio::spawn(events::run_persist_writer(
                 persist_rx,
                 events_repo.clone(),
@@ -728,6 +761,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let state = ApiState {
         store,
         logs,
+        flows,
         host_sample: core_host,
         nodes,
         alerts,
@@ -802,6 +836,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     let state = ApiState {
         store: sink,
         logs: None,
+        flows: None,
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(AlertManager::new()),
@@ -1275,6 +1310,132 @@ async fn enqueue_history(
 
 /// Async VictoriaMetrics batch writer (ADR-025): drains the bounded metrics queue and coalesces many
 /// poll results' samples into few bulk import POSTs, off the matcher's hot path. Takes the shutdown
+/// Max flow rows buffered before a forced ClickHouse insert (bounds memory between flush ticks).
+const FLOW_INSERT_MAX_ROWS: usize = 10_000;
+/// How often the flow writer flushes accumulated rows to ClickHouse.
+const FLOW_INSERT_FLUSH_SECS: u64 = 5;
+/// How often the flow writer refreshes its exporter-IP → node-id snapshot.
+const FLOW_ADDR_REFRESH_SECS: u64 = 60;
+
+/// Ensure the ClickHouse flow schema exists, with a short retry to tolerate ClickHouse coming up
+/// after core (compose gates on `service_started`, not health). Best-effort: after the retries it
+/// logs and moves on — inserts will keep failing (dropped, loss-tolerant tier) until ClickHouse is
+/// reachable, at which point they succeed against the now-present tables.
+async fn ensure_flow_schema(store: &Arc<dyn FlowStore>) {
+    for attempt in 1..=5u32 {
+        match store.ensure_schema().await {
+            Ok(()) => return,
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "ClickHouse flow schema ensure failed; retrying");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+        }
+    }
+    tracing::error!(
+        "could not ensure ClickHouse flow schema after retries — flow inserts will fail until reachable"
+    );
+}
+
+/// Consume edge-aggregated flow batches from the bus, resolve each exporter IP to a node (via the
+/// same address map the event pipeline uses), and batch-write the rows to ClickHouse (ADR-031).
+/// Best-effort/loss-tolerant (ADR-017): a batch from an unmapped exporter or a failed insert is
+/// dropped and counted, never buffered or retried. Owns its own shutdown handling for a final flush.
+async fn run_flow_writer<S>(
+    mut flows: S,
+    store: Arc<dyn FlowStore>,
+    repo: Arc<NodeRepo>,
+    shutdown: CancellationToken,
+) where
+    S: Stream<Item = FlowBatch> + Unpin,
+{
+    let mut addr_map = repo.address_map().await.unwrap_or_default();
+    let mut last_refresh = Instant::now();
+    let mut buf: Vec<FlowRow> = Vec::new();
+    let mut ticker = tokio::time::interval(Duration::from_secs(FLOW_INSERT_FLUSH_SECS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => {
+                flush_flow(&store, &mut buf).await;
+                break;
+            }
+            _ = ticker.tick() => {
+                flush_flow(&store, &mut buf).await;
+            }
+            item = flows.next() => {
+                let Some(batch) = item else {
+                    flush_flow(&store, &mut buf).await;
+                    break;
+                };
+                // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime).
+                if last_refresh.elapsed() >= Duration::from_secs(FLOW_ADDR_REFRESH_SECS) {
+                    if let Ok(m) = repo.address_map().await {
+                        addr_map = m;
+                    }
+                    last_refresh = Instant::now();
+                }
+                let node_id = match addr_map.get(&batch.exporter_ip).copied() {
+                    Some(id) => Some(id),
+                    None => {
+                        // Miss: refresh once in case the exporter's node was just added.
+                        if let Ok(m) = repo.address_map().await {
+                            addr_map = m;
+                            last_refresh = Instant::now();
+                        }
+                        addr_map.get(&batch.exporter_ip).copied()
+                    }
+                };
+                let Some(node_id) = node_id else {
+                    metrics::counter!("yagra_flow_batches_unmapped_total").increment(1);
+                    tracing::debug!(exporter = %batch.exporter_ip, "flow batch from unmapped exporter — dropped");
+                    continue;
+                };
+                for rec in &batch.records {
+                    buf.push(FlowRow {
+                        node_id,
+                        ts_unix_ms: batch.bucket_start_ms,
+                        exporter_ip: batch.exporter_ip,
+                        if_index: rec.if_index,
+                        src_ip: rec.src_ip,
+                        dst_ip: rec.dst_ip,
+                        src_port: rec.src_port,
+                        dst_port: rec.dst_port,
+                        proto: rec.proto,
+                        tos: rec.tos,
+                        src_as: rec.src_as,
+                        dst_as: rec.dst_as,
+                        bytes: rec.bytes,
+                        packets: rec.packets,
+                        flows: rec.flows,
+                    });
+                }
+                if buf.len() >= FLOW_INSERT_MAX_ROWS {
+                    flush_flow(&store, &mut buf).await;
+                }
+            }
+        }
+    }
+}
+
+/// Insert one buffered batch of flow rows; on failure the batch is dropped and counted (flow is a
+/// loss-tolerant tier, unlike the metrics path which spills — ADR-017).
+async fn flush_flow(store: &Arc<dyn FlowStore>, buf: &mut Vec<FlowRow>) {
+    if buf.is_empty() {
+        return;
+    }
+    let rows = std::mem::take(buf);
+    let n = rows.len() as u64;
+    match store.insert_batch(&rows).await {
+        Ok(()) => metrics::counter!("yagra_flow_rows_written_total").increment(n),
+        Err(e) => {
+            metrics::counter!("yagra_flow_rows_dropped_total", "reason" => "insert_error")
+                .increment(n);
+            tracing::warn!(error = %e, rows = n, "ClickHouse flow insert failed — batch dropped (loss-tolerant tier)");
+        }
+    }
+}
+
 /// token directly (not `spawn_cancellable`) so it can do a best-effort final flush on cancel.
 async fn run_vm_writer(
     mut rx: tokio::sync::mpsc::Receiver<Arc<PollResult>>,

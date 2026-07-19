@@ -107,7 +107,26 @@
     "overview": "Overview",
     "interfaces": "Interfaces",
     "collection": "Collection",
-    "events": "Events"
+    "events": "Events",
+    "flow": "Flow"
+  },
+  "flow": {
+    "trend": "Traffic by protocol",
+    "topTalkers": "Top talkers",
+    "topProtocols": "Protocols",
+    "topPorts": "Top destination ports",
+    "conversations": "Top conversations",
+    "col": {
+      "source": "Source",
+      "destination": "Destination",
+      "bytes": "Bytes",
+      "packets": "Packets"
+    },
+    "none": "No flow data in this window.",
+    "noTrend": "No traffic trend in this window.",
+    "empty": "No flow data yet. Configure this device to export NetFlow v9 / IPFIX to the poller (default UDP :2055).",
+    "disabled": "Flow monitoring is not enabled. Configure a ClickHouse flow store (YAGRA_CLICKHOUSE_URL on core) and a flow listener (YAGRA_FLOW_BIND on the poller) to collect traffic flows.",
+    "loadError": "Failed to load flow data."
   },
   "deleteNode": {
     "title": "Delete node",

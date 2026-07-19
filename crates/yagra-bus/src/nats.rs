@@ -11,8 +11,8 @@
 
 use crate::bus::{Bus, BusError, SyncBus};
 use crate::messages::{
-    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, HeartbeatMsg, PollJob, PollResult,
-    SyncMsg, SyncRequest,
+    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
+    PollResult, SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -237,6 +237,26 @@ impl NatsBus {
                 Ok(event) => Some(event),
                 Err(e) => {
                     tracing::warn!(error = %e, "dropping malformed EventMsg from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Subscribe to edge-aggregated flow batches — core side (ADR-031, single consumer, mirrors
+    /// [`Self::subscribe_events`]). Malformed messages are skipped. Only a flow-aware core subscribes
+    /// here; an older core never does, so a newer poller's flow batches degrade safely (dropped).
+    pub async fn subscribe_flows(&self) -> Result<impl Stream<Item = FlowBatch>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::flows())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe flows: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<FlowBatch>(&msg.payload) {
+                Ok(batch) => Some(batch),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed FlowBatch from bus");
                     None
                 }
             }
@@ -504,6 +524,15 @@ impl Bus for NatsBus {
             .publish(subjects::events(), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish event: {e}")))
+    }
+
+    async fn publish_flows(&self, batch: FlowBatch) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&batch)
+            .map_err(|e| BusError::Publish(format!("encode flow batch: {e}")))?;
+        self.client
+            .publish(subjects::flows(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish flow batch: {e}")))
     }
 
     fn is_connected(&self) -> bool {

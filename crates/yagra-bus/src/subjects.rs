@@ -44,6 +44,16 @@ pub fn events() -> String {
     format!("{ROOT}.events")
 }
 
+/// Subject pollers publish **edge-aggregated flow batches** (NetFlow/IPFIX/sFlow) on, consumed by
+/// core and written to ClickHouse (ADR-031). Kept off the [`results`]/[`events`] streams on purpose:
+/// flow is a high-volume, best-effort, loss-tolerant tier, and the separate subject is the N-1
+/// safety valve — an older core that predates flow simply never subscribes here, so a newer poller's
+/// flow batches are silently dropped instead of erroring.
+#[must_use]
+pub fn flows() -> String {
+    format!("{ROOT}.flows")
+}
+
 /// Subject core publishes discovery sweep jobs on; pollers subscribe (queue group).
 #[must_use]
 pub fn discovery_jobs() -> String {
@@ -156,6 +166,16 @@ mod tests {
     #[test]
     fn events_subject_is_stable() {
         assert_eq!(events(), "yagra.events");
+    }
+
+    #[test]
+    fn flows_subject_is_stable_and_distinct() {
+        assert_eq!(flows(), "yagra.flows");
+        // Must be isolated from results/events so an N-1 core (no flow subscriber) drops flow
+        // batches instead of mis-consuming them.
+        assert_ne!(flows(), results());
+        assert_ne!(flows(), events());
+        assert!(!flows().starts_with("yagra.results"));
     }
 
     #[test]
