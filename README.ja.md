@@ -82,14 +82,19 @@ fire/resolve ライフサイクル連動で転送できます:
 Yagra は**読み取り専用の [MCP](https://modelcontextprotocol.io) ツール面**（ADR-028）を公開でき、
 AI クライアント（Claude Code / Claude Desktop / その他 MCP 対応アシスタント）から監視状態を自然言語で
 問い合わせられます。例:「落ちているノードは?」「アクティブなアラートを要約して」「edge-router-1 の
-直近1時間の CPU を見せて」「アノマリー検知を実行して異常を教えて」。**状態変更や機器設定のツールは
-一切ありません** — AI が読めるのは WebUI と同じデータで、同じオンデマンドの**トラブルシュート**分析を
-起動できるだけです（分析はメトリクス履歴を読んで所見を返すのみ — 通知も機器操作もしません）。
+直近1時間の CPU を見せて」「アノマリー検知を実行して異常を教えて」。ほとんどのツールは**読み取り専用**で、
+AI が見るのは WebUI と同じデータです。同じオンデマンドの**トラブルシュート**分析も起動できます（分析は
+メトリクス履歴を読んで所見を返すのみ）。少数の**書き込み**ツールは*監視*システムに作用できます — アラート
+の確認応答、メンテナンス枠の作成、即時ポーリングの実行 — ただしロールが許可するトークンのみ（**Viewer**
+トークンは読み取り専用）で、書き込みはすべて監査ログに記録されます。**ネットワーク機器を設定・変更する
+ツールは依然としてありません**。
 
-ツール: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`,
-`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`、およびトラブルシュート3種
-`run_analysis`, `get_analysis_findings`, `list_analyses`（オンデマンドの anomaly / correlation /
-capacity / flap 分析）。
+読み取りツール: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`,
+`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`, `search_events`（syslog / トラップ /
+webhook）、およびトラブルシュート3種 `run_analysis`, `get_analysis_findings`, `list_analyses`
+（オンデマンドの anomaly / correlation / capacity / flap 分析）。
+書き込みツール（Operator/Admin トークンが必要・全呼び出しを監査）: `ack_alert`, `open_maintenance`,
+`poll_now`。
 
 ### 1. サーバを有効化
 
@@ -106,10 +111,11 @@ WebUI のリバースプロキシは `/mcp` をルーティングしないため
 
 ### 2. API トークンを発行
 
-WebUI に管理者でサインイン → **Settings ▸ API tokens ▸ New token** → **Viewer**（読み取り専用で十分）を
-選び、一度だけ表示される `yat_…` をコピー。これが AI クライアントが送る Bearer トークンです。
-（通常のログインセッショントークンでも動きますが期限切れになります。API トークンは無人クライアント向けで、
-同じ画面から失効できます。）
+WebUI に管理者でサインイン → **Settings ▸ API tokens ▸ New token** → 読み取り専用アシスタントなら
+**Viewer**（読み取り／トラブルシュート系は全て使えます）、アラート確認応答・メンテナンス枠作成・即時
+ポーリングもさせたいなら **Operator/Admin** を選び、一度だけ表示される `yat_…` をコピー。これが AI
+クライアントが送る Bearer トークンです。（通常のログインセッショントークンでも動きますが期限切れに
+なります。API トークンは無人クライアント向けで、同じ画面から失効できます。）
 
 > **到達性:** HTTP 呼び出しは Anthropic のクラウドではなく**あなたの手元のクライアント**から出ます。
 > よってクライアントが `<yagra-host>:8080` に到達できれば十分です（同一 LAN、または VPN 経由）。

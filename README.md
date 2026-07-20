@@ -83,14 +83,20 @@ API v2) and Jira Service Management (Alerts API) with native fire/resolve lifecy
 Yagra can expose a **read-only [MCP](https://modelcontextprotocol.io) tool surface** (ADR-028) so an
 AI client — Claude Code, Claude Desktop, or another MCP-capable assistant — can query live monitoring
 state in natural language: *"which nodes are down?"*, *"summarize the active alerts"*, *"show CPU on
-edge-router-1 for the last hour"*, *"run anomaly detection and tell me what looks wrong"*. There are
-**no** tools that change state or configure devices — the AI reads the same data the WebUI does, and
-can launch the same on-demand **Troubleshoot** analyses (which only read metric history and return
-findings — they never notify or touch a device), nothing more.
+edge-router-1 for the last hour"*, *"run anomaly detection and tell me what looks wrong"*. Most tools
+are **read-only** — the AI sees the same data the WebUI does — and it can launch the same on-demand
+**Troubleshoot** analyses (which only read metric history and return findings). A few **write** tools
+can act on the *monitoring* system — acknowledge an alert, open a maintenance window, or trigger an
+immediate poll — but only for a token whose role permits it (a **Viewer** token is read-only), and
+every write is recorded in the audit log. There are still **no** tools that configure or change
+network devices.
 
-Tools: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`, `get_alert_history`,
-`query_metrics`, `get_topology`, `top_flows`, plus the Troubleshoot trio `run_analysis`,
-`get_analysis_findings`, `list_analyses` (on-demand anomaly / correlation / capacity / flap analysis).
+Read tools: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`,
+`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`, `search_events` (syslog / traps /
+webhooks), plus the Troubleshoot trio `run_analysis`, `get_analysis_findings`, `list_analyses`
+(on-demand anomaly / correlation / capacity / flap analysis).
+Write tools (need an Operator/Admin token; every call is audited): `ack_alert`, `open_maintenance`,
+`poll_now`.
 
 ### 1. Enable the server
 
@@ -107,10 +113,11 @@ byte-identical to before. MCP always requires authentication, even if `YAGRA_PUB
 
 ### 2. Create an API token
 
-Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → choose **Viewer** (read-only
-is all the tools need) → copy the `yat_…` value shown once. This is the bearer token the AI client
-sends. (A regular login session token works too, but it expires; an API token is meant for an
-unattended client and is revocable from the same page.)
+Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → choose **Viewer** for a
+read-only assistant (all the read/Troubleshoot tools work), or **Operator/Admin** if you want it to
+also acknowledge alerts, open maintenance windows, or poll on demand → copy the `yat_…` value shown
+once. This is the bearer token the AI client sends. (A regular login session token works too, but it
+expires; an API token is meant for an unattended client and is revocable from the same page.)
 
 > **Reachability:** the AI client makes the HTTP call from *your* machine, not from Anthropic's cloud —
 > so the client only needs network access to `<yagra-host>:8080` (same LAN, or over a VPN). No public

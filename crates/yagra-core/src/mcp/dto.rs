@@ -17,6 +17,7 @@ use yagra_alert::Alert;
 use yagra_common::{Node, NodeState};
 
 use crate::analysis::{AnalysisFinding, AnalysisJob};
+use crate::events::EventRow;
 use crate::history::AlertHistoryRow;
 use crate::repo::{InterfaceMeta, TopologyRow};
 
@@ -73,6 +74,9 @@ pub struct BreachDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct AlertDto {
     pub node_id: Uuid,
+    /// The check that fired — the third part of an alert's `(node, check, severity)` identity, needed
+    /// to acknowledge it via the `ack_alert` tool.
+    pub check_id: Uuid,
     /// Resolved node display name when available (else `None`; the caller keeps the id).
     pub node_name: Option<String>,
     /// `info` / `warning` / `critical`.
@@ -96,6 +100,7 @@ impl AlertDto {
     pub fn from_alert(alert: &Alert, node_name: Option<String>) -> Self {
         Self {
             node_id: alert.node.0,
+            check_id: alert.check.0,
             node_name,
             severity: alert.severity.as_str().to_owned(),
             state: alert.state.as_str().to_owned(),
@@ -351,6 +356,58 @@ fn compact_detail(mut detail: serde_json::Value) -> serde_json::Value {
     detail
 }
 
+/// One received passive event (syslog / SNMP trap / webhook), sanitized for AI consumption. Excludes
+/// the internal `pool` (poller-assignment) and `source_id` (event-source id) — the LLM sees the
+/// human-facing shape (source IP, hostname, trap name, message), never internal routing ids.
+#[derive(Debug, Clone, Serialize)]
+pub struct EventDto {
+    pub id: Uuid,
+    /// `syslog` / `trap` / `webhook`.
+    pub kind: String,
+    /// Event time as an RFC 3339 UTC timestamp.
+    pub at: String,
+    pub node_id: Option<Uuid>,
+    /// Resolved node display name when available.
+    pub node_name: Option<String>,
+    /// The datagram source address (device that emitted the event), if known.
+    pub source_ip: Option<String>,
+    /// Syslog hostname field, if present.
+    pub hostname: Option<String>,
+    /// Syslog app-name field, if present.
+    pub app_name: Option<String>,
+    /// SNMP trap OID (trap events only).
+    pub trap_oid: Option<String>,
+    /// Well-known MIB name for `trap_oid` (e.g. `linkDown`), if in the curated set.
+    pub trap_name: Option<String>,
+    pub message: String,
+    /// The event rule that matched (raised/cleared an alert), if any.
+    pub matched_rule_id: Option<Uuid>,
+    /// What the pipeline did with the event: `raised` / `cleared` / `logged` / …
+    pub action: String,
+}
+
+impl EventDto {
+    /// Build from an event row and an optional resolved node name.
+    #[must_use]
+    pub fn from_row(row: &EventRow, node_name: Option<String>) -> Self {
+        Self {
+            id: row.id,
+            kind: row.kind.clone(),
+            at: unix_ms_to_rfc3339(row.at_unix_ms),
+            node_id: row.node_id,
+            node_name,
+            source_ip: row.source_ip.clone(),
+            hostname: row.hostname.clone(),
+            app_name: row.app_name.clone(),
+            trap_oid: row.trap_oid.clone(),
+            trap_name: row.trap_name.clone(),
+            message: row.message.clone(),
+            matched_rule_id: row.matched_rule_id,
+            action: row.action.clone(),
+        }
+    }
+}
+
 /// Convert Unix milliseconds to an RFC 3339 UTC string (falls back to the epoch on an out-of-range
 /// value rather than panicking — a malformed timestamp must never take down a tool call).
 fn unix_ms_to_rfc3339(ms: i64) -> String {
@@ -457,6 +514,7 @@ mod tests {
 
         let alert = AlertDto {
             node_id: node.id.0,
+            check_id: uuid::Uuid::new_v4(),
             node_name: Some("edge-router-1".to_owned()),
             severity: "critical".to_owned(),
             state: "unreachable".to_owned(),
@@ -541,6 +599,36 @@ mod tests {
             &serde_json::to_value(AnalysisFindingDto::from_finding(&finding)).unwrap(),
             "AnalysisFinding",
         );
+
+        // EventRow carries `pool` (a forbidden key) — the DTO must drop it.
+        let event = EventRow {
+            id: node.id.0,
+            kind: "trap".to_owned(),
+            at_unix_ms: 0,
+            recorded_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            source_ip: Some("10.0.0.1".to_owned()),
+            node_id: Some(node.id.0),
+            source_id: None,
+            pool: Some("tokyo".to_owned()),
+            facility: None,
+            syslog_severity: None,
+            hostname: Some("edge-router-1".to_owned()),
+            app_name: None,
+            trap_oid: Some("1.3.6.1.6.3.1.1.5.3".to_owned()),
+            trap_name: Some("linkDown".to_owned()),
+            varbinds: None,
+            message: "link down on Gi0/1".to_owned(),
+            matched_rule_id: None,
+            action: "raised".to_owned(),
+        };
+        let event_json =
+            serde_json::to_value(EventDto::from_row(&event, Some("edge-router-1".to_owned())))
+                .unwrap();
+        assert!(
+            event_json.get("pool").is_none(),
+            "pool dropped from EventDto"
+        );
+        assert_no_forbidden_keys(&event_json, "Event");
     }
 
     #[test]

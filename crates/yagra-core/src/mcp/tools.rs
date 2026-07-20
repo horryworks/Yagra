@@ -4,34 +4,41 @@
 //! Each `#[tool]` is a thin adapter over a read seam on [`ApiState`](crate::api::ApiState): it parses
 //! typed params, calls the seam, maps the result into a **sanitized DTO** ([`crate::mcp::dto`]), and
 //! records a metric. Tool bodies never serialize a raw model/row (ADR-018) and never trigger device
-//! I/O. Increment 2 added the Troubleshoot tools (`run_analysis` / `get_analysis_findings` /
-//! `list_analyses`): a Troubleshoot analysis is a **read** — it reads metric history and returns
-//! findings, forces `notify = false` (no external side effect), and is bounded by the runner's
-//! rate/concurrency limits rather than an operator role. Genuinely state-changing tools
-//! (`ack`/`mute`/`maintenance`/`run_probe`) and the group-scope visibility filter remain future work.
-//! The plain-`async fn` shape (params in, DTO out) is what lets the ADR-029 RCA agent reuse these
-//! bodies in-process later.
+//! I/O. Increment 2 added: the Troubleshoot tools (`run_analysis` / `get_analysis_findings` /
+//! `list_analyses`) — a Troubleshoot analysis is a **read** that forces `notify = false` and is
+//! bounded by the runner's rate/concurrency limits rather than a role; the event reader
+//! (`search_events`, WS-C); and the first **write** tools (`ack_alert`, `open_maintenance`,
+//! `poll_now`, WS-E). A write tool reads the authenticated [`McpIdentity`] from its `RequestContext`
+//! (propagated via the HTTP request `Parts`, WS-D), enforces its own [`Permission`]
+//! (`AckAlerts`/`ManageMaintenance`/`ManageConfig`), and records an audit entry. There are still no
+//! device-configuration tools (monitoring lane, ADR-015/029). Group-scope visibility on reads and the
+//! heavier writes (`run_probe`/`trigger_discovery`) remain future work. The plain-`async fn` shape
+//! (params in, DTO out) is what lets the ADR-029 RCA agent reuse these bodies in-process later.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 // The module (not just the trait) — the `JsonSchema` derive expands to `schemars::…` paths, so the
 // `schemars` name must be in scope. rmcp re-exports it, keeping exactly one schemars version.
 use rmcp::schemars;
+use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use yagra_common::{NodeId, SeriesKey};
+use yagra_common::{NodeId, Permission, SeriesKey, Severity};
 
-use super::YagraMcp;
+use super::{McpIdentity, YagraMcp};
+use crate::ack::AckView;
 use crate::analysis::{AnalysisTool, CreateError, JobParams, ScopeKind};
+use crate::api::ApiState;
+use crate::events::EventFilter;
 use crate::flowstore::{AsDir, FlowQuery};
 use crate::mcp::dto::{
-    AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, FleetSummaryDto, InterfaceDto,
-    MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
+    AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
+    InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
 };
 
 /// Default window (seconds) for range/rate metric and flow queries when `from`/`to` are omitted.
@@ -514,6 +521,293 @@ impl YagraMcp {
         ok_json("list_analyses", &out)
     }
 
+    #[tool(
+        description = "Search received passive events (syslog / SNMP traps / webhooks), newest first. \
+                       Optional `search` (case-insensitive substring over source/message, or a \
+                       message-only regex when `regex` is true), `kind` (syslog|trap|webhook), \
+                       `node_id`, `matched` (only rule-matched events), `since`/`until` (RFC 3339), and \
+                       `limit` (1–500, default 100). Requires live mode."
+    )]
+    async fn search_events(
+        &self,
+        Parameters(p): Parameters<EventSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("search_events", "event search requires live mode");
+        };
+        let since = match parse_opt_rfc3339(p.since.as_deref()) {
+            Ok(v) => v,
+            Err(()) => {
+                return tool_bad_params("search_events", "`since` must be an RFC 3339 timestamp")
+            }
+        };
+        let until = match parse_opt_rfc3339(p.until.as_deref()) {
+            Ok(v) => v,
+            Err(()) => {
+                return tool_bad_params("search_events", "`until` must be an RFC 3339 timestamp")
+            }
+        };
+        if let Some(kind) = p.kind.as_deref() {
+            if !matches!(kind, "syslog" | "trap" | "webhook") {
+                return tool_bad_params("search_events", "`kind` must be syslog, trap, or webhook");
+            }
+        }
+        let regex = p.regex.unwrap_or(false);
+        let search = p
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        // Validate a regex at the edge (size / ReDoS guard, shared with rule compilation).
+        if regex {
+            if let Some(term) = search.as_deref() {
+                if let Err(e) = crate::events::compile_matcher("regex", term) {
+                    return tool_bad_params(
+                        "search_events",
+                        &format!("invalid regular expression: {e}"),
+                    );
+                }
+            }
+        }
+        let filter = EventFilter {
+            before: None,
+            since,
+            until,
+            kind: p.kind.clone(),
+            node_id: p.node_id,
+            matched: p.matched,
+            search,
+            regex,
+        };
+        let limit = p.limit.unwrap_or(100).clamp(1, 500);
+        // Mirrors the REST events reader: the log store is the search source of record when enabled
+        // (free-text node-name search resolves to ids here so the name never enters the store), else
+        // fall back to the PostgreSQL alert-linked rows.
+        let rows = if let Some(logs) = self.state.logs.as_ref() {
+            let name_node_ids = match (filter.regex, filter.search.as_deref()) {
+                (false, Some(term)) => admin
+                    .repo
+                    .node_ids_by_name_like(term, 50)
+                    .await
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            logs.search(&filter, &name_node_ids, limit).await
+        } else {
+            admin.events.list_events(&filter, limit).await
+        };
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => return tool_error("search_events", "search events", &e),
+        };
+        let names = self
+            .resolve_names(rows.iter().filter_map(|r| r.node_id))
+            .await;
+        let out: Vec<EventDto> = rows
+            .iter()
+            .map(|r| EventDto::from_row(r, r.node_id.and_then(|id| names.get(&id).cloned())))
+            .collect();
+        ok_json("search_events", &out)
+    }
+
+    #[tool(
+        description = "Acknowledge an active alert (or clear its ack). Requires ack-alerts permission. \
+                       Identify the alert by `node_id` + `check_id` + `severity` — all from \
+                       get_active_alerts or get_node_status. `acked` defaults true; set false to clear. \
+                       Optional `note`. Requires live mode."
+    )]
+    async fn ack_alert(
+        &self,
+        Parameters(p): Parameters<AckAlertParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
+            return tool_forbidden("ack_alert", "this token lacks ack-alerts permission");
+        };
+        let Some(ack) = self.state.ack.as_ref() else {
+            return tool_unavailable("ack_alert", "ack requires live mode");
+        };
+        let Some(severity) = parse_severity(&p.severity) else {
+            return tool_bad_params("ack_alert", "`severity` must be info, warning, or critical");
+        };
+        if p.acked.unwrap_or(true) {
+            let view = AckView {
+                at_unix_ms: Utc::now().timestamp_millis(),
+                by: identity.actor.clone(),
+                source: "mcp".to_owned(),
+                note: p.note.clone(),
+            };
+            if let Err(e) = ack
+                .set(p.node_id, p.check_id, severity.as_str(), &view)
+                .await
+            {
+                return tool_error("ack_alert", "record ack", &e);
+            }
+            self.state.alerts.broadcast_acked(
+                p.node_id,
+                p.check_id,
+                severity,
+                serde_json::to_value(&view).ok(),
+            );
+            record_audit(
+                &self.state,
+                &identity,
+                &format!(
+                    "mcp.ack_alert node={} check={} sev={}",
+                    p.node_id,
+                    p.check_id,
+                    severity.as_str()
+                ),
+                200,
+            )
+            .await;
+            ok_json_value(
+                "ack_alert",
+                serde_json::json!({ "acked": true, "node_id": p.node_id, "check_id": p.check_id }),
+            )
+        } else {
+            if let Err(e) = ack.clear(p.node_id, p.check_id, severity.as_str()).await {
+                return tool_error("ack_alert", "clear ack", &e);
+            }
+            self.state
+                .alerts
+                .broadcast_acked(p.node_id, p.check_id, severity, None);
+            record_audit(
+                &self.state,
+                &identity,
+                &format!(
+                    "mcp.ack_alert(clear) node={} check={} sev={}",
+                    p.node_id,
+                    p.check_id,
+                    severity.as_str()
+                ),
+                200,
+            )
+            .await;
+            ok_json_value(
+                "ack_alert",
+                serde_json::json!({ "acked": false, "node_id": p.node_id, "check_id": p.check_id }),
+            )
+        }
+    }
+
+    #[tool(
+        description = "Open a maintenance window for one node so its alerts are suppressed for a period. \
+                       Requires manage-maintenance permission. Give `node_id` and either \
+                       `duration_mins` (from now, default 60, max 10080) or explicit `starts_at`/ \
+                       `ends_at` (RFC 3339). Optional `name`. Requires live mode."
+    )]
+    async fn open_maintenance(
+        &self,
+        Parameters(p): Parameters<OpenMaintenanceParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(identity) = authed_for(&ctx, Permission::ManageMaintenance) else {
+            return tool_forbidden(
+                "open_maintenance",
+                "this token lacks manage-maintenance permission",
+            );
+        };
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("open_maintenance", "maintenance requires live mode");
+        };
+        let (starts, ends) = match (p.starts_at.as_deref(), p.ends_at.as_deref()) {
+            (Some(s), Some(e)) => {
+                let (Some(s), Some(e)) = (parse_rfc3339_ok(s), parse_rfc3339_ok(e)) else {
+                    return tool_bad_params(
+                        "open_maintenance",
+                        "`starts_at`/`ends_at` must be RFC 3339 timestamps",
+                    );
+                };
+                (s, e)
+            }
+            (None, None) => {
+                let mins = p.duration_mins.unwrap_or(60).clamp(1, 7 * 24 * 60);
+                let now = Utc::now();
+                (now, now + chrono::Duration::minutes(mins))
+            }
+            _ => {
+                return tool_bad_params(
+                    "open_maintenance",
+                    "provide both starts_at and ends_at, or neither (use duration_mins)",
+                )
+            }
+        };
+        if ends <= starts {
+            return tool_bad_params("open_maintenance", "the window must end after it starts");
+        }
+        let node = match admin.repo.get_node(p.node_id).await {
+            Ok(Some(n)) => n,
+            Ok(None) => return tool_unavailable("open_maintenance", "no node with that id"),
+            Err(e) => return tool_error("open_maintenance", "load node", &e),
+        };
+        let name = p
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("MCP maintenance — {}", node.name));
+        match admin
+            .maintenance
+            .create_window(&name, "node", &p.node_id.to_string(), starts, ends)
+            .await
+        {
+            Ok(id) => {
+                record_audit(
+                    &self.state,
+                    &identity,
+                    &format!("mcp.open_maintenance node={} window={id}", p.node_id),
+                    201,
+                )
+                .await;
+                ok_json_value(
+                    "open_maintenance",
+                    serde_json::json!({
+                        "created": true,
+                        "window_id": id,
+                        "node_id": p.node_id,
+                        "starts_at": starts.to_rfc3339(),
+                        "ends_at": ends.to_rfc3339(),
+                    }),
+                )
+            }
+            Err(e) => tool_error("open_maintenance", "create maintenance window", &e),
+        }
+    }
+
+    #[tool(
+        description = "Trigger an immediate, out-of-schedule poll of one node. Requires manage-config \
+                       permission. Returns whether a poll job was dispatched. Requires live mode."
+    )]
+    async fn poll_now(
+        &self,
+        Parameters(p): Parameters<NodeIdParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(identity) = authed_for(&ctx, Permission::ManageConfig) else {
+            return tool_forbidden("poll_now", "this token lacks manage-config permission");
+        };
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("poll_now", "poll requires live mode");
+        };
+        let node = match admin.repo.get_node(p.node_id).await {
+            Ok(Some(n)) => n,
+            Ok(None) => return tool_unavailable("poll_now", "no node with that id"),
+            Err(e) => return tool_error("poll_now", "load node", &e),
+        };
+        let dispatched = admin.poll.poll_now(&node).await;
+        record_audit(
+            &self.state,
+            &identity,
+            &format!("mcp.poll_now node={}", p.node_id),
+            202,
+        )
+        .await;
+        ok_json_value(
+            "poll_now",
+            serde_json::json!({ "dispatched": dispatched, "node_id": p.node_id }),
+        )
+    }
+
     /// Resolve node ids → display names via the live repo (empty in skeleton mode). Deduplicated so a
     /// repeated node in an alert list doesn't bloat the `IN (…)` query.
     async fn resolve_names(&self, ids: impl Iterator<Item = Uuid>) -> HashMap<Uuid, String> {
@@ -637,6 +931,54 @@ struct ListAnalysesParams {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EventSearchParams {
+    /// Case-insensitive substring over source/message (or a message-only regex when `regex` is true).
+    search: Option<String>,
+    /// Interpret `search` as a regular expression (message-only) rather than a substring.
+    regex: Option<bool>,
+    /// Restrict to an event kind: syslog, trap, or webhook.
+    kind: Option<String>,
+    /// Restrict to one node's events (UUID).
+    node_id: Option<Uuid>,
+    /// Only events that matched an event rule (raised/cleared an alert).
+    matched: Option<bool>,
+    /// Time-range lower bound, RFC 3339.
+    since: Option<String>,
+    /// Time-range upper bound, RFC 3339.
+    until: Option<String>,
+    /// Max events to return (1–500, default 100).
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AckAlertParams {
+    /// The alerting node's UUID.
+    node_id: Uuid,
+    /// The alert's check UUID (the `check_id` field from get_active_alerts / get_node_status).
+    check_id: Uuid,
+    /// The alert severity: info, warning, or critical.
+    severity: String,
+    /// True to acknowledge (default), false to clear a prior ack.
+    acked: Option<bool>,
+    /// Optional free-text note recorded with the acknowledgement.
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct OpenMaintenanceParams {
+    /// The node to place into maintenance (UUID).
+    node_id: Uuid,
+    /// Window length in minutes from now (default 60, max 10080). Ignored if starts_at/ends_at given.
+    duration_mins: Option<i64>,
+    /// Explicit window start, RFC 3339 (must be paired with ends_at).
+    starts_at: Option<String>,
+    /// Explicit window end, RFC 3339 (must be paired with starts_at).
+    ends_at: Option<String>,
+    /// Optional window name (defaults to a generated label).
+    name: Option<String>,
+}
+
 // ── Result / metric helpers ───────────────────────────────────────────────────────────────────────
 
 /// Serialize a DTO to a pretty-JSON tool result (records an `ok` outcome).
@@ -690,6 +1032,58 @@ fn record_tool(tool: &str, outcome: &str) {
 /// Whether an analysis job has reached a terminal lifecycle state (no further progress).
 fn is_terminal(state: &str) -> bool {
     matches!(state, "done" | "failed" | "cancelled")
+}
+
+/// The authenticated caller `mcp_auth_mw` inserted into the request extensions, if it has `perm`
+/// (WS-D). rmcp forwards the HTTP request `Parts` into the tool's `RequestContext`, so the identity
+/// is read back from `parts.extensions`. Fail-closed: `None` ⇒ the write tool returns forbidden.
+fn authed_for(ctx: &RequestContext<RoleServer>, perm: Permission) -> Option<McpIdentity> {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<McpIdentity>())
+        .filter(|id| id.principal.can(perm))
+        .cloned()
+}
+
+/// Best-effort audit record for an MCP write tool (a store hiccup must never fail the action — the
+/// side effect already happened; log and move on).
+async fn record_audit(state: &ApiState, identity: &McpIdentity, action: &str, status: u16) {
+    if let Some(admin) = state.admin.as_ref() {
+        if let Err(e) = admin.audit.record(&identity.actor, action, status).await {
+            tracing::warn!(error = %e, action, "MCP audit record failed");
+        }
+    }
+}
+
+/// Parse a severity string (info|warning|critical) into the enum. `None` on anything else.
+fn parse_severity(s: &str) -> Option<Severity> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "info" => Some(Severity::Info),
+        "warning" => Some(Severity::Warning),
+        "critical" => Some(Severity::Critical),
+        _ => None,
+    }
+}
+
+/// Parse an RFC 3339 timestamp to UTC. `None` if malformed.
+fn parse_rfc3339_ok(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+/// Parse an optional RFC 3339 timestamp: `Ok(None)` when absent, `Err(())` when present but malformed.
+fn parse_opt_rfc3339(s: Option<&str>) -> Result<Option<DateTime<Utc>>, ()> {
+    match s {
+        None => Ok(None),
+        Some(v) => parse_rfc3339_ok(v).map(Some).ok_or(()),
+    }
+}
+
+/// A permission-denied tool result (records `forbidden`). Maps to a JSON-RPC invalid-request error.
+fn tool_forbidden(tool: &str, reason: &str) -> Result<CallToolResult, McpError> {
+    record_tool(tool, "forbidden");
+    Err(McpError::invalid_request(reason.to_string(), None))
 }
 
 /// Rank a severity string for the `min_severity` filter (unknown ⇒ lowest).
