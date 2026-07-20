@@ -65,7 +65,8 @@ impl IpAsnDb {
 
     /// Parse the iptoasn TSV body. Lines that don't parse are skipped. `asn = 0` rows ("Not routed" /
     /// private ranges) are dropped so those addresses stay `unknown` rather than getting a bogus AS.
-    fn from_tsv(content: &str) -> Arc<Self> {
+    /// `pub(crate)` so the flow-enrichment tests in `main.rs` can build a small in-memory table.
+    pub(crate) fn from_tsv(content: &str) -> Arc<Self> {
         let mut v4 = Vec::new();
         let mut v6 = Vec::new();
         let mut names: HashMap<u32, String> = HashMap::new();

@@ -637,14 +637,18 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             // buffered. Absent when no ClickHouse URL is configured (default-OFF).
             if let Some(flow_store) = flows.clone() {
                 ensure_flow_schema(&flow_store).await;
+                // Match/persist split (ADR-024/025, S27): the consumer resolves + enriches and hands
+                // rows to the writer over a bounded queue, so a slow/hung ClickHouse can't stall the
+                // `yagra.flows` subscription into a silent NATS slow-consumer drop. Leader-only, so
+                // exactly one writer persists; the writer owns the final flush on shutdown.
+                let (flow_tx, flow_rx) =
+                    tokio::sync::mpsc::channel::<FlowRow>(FLOW_PERSIST_CHANNEL_CAP);
+                tokio::spawn(run_flow_writer(flow_rx, flow_store, shutdown.clone()));
                 let flow_stream = Box::pin(bus.subscribe_flows().await?);
-                tokio::spawn(run_flow_writer(
-                    flow_stream,
-                    flow_store,
-                    repo.clone(),
-                    ipasn.clone(),
-                    shutdown.clone(),
-                ));
+                spawn_cancellable(
+                    &shutdown,
+                    consume_flows(flow_stream, flow_tx, repo.clone(), ipasn.clone()),
+                );
             }
 
             tokio::spawn(events::run_persist_writer(
@@ -1391,14 +1395,16 @@ async fn enqueue_history(
     }
 }
 
-/// Async VictoriaMetrics batch writer (ADR-025): drains the bounded metrics queue and coalesces many
-/// poll results' samples into few bulk import POSTs, off the matcher's hot path. Takes the shutdown
 /// Max flow rows buffered before a forced ClickHouse insert (bounds memory between flush ticks).
 const FLOW_INSERT_MAX_ROWS: usize = 10_000;
 /// How often the flow writer flushes accumulated rows to ClickHouse.
 const FLOW_INSERT_FLUSH_SECS: u64 = 5;
-/// How often the flow writer refreshes its exporter-IP → node-id snapshot.
+/// How often the flow consumer refreshes its exporter-IP → node-id snapshot.
 const FLOW_ADDR_REFRESH_SECS: u64 = 60;
+/// Bounded hand-off queue between the flow consumer (bus → rows) and the ClickHouse writer. A full
+/// queue means the writer is behind a slow/hung ClickHouse; the consumer then drops + counts rows
+/// (`channel_full`) instead of stalling the `yagra.flows` subscription into a silent NATS drop (S27).
+const FLOW_PERSIST_CHANNEL_CAP: usize = 16_384;
 
 /// Ensure the ClickHouse flow schema exists, with a short retry to tolerate ClickHouse coming up
 /// after core (compose gates on `service_started`, not health). Best-effort: after the retries it
@@ -1419,21 +1425,121 @@ async fn ensure_flow_schema(store: &Arc<dyn FlowStore>) {
     );
 }
 
-/// Consume edge-aggregated flow batches from the bus, resolve each exporter IP to a node (via the
-/// same address map the event pipeline uses), and batch-write the rows to ClickHouse (ADR-031).
-/// Best-effort/loss-tolerant (ADR-017): a batch from an unmapped exporter or a failed insert is
-/// dropped and counted, never buffered or retried. Owns its own shutdown handling for a final flush.
-async fn run_flow_writer<S>(
+/// Build the ClickHouse rows for one edge-aggregated flow batch: resolve the exporter to a node and
+/// fill in only the AS numbers the exporter didn't provide from the offline IP→ASN table (the
+/// exporter's own BGP view is authoritative — ADR-031). Returns `None` when the exporter isn't
+/// mapped to a node (the batch is dropped by the caller). Pure — unit-tested.
+fn flow_rows_from_batch(
+    batch: &FlowBatch,
+    addr_map: &HashMap<std::net::IpAddr, Uuid>,
+    ipasn: Option<&Arc<crate::ipasn::IpAsnDb>>,
+) -> Option<Vec<FlowRow>> {
+    let node_id = addr_map.get(&batch.exporter_ip).copied()?;
+    let mut rows = Vec::with_capacity(batch.records.len());
+    for rec in &batch.records {
+        let mut src_as = rec.src_as;
+        let mut dst_as = rec.dst_as;
+        if let Some(db) = ipasn {
+            if src_as == 0 {
+                src_as = db.lookup(rec.src_ip).unwrap_or(0);
+            }
+            if dst_as == 0 {
+                dst_as = db.lookup(rec.dst_ip).unwrap_or(0);
+            }
+        }
+        rows.push(FlowRow {
+            node_id,
+            ts_unix_ms: batch.bucket_start_ms,
+            exporter_ip: batch.exporter_ip,
+            if_index: rec.if_index,
+            src_ip: rec.src_ip,
+            dst_ip: rec.dst_ip,
+            src_port: rec.src_port,
+            dst_port: rec.dst_port,
+            proto: rec.proto,
+            tos: rec.tos,
+            src_as,
+            dst_as,
+            bytes: rec.bytes,
+            packets: rec.packets,
+            flows: rec.flows,
+        });
+    }
+    Some(rows)
+}
+
+/// Hand rows to the flow writer without ever awaiting ClickHouse (ADR-024/025 match/persist split).
+/// A full queue means the writer is behind a slow/hung ClickHouse: the row is dropped and counted
+/// (`channel_full`) so the `yagra.flows` subscription keeps draining — turning what used to be an
+/// invisible NATS slow-consumer drop into a measured one (S27). Returns the number of rows dropped.
+fn send_flow_rows(tx: &tokio::sync::mpsc::Sender<FlowRow>, rows: Vec<FlowRow>) -> u64 {
+    let mut dropped = 0u64;
+    for row in rows {
+        match tx.try_send(row) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => dropped += 1,
+            // Writer gone (shutdown): stop — teardown does the final flush of what's already queued.
+            Err(TrySendError::Closed(_)) => break,
+        }
+    }
+    if dropped > 0 {
+        metrics::counter!("yagra_flow_rows_dropped_total", "reason" => "channel_full")
+            .increment(dropped);
+    }
+    dropped
+}
+
+/// Consume edge-aggregated flow batches from the bus, resolve each exporter to a node (via the same
+/// address map the event pipeline uses), enrich AS numbers, and hand the rows to the ClickHouse
+/// writer over a bounded queue. Never awaits ClickHouse, so a slow/hung ClickHouse can't stall the
+/// `yagra.flows` subscription into a silent NATS slow-consumer drop (ADR-024/025 match/persist split,
+/// S27). Spawned via `spawn_cancellable` — the writer owns the final flush on shutdown.
+async fn consume_flows<S>(
     mut flows: S,
-    store: Arc<dyn FlowStore>,
+    tx: tokio::sync::mpsc::Sender<FlowRow>,
     repo: Arc<NodeRepo>,
     ipasn: crate::ipasn::IpAsnHandle,
-    shutdown: CancellationToken,
 ) where
     S: Stream<Item = FlowBatch> + Unpin,
 {
     let mut addr_map = repo.address_map().await.unwrap_or_default();
     let mut last_refresh = Instant::now();
+    while let Some(batch) = flows.next().await {
+        // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime), and
+        // once more on a mapping miss in case the exporter's node was just added.
+        if last_refresh.elapsed() >= Duration::from_secs(FLOW_ADDR_REFRESH_SECS) {
+            if let Ok(m) = repo.address_map().await {
+                addr_map = m;
+            }
+            last_refresh = Instant::now();
+        }
+        if !addr_map.contains_key(&batch.exporter_ip) {
+            if let Ok(m) = repo.address_map().await {
+                addr_map = m;
+                last_refresh = Instant::now();
+            }
+        }
+        // Snapshot the hot-swappable IP→ASN table once per batch (not per record).
+        let ipasn_now = ipasn.read().unwrap().clone();
+        let Some(rows) = flow_rows_from_batch(&batch, &addr_map, ipasn_now.as_ref()) else {
+            metrics::counter!("yagra_flow_batches_unmapped_total").increment(1);
+            tracing::debug!(exporter = %batch.exporter_ip, "flow batch from unmapped exporter — dropped");
+            continue;
+        };
+        send_flow_rows(&tx, rows);
+    }
+}
+
+/// Async ClickHouse flow writer (ADR-031): drains the bounded flow queue, batches rows across
+/// consumed items, and bulk-inserts on a size (`FLOW_INSERT_MAX_ROWS`) or time
+/// (`FLOW_INSERT_FLUSH_SECS`) trigger. Best-effort/loss-tolerant (ADR-017): an insert failure drops
+/// the batch and counts it (unlike the metrics path, which spills). Takes the shutdown token
+/// directly (not `spawn_cancellable`) so it can do a best-effort final flush on cancel.
+async fn run_flow_writer(
+    mut rx: tokio::sync::mpsc::Receiver<FlowRow>,
+    store: Arc<dyn FlowStore>,
+    shutdown: CancellationToken,
+) {
     let mut buf: Vec<FlowRow> = Vec::new();
     let mut ticker = tokio::time::interval(Duration::from_secs(FLOW_INSERT_FLUSH_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1441,75 +1547,38 @@ async fn run_flow_writer<S>(
         tokio::select! {
             biased;
             () = shutdown.cancelled() => {
+                while let Ok(r) = rx.try_recv() {
+                    buf.push(r);
+                    if buf.len() >= FLOW_INSERT_MAX_ROWS {
+                        flush_flow(&store, &mut buf).await;
+                    }
+                }
                 flush_flow(&store, &mut buf).await;
                 break;
             }
             _ = ticker.tick() => {
                 flush_flow(&store, &mut buf).await;
             }
-            item = flows.next() => {
-                let Some(batch) = item else {
-                    flush_flow(&store, &mut buf).await;
-                    break;
-                };
-                // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime).
-                if last_refresh.elapsed() >= Duration::from_secs(FLOW_ADDR_REFRESH_SECS) {
-                    if let Ok(m) = repo.address_map().await {
-                        addr_map = m;
-                    }
-                    last_refresh = Instant::now();
-                }
-                let node_id = match addr_map.get(&batch.exporter_ip).copied() {
-                    Some(id) => Some(id),
+            first = rx.recv() => {
+                match first {
                     None => {
-                        // Miss: refresh once in case the exporter's node was just added.
-                        if let Ok(m) = repo.address_map().await {
-                            addr_map = m;
-                            last_refresh = Instant::now();
-                        }
-                        addr_map.get(&batch.exporter_ip).copied()
+                        flush_flow(&store, &mut buf).await;
+                        break;
                     }
-                };
-                let Some(node_id) = node_id else {
-                    metrics::counter!("yagra_flow_batches_unmapped_total").increment(1);
-                    tracing::debug!(exporter = %batch.exporter_ip, "flow batch from unmapped exporter — dropped");
-                    continue;
-                };
-                // Snapshot the hot-swappable IP→ASN table once per batch (not per record).
-                let ipasn_now = ipasn.read().unwrap().clone();
-                for rec in &batch.records {
-                    // Enrich only the zeros: the exporter's own BGP view is authoritative, the
-                    // offline IP→ASN table only fills in AS the device couldn't provide (ADR-031).
-                    let mut src_as = rec.src_as;
-                    let mut dst_as = rec.dst_as;
-                    if let Some(db) = &ipasn_now {
-                        if src_as == 0 {
-                            src_as = db.lookup(rec.src_ip).unwrap_or(0);
+                    Some(r) => {
+                        buf.push(r);
+                        while buf.len() < FLOW_INSERT_MAX_ROWS {
+                            match rx.try_recv() {
+                                Ok(r) => buf.push(r),
+                                Err(_) => break,
+                            }
                         }
-                        if dst_as == 0 {
-                            dst_as = db.lookup(rec.dst_ip).unwrap_or(0);
+                        if buf.len() >= FLOW_INSERT_MAX_ROWS {
+                            flush_flow(&store, &mut buf).await;
                         }
+                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "flow")
+                            .set(rx.len() as f64);
                     }
-                    buf.push(FlowRow {
-                        node_id,
-                        ts_unix_ms: batch.bucket_start_ms,
-                        exporter_ip: batch.exporter_ip,
-                        if_index: rec.if_index,
-                        src_ip: rec.src_ip,
-                        dst_ip: rec.dst_ip,
-                        src_port: rec.src_port,
-                        dst_port: rec.dst_port,
-                        proto: rec.proto,
-                        tos: rec.tos,
-                        src_as,
-                        dst_as,
-                        bytes: rec.bytes,
-                        packets: rec.packets,
-                        flows: rec.flows,
-                    });
-                }
-                if buf.len() >= FLOW_INSERT_MAX_ROWS {
-                    flush_flow(&store, &mut buf).await;
                 }
             }
         }
@@ -1534,6 +1603,8 @@ async fn flush_flow(store: &Arc<dyn FlowStore>, buf: &mut Vec<FlowRow>) {
     }
 }
 
+/// Async VictoriaMetrics batch writer (ADR-025): drains the bounded metrics queue and coalesces many
+/// poll results' samples into few bulk import POSTs, off the matcher's hot path. Takes the shutdown
 /// token directly (not `spawn_cancellable`) so it can do a best-effort final flush on cancel.
 async fn run_vm_writer(
     mut rx: tokio::sync::mpsc::Receiver<Arc<PollResult>>,
@@ -2578,5 +2649,143 @@ mod tests {
             VM_SPILL_MAX_BATCHES,
             "spill never exceeds its bound; the oldest is dropped"
         );
+    }
+
+    // ---- Flow ingest match/persist split (S27, ADR-031) ----
+
+    fn flow_rec(
+        src: &str,
+        dst: &str,
+        src_as: u32,
+        dst_as: u32,
+        bytes: u64,
+    ) -> yagra_bus::FlowRecord {
+        yagra_bus::FlowRecord {
+            src_ip: src.parse().unwrap(),
+            dst_ip: dst.parse().unwrap(),
+            src_port: 1234,
+            dst_port: 443,
+            proto: 6,
+            tos: 0,
+            if_index: 2,
+            src_as,
+            dst_as,
+            bytes,
+            packets: 10,
+            flows: 1,
+        }
+    }
+
+    fn flow_batch(exporter: &str, records: Vec<yagra_bus::FlowRecord>) -> FlowBatch {
+        FlowBatch {
+            schema_version: 1,
+            poller_id: "test-poller".into(),
+            pool: DEFAULT_POOL.into(),
+            exporter_ip: exporter.parse().unwrap(),
+            bucket_start_ms: 1_700_000_000_000,
+            bucket_secs: 60,
+            records,
+            dropped: 0,
+        }
+    }
+
+    #[test]
+    fn flow_rows_dropped_when_exporter_unmapped() {
+        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::new();
+        let batch = flow_batch(
+            "198.51.100.7",
+            vec![flow_rec("10.0.0.1", "8.8.8.8", 0, 0, 100)],
+        );
+        assert!(
+            flow_rows_from_batch(&batch, &addr_map, None).is_none(),
+            "an unmapped exporter yields no rows (the batch is dropped by the caller)"
+        );
+    }
+
+    #[test]
+    fn flow_rows_resolve_node_and_preserve_fields() {
+        let exporter: std::net::IpAddr = "198.51.100.7".parse().unwrap();
+        let node = Uuid::from_u128(42);
+        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::from([(exporter, node)]);
+        let batch = flow_batch(
+            "198.51.100.7",
+            vec![
+                flow_rec("10.0.0.1", "8.8.8.8", 0, 0, 100),
+                flow_rec("10.0.0.2", "1.1.1.1", 0, 0, 200),
+            ],
+        );
+        let rows = flow_rows_from_batch(&batch, &addr_map, None).expect("mapped exporter");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.node_id == node));
+        assert_eq!(rows[0].ts_unix_ms, 1_700_000_000_000);
+        assert_eq!((rows[0].bytes, rows[1].bytes), (100, 200));
+        // No IP→ASN table and the exporter sent 0 → AS stays unknown.
+        assert_eq!((rows[0].src_as, rows[0].dst_as), (0, 0));
+    }
+
+    #[test]
+    fn flow_as_enrichment_fills_only_zeros() {
+        // Offline IP→ASN table maps 8.8.8.0/24 → AS15169; an exporter's own non-zero AS still wins.
+        let db = crate::ipasn::IpAsnDb::from_tsv("8.8.8.0\t8.8.8.255\t15169\tUS\tGOOGLE\n");
+        let exporter: std::net::IpAddr = "198.51.100.7".parse().unwrap();
+        let node = Uuid::from_u128(7);
+        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::from([(exporter, node)]);
+        let batch = flow_batch(
+            "198.51.100.7",
+            vec![
+                // dst 8.8.8.8, dst_as=0 → enriched to 15169; src_as=64500 provided → preserved.
+                flow_rec("10.0.0.1", "8.8.8.8", 64500, 0, 100),
+                // dst 9.9.9.9 not in the table → stays unknown.
+                flow_rec("10.0.0.2", "9.9.9.9", 0, 0, 50),
+            ],
+        );
+        let rows = flow_rows_from_batch(&batch, &addr_map, Some(&db)).expect("mapped exporter");
+        assert_eq!(
+            rows[0].src_as, 64500,
+            "exporter-provided AS is authoritative"
+        );
+        assert_eq!(
+            rows[0].dst_as, 15169,
+            "a zero AS is filled from the offline table"
+        );
+        assert_eq!(
+            rows[1].dst_as, 0,
+            "an address not in the table stays unknown"
+        );
+    }
+
+    #[tokio::test]
+    async fn flow_send_drops_and_counts_when_queue_full() {
+        // A full hand-off queue (writer behind a slow ClickHouse) drops rows and reports the count
+        // instead of blocking the bus consumer — the S27 backpressure contract.
+        let node = Uuid::from_u128(1);
+        let mk = |n: usize| -> Vec<FlowRow> {
+            (0..n)
+                .map(|i| FlowRow {
+                    node_id: node,
+                    ts_unix_ms: 0,
+                    exporter_ip: "198.51.100.7".parse().unwrap(),
+                    if_index: 0,
+                    src_ip: "10.0.0.1".parse().unwrap(),
+                    dst_ip: "8.8.8.8".parse().unwrap(),
+                    src_port: 0,
+                    dst_port: 0,
+                    proto: 6,
+                    tos: 0,
+                    src_as: 0,
+                    dst_as: 0,
+                    bytes: i as u64,
+                    packets: 0,
+                    flows: 1,
+                })
+                .collect()
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<FlowRow>(2);
+        // Queue cap 2: the first two rows are accepted, the remaining three are dropped.
+        let dropped = send_flow_rows(&tx, mk(5));
+        assert_eq!(dropped, 3, "rows beyond the queue capacity are dropped");
+        assert_eq!(rx.try_recv().unwrap().bytes, 0);
+        assert_eq!(rx.try_recv().unwrap().bytes, 1);
+        assert!(rx.try_recv().is_err(), "only the accepted rows are queued");
     }
 }
