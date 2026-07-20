@@ -69,14 +69,43 @@ impl ServerHandler for YagraMcp {
 /// sessions drain on shutdown (ADR-017).
 pub fn build_router(state: ApiState, cancel: CancellationToken) -> axum::Router {
     let factory_state = state.clone();
+    // rmcp's StreamableHttpService ships DNS-rebinding protection that rejects any `Host` header not
+    // in `allowed_hosts` (default `localhost`/`127.0.0.1`/`::1`) with 403. Yagra is reached at an
+    // operator-chosen host (a LAN IP, a hostname behind a proxy), so the default would 403 every real
+    // client. We rely on our own **mandatory Bearer auth** (`mcp_auth_mw`, which runs *before* this
+    // service) as the actual gate — a DNS-rebinding attacker's browser can't supply a valid token, so
+    // it's stopped at 401 regardless of Host. Default: disable the allowlist (accept any Host).
+    // Operators who still want Host pinning set `YAGRA_MCP_ALLOWED_HOSTS` (comma-separated).
+    let hosts = mcp_allowed_hosts();
+    let config = StreamableHttpServerConfig::default().with_cancellation_token(cancel);
+    let config = if hosts.is_empty() {
+        config.disable_allowed_hosts()
+    } else {
+        config.with_allowed_hosts(hosts)
+    };
     let service = StreamableHttpService::new(
         move || Ok(YagraMcp::new(factory_state.clone())),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default().with_cancellation_token(cancel),
+        config,
     );
     axum::Router::new()
         .fallback_service(service)
         .layer(axum::middleware::from_fn_with_state(state, mcp_auth_mw))
+}
+
+/// Operator-configured `Host`-header allowlist for the MCP endpoint (`YAGRA_MCP_ALLOWED_HOSTS`,
+/// comma-separated, e.g. `yagra.example.com,192.168.1.2:8080`). Empty/unset ⇒ the allowlist is
+/// disabled and any Host is accepted (Bearer auth remains the gate — see `build_router`).
+fn mcp_allowed_hosts() -> Vec<String> {
+    std::env::var("YAGRA_MCP_ALLOWED_HOSTS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|h| h.trim().to_owned())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Authenticate every `/mcp` request before the MCP protocol handler runs. A denial short-circuits
