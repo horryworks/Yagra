@@ -1,5 +1,30 @@
 # Release Notes
 
+## v0.1.16
+
+**Licensing and flow-ingestion hardening.** Yagra is now released under the **GNU Affero General
+Public License v3.0 (AGPL-3.0-only)**, and this release hardens the traffic-flow ingestion path so a
+busy or slow flow store can't disturb the rest of the system. There are no new user-facing features —
+a default install behaves exactly as v0.1.15 did, now under the new license.
+
+### Licensing
+- **Relicensed to AGPL-3.0-only.** Every source file now carries an SPDX header and the repository
+  ships under `AGPL-3.0-only`. Because Yagra is typically run as a network service, note AGPL **§13**:
+  if you run a *modified* version and let others use it over a network, you must offer them its source.
+  For terms other than the AGPL (e.g. embedding Yagra in a proprietary product), a **commercial
+  license** may be available — see the README.
+
+### Improvements
+- **Flow ingestion is isolated from a slow flow store.** The ClickHouse flow writer now runs
+  separately from the flow bus consumer, handing rows off over a bounded queue. A slow or hung
+  ClickHouse can no longer back the `yagra.flows` subscription up into a silent message drop — under
+  pressure, flow rows are dropped and counted (the store is loss-tolerant by design) instead of
+  stalling ingestion.
+- **Flow exporter resolution no longer reloads the node table per batch.** Flow from an exporter whose
+  source IP isn't a registered node (common for routers that export from a loopback) used to re-scan
+  the whole node table on every batch; each unmapped exporter is now retried at most once, so flow
+  ingestion stays cheap at tens of thousands of nodes.
+
 ## v0.1.15
 
 **See what your traffic is doing.** Yagra now collects and analyzes network **flow** records — NetFlow,

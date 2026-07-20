@@ -1401,6 +1401,11 @@ const FLOW_INSERT_MAX_ROWS: usize = 10_000;
 const FLOW_INSERT_FLUSH_SECS: u64 = 5;
 /// How often the flow consumer refreshes its exporter-IP → node-id snapshot.
 const FLOW_ADDR_REFRESH_SECS: u64 = 60;
+/// Cap on the flow consumer's "already-missed" exporter set (throttles miss-triggered addr-map
+/// reloads to once per distinct exporter). Bounded well above any realistic exporter count; a
+/// pathological flood of distinct source IPs clears it, re-arming the periodic refresh as the
+/// backstop rather than growing memory unbounded.
+const FLOW_MISS_CACHE_MAX: usize = 65_536;
 /// Bounded hand-off queue between the flow consumer (bus → rows) and the ClickHouse writer. A full
 /// queue means the writer is behind a slow/hung ClickHouse; the consumer then drops + counts rows
 /// (`channel_full`) instead of stalling the `yagra.flows` subscription into a silent NATS drop (S27).
@@ -1489,6 +1494,21 @@ fn send_flow_rows(tx: &tokio::sync::mpsc::Sender<FlowRow>, rows: Vec<FlowRow>) -
     dropped
 }
 
+/// Decide whether a flow batch from `exporter_ip` should trigger an out-of-band address-map reload.
+/// Returns `true` only for the *first* miss of each distinct exporter (recording it in `missed`), so
+/// a steady stream of batches from an unregistered/never-mapped exporter — the normal case, since
+/// routers often export from a loopback that differs from their configured management address —
+/// cannot spin a full-table `SELECT` + map rebuild on the flow-ingest hot path once per batch. A
+/// genuinely just-added node is still picked up: its first miss reloads immediately, and thereafter
+/// it is present in the map; anything still unmapped is caught by the periodic refresh (S27 follow-up).
+fn should_reload_on_miss(
+    addr_map: &HashMap<std::net::IpAddr, Uuid>,
+    missed: &mut std::collections::HashSet<std::net::IpAddr>,
+    exporter_ip: std::net::IpAddr,
+) -> bool {
+    !addr_map.contains_key(&exporter_ip) && missed.insert(exporter_ip)
+}
+
 /// Consume edge-aggregated flow batches from the bus, resolve each exporter to a node (via the same
 /// address map the event pipeline uses), enrich AS numbers, and hand the rows to the ClickHouse
 /// writer over a bounded queue. Never awaits ClickHouse, so a slow/hung ClickHouse can't stall the
@@ -1504,16 +1524,23 @@ async fn consume_flows<S>(
 {
     let mut addr_map = repo.address_map().await.unwrap_or_default();
     let mut last_refresh = Instant::now();
+    // Exporters we've already tried (and failed) to resolve since startup — throttles the
+    // miss-triggered reload below to once per distinct exporter (see `should_reload_on_miss`).
+    let mut missed: std::collections::HashSet<std::net::IpAddr> = std::collections::HashSet::new();
     while let Some(batch) = flows.next().await {
-        // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime), and
-        // once more on a mapping miss in case the exporter's node was just added.
+        // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime).
         if last_refresh.elapsed() >= Duration::from_secs(FLOW_ADDR_REFRESH_SECS) {
             if let Ok(m) = repo.address_map().await {
                 addr_map = m;
             }
             last_refresh = Instant::now();
         }
-        if !addr_map.contains_key(&batch.exporter_ip) {
+        // On a mapping miss, reload once more in case the exporter's node was just added — but only
+        // the first time we see each exporter, so a never-registered exporter can't reload per batch.
+        if missed.len() >= FLOW_MISS_CACHE_MAX {
+            missed.clear();
+        }
+        if should_reload_on_miss(&addr_map, &mut missed, batch.exporter_ip) {
             if let Ok(m) = repo.address_map().await {
                 addr_map = m;
                 last_refresh = Instant::now();
@@ -2700,6 +2727,31 @@ mod tests {
             flow_rows_from_batch(&batch, &addr_map, None).is_none(),
             "an unmapped exporter yields no rows (the batch is dropped by the caller)"
         );
+    }
+
+    #[test]
+    fn miss_reload_throttled_to_once_per_exporter() {
+        use std::collections::HashSet;
+        use std::net::IpAddr;
+        let mapped: IpAddr = "10.0.0.1".parse().unwrap();
+        let addr_map: HashMap<IpAddr, Uuid> = HashMap::from([(mapped, Uuid::from_u128(1))]);
+        let mut missed: HashSet<IpAddr> = HashSet::new();
+
+        // A mapped exporter never triggers a reload and is never recorded as missed.
+        assert!(!should_reload_on_miss(&addr_map, &mut missed, mapped));
+        assert!(missed.is_empty());
+
+        // First batch from an unmapped exporter reloads once…
+        let unknown: IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(should_reload_on_miss(&addr_map, &mut missed, unknown));
+        // …and every subsequent batch from the same still-unmapped exporter is throttled (no reload).
+        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown));
+        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown));
+
+        // A different unmapped exporter still gets its own one-shot reload.
+        let unknown2: IpAddr = "203.0.113.9".parse().unwrap();
+        assert!(should_reload_on_miss(&addr_map, &mut missed, unknown2));
+        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown2));
     }
 
     #[test]
