@@ -50,6 +50,7 @@
     "users": "Users",
     "roles": "Roles & privileges",
     "auth": "Authentication",
+    "apiTokens": "API tokens",
     "audit": "Audit log",
     "system": "System settings",
     "preferences": "Preferences",
@@ -79,7 +80,8 @@
     "topologyDependency": "Manage parent → child dependency links",
     "troubleshootRuns": "Background analysis jobs and their reports",
     "settingsCredentials": "SNMP and API credentials, encrypted at rest",
-    "settingsPollers": "Distributed poller fleet status"
+    "settingsPollers": "Distributed poller fleet status",
+    "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients"
   },
   "shell": {
     "home": "Home",

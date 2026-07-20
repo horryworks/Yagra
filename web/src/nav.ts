@@ -260,6 +260,13 @@ export const NAV: NavSection[] = [
           { labelKey: 'settings.users', path: '/settings/users', implemented: true, mono: 'Us' },
           { labelKey: 'settings.roles', path: '/settings/roles', implemented: true, mono: 'Rl' },
           { labelKey: 'settings.auth', path: '/settings/auth', implemented: true, mono: 'Au' },
+          {
+            labelKey: 'settings.apiTokens',
+            descKey: 'descriptions.settingsApiTokens',
+            path: '/settings/api-tokens',
+            implemented: true,
+            mono: 'Tk',
+          },
           { labelKey: 'settings.audit', path: '/settings/audit', implemented: true, mono: 'Ad' },
         ],
       },

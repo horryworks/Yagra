@@ -78,6 +78,107 @@ API v2) and Jira Service Management (Alerts API) with native fire/resolve lifecy
 > `network_mode: host`. If the host already runs a syslog daemon on port 514, remap the
 > published port. Poller-side rate limits (per-source and global) bound event floods.
 
+## Connecting an AI client (MCP)
+
+Yagra can expose a **read-only [MCP](https://modelcontextprotocol.io) tool surface** (ADR-028) so an
+AI client — Claude Code, Claude Desktop, or another MCP-capable assistant — can query live monitoring
+state in natural language: *"which nodes are down?"*, *"summarize the active alerts"*, *"show CPU on
+edge-router-1 for the last hour"*. There are **no** tools that change state or configure devices — the
+AI reads the same data the WebUI does, nothing more.
+
+Tools: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`, `get_alert_history`,
+`query_metrics`, `get_topology`, `top_flows`.
+
+### 1. Enable the server
+
+Off by default. Set `YAGRA_ENABLE_MCP=true` for core (uncomment it in `docker-compose.yml`, or add it
+to your `.env` for the deploy compose) and restart. The endpoint is then served **on the API port** at:
+
+```
+http://<yagra-host>:8080/mcp          # Streamable HTTP transport
+```
+
+When disabled the path is not mounted (404), byte-identical to before. MCP always requires
+authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
+
+### 2. Create an API token
+
+Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → choose **Viewer** (read-only
+is all the tools need) → copy the `yat_…` value shown once. This is the bearer token the AI client
+sends. (A regular login session token works too, but it expires; an API token is meant for an
+unattended client and is revocable from the same page.)
+
+> **Reachability:** the AI client makes the HTTP call from *your* machine, not from Anthropic's cloud —
+> so the client only needs network access to `<yagra-host>:8080` (same LAN, or over a VPN). No public
+> inbound exposure is required unless you want to connect from the claude.ai web app (see below).
+
+### 3. Register it with your client
+
+**Claude Code (CLI)** — the simplest path:
+
+```bash
+claude mcp add --transport http yagra http://<yagra-host>:8080/mcp \
+  --header "Authorization: Bearer yat_your_token"
+```
+
+Then run `/mcp` in Claude Code to confirm it connected, and ask it to list nodes or summarize alerts.
+
+**Claude Desktop** — Desktop bridges to a remote HTTP server via the `mcp-remote` helper. Add this to
+`claude_desktop_config.json` (Settings ▸ Developer ▸ Edit config), then restart Desktop:
+
+```json
+{
+  "mcpServers": {
+    "yagra": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "http://<yagra-host>:8080/mcp",
+        "--header", "Authorization: Bearer yat_your_token"
+      ]
+    }
+  }
+}
+```
+
+**Gemini CLI** — add the server to `~/.gemini/settings.json` (or a project-local
+`.gemini/settings.json`). The `httpUrl` key selects the Streamable HTTP transport:
+
+```json
+{
+  "mcpServers": {
+    "yagra": {
+      "httpUrl": "http://<yagra-host>:8080/mcp",
+      "headers": { "Authorization": "Bearer yat_your_token" }
+    }
+  }
+}
+```
+
+Restart `gemini`, then `/mcp` lists the Yagra tools. Gemini Code Assist (VS Code) reads the same
+`settings.json`.
+
+**claude.ai (web) / Team / Enterprise** — add Yagra as a **Custom Connector** (Settings ▸ Connectors).
+This requires the `/mcp` endpoint to be reachable from Anthropic's servers, i.e. a **public HTTPS URL**
+(e.g. front it with a reverse proxy or a Cloudflare Tunnel) — a LAN/VPN-only address won't work here.
+The same public-HTTPS requirement applies to the Gemini web app / Vertex AI agent connectors.
+
+**Any MCP client / quick check with `curl`** — the transport is plain JSON-RPC over HTTP, so you can
+smoke-test without a client:
+
+```bash
+curl -sN http://<yagra-host>:8080/mcp \
+  -H "Authorization: Bearer yat_your_token" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+> **Note:** because the AI reads live monitoring data (node names, addresses, alerts) and, for a
+> cloud-hosted assistant, that data is sent to the model provider as conversation context, treat the
+> tool output as you would any data leaving your boundary. Device credentials are **never** included in
+> any tool result. Keep the token least-privileged (Viewer) and revoke it from Settings ▸ API tokens
+> when a client no longer needs it.
+
 ## Deployment
 
 Bring up a full single-node stack in one command:

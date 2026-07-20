@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ API tokens. Only the one-time reveal modal needs custom layout; the list reuses the
+   shared DataTable/Badge/toolbar styles. Colors/fonts come from theme variables (ui-conventions). */
+
+.tok-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Token value + copy button on one row inside the reveal modal. */
+.tok-copyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The raw token: monospace, selectable, wraps rather than overflowing the modal. */
+.tok-token {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  word-break: break-all;
+  user-select: all;
+}
+
+/* The ready-to-paste MCP client command. */
+.tok-cmd {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  word-break: break-all;
+  user-select: all;
+  font-size: var(--font-sm);
+}

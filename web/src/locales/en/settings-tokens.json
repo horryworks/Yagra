@@ -1,0 +1,44 @@
+{
+  "note": "Long-lived API tokens for non-browser clients — in particular an AI/MCP client such as Claude Code or Claude Desktop. A token carries a role and is shown once at creation; only its hash is stored. The read-only MCP tool surface (Settings enable the MCP server with YAGRA_ENABLE_MCP) authenticates with these tokens.",
+  "unavailable": "Managing API tokens requires the admin role.",
+  "signInPrompt": "Sign in as an admin to manage API tokens.",
+  "empty": "No API tokens yet. Create one to give an AI/MCP or API client access.",
+  "add": { "button": "New token", "title": "Create API token" },
+  "field": {
+    "name": "Name",
+    "namePlaceholder": "e.g. oncall-laptop",
+    "role": "Role",
+    "roleHint": "Use Viewer for a read-only AI/MCP client."
+  },
+  "cols": {
+    "name": "Name",
+    "role": "Role",
+    "status": "Status",
+    "created": "Created",
+    "lastUsed": "Last used",
+    "actions": "Actions"
+  },
+  "status": { "active": "Active", "revoked": "Revoked" },
+  "lastUsed": { "never": "Never" },
+  "token": {
+    "title": "Token created",
+    "intro": "Copy this token now — it is shown only once and cannot be recovered.",
+    "label": "API token",
+    "usageHint": "Add it to an MCP client as a bearer token, for example:",
+    "copy": "Copy",
+    "done": "Done"
+  },
+  "revoke": {
+    "title": "Revoke token",
+    "confirm": "Revoke the token \"{{name}}\"? Any client using it loses access immediately.",
+    "action": "Revoke"
+  },
+  "count_one": "{{count}} token",
+  "count_other": "{{count}} tokens",
+  "err": {
+    "load": "Failed to load API tokens",
+    "create": "Failed to create the token",
+    "revoke": "Failed to revoke the token",
+    "duplicate": "A token with that name already exists"
+  }
+}

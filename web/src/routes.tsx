@@ -39,6 +39,7 @@ import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { AuthSettingsPage } from './pages/AuthSettingsPage';
+import { ApiTokensPage } from './pages/ApiTokensPage';
 import { TopologyMapPage } from './pages/TopologyMapPage';
 import { DependencyPage } from './pages/DependencyPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
@@ -107,6 +108,7 @@ export function AppRoutes() {
         <Route path="settings/users" element={<UsersPage />} />
         <Route path="settings/roles" element={<RolesPage />} />
         <Route path="settings/auth" element={<AuthSettingsPage />} />
+        <Route path="settings/api-tokens" element={<ApiTokensPage />} />
         <Route path="settings/audit" element={<AuditPage />} />
         <Route path="settings/system" element={<SystemSettingsPage />} />
         <Route path="settings/preferences" element={<PreferencesPage />} />

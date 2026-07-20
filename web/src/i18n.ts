@@ -31,6 +31,7 @@ import enTroubleshoot from './locales/en/troubleshoot.json';
 import enAccess from './locales/en/access.json';
 import enSystem from './locales/en/system.json';
 import enSettingsAuth from './locales/en/settings-auth.json';
+import enSettingsTokens from './locales/en/settings-tokens.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
 export const NAMESPACES = [
@@ -51,6 +52,7 @@ export const NAMESPACES = [
   'access',
   'system',
   'settings-auth',
+  'settings-tokens',
 ] as const;
 
 void i18n
@@ -89,6 +91,7 @@ void i18n
         access: enAccess,
         system: enSystem,
         'settings-auth': enSettingsAuth,
+        'settings-tokens': enSettingsTokens,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages

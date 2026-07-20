@@ -77,6 +77,106 @@ fire/resolve ライフサイクル連動で転送できます:
 > いる場合は公開ポートを変更してください。ポーラ側のレート制限（送信元ごと + 全体）が
 > イベントフラッドを抑えます。
 
+## AI クライアントの接続（MCP）
+
+Yagra は**読み取り専用の [MCP](https://modelcontextprotocol.io) ツール面**（ADR-028）を公開でき、
+AI クライアント（Claude Code / Claude Desktop / その他 MCP 対応アシスタント）から監視状態を自然言語で
+問い合わせられます。例:「落ちているノードは?」「アクティブなアラートを要約して」「edge-router-1 の
+直近1時間の CPU を見せて」。**状態変更や機器設定のツールは一切ありません** — AI が読めるのは WebUI と
+同じデータだけです。
+
+ツール: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`,
+`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`。
+
+### 1. サーバを有効化
+
+既定 OFF。core に `YAGRA_ENABLE_MCP=true` を設定して（`docker-compose.yml` のコメントを外すか、
+deploy compose なら `.env` に追記）再起動します。エンドポイントは **API ポート**の `/mcp` に出ます:
+
+```
+http://<yagra-host>:8080/mcp          # Streamable HTTP トランスポート
+```
+
+無効時は未マウント（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも
+**常に認証必須**です。
+
+### 2. API トークンを発行
+
+WebUI に管理者でサインイン → **Settings ▸ API tokens ▸ New token** → **Viewer**（読み取り専用で十分）を
+選び、一度だけ表示される `yat_…` をコピー。これが AI クライアントが送る Bearer トークンです。
+（通常のログインセッショントークンでも動きますが期限切れになります。API トークンは無人クライアント向けで、
+同じ画面から失効できます。）
+
+> **到達性:** HTTP 呼び出しは Anthropic のクラウドではなく**あなたの手元のクライアント**から出ます。
+> よってクライアントが `<yagra-host>:8080` に到達できれば十分です（同一 LAN、または VPN 経由）。
+> claude.ai の Web アプリから繋ぐ場合を除き、インターネットへのインバウンド公開は不要です（下記参照）。
+
+### 3. クライアントに登録
+
+**Claude Code（CLI）** — 最も簡単:
+
+```bash
+claude mcp add --transport http yagra http://<yagra-host>:8080/mcp \
+  --header "Authorization: Bearer yat_your_token"
+```
+
+その後 Claude Code で `/mcp` を実行して接続を確認し、ノード一覧やアラート要約を依頼します。
+
+**Claude Desktop** — Desktop は `mcp-remote` ヘルパー経由でリモート HTTP サーバに橋渡しします。
+`claude_desktop_config.json`（Settings ▸ Developer ▸ Edit config）に以下を追加し、Desktop を再起動:
+
+```json
+{
+  "mcpServers": {
+    "yagra": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "http://<yagra-host>:8080/mcp",
+        "--header", "Authorization: Bearer yat_your_token"
+      ]
+    }
+  }
+}
+```
+
+**Gemini CLI** — `~/.gemini/settings.json`（またはプロジェクトの `.gemini/settings.json`）に追加します。
+`httpUrl` キーで Streamable HTTP トランスポートが選択されます:
+
+```json
+{
+  "mcpServers": {
+    "yagra": {
+      "httpUrl": "http://<yagra-host>:8080/mcp",
+      "headers": { "Authorization": "Bearer yat_your_token" }
+    }
+  }
+}
+```
+
+`gemini` を再起動して `/mcp` を実行すると Yagra のツールが一覧されます。VS Code の Gemini Code Assist も
+同じ `settings.json` を読みます。
+
+**claude.ai（Web）/ Team / Enterprise** — **カスタムコネクタ**（Settings ▸ Connectors）として追加します。
+これは `/mcp` が Anthropic のサーバから到達できること、すなわち**公開 HTTPS URL**（リバースプロキシや
+Cloudflare Tunnel でフロントする）が前提です。LAN/VPN のみのアドレスでは繋がりません。Gemini の Web アプリ /
+Vertex AI エージェントのコネクタから繋ぐ場合も同じく公開 HTTPS が必要です。
+
+**任意の MCP クライアント / `curl` での疎通確認** — トランスポートは HTTP 上の素の JSON-RPC なので、
+クライアント無しでスモークテストできます:
+
+```bash
+curl -sN http://<yagra-host>:8080/mcp \
+  -H "Authorization: Bearer yat_your_token" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+> **注意:** AI は稼働中の監視データ（ノード名・アドレス・アラート）を読み、クラウド型アシスタントでは
+> それが会話コンテキストとしてモデルプロバイダに送られます。ツール出力は境界外に出るデータとして扱って
+> ください。機器の資格情報はどのツール結果にも**絶対に含まれません**。トークンは最小権限（Viewer）に保ち、
+> クライアントが不要になったら Settings ▸ API tokens から失効してください。
+
 ## デプロイ
 
 単一ノードのフルスタックを 1 コマンドで起動:

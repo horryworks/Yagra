@@ -108,6 +108,9 @@ pub struct AdminState {
     /// Durable poller inventory (ADR-009): lets the Pollers view surface a poller that is currently
     /// offline (its live liveness lives only in the coordinator/Redis, which forget it on TTL).
     pub pollers: Arc<PollerRepo>,
+    /// Long-lived API tokens (PATs) for non-browser clients (ADR-028): backs Settings ▸ API tokens
+    /// and the MCP auth gate. Admin-managed; the raw token is shown once at creation, never stored.
+    pub api_tokens: Arc<crate::apitokens::ApiTokenStore>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -124,7 +127,7 @@ const MAX_RANGE_POINTS: i64 = 5000;
 /// Clamp a range query's `step` so `[from, to]` yields at most [`MAX_RANGE_POINTS`] samples. Floors
 /// at the caller's own minimum (`min_step`) and at 1s, then raises it further if the requested span
 /// would otherwise exceed the point cap. `from`/`to` are Unix seconds.
-fn clamp_range_step(from: i64, to: i64, step: u64, min_step: u64) -> u64 {
+pub(crate) fn clamp_range_step(from: i64, to: i64, step: u64, min_step: u64) -> u64 {
     let span = (to - from).max(0);
     let needed = u64::try_from(span / MAX_RANGE_POINTS.max(1)).unwrap_or(u64::MAX);
     step.max(min_step).max(needed).max(1)
@@ -184,6 +187,10 @@ pub struct ApiState {
     pub oidc: Option<Arc<crate::oidc::OidcRepo>>,
     /// In-flight OIDC authorizations (CSRF state → nonce/PKCE), one per pending SSO login.
     pub oidc_flight: Arc<crate::oidc::OidcFlight>,
+    /// MCP server enabled (ADR-028, `YAGRA_ENABLE_MCP`). When `true`, `serve()` mounts the read-only
+    /// MCP tool surface at `/mcp`; when `false` (default) the route is absent (a request 404s). Held
+    /// here so `serve()` reads it off the same state it already threads.
+    pub enable_mcp: bool,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -345,6 +352,13 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/users/:id/role", put(set_user_role))
         .route("/api/v1/users/:id/enabled", put(set_user_status))
         .route("/api/v1/users/:id/password", put(set_user_password))
+        // API tokens (PATs) for non-browser clients / the MCP tool surface (ADR-028). Admin-only;
+        // issuance/revocation are audited by `audit_mw`. The raw token is returned once on create.
+        .route(
+            "/api/v1/api-tokens",
+            get(list_api_tokens).post(create_api_token),
+        )
+        .route("/api/v1/api-tokens/:id", delete(revoke_api_token))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(auth_me))
@@ -731,7 +745,7 @@ struct ErrorDetail {
     message: String,
 }
 
-fn error_response(status: StatusCode, code: &str, message: String) -> Response {
+pub(crate) fn error_response(status: StatusCode, code: &str, message: String) -> Response {
     (
         status,
         Json(ErrorBody {
@@ -751,7 +765,7 @@ fn not_found(code: &str, message: String) -> Response {
 /// A Prometheus-style metric name: `[a-zA-Z_:][a-zA-Z0-9_:]*`. Validating at the edge
 /// keeps the (untrusted) path segment from being interpolated into the PromQL selector
 /// sent to the TSDB (security.md: parse into strong, bounded types at the API edge).
-fn is_valid_metric_name(metric: &str) -> bool {
+pub(crate) fn is_valid_metric_name(metric: &str) -> bool {
     let mut chars = metric.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {}
@@ -4038,7 +4052,7 @@ fn internal(what: &str) -> Response {
 }
 
 /// Extract the `Authorization: Bearer <token>` value, if present.
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(AUTHORIZATION)?
         .to_str()
@@ -4149,6 +4163,137 @@ async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
             "unauthorized",
             "not authenticated".to_owned(),
         ),
+    }
+}
+
+// ── API tokens (PATs) — the durable credential for the MCP tool surface (ADR-028) ─────────────────
+// Admin-only (issuing a role-bearing credential is a user-management action). Mutations are audited
+// generically by `audit_mw`; the raw token is returned once on create and never stored.
+
+/// Request body for `POST /api/v1/api-tokens`.
+#[derive(Deserialize)]
+struct CreateApiTokenBody {
+    /// Human label (unique, ≤128 chars).
+    name: String,
+    /// The role the token grants (`viewer` recommended for a read-only MCP client).
+    role: Role,
+    /// Visibility scope (`"All"` or `{"Groups":[…]}`); defaults to `All` when omitted.
+    scope: Option<yagra_common::Scope>,
+}
+
+/// Resolve the caller's session, requiring `ManageUsers` (admin-only). On failure returns the
+/// short-circuit `Err(response)`; on success `Ok(session)` (used for the `created_by` actor). The
+/// error is boxed so the `Ok`/`Err` size gap stays small (`clippy::result_large_err`).
+fn require_admin_session(
+    st: &ApiState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Session, Box<Response>> {
+    match st
+        .sessions
+        .authorize(bearer(headers), Permission::ManageUsers)
+    {
+        Ok(session) => Ok(session),
+        Err(AuthError::Forbidden) => Err(Box::new(error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "managing API tokens requires the admin role".to_owned(),
+        ))),
+        Err(_) => Err(Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid bearer token is required".to_owned(),
+        ))),
+    }
+}
+
+async fn create_api_token(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateApiTokenBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let session = match require_admin_session(&st, &headers) {
+        Ok(s) => s,
+        Err(resp) => return *resp,
+    };
+    let name = body.name.trim();
+    if name.is_empty() || name.chars().count() > 128 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "token name must be 1–128 characters".to_owned(),
+        );
+    }
+    let scope = body.scope.unwrap_or(yagra_common::Scope::All);
+    match admin
+        .api_tokens
+        .create(name, body.role, &scope, &session.username)
+        .await
+    {
+        Ok((id, raw)) => (
+            StatusCode::CREATED,
+            // The raw token is returned exactly once — the client must store it now (it's unrecoverable).
+            Json(serde_json::json!({
+                "id": id,
+                "name": name,
+                "role": body.role,
+                "token": raw,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            if e.downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error)
+                .is_some_and(|db| db.is_unique_violation())
+            {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "duplicate_name",
+                    "an API token with that name already exists".to_owned(),
+                );
+            }
+            tracing::error!(error = %e, "API token create failed");
+            internal("failed to create API token")
+        }
+    }
+}
+
+async fn list_api_tokens(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Err(resp) = require_admin_session(&st, &headers) {
+        return *resp;
+    }
+    match admin.api_tokens.list().await {
+        Ok(tokens) => Json(tokens).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "API token list failed");
+            internal("failed to list API tokens")
+        }
+    }
+}
+
+async fn revoke_api_token(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Err(resp) = require_admin_session(&st, &headers) {
+        return *resp;
+    }
+    match admin.api_tokens.revoke(id).await {
+        // Idempotent: a missing/already-revoked id is a no-op 204 (nothing left to do).
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "API token revoke failed");
+            internal("failed to revoke API token")
+        }
     }
 }
 
@@ -9310,6 +9455,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            enable_mcp: false,
         }
     }
 
@@ -9340,6 +9486,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            enable_mcp: false,
         };
         (state, token)
     }
@@ -9368,6 +9515,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            enable_mcp: false,
         };
         (state, token)
     }

@@ -313,6 +313,37 @@ export interface OidcProviderInput {
   enabled: boolean;
 }
 
+/** An API token (`GET /api/v1/api-tokens`, core `ApiTokenInfo`) — a long-lived credential for
+ *  non-browser/MCP clients (ADR-028). The raw token is write-only: shown once on create, never
+ *  returned again; only metadata is listed. `scope` is the serde JSON of the core `Scope`
+ *  (`"All"` or `{ "Groups": [...] }`) rendered as a string. */
+export interface ApiTokenSummary {
+  id: string;
+  name: string;
+  role: Role;
+  scope: unknown;
+  created_by: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Create payload for an API token. `scope` is omitted for global (All) visibility — the only
+ *  scope the MCP tool surface accepts in Increment 1. */
+export interface ApiTokenInput {
+  name: string;
+  role: Role;
+  scope?: string;
+}
+
+/** Create response: the raw `token` is shown once and never returned again. */
+export interface CreatedApiToken {
+  id: string;
+  name: string;
+  role: Role;
+  token: string;
+}
+
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). Split by functional
  *  `category` (role) × `vendor`-NOS family; `category` is the kebab-case `ProfileCategory` token. */
 export interface ProfileSummary {

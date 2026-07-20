@@ -100,6 +100,9 @@ import type {
   UserSummary,
   OidcProviderSummary,
   OidcProviderInput,
+  ApiTokenSummary,
+  ApiTokenInput,
+  CreatedApiToken,
 } from '../types/api';
 
 /** Request body to create a collection item (scalar or table). */
@@ -1303,4 +1306,16 @@ export const api = {
   /** Delete an OIDC provider. */
   deleteOidcProvider: (id: string): Promise<void> =>
     request(`/settings/oidc/${encodeURIComponent(id)}`, jsonBody('DELETE', {})),
+
+  // ── API tokens (Settings ▸ API tokens, ManageUsers) — the MCP/API client credential (ADR-028) ──
+  /** List API tokens (metadata only — never the raw token). */
+  listApiTokens: (): Promise<ApiTokenSummary[]> => request('/api-tokens'),
+
+  /** Create an API token; the response `token` is shown once and only its hash is stored. */
+  createApiToken: (body: ApiTokenInput): Promise<CreatedApiToken> =>
+    request('/api-tokens', jsonBody('POST', body)),
+
+  /** Revoke (soft-delete) an API token. */
+  revokeApiToken: (id: string): Promise<void> =>
+    request(`/api-tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

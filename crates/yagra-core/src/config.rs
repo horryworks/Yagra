@@ -111,6 +111,12 @@ pub struct Config {
     /// (security.md/ADR-018). `None` (unset) ⇒ opaque per-process tokens, **byte-identical to today**.
     /// A configured-but-unreadable/invalid key is a hard startup error (fail-closed).
     pub session_key_file: Option<String>,
+    /// MCP server (ADR-028, Phase 4 inward-facing AI tool surface). Default `false`: the `/mcp`
+    /// Streamable-HTTP endpoint is **not mounted** (a request to it 404s), byte-identical to
+    /// pre-MCP behavior. When `true`, `serve()` mounts a read-only MCP tool surface at `/mcp`,
+    /// authenticated with an API token (PAT) or a session token. Additive, default-OFF,
+    /// N/N-1 rolling-safe (ADR-017). Consumed by `serve()` via [`crate::api::ApiState::enable_mcp`].
+    pub enable_mcp: bool,
 }
 
 impl Config {
@@ -157,6 +163,8 @@ impl Config {
             // Signed session tokens (ADR-016 Increment 2a): opt-in via a mounted key file. Unset ⇒
             // opaque per-process tokens (byte-identical to today).
             session_key_file: parse_optional(std::env::var("YAGRA_SESSION_KEY_FILE").ok()),
+            // MCP server (ADR-028): opt-in. Unset ⇒ `/mcp` not mounted (byte-identical to pre-MCP).
+            enable_mcp: parse_bool(std::env::var("YAGRA_ENABLE_MCP").ok()),
         })
     }
 }

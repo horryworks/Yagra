@@ -1,0 +1,44 @@
+{
+  "note": "ブラウザ以外のクライアント（特に Claude Code / Claude Desktop などの AI/MCP クライアント）向けの長寿命 API トークンです。トークンはロールを持ち、作成時に一度だけ表示されます（保存されるのはハッシュのみ）。読み取り専用の MCP ツール面（YAGRA_ENABLE_MCP で有効化）はこのトークンで認証します。",
+  "unavailable": "API トークンの管理には管理者ロールが必要です。",
+  "signInPrompt": "API トークンを管理するには管理者でサインインしてください。",
+  "empty": "API トークンはまだありません。作成すると AI/MCP・API クライアントにアクセスを付与できます。",
+  "add": { "button": "新規トークン", "title": "API トークンを作成" },
+  "field": {
+    "name": "名前",
+    "namePlaceholder": "例: oncall-laptop",
+    "role": "ロール",
+    "roleHint": "読み取り専用の AI/MCP クライアントには Viewer を使用してください。"
+  },
+  "cols": {
+    "name": "名前",
+    "role": "ロール",
+    "status": "状態",
+    "created": "作成",
+    "lastUsed": "最終使用",
+    "actions": "操作"
+  },
+  "status": { "active": "有効", "revoked": "失効" },
+  "lastUsed": { "never": "未使用" },
+  "token": {
+    "title": "トークンを作成しました",
+    "intro": "このトークンを今すぐコピーしてください。表示は一度きりで、再取得できません。",
+    "label": "API トークン",
+    "usageHint": "MCP クライアントに Bearer トークンとして追加します。例:",
+    "copy": "コピー",
+    "done": "完了"
+  },
+  "revoke": {
+    "title": "トークンを失効",
+    "confirm": "トークン「{{name}}」を失効しますか? 使用中のクライアントは直ちにアクセスできなくなります。",
+    "action": "失効"
+  },
+  "count_one": "{{count}} 件",
+  "count_other": "{{count}} 件",
+  "err": {
+    "load": "API トークンの読み込みに失敗しました",
+    "create": "トークンの作成に失敗しました",
+    "revoke": "トークンの失効に失敗しました",
+    "duplicate": "同じ名前のトークンが既に存在します"
+  }
+}

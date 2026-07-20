@@ -14,6 +14,7 @@ mod ack;
 mod alerts;
 mod analysis;
 mod api;
+mod apitokens;
 mod audit;
 mod auth;
 mod authcallout;
@@ -31,6 +32,7 @@ mod ipasn;
 mod leader;
 mod logstore;
 mod maintenance;
+mod mcp;
 mod meraki;
 mod mib;
 mod notifications;
@@ -774,6 +776,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         events: events_repo,
         coordinator: coordinator.clone(),
         pollers: poller_repo.clone(),
+        api_tokens: Arc::new(apitokens::ApiTokenStore::new(repo.pool().clone())),
     }));
     // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
     // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
@@ -861,6 +864,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         is_leader: is_leader.clone(),
         oidc,
         oidc_flight,
+        enable_mcp: cfg.enable_mcp,
     };
 
     if cfg.enable_ha {
@@ -941,6 +945,9 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // Skeleton has no metadata store, so no OIDC provider config.
         oidc: None,
         oidc_flight: Arc::new(oidc::OidcFlight::new()),
+        // Skeleton has no API-token store (admin is None), so MCP has no PAT auth backend — leave it
+        // off regardless of the flag. MCP is a live-mode feature (its tools read the live seams).
+        enable_mcp: false,
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }
@@ -2228,7 +2235,20 @@ async fn serve(
     metrics: PrometheusHandle,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    let app = api::router(state)
+    // MCP tool surface (ADR-028): mounted only when enabled, so a disabled deployment 404s `/mcp`
+    // (byte-identical to pre-MCP). Built before the router consumes `state`; the service shares the
+    // server shutdown token (child) so in-flight MCP sessions drain on stop (ADR-017).
+    let mcp_router = state
+        .enable_mcp
+        .then(|| mcp::build_router(state.clone(), shutdown.child_token()));
+    if mcp_router.is_some() {
+        tracing::info!("MCP server enabled — read-only tool surface at /mcp (ADR-028)");
+    }
+    let mut app = api::router(state);
+    if let Some(mcp_router) = mcp_router {
+        app = app.nest("/mcp", mcp_router);
+    }
+    let app = app
         .route(
             "/metrics",
             get(move || {

@@ -141,6 +141,10 @@ jobs:
           YAGRA_IMAGE_TAG: latest
           # Optional override; empty secret falls back to the compose default.
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # MCP server (ADR-028): toggled by the `YAGRA_ENABLE_MCP` repo variable (unset ⇒ empty ⇒
+          # compose default `false`). The test server is the MCP validation channel; flip the variable
+          # to turn it off without a code change.
+          YAGRA_ENABLE_MCP: ${{ vars.YAGRA_ENABLE_MCP }}
         run: |
           docker compose -f docker-compose.deploy.yml pull
           docker compose -f docker-compose.deploy.yml up -d --remove-orphans

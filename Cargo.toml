@@ -136,6 +136,17 @@ data-encoding = "2"
 # code exchange, and ID-token signature/claim validation per spec. TLS rides the in-tree reqwest
 # (rustls) — `default-features = false` + explicit `rustls-tls` keeps native-tls/openssl/NASM out.
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+# MCP server (ADR-028 Phase 4, inward-facing AI tool surface). Official Rust SDK: the `server` +
+# `macros` features give the `#[tool]`/`#[tool_router]`/`#[tool_handler]` declarative tool layer, and
+# `transport-streamable-http-server` gives a `StreamableHttpService` that mounts into the existing
+# axum `serve()` as a tower Service (rmcp's runtime is hyper1/http1/tower-service-0.3 — the same
+# stack axum 0.7 links, so there is no axum-version coupling; axum is dev-only upstream). stdio
+# transport is deferred (Docker deployment makes HTTP the practical transport). Pure Rust, no NASM.
+rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
+# rmcp pulls schemars 1.x itself; this direct entry only enables the `uuid1` feature on that same
+# single copy so MCP tool-param structs can derive `JsonSchema` for their `Uuid` fields (node ids).
+# Features unify across the one schemars version — no second copy. Code uses `rmcp::schemars`.
+schemars = { version = "1", features = ["uuid1", "chrono04"] }
 
 [profile.release]
 lto = "thin"

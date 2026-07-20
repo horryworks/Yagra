@@ -50,6 +50,7 @@
     "users": "ユーザー",
     "roles": "ロールと権限",
     "auth": "認証",
+    "apiTokens": "API トークン",
     "audit": "監査ログ",
     "system": "システム設定",
     "preferences": "環境設定",
@@ -79,7 +80,8 @@
     "topologyDependency": "親子の依存リンクを管理",
     "troubleshootRuns": "バックグラウンド分析ジョブとレポート",
     "settingsCredentials": "SNMP・API 認証情報（暗号化して保存）",
-    "settingsPollers": "分散ポーラーの状態"
+    "settingsPollers": "分散ポーラーの状態",
+    "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン"
   },
   "shell": {
     "home": "ホーム",

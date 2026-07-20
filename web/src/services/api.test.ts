@@ -1406,4 +1406,30 @@ describe('api client', () => {
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body)).toEqual({ enabled: false });
   });
+
+  it('creates an API token and returns the once-shown raw token', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: 'tok1', name: 'oncall', role: 'viewer', token: 'yat_abc' }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.createApiToken({ name: 'oncall', role: 'viewer' });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/api-tokens');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({ name: 'oncall', role: 'viewer' });
+    expect(res.token).toBe('yat_abc');
+  });
+
+  it('revokes an API token via DELETE to its id (url-encoded)', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
+    globalThis.fetch = spy;
+    await api.revokeApiToken('tok/1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/api-tokens/tok%2F1');
+    expect(init.method).toBe('DELETE');
+  });
 });
