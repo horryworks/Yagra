@@ -97,8 +97,9 @@ deploy compose なら `.env` に追記）再起動します。エンドポイン
 http://<yagra-host>:8080/mcp          # Streamable HTTP トランスポート
 ```
 
-無効時は未マウント（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも
-**常に認証必須**です。
+クライアントは **core の API ポート（`8080`）**に向けてください。**WebUI ポート（`3000`）ではありません** —
+WebUI のリバースプロキシは `/mcp` をルーティングしないため `:3000/mcp` は 405 になります。無効時は未マウント
+（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも **常に認証必須**です。
 
 ### 2. API トークンを発行
 
@@ -113,14 +114,17 @@ WebUI に管理者でサインイン → **Settings ▸ API tokens ▸ New token
 
 ### 3. クライアントに登録
 
-**Claude Code（CLI）** — 最も簡単:
+**Claude Code（CLI / VS Code 拡張）** — 全プロジェクト・全ディレクトリで使えるよう **`--scope user`** を付けます:
 
 ```bash
-claude mcp add --transport http yagra http://<yagra-host>:8080/mcp \
+claude mcp add --scope user --transport http yagra http://<yagra-host>:8080/mcp \
   --header "Authorization: Bearer yat_your_token"
 ```
 
-その後 Claude Code で `/mcp` を実行して接続を確認し、ノード一覧やアラート要約を依頼します。
+`--scope user` を付けないと `claude mcp add` は *local* スコープに入り、**CLI では見えても VS Code 拡張は
+local スコープを読み込みません**（拡張は user スコープと project の `.mcp.json` のみ）。そのため拡張の `/mcp`
+に出ません。また MCP はセッション開始時に読み込まれるので、追加後は**ウィンドウをリロード / 新規セッション**
+してください。その後 `/mcp` で `yagra` が connected として出て、ノード一覧やアラート要約を依頼できます。
 
 **Claude Desktop** — Desktop は `mcp-remote` ヘルパー経由でリモート HTTP サーバに橋渡しします。
 `claude_desktop_config.json`（Settings ▸ Developer ▸ Edit config）に以下を追加し、Desktop を再起動:

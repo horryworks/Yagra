@@ -98,8 +98,9 @@ to your `.env` for the deploy compose) and restart. The endpoint is then served 
 http://<yagra-host>:8080/mcp          # Streamable HTTP transport
 ```
 
-When disabled the path is not mounted (404), byte-identical to before. MCP always requires
-authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
+Point clients at the **core API port** (`8080`), **not** the WebUI port (`3000`) — the WebUI's reverse
+proxy does not route `/mcp`, so `:3000/mcp` returns 405. When disabled the path is not mounted (404),
+byte-identical to before. MCP always requires authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
 
 ### 2. Create an API token
 
@@ -114,14 +115,19 @@ unattended client and is revocable from the same page.)
 
 ### 3. Register it with your client
 
-**Claude Code (CLI)** — the simplest path:
+**Claude Code (CLI or VS Code extension)** — use **`--scope user`** so the server is available in every
+project and directory:
 
 ```bash
-claude mcp add --transport http yagra http://<yagra-host>:8080/mcp \
+claude mcp add --scope user --transport http yagra http://<yagra-host>:8080/mcp \
   --header "Authorization: Bearer yat_your_token"
 ```
 
-Then run `/mcp` in Claude Code to confirm it connected, and ask it to list nodes or summarize alerts.
+Without `--scope user`, `claude mcp add` defaults to *local* scope — the CLI sees it, but the **VS Code
+extension does not load local-scope servers** (it reads user-scope and project `.mcp.json` servers only),
+so `/mcp` in the extension won't show it. MCP servers are also loaded at session start, so **reload the
+window / start a new session** after adding. Then `/mcp` should list `yagra` as connected; ask it to
+list nodes or summarize alerts.
 
 **Claude Desktop** — Desktop bridges to a remote HTTP server via the `mcp-remote` helper. Add this to
 `claude_desktop_config.json` (Settings ▸ Developer ▸ Edit config), then restart Desktop:
