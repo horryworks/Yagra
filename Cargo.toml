@@ -153,6 +153,22 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+# Fast-compile profile for the test-server (`:latest`) image channel. Inherits `release` but trades
+# runtime optimization for a much faster compile — `codegen-units = 1` + thin LTO is the single
+# biggest cost in the `images` job (the core release build takes 3.5–6.5 min). Splitting codegen back
+# into 256 units and dropping LTO lets rustc parallelize across cores again, and `opt-level = 1` skips
+# the expensive optimization passes while keeping the binary far faster than a debug build.
+#
+# Wiring (docker/yagra-rust.Dockerfile `ARG CARGO_PROFILE`, .github/workflows/ci.yml): `/flashdeploy`
+# (main push → `:latest`) builds with `--profile ci-fast`; `/release` (v* tag → `:v<version>`) builds
+# with the full `[profile.release]` above. So the test server gets fast iteration and shipped releases
+# stay fully optimized. Local `cargo build --release` is unchanged.
+[profile.ci-fast]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 256
+
 # Local vendored patch: snmp2 0.5.0's crypto-rust path fails to compile (E0034,
 # ambiguous `update`) when any crate in the graph enables `hmac/reset` — sqlx-postgres
 # does. See vendor/snmp2/PATCH_NOTE.md; drop once upstream fixes it.

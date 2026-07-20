@@ -32,7 +32,8 @@ services:
   core-b:
     build:
       context: .
-      dockerfile: docker/yagra-core.Dockerfile
+      dockerfile: docker/yagra-rust.Dockerfile
+      target: core
     image: ghcr.io/horryworks/yagra-core:dev
     depends_on: [postgres, redis, nats, victoriametrics, victorialogs]
     environment:

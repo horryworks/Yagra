@@ -35,6 +35,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # Enable the mold linker (S2) for the host clippy/test build. Best-effort and non-fatal: if mold
+      # can't be installed (no passwordless sudo) or `cc` is too old to accept `-fuse-ld=mold` (gcc <
+      # 12), we leave RUSTFLAGS unset and fall back to the default linker — the build still runs. Set
+      # before rust-cache so the cache key is consistent across runs (no restore/save key drift).
+      - name: Enable mold linker (best-effort)
+        run: |
+          if ! command -v mold >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends mold || true
+          fi
+          probe="$(mktemp)"
+          if command -v mold >/dev/null 2>&1 && printf 'int main(){return 0;}\n' | cc -fuse-ld=mold -xc - -o "$probe" 2>/dev/null; then
+            echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+            echo "mold enabled: $(mold --version | head -1)"
+          else
+            echo "mold unavailable — using default linker"
+          fi
+          rm -f "$probe"
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all --check
@@ -72,13 +89,16 @@ jobs:
     strategy:
       # One docker build at a time: the self-hosted runners share a single dockerd, so concurrent
       # image builds contend on it (and earlier hung on the GHA cache). backend/frontend still
-      # parallelise across runners — only this matrix is serialised.
+      # parallelise across runners — only this matrix is serialised. Serialisation also lets `poller`
+      # reuse `core`'s cached build stage: both target the same yagra-rust.Dockerfile, so the shared
+      # `cargo build --bin core --bin poller` runs once (during `core`) and `poller` just assembles
+      # its runtime layer.
       max-parallel: 1
       matrix:
         include:
-          - { name: core, context: ., dockerfile: docker/yagra-core.Dockerfile }
-          - { name: poller, context: ., dockerfile: docker/yagra-poller.Dockerfile }
-          - { name: web, context: ./web, dockerfile: docker/web.Dockerfile }
+          - { name: core, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: core }
+          - { name: poller, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: poller }
+          - { name: web, context: ./web, dockerfile: docker/web.Dockerfile, target: "" }
     steps:
       - uses: actions/checkout@v6
       # Use the host dockerd's built-in BuildKit (`driver: docker`), not an ephemeral
@@ -114,11 +134,27 @@ jobs:
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+      # Compile profile for the Rust images (ignored by the web image). Only a real release (`/release`
+      # → v* tag → :v<version>) is built fully optimized; every other build — a `/flashdeploy` main
+      # push (:latest, the test-server channel) and PR validation builds — uses the fast-compile
+      # `ci-fast` profile so the dev cycle stays short. See [profile.ci-fast] in Cargo.toml.
+      - name: Select cargo profile
+        id: profile
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "cargo=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "cargo=ci-fast" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          # core/poller share yagra-rust.Dockerfile and select a stage; web has no target (last stage).
+          target: ${{ matrix.target }}
+          # Pass the compile profile only to the Rust images (empty target ⇒ web ⇒ no build-arg).
+          build-args: ${{ matrix.target != '' && format('CARGO_PROFILE={0}', steps.profile.outputs.cargo) || '' }}
           push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.tags.outputs.list }}
           # No type=gha cache: on the persistent self-hosted runner the local docker layer cache is
