@@ -82,11 +82,14 @@ fire/resolve ライフサイクル連動で転送できます:
 Yagra は**読み取り専用の [MCP](https://modelcontextprotocol.io) ツール面**（ADR-028）を公開でき、
 AI クライアント（Claude Code / Claude Desktop / その他 MCP 対応アシスタント）から監視状態を自然言語で
 問い合わせられます。例:「落ちているノードは?」「アクティブなアラートを要約して」「edge-router-1 の
-直近1時間の CPU を見せて」。**状態変更や機器設定のツールは一切ありません** — AI が読めるのは WebUI と
-同じデータだけです。
+直近1時間の CPU を見せて」「アノマリー検知を実行して異常を教えて」。**状態変更や機器設定のツールは
+一切ありません** — AI が読めるのは WebUI と同じデータで、同じオンデマンドの**トラブルシュート**分析を
+起動できるだけです（分析はメトリクス履歴を読んで所見を返すのみ — 通知も機器操作もしません）。
 
 ツール: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_alerts`,
-`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`。
+`get_alert_history`, `query_metrics`, `get_topology`, `top_flows`、およびトラブルシュート3種
+`run_analysis`, `get_analysis_findings`, `list_analyses`（オンデマンドの anomaly / correlation /
+capacity / flap 分析）。
 
 ### 1. サーバを有効化
 

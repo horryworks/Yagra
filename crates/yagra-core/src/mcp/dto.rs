@@ -16,6 +16,7 @@ use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{Node, NodeState};
 
+use crate::analysis::{AnalysisFinding, AnalysisJob};
 use crate::history::AlertHistoryRow;
 use crate::repo::{InterfaceMeta, TopologyRow};
 
@@ -241,6 +242,115 @@ pub struct FleetSummaryDto {
     pub log_tier_enabled: bool,
 }
 
+/// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
+/// lifecycle state. Timestamps are RFC 3339 UTC. Carries no credential-bearing field (a job is a
+/// record of a **read** over the TSDB; ADR-028 Increment 2 treats analyses as read-only).
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalysisJobDto {
+    pub id: Uuid,
+    /// `anomaly` / `correlation` / `capacity` / `flap`.
+    pub tool: String,
+    /// `all` / `group` / `node`.
+    pub scope_kind: String,
+    /// Group/node id the analysis ran over (`None` for fleet-wide `all` scope).
+    pub scope_id: Option<Uuid>,
+    /// Human label for the scope (e.g. a group or node name).
+    pub scope_label: String,
+    /// Lifecycle state: `running` / `done` / `failed` / `cancelled`.
+    pub state: String,
+    /// Progress percent (0–100).
+    pub pct: i32,
+    /// Current progress caption while running (`None` once terminal).
+    pub phase: Option<String>,
+    /// Number of findings produced (valid once `done`).
+    pub finding_count: i32,
+    /// One-line result summary (once `done`).
+    pub summary: Option<String>,
+    /// Failure reason (once `failed`).
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+impl AnalysisJobDto {
+    /// Build from an analysis-job row.
+    #[must_use]
+    pub fn from_job(job: &AnalysisJob) -> Self {
+        Self {
+            id: job.id,
+            tool: job.tool.clone(),
+            scope_kind: job.scope_kind.clone(),
+            scope_id: job.scope_id,
+            scope_label: job.scope_label.clone(),
+            state: job.state.clone(),
+            pct: job.pct,
+            phase: job.phase.clone(),
+            finding_count: job.finding_count,
+            summary: job.summary.clone(),
+            error: job.error.clone(),
+            created_at: unix_ms_to_rfc3339(job.created_ms),
+            started_at: job.started_ms.map(unix_ms_to_rfc3339),
+            finished_at: job.finished_ms.map(unix_ms_to_rfc3339),
+        }
+    }
+}
+
+/// One analysis finding (anomaly card / correlation pair / capacity projection / flap row), sanitized.
+/// The bulky chart `points` array is stripped from `detail` (see [`compact_detail`]) — the LLM needs
+/// the scalar characterization, not per-sample data. No secret can appear: findings are derived from
+/// metric values keyed by node id, never from device credentials.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalysisFindingDto {
+    /// 0–100 significance score (higher = more urgent).
+    pub score: f64,
+    /// `info` / `warn` / `crit`.
+    pub severity: String,
+    /// The node this finding is about (`None` for cross-node correlations).
+    pub node_id: Option<Uuid>,
+    pub node_name: String,
+    /// The metric involved (or, for correlation, the two series being related).
+    pub metric: String,
+    /// Finding kind/shape: `spike`/`level`/`drift`/`flat`/`season` (anomaly), `capacity`, `flap`,
+    /// or `correlation`.
+    pub kind: String,
+    /// Relative "when" label (e.g. `2h ago`, `co-rising`, `N flaps`).
+    pub when_label: String,
+    /// Duration/magnitude label (e.g. `ongoing`, `~30d to 100%`, `r=0.93`).
+    pub duration: String,
+    /// Scalar detail for the finding kind (chart `points` removed). Shapes: capacity →
+    /// `{current, slope_per_day, tte_days}`; correlation → `{r, samples}`; flap → `{flaps, per_hour}`;
+    /// anomaly → `{mean, sigma, recent_from}`.
+    pub detail: serde_json::Value,
+}
+
+impl AnalysisFindingDto {
+    /// Build from a finding row, compacting its `detail`.
+    #[must_use]
+    pub fn from_finding(f: &AnalysisFinding) -> Self {
+        Self {
+            score: f.score,
+            severity: f.severity.clone(),
+            node_id: f.node_id,
+            node_name: f.node_name.clone(),
+            metric: f.metric.clone(),
+            kind: f.kind.clone(),
+            when_label: f.when_label.clone(),
+            duration: f.duration.clone(),
+            detail: compact_detail(f.detail.clone()),
+        }
+    }
+}
+
+/// Strip the bulky per-sample `points` array from a finding's `detail` (kept for the WebUI chart, of
+/// no use to an LLM), leaving the scalar characterization. A non-object detail passes through.
+fn compact_detail(mut detail: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = detail.as_object_mut() {
+        obj.remove("points");
+    }
+    detail
+}
+
 /// Convert Unix milliseconds to an RFC 3339 UTC string (falls back to the epoch on an out-of-range
 /// value rather than panicking — a malformed timestamp must never take down a tool call).
 fn unix_ms_to_rfc3339(ms: i64) -> String {
@@ -389,5 +499,71 @@ mod tests {
             log_tier_enabled: false,
         };
         assert_no_forbidden_keys(&serde_json::to_value(&fleet).unwrap(), "FleetSummary");
+
+        let job = AnalysisJob {
+            id: node.id.0,
+            tool: "anomaly".to_owned(),
+            scope_kind: "all".to_owned(),
+            scope_id: None,
+            scope_label: "All nodes".to_owned(),
+            params: serde_json::json!({ "sensitivity": 3.0 }),
+            state: "done".to_owned(),
+            pct: 100,
+            phase: None,
+            finding_count: 1,
+            summary: Some("1 anomaly".to_owned()),
+            error: None,
+            created_ms: 0,
+            started_ms: Some(0),
+            finished_ms: Some(1000),
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(AnalysisJobDto::from_job(&job)).unwrap(),
+            "AnalysisJob",
+        );
+
+        let finding = AnalysisFinding {
+            id: node.id.0,
+            score: 92.0,
+            severity: "crit".to_owned(),
+            node_id: Some(node.id.0),
+            node_name: "edge-router-1".to_owned(),
+            metric: "cpu_percent".to_owned(),
+            kind: "spike".to_owned(),
+            when_label: "2h ago".to_owned(),
+            duration: "ongoing".to_owned(),
+            detail: serde_json::json!({
+                "mean": 20.0, "sigma": 3.0,
+                "points": [{ "t": 0, "v": 20.0 }, { "t": 60, "v": 90.0 }],
+            }),
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(AnalysisFindingDto::from_finding(&finding)).unwrap(),
+            "AnalysisFinding",
+        );
+    }
+
+    #[test]
+    fn finding_dto_strips_chart_points() {
+        // The bulky per-sample `points` array is dropped; the scalar characterization is kept.
+        let finding = AnalysisFinding {
+            id: uuid::Uuid::new_v4(),
+            score: 80.0,
+            severity: "warn".to_owned(),
+            node_id: None,
+            node_name: "a ↔ b".to_owned(),
+            metric: "a ↔ b".to_owned(),
+            kind: "correlation".to_owned(),
+            when_label: "co-rising".to_owned(),
+            duration: "r=0.93".to_owned(),
+            detail: serde_json::json!({
+                "r": 0.93, "samples": 42,
+                "points": [{ "t": 0, "v": 1.0 }],
+            }),
+        };
+        let json = serde_json::to_value(AnalysisFindingDto::from_finding(&finding)).unwrap();
+        assert!(json["detail"].get("points").is_none(), "points stripped");
+        assert_eq!(json["detail"]["r"], 0.93, "scalars kept");
+        assert_eq!(json["detail"]["samples"], 42);
     }
 }

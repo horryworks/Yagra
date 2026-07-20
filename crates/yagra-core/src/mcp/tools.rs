@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The read-only MCP tool surface (ADR-028 Increment 1).
+//! The read-only MCP tool surface (ADR-028 Increments 1 & 2).
 //!
 //! Each `#[tool]` is a thin adapter over a read seam on [`ApiState`](crate::api::ApiState): it parses
 //! typed params, calls the seam, maps the result into a **sanitized DTO** ([`crate::mcp::dto`]), and
 //! records a metric. Tool bodies never serialize a raw model/row (ADR-018) and never trigger device
-//! I/O — state-changing tools (`ack`/`mute`/`maintenance`/`run_probe`) and the group-scope filter are
-//! Increment 2. The plain-`async fn` shape (params in, DTO out) is what lets the ADR-029 RCA agent
-//! reuse these bodies in-process later.
+//! I/O. Increment 2 added the Troubleshoot tools (`run_analysis` / `get_analysis_findings` /
+//! `list_analyses`): a Troubleshoot analysis is a **read** — it reads metric history and returns
+//! findings, forces `notify = false` (no external side effect), and is bounded by the runner's
+//! rate/concurrency limits rather than an operator role. Genuinely state-changing tools
+//! (`ack`/`mute`/`maintenance`/`run_probe`) and the group-scope visibility filter remain future work.
+//! The plain-`async fn` shape (params in, DTO out) is what lets the ADR-029 RCA agent reuse these
+//! bodies in-process later.
 
 use chrono::Utc;
 use rmcp::handler::server::wrapper::Parameters;
@@ -18,18 +22,24 @@ use rmcp::{tool, tool_router, ErrorData as McpError};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
 use super::YagraMcp;
+use crate::analysis::{AnalysisTool, CreateError, JobParams, ScopeKind};
 use crate::flowstore::{AsDir, FlowQuery};
 use crate::mcp::dto::{
-    AlertDto, AlertHistoryDto, FleetSummaryDto, InterfaceDto, MetricPointDto, MetricSeriesDto,
-    NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
+    AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, FleetSummaryDto, InterfaceDto,
+    MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
 };
 
 /// Default window (seconds) for range/rate metric and flow queries when `from`/`to` are omitted.
 const DEFAULT_WINDOW_SECS: i64 = 3600;
+/// How long `run_analysis` blocks polling for a job to finish before returning it still-running.
+const ANALYSIS_MAX_WAIT: Duration = Duration::from_secs(120);
+/// Poll interval while `run_analysis` waits for a job to reach a terminal state.
+const ANALYSIS_POLL: Duration = Duration::from_millis(750);
 
 #[tool_router]
 impl YagraMcp {
@@ -333,6 +343,177 @@ impl YagraMcp {
         }
     }
 
+    #[tool(
+        description = "Run an on-demand Troubleshoot analysis and wait for its findings (read-only: it \
+                       reads metric history and returns findings, and never notifies or changes device \
+                       configuration). `tool` is anomaly|correlation|capacity|flap. `scope` is \
+                       all|group|node (default all); for group/node pass `scope_id` (a UUID). Optional \
+                       `window_secs`, `baseline_secs`, `sensitivity` (0.5–6.0), `depth` \
+                       (quick|standard|exhaustive), and `family` (all|reachability_interface|system) \
+                       tune the run. Blocks up to ~2 minutes; if the job is still running it returns \
+                       the job id to poll with get_analysis_findings. Rate-limited; requires live mode."
+    )]
+    async fn run_analysis(
+        &self,
+        Parameters(p): Parameters<RunAnalysisParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("run_analysis", "analysis requires live mode");
+        };
+        let Some(tool) = AnalysisTool::from_str(&p.tool) else {
+            return tool_bad_params(
+                "run_analysis",
+                "`tool` must be anomaly, correlation, capacity, or flap",
+            );
+        };
+        let scope = p.scope.as_deref().unwrap_or("all");
+        let Some(scope_kind) = ScopeKind::from_str(scope) else {
+            return tool_bad_params("run_analysis", "`scope` must be all, group, or node");
+        };
+        let scope_id = p.scope_id;
+        if scope_kind != ScopeKind::All && scope_id.is_none() {
+            return tool_bad_params(
+                "run_analysis",
+                "`scope_id` is required for group or node scope",
+            );
+        }
+        // A readable label for the runs list (mirrors the WebUI's launch drawer).
+        let scope_label = match &scope_kind {
+            ScopeKind::All => "All nodes".to_owned(),
+            ScopeKind::Node => match scope_id {
+                Some(id) => self
+                    .resolve_names(std::iter::once(id))
+                    .await
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("node {id}")),
+                None => "node".to_owned(),
+            },
+            ScopeKind::Group => {
+                scope_id.map_or_else(|| "group".to_owned(), |id| format!("group {id}"))
+            }
+        };
+        // Clamp numerics like the REST edge; force `notify = false` — a read-only MCP run must never
+        // trigger the one external side effect (a notification). ADR-028 Increment 2 design decision.
+        let params = JobParams {
+            tool,
+            scope_kind,
+            scope_id,
+            scope_label,
+            window_secs: p
+                .window_secs
+                .unwrap_or(DEFAULT_WINDOW_SECS)
+                .clamp(300, 365 * 86_400),
+            baseline_secs: p
+                .baseline_secs
+                .unwrap_or(14 * 86_400)
+                .clamp(3600, 365 * 86_400),
+            sensitivity: p.sensitivity.unwrap_or(3.0).clamp(0.5, 6.0),
+            depth: p.depth.clone().unwrap_or_else(|| "standard".to_owned()),
+            family: p.family.clone().unwrap_or_else(|| "all".to_owned()),
+            notify: false,
+        };
+        let job = match admin.analysis.create(params, Some("mcp".to_owned())).await {
+            Ok(j) => j,
+            // Capacity/rate rejections are transient — present as unavailable-with-reason so the model
+            // retries rather than treating it as a hard failure.
+            Err(e @ (CreateError::TooManyConcurrent(_) | CreateError::RateLimited(_))) => {
+                return tool_unavailable("run_analysis", &e.to_string());
+            }
+            Err(CreateError::Internal(e)) => {
+                return tool_error("run_analysis", "create analysis", &e)
+            }
+        };
+        // Block-poll until the job reaches a terminal state or the wait budget is spent.
+        let deadline = Instant::now() + ANALYSIS_MAX_WAIT;
+        let final_job = loop {
+            match admin.analysis.get(job.id).await {
+                Ok(Some(j)) if is_terminal(&j.state) => break j,
+                Ok(Some(j)) => {
+                    if Instant::now() >= deadline {
+                        let body = serde_json::json!({
+                            "job": AnalysisJobDto::from_job(&j),
+                            "findings": Vec::<AnalysisFindingDto>::new(),
+                            "note": "analysis still running after the wait budget; \
+                                     call get_analysis_findings with job.id to fetch results",
+                        });
+                        return ok_json_value("run_analysis", body);
+                    }
+                    tokio::time::sleep(ANALYSIS_POLL).await;
+                }
+                Ok(None) => {
+                    return tool_unavailable("run_analysis", "job vanished before completion")
+                }
+                Err(e) => return tool_error("run_analysis", "poll analysis", &e),
+            }
+        };
+        // Findings exist only on success; a failed/cancelled job carries its state/error instead.
+        let findings: Vec<AnalysisFindingDto> = if final_job.state == "done" {
+            match admin.analysis.findings(final_job.id).await {
+                Ok(fs) => fs.iter().map(AnalysisFindingDto::from_finding).collect(),
+                Err(e) => return tool_error("run_analysis", "load findings", &e),
+            }
+        } else {
+            Vec::new()
+        };
+        let body = serde_json::json!({
+            "job": AnalysisJobDto::from_job(&final_job),
+            "findings": findings,
+        });
+        ok_json_value("run_analysis", body)
+    }
+
+    #[tool(
+        description = "Fetch a Troubleshoot analysis job and its findings by job id (from run_analysis \
+                       or list_analyses). Use this to poll a run that was still in progress. Requires \
+                       live mode."
+    )]
+    async fn get_analysis_findings(
+        &self,
+        Parameters(p): Parameters<AnalysisJobIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("get_analysis_findings", "analysis requires live mode");
+        };
+        let job = match admin.analysis.get(p.job_id).await {
+            Ok(Some(j)) => j,
+            Ok(None) => {
+                return tool_unavailable("get_analysis_findings", "no analysis job with that id")
+            }
+            Err(e) => return tool_error("get_analysis_findings", "load job", &e),
+        };
+        let findings: Vec<AnalysisFindingDto> = match admin.analysis.findings(p.job_id).await {
+            Ok(fs) => fs.iter().map(AnalysisFindingDto::from_finding).collect(),
+            Err(e) => return tool_error("get_analysis_findings", "load findings", &e),
+        };
+        let body = serde_json::json!({
+            "job": AnalysisJobDto::from_job(&job),
+            "findings": findings,
+        });
+        ok_json_value("get_analysis_findings", body)
+    }
+
+    #[tool(
+        description = "List recent Troubleshoot analysis jobs (the runs list), newest first, with \
+                       their tool, scope, state, and result summary. `limit` is 1–100 (default 20). \
+                       Requires live mode."
+    )]
+    async fn list_analyses(
+        &self,
+        Parameters(p): Parameters<ListAnalysesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("list_analyses", "analysis requires live mode");
+        };
+        let limit = p.limit.unwrap_or(20).clamp(1, 100);
+        let jobs = match admin.analysis.list(limit).await {
+            Ok(js) => js,
+            Err(e) => return tool_error("list_analyses", "list analyses", &e),
+        };
+        let out: Vec<AnalysisJobDto> = jobs.iter().map(AnalysisJobDto::from_job).collect();
+        ok_json("list_analyses", &out)
+    }
+
     /// Resolve node ids → display names via the live repo (empty in skeleton mode). Deduplicated so a
     /// repeated node in an alert list doesn't bloat the `IN (…)` query.
     async fn resolve_names(&self, ids: impl Iterator<Item = Uuid>) -> HashMap<Uuid, String> {
@@ -424,6 +605,38 @@ struct TopFlowsParams {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RunAnalysisParams {
+    /// Which diagnostic to run: anomaly, correlation, capacity, or flap.
+    tool: String,
+    /// Scope: all, group, or node (default all).
+    scope: Option<String>,
+    /// Group or node UUID (required when scope is group or node).
+    scope_id: Option<Uuid>,
+    /// Recent window to inspect, seconds (tool-specific floor applied; default 1 hour).
+    window_secs: Option<i64>,
+    /// Baseline lookback for anomaly detection, seconds (default 14 days).
+    baseline_secs: Option<i64>,
+    /// Anomaly sensitivity in σ (0.5–6.0, default 3.0); lower flags more.
+    sensitivity: Option<f64>,
+    /// Scan depth: quick, standard, or exhaustive (default standard) — caps how many nodes are scanned.
+    depth: Option<String>,
+    /// Metric family filter: all, reachability_interface, or system (default all).
+    family: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AnalysisJobIdParams {
+    /// The analysis job's UUID (from run_analysis or list_analyses).
+    job_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListAnalysesParams {
+    /// Max jobs to return (1–100, default 20).
+    limit: Option<i64>,
+}
+
 // ── Result / metric helpers ───────────────────────────────────────────────────────────────────────
 
 /// Serialize a DTO to a pretty-JSON tool result (records an `ok` outcome).
@@ -472,6 +685,11 @@ fn tool_error(tool: &str, context: &str, err: &anyhow::Error) -> Result<CallTool
 fn record_tool(tool: &str, outcome: &str) {
     metrics::counter!("yagra_mcp_tool_calls_total", "tool" => tool.to_owned(), "outcome" => outcome.to_owned())
         .increment(1);
+}
+
+/// Whether an analysis job has reached a terminal lifecycle state (no further progress).
+fn is_terminal(state: &str) -> bool {
+    matches!(state, "done" | "failed" | "cancelled")
 }
 
 /// Rank a severity string for the `min_severity` filter (unknown ⇒ lowest).

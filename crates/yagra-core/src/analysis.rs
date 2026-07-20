@@ -13,14 +13,14 @@
 //! broadcast over SSE) and writes findings when done. Job metadata + findings are metadata, so
 //! they live in PostgreSQL ([`AnalysisRepo`], ADR-004).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
@@ -36,6 +36,58 @@ const MAX_POINTS: i64 = 300;
 const MIN_POINTS: usize = 12;
 /// Cap on findings returned per job (the report lists the most significant first).
 const MAX_FINDINGS: usize = 60;
+/// Default cap on concurrently-running analysis jobs (env `YAGRA_ANALYSIS_MAX_CONCURRENT`). This is
+/// the abuse control that lets an analysis be treated as a **read** (ADR-028 Increment 2): a
+/// View-scoped MCP client may launch one, but a fleet-wide TSDB scan is heavy, so bound how many run
+/// at once regardless of who asked — the concurrency cap, not a role, is the guard rail.
+const DEFAULT_MAX_CONCURRENT: usize = 4;
+/// Default cap on new jobs admitted per [`RATE_WINDOW`] (env `YAGRA_ANALYSIS_RATE_PER_MIN`) — bounds
+/// rapid-fire creation even when each job finishes quickly.
+const DEFAULT_RATE_PER_MIN: usize = 30;
+/// The sliding window the per-minute creation rate limit is measured over.
+const RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Read a positive-`usize` cap from an env var, falling back to `default` when unset/invalid/zero.
+fn env_cap(var: &str, default: usize) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
+}
+
+/// Why [`AnalysisRunner::create`] declined to launch a job. The two rate outcomes map to HTTP 429 at
+/// the REST edge (and a "try again shortly" note over MCP); [`CreateError::Internal`] maps to 500.
+#[derive(Debug, thiserror::Error)]
+pub enum CreateError {
+    /// The concurrent-job cap is full (value = the cap).
+    #[error("analysis capacity reached ({0} jobs already running) — retry shortly")]
+    TooManyConcurrent(usize),
+    /// The per-minute creation cap is exhausted (value = the cap).
+    #[error("analysis rate limit reached (max {0} new jobs/minute) — retry shortly")]
+    RateLimited(usize),
+    /// An internal failure (e.g. the job-row insert failed).
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+
+/// Charge one creation against a sliding window: prune entries older than `window`, then admit iff
+/// fewer than `max` remain (pushing `now` on admission). Pure so the rate limiter is unit-testable
+/// without a full runner (which needs a live `PgPool`).
+fn charge_window(q: &mut VecDeque<Instant>, now: Instant, window: Duration, max: usize) -> bool {
+    while let Some(&front) = q.front() {
+        if now.duration_since(front) >= window {
+            q.pop_front();
+        } else {
+            break;
+        }
+    }
+    if q.len() >= max {
+        return false;
+    }
+    q.push_back(now);
+    true
+}
 
 // ── Tool / state / scope enums ──────────────────────────────────────────────────────
 
@@ -451,6 +503,14 @@ pub struct AnalysisRunner {
     groups: Arc<GroupRepo>,
     tx: broadcast::Sender<String>,
     cancels: Mutex<std::collections::HashMap<Uuid, Arc<AtomicBool>>>,
+    /// Concurrency cap (ADR-028 Increment 2 WS-A): a permit is held for each running job's lifetime.
+    slots: Arc<Semaphore>,
+    /// The configured concurrent-job cap (for the [`CreateError::TooManyConcurrent`] message).
+    max_concurrent: usize,
+    /// Sliding-window creation timestamps for the per-minute rate limit.
+    recent_starts: Mutex<VecDeque<Instant>>,
+    /// The configured per-[`RATE_WINDOW`] creation cap.
+    max_per_window: usize,
 }
 
 impl AnalysisRunner {
@@ -462,6 +522,8 @@ impl AnalysisRunner {
         groups: Arc<GroupRepo>,
     ) -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
+        let max_concurrent = env_cap("YAGRA_ANALYSIS_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
+        let max_per_window = env_cap("YAGRA_ANALYSIS_RATE_PER_MIN", DEFAULT_RATE_PER_MIN);
         Self {
             repo,
             store,
@@ -469,6 +531,24 @@ impl AnalysisRunner {
             groups,
             tx,
             cancels: Mutex::new(std::collections::HashMap::new()),
+            slots: Arc::new(Semaphore::new(max_concurrent)),
+            max_concurrent,
+            recent_starts: Mutex::new(VecDeque::new()),
+            max_per_window,
+        }
+    }
+
+    /// Record a creation against the sliding-window rate limit. `Err(RateLimited)` when the window is
+    /// already full (delegates the pruning/count logic to the pure [`charge_window`]).
+    fn admit_rate(&self) -> Result<(), CreateError> {
+        let mut q = self
+            .recent_starts
+            .lock()
+            .expect("recent_starts mutex poisoned");
+        if charge_window(&mut q, Instant::now(), RATE_WINDOW, self.max_per_window) {
+            Ok(())
+        } else {
+            Err(CreateError::RateLimited(self.max_per_window))
         }
     }
 
@@ -511,12 +591,20 @@ impl AnalysisRunner {
         }
     }
 
-    /// Create a job, spawn its background task, and return the freshly-inserted row.
+    /// Create a job, spawn its background task, and return the freshly-inserted row. Admission is
+    /// bounded (ADR-028 Increment 2 WS-A): the concurrency permit is taken first (no side effect, so a
+    /// rate-limit rejection drops it cleanly), then the creation-rate window is charged; the permit is
+    /// moved into the job task and released when the job ends.
     pub async fn create(
         self: &Arc<Self>,
         params: JobParams,
         created_by: Option<String>,
-    ) -> anyhow::Result<AnalysisJob> {
+    ) -> Result<AnalysisJob, CreateError> {
+        let permit = Arc::clone(&self.slots)
+            .try_acquire_owned()
+            .map_err(|_| CreateError::TooManyConcurrent(self.max_concurrent))?;
+        self.admit_rate()?;
+
         let job = self.repo.insert(&params, created_by.as_deref()).await?;
         self.broadcast_job(&job);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -527,6 +615,8 @@ impl AnalysisRunner {
         let runner = self.clone();
         let id = job.id;
         tokio::spawn(async move {
+            // Hold the concurrency permit for the whole job; dropping it frees a slot.
+            let _permit = permit;
             runner.run_job(id, params, cancel).await;
         });
         Ok(job)
@@ -1463,6 +1553,60 @@ mod tests {
             assert_eq!(AnalysisTool::from_str(t.as_str()), Some(t));
         }
         assert_eq!(AnalysisTool::from_str("nope"), None);
+    }
+
+    #[test]
+    fn charge_window_admits_under_cap_and_rejects_at_cap() {
+        let mut q = VecDeque::new();
+        let win = Duration::from_secs(60);
+        let t0 = Instant::now();
+        assert!(charge_window(&mut q, t0, win, 2), "1st admitted");
+        assert!(charge_window(&mut q, t0, win, 2), "2nd admitted");
+        assert!(!charge_window(&mut q, t0, win, 2), "3rd at cap rejected");
+        assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn charge_window_prunes_expired_then_readmits() {
+        let mut q = VecDeque::new();
+        let win = Duration::from_secs(60);
+        let t0 = Instant::now();
+        assert!(charge_window(&mut q, t0, win, 1));
+        assert!(
+            !charge_window(&mut q, t0, win, 1),
+            "still within window ⇒ full"
+        );
+        // Advance past the window: the old entry is pruned and a new one is admitted.
+        let t1 = t0 + Duration::from_secs(61);
+        assert!(
+            charge_window(&mut q, t1, win, 1),
+            "expired entry pruned ⇒ readmit"
+        );
+        assert_eq!(q.len(), 1);
+    }
+
+    #[test]
+    fn concurrency_permit_caps_and_frees() {
+        // Mirrors AnalysisRunner's `slots`: try_acquire_owned admits up to the cap, then errors until
+        // an outstanding permit is dropped (a finished job frees its slot).
+        let sem = Arc::new(Semaphore::new(2));
+        let p1 = Arc::clone(&sem).try_acquire_owned().expect("slot 1");
+        let _p2 = Arc::clone(&sem).try_acquire_owned().expect("slot 2");
+        assert!(
+            Arc::clone(&sem).try_acquire_owned().is_err(),
+            "at cap ⇒ rejected"
+        );
+        drop(p1);
+        assert!(
+            Arc::clone(&sem).try_acquire_owned().is_ok(),
+            "freed slot ⇒ admitted"
+        );
+    }
+
+    #[test]
+    fn env_cap_falls_back_when_unset() {
+        // An unset var yields the default; a zero/invalid value would too (filtered out).
+        assert_eq!(env_cap("YAGRA_ANALYSIS_CAP_DEFINITELY_UNSET_XYZ", 4), 4);
     }
 
     #[test]

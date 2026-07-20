@@ -36,10 +36,12 @@ use crate::api::ApiState;
 
 /// Instructions shown to the MCP client at `initialize` — sets expectations for the model.
 const INSTRUCTIONS: &str = "Yagra network-monitoring, read-only. These tools query live node status, \
-    alerts, metrics, topology, and traffic flows. There are no tools that change state or configure \
-    devices. Start with get_fleet_summary, then drill in with list_nodes / get_node_status / \
-    get_active_alerts / query_metrics. Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds as \
-    documented per tool.";
+    alerts, metrics, topology, and traffic flows, and run on-demand Troubleshoot analyses \
+    (anomaly/correlation/capacity/flap). There are no tools that change state or configure devices — \
+    an analysis reads metric history and returns findings, it never notifies or edits a device. Start \
+    with get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
+    query_metrics; use run_analysis for deeper diagnosis (poll a long run with get_analysis_findings). \
+    Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds as documented per tool.";
 
 /// The MCP server handler: holds the shared read state and the macro-generated tool router. Cheap to
 /// clone (the state is all `Arc`s); a fresh instance is created per session by the transport factory.

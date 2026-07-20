@@ -10,7 +10,7 @@
 
 use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
-use crate::analysis::{AnalysisRunner, AnalysisTool, JobParams, ScopeKind};
+use crate::analysis::{AnalysisRunner, AnalysisTool, CreateError, JobParams, ScopeKind};
 use crate::audit::AuditRepo;
 use crate::auth::{
     AuthError, LoginThrottle, SessionStore, UserCreateOutcome, UserMutation, UserStore,
@@ -3372,7 +3372,15 @@ async fn create_analysis_job(
         .map(|s| s.username);
     match admin.analysis.create(params, user).await {
         Ok(job) => Json(job).into_response(),
-        Err(e) => {
+        // Admission control (ADR-028 Increment 2 WS-A): capacity/rate rejections are retryable → 429.
+        Err(e @ (CreateError::TooManyConcurrent(_) | CreateError::RateLimited(_))) => {
+            error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "analysis_busy",
+                e.to_string(),
+            )
+        }
+        Err(CreateError::Internal(e)) => {
             tracing::error!(error = %e, "create analysis job failed");
             internal("failed to create analysis job")
         }
