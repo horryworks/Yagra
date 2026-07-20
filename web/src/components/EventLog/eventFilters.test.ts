@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure-helper unit tests for the Events node-filter URL codec (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Device-class / profile: the polling-and-threshold template a node inherits.
 //!
 //! A profile groups the default thresholds (and, later, polling templates / OID sets)

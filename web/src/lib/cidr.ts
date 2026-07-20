@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Expand a discovery target spec into host addresses. The backend takes an explicit target
 // list (and re-validates each IP), so this is a UI convenience that also caps the total size.
 // A spec is a comma/whitespace-separated list whose tokens may each be a single IPv4, an IPv4

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure, side-effect-free tidy-tree layout for the dependency map. Kept out of the React
 // component so it unit-tests in the node env (no DOM). The dependency graph is a forest of
 // single-parent trees (yagra-common Node.parent is Option<NodeId>), so a classic post-order

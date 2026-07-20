@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Data for the scope picker's Group mode: node groups (loaded eagerly — cheap, bounded). The Node
 // mode does NOT load the inventory into the browser — it queries the server search endpoint per
 // keystroke (see ScopePicker), so this no longer full-loads up to N nodes client-side (was S/ADR-022;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-core — Core/API.
 //!
 //! Orchestration, scheduling, and the northbound REST API (`/api/v1`, ADR-008/019) the

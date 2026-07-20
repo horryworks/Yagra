@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-ingest — passive event parsing for the poller's edge listeners (Phase 2).
 //!
 //! Pure logic only: syslog parsing (RFC 5424 → RFC 3164 → raw fallback), SNMP trap PDU

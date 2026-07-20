@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // My Dashboard widget catalog. The REGISTRY is the single source of truth for which widgets
 // exist, their grid spans, and their backing tag. Only buildable widgets (those with a real
 // component + live/started-backend data) are listed today; the broader catalog (rollup/new

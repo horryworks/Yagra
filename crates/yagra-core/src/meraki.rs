@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Cisco Meraki orchestration: org/device/network persistence, the collect-job builder, and the
 //! read-only API-key resolver.
 //!

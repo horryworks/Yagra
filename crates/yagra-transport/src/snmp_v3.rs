@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! SNMP v3 (USM) GET over a pure-Rust client (`snmp2`, crypto-rust backend) — resolves
 //! the ADR-021 v3 question without a net-snmp FFI fallback.
 //!

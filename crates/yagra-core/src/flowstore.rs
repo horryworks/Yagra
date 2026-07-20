@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The flow store seam: where edge-aggregated flow records are written and queried (ADR-031).
 //!
 //! [`FlowStore`] abstracts flow storage so the bus consumer/writer and the flow API don't care

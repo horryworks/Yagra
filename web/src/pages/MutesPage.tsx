@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Mutes (Alerts ▸ Mutes). A mute silences notifications for one node — optionally one
 // check (metric name) — until a given time. The alert still fires and shows in the UI and
 // history; only the page is suppressed. Expired mutes drop off automatically.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Notification channels + routing rules (Phase A).
 //!
 //! A **channel** is a place alerts can be delivered (webhook/email); its connection config is

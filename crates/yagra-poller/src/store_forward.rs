@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Store-and-forward result buffer for a remote poller (Phase 3).
 //!
 //! When the core↔poller NATS link partitions, the poller keeps executing its working set locally

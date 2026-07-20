@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Syslog datagram parsing: RFC 5424, then RFC 3164, then a raw fallback.
 //!
 //! Parsing is **infallible** — real-world syslog is wildly non-conformant (Cisco's

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // react-i18next type augmentation.
 //
 // We deliberately do NOT constrain `t()` to a literal union of keys. The nav IA (`nav.ts`) and the

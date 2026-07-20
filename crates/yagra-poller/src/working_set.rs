@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The poller's local working set — a pure state machine (ADR-009/020).
 //!
 //! In the distributed-poller model core no longer publishes every [`PollJob`] each tick. It hands

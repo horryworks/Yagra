@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Preferences (Settings ▸ Preferences). Real, client-only: theme (light/dark, required by
 // §1.2) and interface language, both persisted via the prefs store. Theme reflects onto
 // <html data-theme>; language drives i18next (see App.tsx). No backend needed.

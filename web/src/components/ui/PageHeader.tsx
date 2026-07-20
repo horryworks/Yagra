@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Page header: optional breadcrumb trail, a title, a sub-note, and a right-aligned actions
 // slot. Gives every screen a consistent top band.
 

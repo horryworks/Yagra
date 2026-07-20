@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure-helper unit tests for RangeControl. Vitest runs in a node env (no DOM), so we cover only the
 // exported pure helpers, not the component render. Importing the component module is safe: it merely
 // defines functions/JSX (nothing renders here) and the CSS import is a no-op under Vitest.

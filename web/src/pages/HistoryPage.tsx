@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Alert history (Alerts ▸ History). Append-only lifecycle log from /alerts/history. Each row
 // is a transition (fire / clear). MTTR is open→clear in this model (§3.2: ack/response time is
 // external and not measured here). Empty in skeleton mode (no persistent store). Rendered with

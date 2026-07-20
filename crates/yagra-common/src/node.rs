@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The core inventory entity: a monitored node.
 //!
 //! Nodes form a **multi-tier nested** inventory (a node may have a parent), which is

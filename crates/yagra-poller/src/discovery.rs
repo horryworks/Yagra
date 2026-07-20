@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Discovery sweep execution (Phase C) — the poller side.
 //!
 //! Consumes [`DiscoveryJob`]s off the bus and probes each target for ICMP liveness + SNMP

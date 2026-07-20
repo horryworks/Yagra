@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Collection-set editor (what SNMP metrics to poll at a scope). Reused for a device profile
 // (defaults for the class) and for a single node (overrides). Lists the items defined at the
 // scope, lets an admin add a scalar/table metric (metric_name + OID + kind), and delete one.

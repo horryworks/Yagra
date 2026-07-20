@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import type uPlot from 'uplot';
 
 /** Build the uPlot `scales` option from optional fixed axis ranges.

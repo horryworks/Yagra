@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Troubleshoot deep-diagnostic jobs (ADR-022).
 //!
 //! These are heavy, long-running analyses that read long metric histories and run statistical

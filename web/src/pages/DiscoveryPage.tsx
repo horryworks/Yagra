@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Discovery (Nodes ▸ Discovery). Sweep a subnet for live + SNMP-speaking devices, review the
 // candidates (classified into a suggested profile from sysDescr), and import the chosen ones as
 // nodes. The sweep runs on the poller (raw-socket ICMP); core correlates results by scan id.

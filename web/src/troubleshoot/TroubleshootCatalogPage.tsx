@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Troubleshoot landing — the tool catalog (handoff §1). PageHeader + an intro stat strip (now
 // computed from the real job history) + the Analysis runs panel + the diagnostic-tool grid. Owns
 // the launch drawer and the toast; live job updates arrive via useTroubleshootStream.

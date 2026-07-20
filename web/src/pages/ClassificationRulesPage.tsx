@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Classification rules (Nodes ▸ Classification rules). Operator-editable mappings from a
 // discovered device's SNMP signature (sysObjectID prefix — authoritative — and/or a sysDescr
 // regex) to a Device profile. Discovery consults these to pre-select a profile on import, so a

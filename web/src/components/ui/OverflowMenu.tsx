@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Responsive row/card action group. Desktop keeps the familiar hover-revealed IconButton row
 // (rendered as a bare fragment so it drops straight into the page's existing `.ytable-actions` /
 // `.il-actions` wrapper — the hover-reveal + `(hover:none)` CSS still applies). Mobile collapses

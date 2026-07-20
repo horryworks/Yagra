@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Live alert state (Zustand). Ephemeral live data lives here, not in a persisted store
 // (coding-conventions). Alerts are keyed by their dedup identity (node|check|severity) so
 // an SSE re-delivery upserts rather than duplicates.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Synthetic poll-result firehose — the S1 (ADR-025) scale-validation harness.
 //!
 //! Publishes `PollResult` messages to the real bus (`yagra.results`) at a target rate against a set

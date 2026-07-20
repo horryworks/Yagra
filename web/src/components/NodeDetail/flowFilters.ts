@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Flow-tab drill-down filter helpers (ADR-031). Kept pure (no React) so the click-to-filter and
 // AND-combination logic is unit-testable without rendering the whole Flow tab. The raw filter
 // inputs (protocol / destination port / peer IP) are the same values the typed filter bar drives

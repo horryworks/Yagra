@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Dashboard layout state (Zustand, non-persisted in the browser store — the *server* is the
 // source of truth). `createLayoutStore` builds an independent store from a load/save pair, so the
 // per-user "My Dashboard" (useLayoutStore) and the global "Shared Dashboard" (useSharedLayoutStore)

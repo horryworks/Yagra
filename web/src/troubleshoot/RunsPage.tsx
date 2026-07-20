@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Analysis runs — the full async-jobs view (handoff §2, `/troubleshoot/runs`). The same run list
 // the catalog summarises, on its own page. Live progress streams via useTroubleshootStream; cancel / retry /
 // view actions are wired through the store (toasts surface their results).

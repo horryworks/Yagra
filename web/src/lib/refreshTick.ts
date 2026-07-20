@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // One shared live-refresh clock for the node-detail surfaces (S24). The Overview/Interfaces detail
 // used to arm a separate `setInterval(load, 15_000)` per card — worst case ~7 independent, drifting
 // timers on one node (status+RTT+interfaces orchestrator, CPU/mem/session/VPN health, URL/Meraki,

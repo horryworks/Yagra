@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! SNMP trap / inform normalization over the vendored `snmp2` decode types.
 //!
 //! Accepts v1 `Trap-PDU` (mapped to a v2c trap OID per RFC 3584 §3.1) and v2c

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Real Cisco Meraki Dashboard API transport (`reqwest` over rustls) — strictly **READ-ONLY**.
 //!
 //! The Dashboard API is org-scoped and bulk: one paged GET returns data for many devices. A

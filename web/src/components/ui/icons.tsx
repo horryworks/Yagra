@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Outline icon set for the data-table standard (search, type glyphs, row actions, etc.).
 // Stroke-based, 24×24 viewBox, `currentColor` — they inherit size/color from the element
 // they sit in (icon-button, chip, type tile). One small shared set keeps every list aligned.

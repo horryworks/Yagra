@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Reports (Dashboard → Reports).
 //!
 //! A **report definition** is a reusable, customizable template — a name plus an opaque `spec`

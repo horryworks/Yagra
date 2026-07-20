@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 06 · Monitoring-health widgets. Maintenance windows (what's suppressed now + upcoming) and a
 // recent-changes feed off the audit log (admin-only — non-admins see a friendly gate). Both are
 // straight reads of existing endpoints.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // i18next bootstrap. Default + fallback language is English, bundled statically so first paint
 // never waits on a fetch; other languages (Japanese today) are code-split and lazy-loaded the
 // first time the user switches. The active language is owned by the persisted `prefs` store — this

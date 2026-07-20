@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The single typed boundary to the Yagra-core northbound API (coding-conventions: never
 // scatter raw fetch across components). All calls go through `api`; errors surface as a
 // typed `ApiError` decoded from the fixed error envelope (ADR-019).

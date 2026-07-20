@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Nodes / All nodes — a two-pane split. The left pane is the inventory tree (groups → member
 // nodes) with a per-group health rollup; selecting a row drives the right pane, which shows the
 // chosen node's live detail (the shared <NodeDetail>, the same component as the /nodes/:id route)

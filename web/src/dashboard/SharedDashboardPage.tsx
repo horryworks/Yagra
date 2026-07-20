@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared Dashboard — the global widget board (/dashboard), the customizable replacement for the old
 // fixed "Overview". One layout shown to all users; **only admins** may customize it (the change
 // applies to everyone, so entering edit mode requires a confirmation). Non-admins see it read-only.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Troubleshoot UI state (Zustand). The async-jobs list is now real — seeded from the jobs API
 // and kept live over SSE (ADR-022) — so this store holds the job list plus the ephemeral launch
 // drawer and toast. Live data ⇒ not persisted (coding-conventions).

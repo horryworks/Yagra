@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Host self-observability sample — the NMS's own CPU / load / memory / disk.
 //!
 //! This is the cross-cutting DTO for Yagra monitoring **itself** (self-observability,

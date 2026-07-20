@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Stable identifiers shared across components.
 //!
 //! These are the *stable* keys the whole system agrees on: `NodeId`/`IfIndex` are

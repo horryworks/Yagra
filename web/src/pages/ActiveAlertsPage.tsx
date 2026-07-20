@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Active alerts — triage only (§3.2). Per the responsibility split, Yagra detects/correlates/
 // suppresses/routes; the acknowledgement *action*, escalation and on-call live in external tools
 // (PagerDuty/JSM). So there is NO Ack button — but ack *state* mirrored back from the external

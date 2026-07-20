@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Flow-export UDP listener + edge aggregation (Phase 3, ADR-031).
 //!
 //! Sibling to the syslog/trap listeners ([`crate::listeners`]): N `SO_REUSEPORT` reader sockets on

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Segmented control: equal-width buttons with 0.5px dividers; the selected button gets the
 // tertiary fill + a 2px accent inset under-border. Used for the drawer's time-window / depth /
 // notify choices. Keyboard-operable (each option is a real button).

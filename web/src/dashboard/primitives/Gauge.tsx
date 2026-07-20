@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 270° arc gauge with a center percentage. Powers the data-coverage widget. The arc color is
 // passed in (the widget owns the channel — status for coverage). Value is clamped to 0–100.
 

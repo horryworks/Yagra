@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! External IdP login via OpenID Connect (authorization-code + PKCE, ADR-010 Phase 3).
 //!
 //! A single operator-configured OIDC provider lets users sign in with the org SSO alongside local

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Per-user "My Dashboard" layout persistence.
 //!
 //! Stores one opaque JSON document per user (the ordered widget instances + their spans +

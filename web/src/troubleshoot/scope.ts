@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure scope helpers used by ScopePicker — split out so the filtering and label logic is unit-
 // testable without a DOM (the repo has no React test renderer; tests target pure functions).
 //

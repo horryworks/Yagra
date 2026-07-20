@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Report builder — create/edit a report definition (template). Reuses the Modal + Field controls.
 // Left: report name/description/window + the ordered list of chosen sections with their settings.
 // "Add section" reveals the section catalog (grouped), mirroring the dashboard widget picker. Local

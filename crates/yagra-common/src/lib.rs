@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! yagra-common — shared types and models across Yagra components.
 //!
 //! Node/device-class, metric, alert-state, and severity types that more than one

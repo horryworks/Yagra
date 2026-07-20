@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A node-only typeahead filter control: a field-styled trigger opens a popover with a scale-aware
 // node search that queries the server on each keystroke (debounced), capped — never a flat dropdown
 // and never a whole-inventory client load (A-2). Emits a plain { id, name } | null. Distinct from

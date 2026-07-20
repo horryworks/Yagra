@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Big-number KPI tile: a headline value + unit, a caption, and an optional delta vs a prior
 // window. The delta is categorical, not a node status, so its ▲/▼ uses neutral series-ish text
 // tones (never status red/green) — direction is shown by the arrow + sign, not color alone.

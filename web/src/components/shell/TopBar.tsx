@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Top bar (§2.1, decision log §6): logo (=home) at the left, text-only section tabs (active
 // tab = 朱 underline), and the always-present right cluster: global search, notification
 // bell, user menu. 朱 (accent) appears only on the active tab / focus (§1.1).

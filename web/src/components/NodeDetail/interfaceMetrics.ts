@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers for the Interfaces tab's Direction-C layout (in-row sparklines + bottom dock).
 // Kept framework-free so they're unit-testable in the node test env (the WebUI has no DOM-render
 // harness — see vitest.config.ts `environment: 'node'`).

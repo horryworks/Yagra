@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Device classification rules: map a discovered device's SNMP signature to a device
 //! profile.
 //!

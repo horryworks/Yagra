@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers for the inventory tree: build a nested group/node structure from the flat API
 // shapes, answer "is X a descendant of Y" for drag-drop cycle guards, and roll up the health of a
 // group's descendant nodes. Kept free of React so they can be unit-tested directly.

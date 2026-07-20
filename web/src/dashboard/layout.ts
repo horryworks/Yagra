@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure layout helpers for My Dashboard — no React, no I/O, no registry import (the store
 // injects registry-derived predicates), so they're trivially unit-testable in the node env.
 // Every mutator returns a new array (immutable update for Zustand).

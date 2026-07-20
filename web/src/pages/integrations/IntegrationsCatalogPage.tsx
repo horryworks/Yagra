@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Settings ▸ Integrations. Catalog of external systems Yagra can monitor through a vendor cloud
 // API. Today the only integration is Cisco Meraki; the page is a card grid so more vendors slot in
 // without restructuring. Each connected integration links to its own detail page (the Meraki page

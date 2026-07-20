@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Synthetic node seeder — the S2/S6 control-plane scale harness.
 //!
 //! Bulk-inserts N synthetic nodes straight into Postgres so the core's scheduler sweep (spec

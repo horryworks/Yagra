@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Status summary widget (§8 NOC board): a roll-up of node counts by state. Color is the
 // canonical status palette (status = state only). Today the inventory endpoint derives a
 // coarse state (ok when a recent RTT exists, else unknown); richer states light up as the

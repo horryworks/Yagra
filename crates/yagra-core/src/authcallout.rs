@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! NATS **Auth Callout** responder (ADR-030): core as the NATS auth service.
 //!
 //! When per-poller credential scoping is enabled (a callout account seed is mounted, see

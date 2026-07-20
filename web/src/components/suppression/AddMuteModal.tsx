@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Create a mute — shared by the Mutes page ("+ Add mute") and the All Nodes right-click "Custom…"
 // path. A node mute can target one metric; a folder-group mute silences every node under the group
 // (recursive incl. subgroups, ADR-022) and has no metric. When `initialScope` is set the scope is

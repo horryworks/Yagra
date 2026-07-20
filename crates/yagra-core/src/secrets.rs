@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Credential store: encrypted monitoring credentials at rest (ADR-018, Workstream D).
 //!
 //! Secrets are sealed with [`yagra_secrets`] envelope encryption (per-secret DEK under a

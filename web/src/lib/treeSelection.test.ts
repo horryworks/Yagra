@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure-helper tests for the Nodes split selection ↔ URL-param round-trip.
 
 import { describe, expect, it } from 'vitest';

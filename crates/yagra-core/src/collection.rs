@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Collection-set persistence: which OIDs/metrics to collect, per profile and per node.
 //!
 //! Mirrors [`crate::thresholds::ThresholdStore`]: scope-based rows that the scheduler

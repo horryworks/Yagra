@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Board tabs for My Dashboard: switch between a user's boards, and in edit ("Customize") mode
 // add / rename / remove them. Reads the active layout store from context so it targets the right
 // board set. A user always keeps ≥1 board (the last one can't be removed).

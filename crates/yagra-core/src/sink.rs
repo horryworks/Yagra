@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! In-memory metric sink for the skeleton / tests.
 //!
 //! Holds only the latest value per series so the API can serve it without a TSDB. The

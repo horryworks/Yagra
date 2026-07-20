@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Synthetic syslog firehose — the S9/S11 passive-event scale & drop-rate harness.
 //!
 //! Sends RFC 5424 syslog datagrams over UDP to a poller's `YAGRA_SYSLOG_BIND` at a target rate,

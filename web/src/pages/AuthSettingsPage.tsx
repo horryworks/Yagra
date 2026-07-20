@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Authentication (Settings ▸ Auth): configure an external IdP for SSO (OIDC). The client_secret is
 // write-only — the API never returns it — and IdP groups map to Yagra roles via the role map.
 // ManageUsers-gated. Local accounts (Settings ▸ Users) keep working alongside SSO.

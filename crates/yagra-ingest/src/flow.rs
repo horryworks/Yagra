@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Flow export parsing (NetFlow v9 / IPFIX) and edge top-N aggregation (Phase 3, ADR-031).
 //!
 //! Devices export **flow records** (who talked to whom, on which port/protocol, how much) as

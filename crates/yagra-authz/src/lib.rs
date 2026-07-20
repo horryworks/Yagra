@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-authz — NATS **Auth Callout** credential scoping (ADR-030).
 //!
 //! Monitoring credentials (SNMP communities, SNMPv3 keys, API tokens) are decrypted by core and ride

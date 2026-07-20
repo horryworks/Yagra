@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Process-wide **config generation** counter — the S2/S6 dirty signal.
 //!
 //! Bumped by the API audit middleware ([`crate::api`]) on every successful config-changing mutation,

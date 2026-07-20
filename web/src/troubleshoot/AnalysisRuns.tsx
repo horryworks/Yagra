@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Analysis runs — the async-jobs list (ADR-022), now backed by the real jobs API + SSE. One
 // CSS-grid row per job in its lifecycle state:
 //  • running   — spinner + live progress bar + phase + %; Cancel

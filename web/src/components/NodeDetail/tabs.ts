@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Single source of truth for the node-detail sub-tab whitelist.
 //
 // Consumed by all three surfaces that host the node detail so they can never drift:

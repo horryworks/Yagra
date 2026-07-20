@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Per-type group icons for the inventory tree. Each GroupType renders a distinct inline SVG
 // (stroke = currentColor, so it inherits the row's text colour and theming). Decorative —
 // aria-hidden; the group's type is also conveyed by its name/label.

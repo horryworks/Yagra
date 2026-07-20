@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Core HA leader election (ADR-016).
 //!
 //! A PostgreSQL **session-level advisory lock** elects a single active core. Only the lock holder

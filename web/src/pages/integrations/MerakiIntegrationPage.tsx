@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Settings ▸ Integrations ▸ Cisco Meraki. The detail page for the Meraki integration (reached from
 // the Integrations catalog). Onboard Meraki organizations (read-only Dashboard API), manage per-org
 // enable/cadence/scope, launch the import wizard, and toggle the global kill switch.

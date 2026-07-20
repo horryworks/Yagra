@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The event-log store seam: where passive events are written for search/display (ADR-024).
 //!
 //! [`LogStore`] abstracts the event log so the persist writer and the events API don't care

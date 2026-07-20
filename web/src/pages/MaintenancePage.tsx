@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Maintenance windows (Alerts ▸ Maintenance windows). A window covers nodes by scope
 // (node / profile / group, like thresholds) for a time range: covered nodes observe
 // `maintenance` — no alerts fire and existing ones resolve — until the window ends.

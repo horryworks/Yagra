@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The poller work loop.
 //!
 //! A poller consumes [`PollJob`]s from the bus, executes them via the [`Transport`]

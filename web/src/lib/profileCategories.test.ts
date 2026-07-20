@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
 import { PROFILE_CATEGORIES, categoryLabel } from './profileCategories';

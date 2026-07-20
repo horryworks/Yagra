@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Northbound REST API (`/api/v1`).
 //!
 //! Path-versioned (ADR-019). Responses are JSON; errors use the fixed envelope

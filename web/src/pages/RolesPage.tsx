@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Roles & privileges (Settings ▸ Roles & privileges). Read-only view of the RBAC model: the
 // role-vs-privilege matrix (which permission each role grants) plus a short description of every
 // role. Sourced from GET /api/v1/roles, which derives the matrix from the backend's authoritative

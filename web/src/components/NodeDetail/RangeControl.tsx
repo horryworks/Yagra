@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Reusable chart time-range selector — the canonical duration/range picker for the whole app.
 // A joined segmented control of presets (1h 6h 24h 3d 7d) followed by a calendar button that opens
 // a custom-range popover (quick chips + From/To). Every chart window reuses THIS component rather

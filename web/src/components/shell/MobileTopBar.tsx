@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Mobile top bar (ADR-027 §2.3): hamburger → home (logo + wordmark) → spacer → notification bell →
 // the shared UserMenu. Only mounts in mobile mode (AppShell branch), so it carries no desktop CSS.
 // Global search is omitted (it is disabled everywhere today); it returns with the search backend.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The node/check state machine.
 //!
 //! States are explicit and exhaustive — there is no implicit or ambiguous state

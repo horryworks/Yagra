@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Interfaces tab of the unified node detail — Direction C: keep the interface LIST and the selected
 // interface's CHARTS on screen together. Each row carries a small last-1h throughput sparkline so
 // trends across all interfaces are visible without selecting anything (fast triage of "which port is

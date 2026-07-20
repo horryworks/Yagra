@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers for the dependency graph (single-parent forest). Used by the "set upstream"
 // picker to exclude choices that would form a cycle, and by the dependency page. The server
 // still validates every edge (self/cycle) — these keep the UI from offering an invalid choice.

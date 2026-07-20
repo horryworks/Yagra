@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Passive-event UDP listeners: syslog and SNMP traps (Phase 2 passive monitoring).
 //!
 //! Each protocol runs **N parallel `recv_from` loops** bound to the same **unprivileged**

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 01 · Fleet status widgets: status summary (reuses the existing presentational widget),
 // health ring (donut of node states with % healthy), and a nodes-down KPI tile. All read the
 // shared server-computed `useFleetSummary()` poll (`/fleet/summary`) — correct over the whole

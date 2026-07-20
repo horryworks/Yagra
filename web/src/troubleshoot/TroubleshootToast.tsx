@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Bottom-center transient toast for the Troubleshoot section (ui-conventions: transient results
 // are toasts, not modals). Driven by the store; auto-dismisses ~4.2s after each showToast. An
 // optional "View →" link navigates to a result route. Kept mounted by each troubleshoot page so

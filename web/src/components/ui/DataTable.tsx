@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // High-density, virtualized table (§4: lists assume tens of thousands of rows ⇒ virtual
 // scroll + server-side paging; never render the whole set). Generic over the row type. The
 // caller fetches pages (keyset) and appends to `rows`; this component windows the DOM with

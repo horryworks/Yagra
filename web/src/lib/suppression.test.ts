@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
 import { buildSuppressionIndex, groupSubtree } from './suppression';

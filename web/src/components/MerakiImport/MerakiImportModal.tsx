@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Meraki import wizard: enumerate an org's networks + devices (read-only), let the operator pick
 // which devices to monitor (grouped by network), then import the selection as nodes. The chosen
 // devices' networks are set in scope; only imported serials are ever polled (scope at fan-out).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-discovery — device discovery and classification.
 //!
 //! IP-range / SNMP sweep / LLDP-CDP based discovery, classification into profiles, and

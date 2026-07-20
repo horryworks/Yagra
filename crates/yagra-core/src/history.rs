@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Alert history persistence (Workstream #3).
 //!
 //! Appends one row per alert fire/resolve so the lifecycle is durable beyond the in-memory

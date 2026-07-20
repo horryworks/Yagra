@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Audit log persistence (security.md: who changed what, when).
 //!
 //! Rows are written by the API middleware in [`crate::api`] — one per mutating request

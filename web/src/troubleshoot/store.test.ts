@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runningCount, useTroubleshootStore } from './store';
 import type { AnalysisJob } from '../types/api';

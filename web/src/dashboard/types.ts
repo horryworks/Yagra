@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // My Dashboard — shared types for the customizable widget board.
 //
 // A *definition* describes a kind of widget (its title, grid span, backing tag, and the React

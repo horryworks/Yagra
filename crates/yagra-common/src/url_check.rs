@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! URL / HTTP(S) endpoint monitoring: configuration and metric vocabulary.
 //!
 //! A URL monitor is modelled as a dedicated *node kind* (profile category

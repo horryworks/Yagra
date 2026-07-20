@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Topology ▸ Network map. A visual dependency graph: every node with a parent → child link,
 // colored by live status, with dependency-suppressed nodes (an upstream root cause) drawn muted
 // and their edge dashed. Data: GET /api/v1/topology (parent links + state + root_cause), fetched on

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-telemetry — process-wide observability init (structured logs + OpenTelemetry traces).
 //!
 //! Every Yagra binary calls [`init`] once at startup to install a `tracing` subscriber that

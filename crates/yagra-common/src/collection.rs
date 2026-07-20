@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Collection sets: *what* Yagra collects from a node, and how those choices resolve.
 //!
 //! A **collection set** is the list of metrics polled from a node. Like thresholds

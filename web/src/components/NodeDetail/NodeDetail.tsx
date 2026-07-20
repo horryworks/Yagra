@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The unified node detail — one implementation rendered both inline (right pane of the Nodes split)
 // and full-page (the /nodes/:id route), so the two surfaces never drift. It owns the header
 // (group-breadcrumb eyebrow · name + status pill · per-variant actions · ip/maker/seen sub line),

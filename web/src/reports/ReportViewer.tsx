@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Report viewer — a full-bleed overlay showing a generated run. The report body is the server-
 // rendered HTML (the same artifact the PDF is made from, so screen and PDF match), shown in a
 // sandboxed iframe (no scripts execute; device strings are already escaped server-side). The

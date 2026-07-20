@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Set (or clear) a node's dependency upstream (parent) — the alert-suppression edge. A focused-edit
 // modal shared by the node-detail header and the Dependency page, so setting an upstream is
 // identical wherever it's reached. Excludes self + descendants from the picker (client-side cycle

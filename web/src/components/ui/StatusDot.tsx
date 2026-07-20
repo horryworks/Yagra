@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Status indicator (§1.3): a colored dot + text label. Status color is a domain concept —
 // it comes from stateColorVar (the canonical status palette) and is NEVER reused for
 // decoration. Pairs color with text so it's not color-alone (accessibility).

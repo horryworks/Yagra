@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Per-source + global token-bucket rate limiting for the edge listeners.
 //!
 //! Storm protection layer 1 (see the event-pipeline design): a chatty or misbehaving

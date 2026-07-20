@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Runtime configuration from the environment.
 //!
 //! The three store/bus URLs decide the run mode: if all are present the core runs

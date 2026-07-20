@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Schedule editor — create/edit a preset cadence for a report definition. Times are UTC (the
 // backend computes next_run_at in UTC). Weekly adds a weekday picker; monthly a day-of-month.
 

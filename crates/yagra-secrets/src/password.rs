@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Local-auth password hashing (Argon2id).
 //!
 //! User login passwords are hashed with Argon2id and a per-password random salt, stored as

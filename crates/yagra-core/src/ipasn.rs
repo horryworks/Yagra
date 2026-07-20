@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! IP→ASN enrichment (ADR-031 Increment 3).
 //!
 //! Most non-BGP exporters (access switches, home/edge routers — including the lab USG) export flow

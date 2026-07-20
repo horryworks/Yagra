@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-bus — task queue / message bus client.
 //!
 //! Abstracts job distribution from Yagra-core to Yagra-poller workers over NATS

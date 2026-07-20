@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Modal (ui-conventions: use sparingly — confirmation / destructive consent / focused
 // editing). One canonical chrome (overlay, radius, header/footer padding, action spacing) so
 // every dialog in the app matches — this is the Modals UI-consistency group. Closes on

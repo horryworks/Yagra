@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Well-known SNMP trap identity OIDs → human names.
 //!
 //! A small, curated static table mapping the standard RFC trap OIDs (plus the two BGP

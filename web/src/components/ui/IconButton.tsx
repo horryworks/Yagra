@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Square icon-only button for table row actions (edit / delete / copy / toggle). 28×28,
 // transparent until hovered; the `danger` variant fills critical-red on hover for destructive
 // actions. Always pass a `title` (and it doubles as the accessible name).

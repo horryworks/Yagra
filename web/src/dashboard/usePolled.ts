@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Generic polled-fetch hook for dashboard widgets that read a snapshot endpoint (maintenance
 // windows, audit, discovery, alert history, Top-N). Fetches on mount and re-fetches every
 // `intervalMs` (default 15s, matching the dashboard cadence), cancelling in-flight updates on

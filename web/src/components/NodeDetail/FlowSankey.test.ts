@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
 import { buildSankey, SANKEY_MAX_LINKS } from './FlowSankey';
 import type { FlowConversation } from '../../types/api';

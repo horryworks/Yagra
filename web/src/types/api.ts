@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // API types — mirror the Rust serde shapes from `yagra-common` / the `/api/v1` router.
 // Keep these in sync when an endpoint or a shared type changes (coding-conventions).
 

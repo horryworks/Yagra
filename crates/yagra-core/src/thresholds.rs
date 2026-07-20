@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Threshold persistence (Workstream #1).
 //!
 //! Stores scope-based threshold rules; the alert engine resolves them per (node, metric)

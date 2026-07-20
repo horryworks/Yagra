@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Credential Finder rate limiting (ADR-018).
 //!
 //! When probing a device with candidate credentials, attempts must be **rate-limited per

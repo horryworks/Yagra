@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! NATS subject scheme for core⇄poller messaging.
 //!
 //! Jobs are published per **poller pool** (ADR-009) so pollers subscribe only to the pool(s)

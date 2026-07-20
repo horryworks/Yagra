@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 04 · Dependency / root-cause view. Renders the parent→child dependency forest as a compact
 // indented tree (no graph library): each node shows a status dot, its name, and — when the alert
 // engine has attributed an upstream root cause — a muted "← caused by <name>" so downstream

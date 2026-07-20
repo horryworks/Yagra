@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Resolve a referenced entity (node / group / profile / threshold scope) to its human name for
 // table cells. Policy (design-system §4.1 / ui-conventions): the visible primary is ALWAYS the
 // name — the raw UUID is exposed only on hover (tooltip + copy), never as the cell's main text.

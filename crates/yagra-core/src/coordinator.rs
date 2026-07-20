@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Live poller registry + working-set publisher (ADR-009/020).
 //!
 //! The coordinator is core's control plane for the distributed poller pool. It owns the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The dependency map itself: an SVG render of the tidy-tree layout with wheel-zoom + drag-pan.
 // Status color is the canonical palette (stateColorVar) — a node's color here is identical to its
 // dot in the table and its threshold line in a chart. Clicking (or Enter/Space on a focused) node

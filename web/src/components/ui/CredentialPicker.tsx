@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Multi-select picker for stored credentials, rendered as removable chips. Clicking the
 // field-styled control opens a dropdown of stored SNMP credentials; selecting toggles
 // membership and the choice appears as a tag (with an ✕ to deselect). The dropdown footer

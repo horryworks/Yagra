@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // i18n smoke + EN/JA parity tests. Covers three things:
 //   1. The global instance resolves keys and interpolates (the mechanism format.ts relies on).
 //   2. Switching language actually swaps strings (lazy JA load works in the node env too).

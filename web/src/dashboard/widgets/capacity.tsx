@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 05 · Capacity & traffic widgets. Traffic spikes/drops rank interfaces by how much their total
 // throughput moved vs ~5 min ago (signed delta, bits/sec), rendered with DeltaBars. Delta is a
 // series channel (not a node status): spikes use series-4 (amber-brown), drops series-5 (crimson).

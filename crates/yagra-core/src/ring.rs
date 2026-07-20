@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Consistent hash ring for poller assignment (ADR-009).
 //!
 //! Each pool has one ring built from its live pollers. A node is placed on the ring by hashing

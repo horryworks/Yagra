@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import i18n from '../i18n';
 import type { ReportSectionDef, ReportSpec } from '../types/api';

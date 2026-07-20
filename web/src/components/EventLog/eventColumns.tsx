@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Column set for the passive-event log (DataTable), shared by the Events page and the
 // NodeDetail Events tab. `showSource` off drops the Source column — redundant inside a single
 // node's tab, where every row is that node. Device-supplied text (message) is rendered as

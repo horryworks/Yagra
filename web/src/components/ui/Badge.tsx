@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Small inline label chip (counts, severities, flags). `tone` picks a neutral or status
 // accent; status tones reuse the canonical status palette, never an ad-hoc color.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Alert severity.
 //!
 //! Severity is *ordered* — `Info < Warning < Critical` — so callers can compare,

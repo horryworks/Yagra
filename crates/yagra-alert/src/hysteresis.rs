@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Dwell-time hysteresis.
 //!
 //! A raw evaluated state must persist for `dwell` consecutive samples before the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Report-runs state (Zustand). The saved-reports list is seeded from the runs API and kept live
 // over SSE (generation progress) — live data, so not persisted (coding-conventions). Mirrors the
 // troubleshoot runs store.

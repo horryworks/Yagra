@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers shared by the dashboard widgets (kept side-effect-free so they unit-test in the
 // node env). State roll-ups, worst-state precedence, and alert-history bucketing live here.
 

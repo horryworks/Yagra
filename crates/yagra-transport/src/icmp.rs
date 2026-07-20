@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Real ICMP transport over raw sockets (`surge-ping`).
 //!
 //! This is the production [`Transport`] for liveness/RTT. It needs `CAP_NET_RAW` at

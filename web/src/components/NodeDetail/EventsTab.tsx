@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // NodeDetail ▸ Events tab: this node's received passive events (syslog / SNMP traps / webhooks) as
 // a full keyset-paged log, reusing the shared event-log hook + columns + filter bar. The Source
 // column is dropped (every row is this node) and the node picker is hidden (node is fixed); the

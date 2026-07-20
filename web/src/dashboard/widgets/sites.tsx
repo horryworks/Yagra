@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 04 · Sites & topology widgets. Each computes from the server-side per-group health rollup
 // (`useGroupSummary`, A-1) joined to the node-group tree — so they aggregate the WHOLE fleet per
 // group, not the first page of a node slice (the old `useNodes()` path under-counted every group

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The inventory tree (All nodes). Hierarchical groups (folders) with their member nodes, modelled
 // on HoTTY's HostTree: expand/collapse, per-row hover actions, a right-click context menu, and
 // HTML5 drag-and-drop.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Audit log (Settings ▸ Audit log). Admin-only: every mutating API call (who, what, when,
 // response status) plus login events. Read-only & immutable, newest-first, keyset paging — the
 // log is append-only and can grow without bound.

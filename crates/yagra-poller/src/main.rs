@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-poller — stateless poller worker.
 //!
 //! Pulls polling work off the bus (Yagra-bus / NATS), executes it via the transport layer

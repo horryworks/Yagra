@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Navigation IA — the single source of truth for the site map (.claude/docs/design-system.md §2.2,
 // decision log §6). The top bar renders SECTIONS (text-only tabs); the sidebar renders the
 // selected section's ITEMS, grouped so read/monitor screens sit apart from configuration screens

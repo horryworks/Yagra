@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Credentials & secrets (Settings ▸ Credentials & secrets). Stores monitoring secrets
 // (SNMP communities, v3 creds, API tokens) — the crown jewels. The list NEVER includes secret
 // values (the API returns metadata only); the secret is write-only here and sent over the

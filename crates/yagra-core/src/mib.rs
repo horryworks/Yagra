@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! MIB repository (Phase B): a curated, searchable OID catalog.
 //!
 //! A reference table of `metric_name → (oid, kind)` so operators pick metrics by name in the

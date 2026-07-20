@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Notification dispatch: dedup + retry over pluggable channels.
 //!
 //! Yagra forwards a *clean* alert signal to external tools — escalation/on-call live there

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Serialize the Nodes split's right-pane selection to/from a URL query param so a browser reload
 // restores the same pane (see design-guidelines.md "画面状態の永続化"). The wire form is
 // `node:<id>` / `group:<id>`; anything else parses back to null (no selection).

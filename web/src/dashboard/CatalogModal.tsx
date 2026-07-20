@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Add-widget catalog: the registry grouped by section, each widget a clickable card that adds
 // an instance to the board. Backing tags (live/rollup) carry over from the catalog so the
 // operator knows what's data-backed. Stays open after an add so several can be placed at once.

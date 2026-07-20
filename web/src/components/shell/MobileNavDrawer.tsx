@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Mobile navigation drawer (ADR-027 §2.3): off-canvas left panel that reuses the full nav IA
 // (NAV / sidebarGroups / sectionForPath) as a 6-section accordion — the same site map as the
 // desktop top bar + sidebar, no duplicate source. The section owning the current route starts

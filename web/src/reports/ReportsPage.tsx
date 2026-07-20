@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Reports (Dashboard ▸ Reports). Three tabs: Saved reports (generated runs, live over SSE),
 // Templates (reusable report definitions), and Schedules (preset cadences). Reports are a shared
 // resource — everyone views, only admins create/edit/run/delete (the write controls are hidden for

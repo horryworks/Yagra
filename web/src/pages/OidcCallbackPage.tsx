@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // OIDC redirect landing (§3.6): the IdP sends the user back here with `?code&state`. We forward
 // them to the backend, which exchanges the code, validates the ID token, maps groups → role, and
 // returns a session — then we store it like a local login and go to the dashboard. Rendered by the

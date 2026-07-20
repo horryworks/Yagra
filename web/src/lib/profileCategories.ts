@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Device-profile functional taxonomy — mirrors yagra_common::ProfileCategory.
 // `token` is the kebab-case enum form sent over the API; the array order is the display /
 // grouping order used by the Device profiles page (routers → switches → … → generic).

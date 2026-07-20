@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Table toolbar — one consistent control row above every list (search → filters → spacer →
 // result count → primary action). The pieces are small composables so each screen arranges the
 // slots it needs; styles live with the table standard (styles/table.css).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared per-group health rollup for the site/topology dashboard widgets (site-matrix,
 // region-rollup, geo-map). They all need the same server-computed per-group state tally, so this
 // dedupes it into one fetch + one 15s poll regardless of how many are mounted (a subscriber count

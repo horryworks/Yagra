@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-topology — dependency graph and suppression.
 //!
 //! Models upstream→downstream dependencies so the alert engine can suppress a child's

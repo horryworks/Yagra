@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Tool catalog card (handoff §1). Monogram tile + name + method line, description, a "Surfaces …"
 // reveal, and a footer meta row: cost estimate, a 5-pip compute-depth indicator, and a SPLIT Run
 // button. The main "Run" opens the launch drawer to set scope/window/depth before running (so the

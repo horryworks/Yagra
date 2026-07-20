@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Inbound alert acknowledgement reflection (ADR-015, A1).
 //!
 //! Yagra owns alert *quality* (detection / correlation / suppression / routing) but **not** the

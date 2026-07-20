@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Anomaly Detection — report (handoff §4) + live processing (§5), now driven by a real job
 // (ADR-022). The selected job is in `?job=<id>`; its state/progress arrive over SSE and its
 // findings load from the API when it completes. The config bar launches a new anomaly job (real

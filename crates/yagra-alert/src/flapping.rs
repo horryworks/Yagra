@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Flapping detection.
 //!
 //! Rapid state churn (a "flapping" check) is damped rather than alerted on per flip

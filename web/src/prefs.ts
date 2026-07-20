@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Persistent UI preferences (Zustand + persist) — layout/theme prefs survive reloads
 // (coding-conventions: persistent UI prefs → persisted store; live data stays ephemeral).
 

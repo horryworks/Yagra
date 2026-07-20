@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // System Health (Settings ▸ System Health). Yagra's own health in one place: the poll loop's
 // live counters, backing-service reachability (PostgreSQL / TSDB / bus), fleet data coverage, and
 // — new — host-resource trends (CPU / load / memory / disk) for the core and every distributed

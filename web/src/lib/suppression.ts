@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers for the maintenance/mute "suppression" features shared by the All Nodes tree and
 // the management pages: the right-click target, quick-duration presets, and the suppression index
 // (which nodes/groups are currently under maintenance or muted, propagated down a targeted folder

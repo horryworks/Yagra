@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Maintenance windows + mutes persistence (alert-quality).
 //!
 //! Windows are scoped like thresholds (node / profile / group, ADR-013); the alert engine

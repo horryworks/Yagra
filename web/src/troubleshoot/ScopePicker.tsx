@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Scope picker for Troubleshoot analyses: choose All nodes / a Group / a single Node, producing
 // a { kind, id, label }. A field-styled trigger opens a popover (mode tabs + a list), following
 // the CredentialPicker popover/click-outside pattern. The Node list is a scale-aware typeahead

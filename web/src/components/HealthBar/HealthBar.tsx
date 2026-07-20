@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A proportional stacked health bar: one segment per node state, width = its share of the node
 // set, colored from the canonical status palette (stateColorVar — never an ad-hoc color). Used for
 // the per-group rollup on tree rows and the full-width Health section on the group-detail pane. An

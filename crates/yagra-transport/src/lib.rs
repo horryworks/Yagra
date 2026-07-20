@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-transport — device I/O abstraction over ICMP / SNMP / HTTP.
 //!
 //! All device I/O goes through the [`Transport`] trait so pollers and discovery never

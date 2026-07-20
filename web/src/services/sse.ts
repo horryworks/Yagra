@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Live updates over Server-Sent Events (ADR-019). The northbound API exposes per-concern
 // streams (e.g. `/api/v1/stream/alerts`); this consumes them over `fetch` rather than the native
 // `EventSource`. Why: `EventSource` cannot attach request headers, so it can't send the

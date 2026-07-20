@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Poll rate control / backpressure (Workstream #4).
 //!
 //! Two guards protect both Yagra and the devices (monitoring-conventions):

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Troubleshoot — the static tool catalog (UI metadata only). Runs and findings are now real,
 // served by the jobs API (ADR-022) — see services/api.ts and store.ts. This file holds just the
 // fixed set of diagnostics and their display metadata (monogram, method colour, copy), plus the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Volatile poller state mirror: Redis (ADR-004/009).
 //!
 //! Liveness (which pollers are alive) and assignment (which poller owns which node) are

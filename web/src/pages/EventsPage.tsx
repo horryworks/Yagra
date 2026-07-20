@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Events (Alerts ▸ Events). Append-only log of received passive events (syslog / SNMP traps /
 // webhooks), keyset-paged newest-first. The rule-authoring surface: browse what devices actually
 // send, then write rules against it. The node filter lives in the URL (?node_id=) so a deep-link

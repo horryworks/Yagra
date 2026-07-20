@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Local authentication + RBAC enforcement (Workstream E).
 //!
 //! Passwords are Argon2id-verified ([`yagra_secrets::password`]); a successful login mints

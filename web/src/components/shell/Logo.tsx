@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Brand mark (§1.1) — seal (朱印) style, unified everywhere: a brand-orange rounded tile
 // with an off-white 生成り kamon (二重輪 + 入れ子の山形/矢羽). No outline-only transparent
 // logo. Two renderings of the same seal:

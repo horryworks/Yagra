@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure math for the corner drag-to-resize handle — no React, no DOM — so it's unit-testable in the
 // node env. Converts a pointer pixel delta into a new {span, rowSpan}, each snapped to the widget's
 // allowed steps. The grid is always treated as 12 columns (spans are stored 12-based; CSS auto-

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // My Dashboard — the customizable widget board (/dashboard/my). The fixed Overview
 // (/dashboard) is unchanged; this is the per-user, add/remove/move board. Layout loads from and
 // saves to the server (per account). The page owns the single alert SSE subscription so alert

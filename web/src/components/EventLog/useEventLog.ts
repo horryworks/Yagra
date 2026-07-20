@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Keyset-paginated passive-event log fetch, shared by the Events page and the NodeDetail
 // Events tab. Owns the rows / loading / exhausted state machine and the load-more cursor
 // (last row's recorded_at). Filters are passed as PRIMITIVES (kind / node_id / matched) so an

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Frontend helpers for the report document (spec). The backend stores `spec` opaquely and the
 // WebUI owns the shape (same contract as the dashboard layout) — these helpers build/sanitize it.
 

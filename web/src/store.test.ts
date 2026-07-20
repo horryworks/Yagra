@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
 import { sortedAlerts, useAlertStore, useAuthStore, useRangeStore } from './store';
 import type { Alert } from './types/api';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Collection tab of the unified node detail. A read-first status view over what this node collects:
 // a status card (collecting / failing / ICMP-only), the named collection sets it inherits from its
 // device profile, the latest scalar values, and — for admins — the existing CollectionEditor to add

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Alert rules (Alerts ▸ Alert rules). Thresholds resolve by hierarchical
 // override — profile → group → node, most-specific wins (§3.3) — so each rule carries a
 // scope level + id. CRUD against /thresholds. Rules are evaluated live: the alert engine

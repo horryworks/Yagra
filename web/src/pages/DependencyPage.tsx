@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Topology ▸ Dependencies. The management surface for the dependency graph: every node, its
 // upstream (parent), live status, and — when suppressed — the root cause it's rolled up under.
 // Set/change/clear a node's upstream inline (the shared SetParentModal). Read: GET /api/v1/topology

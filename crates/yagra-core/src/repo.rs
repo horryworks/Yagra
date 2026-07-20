@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! PostgreSQL metadata repository (nodes inventory).
 //!
 //! Metadata — nodes, profiles, thresholds, alert history — lives in PostgreSQL (store

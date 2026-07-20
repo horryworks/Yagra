@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Live NATS implementation of the [`Bus`] seam (ADR-007).
 //!
 //! This is the production core⇄poller transport. It is an I/O adapter (needs a running

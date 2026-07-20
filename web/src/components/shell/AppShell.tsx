@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // App shell: top bar + collapsible sidebar + routed content (§2 IA). The content region owns
 // its own scroll so the chrome stays fixed and live lists/tables scroll within their pane.
 //

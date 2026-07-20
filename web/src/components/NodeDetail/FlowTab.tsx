@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // NodeDetail ▸ Flow tab (ADR-031): traffic-flow analysis for this node — a bytes-over-time trend
 // (per protocol), Top-N talkers / protocols / destination ports / autonomous systems, a src→dst
 // Sankey, and a conversations table. Drill-down filters (protocol / destination port / peer)

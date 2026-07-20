@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Alert engine wiring (Workstream B).
 //!
 //! Drives the tested [`yagra_alert`] state machine from live poll results: each node has

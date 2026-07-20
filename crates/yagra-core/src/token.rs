@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Stateless signed session tokens (Core HA active/active, ADR-016 Increment 2a).
 //!
 //! When a mounted session key is configured (`YAGRA_SESSION_KEY_FILE`), a successful login mints an

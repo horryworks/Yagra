@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Passive event pipeline (Phase 2): syslog / SNMP traps / inbound webhooks → rule
 //! matching → alerts.
 //!

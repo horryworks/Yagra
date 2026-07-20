@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Job scheduling: turn inventory into [`PollJob`]s for the bus.
 //!
 //! The scheduler is the core-side producer of work. For the walking skeleton it builds

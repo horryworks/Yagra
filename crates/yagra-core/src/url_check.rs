@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! URL-check persistence (the per-node HTTP/HTTPS monitor configuration).
 //!
 //! Metadata, so it lives in PostgreSQL (store separation). One row per node (1:1), keyed by

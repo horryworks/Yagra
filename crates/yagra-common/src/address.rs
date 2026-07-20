@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Address-family helpers.
 //!
 //! IPv4 and IPv6 are both in scope from the start — never assume v4

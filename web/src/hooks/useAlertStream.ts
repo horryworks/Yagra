@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Seed active alerts once, then keep them live via SSE (ADR-019). Centralized so the
 // dashboard and the Active alerts screen share one subscription path and the same store.
 

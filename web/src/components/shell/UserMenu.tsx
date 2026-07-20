@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // User menu (top-right, always present §2.1): shows the current principal's role and a
 // logout action. Role is resolved into the auth store (App bootstrap / login); in public-dashboard
 // mode there may be no session, in which case it shows a sign-in affordance.

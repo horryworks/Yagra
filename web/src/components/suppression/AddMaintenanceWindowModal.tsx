@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Create a maintenance window — shared by the Maintenance page ("+ Add window") and the All Nodes
 // right-click "Custom…" path. When `initialScope` is set the scope is fixed to that node/folder
 // group (the operator already picked the target); otherwise the scope is chosen here (node /

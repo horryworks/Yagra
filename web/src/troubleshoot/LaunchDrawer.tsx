@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Launch drawer (handoff §3): configure and submit any tool as a real background job (ADR-022).
 // Scope (All nodes / a group / a single node via ScopePicker), Time window / Depth / "When done"
 // (segmented), and a

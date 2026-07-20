@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Role-based access control with group-scoped visibility (ADR-014).
 //!
 //! Two axes: **what** a principal may do (a [`Role`] → [`Permission`] set) and **which**

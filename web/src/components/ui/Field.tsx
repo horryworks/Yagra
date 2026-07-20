@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared form controls (§4: forms/tables are common components). TextInput and Select share
 // one stylesheet so every form field looks identical. Focus = accent border (not outline),
 // per ui-conventions interactive states.

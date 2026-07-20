@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Like RankedBars, but each value is a signed delta: the bar width is proportional to the
 // magnitude and the value reads with a ▲/▼ and sign. Powers traffic spikes/drops. The fill is a
 // series color (a delta direction is not a node status), passed in by the widget.

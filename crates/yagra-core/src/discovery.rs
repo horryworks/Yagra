@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Discovery orchestration (Phase C) — core side.
 //!
 //! Turns a scan request into a [`DiscoveryJob`] on the bus (the poller does the actual ICMP /

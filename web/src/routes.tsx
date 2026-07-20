@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Route table. Mirrors the nav IA (nav.ts): the AppShell wraps every in-app screen; static
 // section/sub-feature paths map to their pages, and every not-yet-backed IA entry routes to
 // ComingSoon so the structure is complete and navigable. Unknown paths fall back to the

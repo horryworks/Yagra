@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // App root: applies the persisted theme, discovers whether reads are gated, and mounts the
 // router. In private-dashboard mode (reads require auth) and not logged in, the whole app is
 // gated behind the login screen; otherwise the shell + routes render. On a config-fetch

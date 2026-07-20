@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Real HTTP/HTTPS endpoint transport (`reqwest` over rustls).
 //!
 //! The URL-monitoring probe: one request to a URL, reporting reachability, the HTTP status

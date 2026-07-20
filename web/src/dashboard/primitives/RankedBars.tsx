@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Ranked horizontal bars: label · track+fill · right-aligned value. Powers all Top-N widgets
 // (RTT, CPU, memory, talkers, top alerting nodes). Bar width is proportional to the value
 // relative to the largest row, so the ranking reads at a glance. The fill color is a series

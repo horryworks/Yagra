@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // About (Settings ▸ About). Product identity + versions in one place. The running core/API
 // version comes from the backend (`GET /api/v1/version`, public); the WebUI build version is
 // baked in at compile time (Vite `define`, from package.json). Showing both makes a core/web
@@ -65,7 +66,11 @@ export function AboutPage() {
               {REPOSITORY}
             </a>
           </InfoRow>
-          <InfoRow label={t('about.license')}>MIT</InfoRow>
+          <InfoRow label={t('about.license')}>
+            <a href={`${REPOSITORY}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
+              AGPL-3.0-only
+            </a>
+          </InfoRow>
         </div>
       </Card>
     </div>

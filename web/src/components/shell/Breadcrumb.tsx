@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Breadcrumb for drill-downs (§4: sidebar = fixed hierarchy, deep navigation = breadcrumb,
 // e.g. `Nodes / All nodes / <node>`). Pure presentation; the caller supplies the trail.
 

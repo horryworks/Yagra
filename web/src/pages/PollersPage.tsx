@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pollers (Settings ▸ Pollers). The distributed-poller fleet (ADR-009/020): a per-pool summary
 // strip over the data-table standard list of registered pollers. Pollers appear when they connect
 // (heartbeat) and are removed here only once offline. Read-only for viewers; deleting a poller and

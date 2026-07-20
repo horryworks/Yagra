@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Time-series chart pane backed by uPlot (fast at many series). Series colors come from the
 // theme's `--series-*` tokens (the same categorical palette every other chart surface uses), so
 // charts adapt to light/dark and never collide with the status channel. A uPlot canvas stroke

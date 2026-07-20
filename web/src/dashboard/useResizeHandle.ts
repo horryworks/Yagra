@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Corner drag-to-resize for a dashboard widget. A self-contained pointer-drag hook (no library):
 // it captures the pointer on the grip element (so moves keep flowing even outside the grip and
 // unmount mid-drag auto-cleans), measures the grid once on pointer-down, and on each frame snaps

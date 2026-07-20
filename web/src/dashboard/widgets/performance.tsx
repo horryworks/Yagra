@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // 03 · Performance hotspots (Top-N). All read fleet Top-N endpoints and render with RankedBars.
 // Node Top-N (RTT/CPU/memory) uses /metrics/top (CPU/memory via logical aliases); interface
 // Top-N (talkers/errors/busiest) uses /metrics/interface-top. The now/1h-max window is a

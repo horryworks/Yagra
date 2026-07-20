@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Store injection for the dashboard widget machinery. `WidgetFrame` and `CatalogModal` are reused
 // by both the per-user My Dashboard and the global Shared Dashboard; each page provides its active
 // store via this context so those components edit the right board. Defaults to the My Dashboard

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Thresholds and their inheritance resolution.
 //!
 //! Thresholds resolve by **inheritance with override** (ADR-013, monitoring-conventions):

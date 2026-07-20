@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Users (Settings ▸ Users). Admin-only CRUD over local auth accounts, rendered
 // as the "identity list" (data-table standard v2, variant B): a roomy row per account with a
 // role-colored monogram, inline instant role change, account status, and hover row-actions

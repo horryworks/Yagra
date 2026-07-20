@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Overview tab of the unified node detail. The compact core (per the redesign) is an "ICMP RTT ·
 // last 30 min" sparkline + a two-column facts grid. Below it sit the richer, relocated sections —
 // Active alerts, Device health (CPU/Mem), System (SNMP) scalars — each of which self-hides when the

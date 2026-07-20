@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Live per-node display-state overrides, kept fresh via the node-state SSE stream (S14). One shared
 // subscription (ref-counted, like `useFleetSummary`) feeds a Map that the inventory / topology /
 // dashboard views overlay on top of their own base data — so a node's up/down/threshold state

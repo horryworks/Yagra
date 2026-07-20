@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Metric identity and kind.
 //!
 //! Series identity follows the **thin-label model** (ADR-011): a series is keyed by

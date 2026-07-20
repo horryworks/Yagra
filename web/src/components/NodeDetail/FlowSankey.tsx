@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // FlowSankey (ADR-031 Increment 3): a hand-rolled SVG Sankey of src→dst conversations. Each band's
 // thickness is proportional to bytes, so "where is this device's traffic going" reads at a glance —
 // the same data as the conversations table, shown as flow. No chart dependency (like TopologyMap /

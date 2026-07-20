@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Grid heatmap: a row-label column + a matrix of cells shaded by intensity, with a scale legend.
 // Powers the alert calendar (weekday × hour) and the interface utilization heatmap. Cell color is
 // a series base mixed toward the track color by intensity (color-mix) — the base is passed in so

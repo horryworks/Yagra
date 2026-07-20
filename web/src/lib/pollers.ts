@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pure helpers for the Pollers page (Settings ▸ Pollers). Kept out of the component so the pool
 // warning, the working-set summary, id/pool validation, and the remote-poller config snippet are
 // all unit-testable without the DOM.

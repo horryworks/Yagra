@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // One placed widget: a Card whose chrome the frame owns. In view mode the card shows the widget's
 // own header actions (a selector, a "View all" link); in edit mode it shows a remove (×) and a
 // dnd-kit move handle (⠿) in the header, plus a bottom-right **resize grip** that drags width +

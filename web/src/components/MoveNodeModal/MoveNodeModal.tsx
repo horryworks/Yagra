@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Move a node into a group (or ungroup it). A focused-edit modal shared by the inventory tree
 // (context-menu / "Move…" picker) and the node-detail header, so the assign-to-group flow is
 // identical wherever it is reached. Assignment is immediate; the caller refreshes on success.

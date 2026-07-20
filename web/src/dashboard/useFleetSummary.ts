@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared fleet status summary for the dashboard status widgets (status-summary, health-ring,
 // nodes-down KPI). They all need the same server-computed per-state tally, so this dedupes it into
 // one fetch + one 15s poll regardless of how many status-widgets are mounted (a subscriber count

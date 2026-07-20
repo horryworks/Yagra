@@ -2,6 +2,7 @@
   "name": "yagra-web",
   "private": true,
   "version": "0.1.15",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Yagra-web — WebUI (React + TypeScript).",
   "scripts": {

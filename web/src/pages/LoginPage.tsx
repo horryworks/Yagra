@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Login (§3.6): split card — 藍 brand panel (家紋) on the left, sign-in on the right. SSO is
 // the intended primary path but no IdP backend exists yet, so it's shown disabled (primary
 // affordance, inert) above the local form (secondary). 朱 appears only on focus. Errors are

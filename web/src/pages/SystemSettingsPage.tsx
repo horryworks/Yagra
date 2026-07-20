@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // System settings (Settings ▸ System settings). System-wide monitoring defaults persisted
 // server-side via /config. Currently: the global default polling interval (seconds). Per-profile
 // overrides (Nodes ▸ Device profiles) take precedence over this default. ManageConfig-gated — the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The bus abstraction and an in-memory implementation.
 //!
 //! [`Bus`] is the publish seam core and pollers depend on, so neither calls the other

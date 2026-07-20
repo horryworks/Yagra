@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Cisco Meraki Dashboard API monitoring: configuration and metric vocabulary.
 //!
 //! A Meraki device is modelled as an ordinary node carrying its real role category (MX→Firewall,

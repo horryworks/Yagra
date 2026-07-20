@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Card / pane (§4): the flat surface container (replaces the old `.pane`). Optional title and
 // a right-aligned actions slot for a toolbar.
 

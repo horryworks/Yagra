@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the API client the stores talk to. Declared via vi.hoisted so the mock factory (hoisted

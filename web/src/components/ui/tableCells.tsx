@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Reusable table-cell content for the data-table standard (styles in styles/table.css).
 // These encode the cell vocabulary the design defines once and every list reuses: sealed
 // secrets, copyable mono ids, HTTP status, method chips, two-line timestamps, monograms.

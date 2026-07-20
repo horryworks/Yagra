@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Bus message contract between core (Yagra-core) and pollers (Yagra-poller).
 //!
 //! These are the *only* way core and pollers talk (ADR-003). Messages are

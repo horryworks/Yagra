@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Hierarchical node groups (the inventory folder tree).
 //!
 //! A group has a [`GroupType`] (rendered with its own icon in the UI) and an optional parent,

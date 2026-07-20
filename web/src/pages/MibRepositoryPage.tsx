@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // MIB repository (Nodes ▸ MIB repository). A curated, searchable OID catalog: metric_name →
 // (OID, kind, vendor). Seeded from the built-in standard + vendor OID sets; admins can add
 // their own. The collection editor picks from this so operators choose metrics by name instead

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Device profiles (Nodes ▸ Device profiles). Profiles are device-class buckets split by
 // functional role (category) × vendor-NOS family; they bundle metrics by *attaching Metric sets*
 // (profiles hold no raw OIDs themselves — edit a set once and every profile using it updates).

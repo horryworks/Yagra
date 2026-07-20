@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Segmented donut ring with an optional center readout + legend. Powers the health ring and
 // severity mix widgets. Colors are passed in (CSS-var strings) — the widget chooses the channel
 // (status for health, severity for the alert mix), so this primitive stays channel-agnostic.

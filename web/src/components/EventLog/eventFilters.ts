@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // URL-param codec for the Events page's node filter. The node_id filter lives in the URL (not
 // local state) so a deep-link from a node — /alerts/events?node_id=<id> — lands pre-filtered and
 // so the filter survives a reload. Pure + unit-tested, mirroring RangeControl's param helpers.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Metric sets (Nodes ▸ Metric sets). Reusable, named metric bundles that device profiles attach
 // (the design's middle layer: MIB → Metric sets → profile). Edit a set's metrics once and every
 // profile that references it updates. CRUD against /collection-templates (the API/type names keep

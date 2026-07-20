@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared filter controls for the event log, used by both the Alerts ▸ Events page and the
 // NodeDetail ▸ Events tab (same shared-module pattern as useEventLog / eventColumns). Renders the
 // kind / matched selects, an optional node picker, a text search with a regex toggle, and a

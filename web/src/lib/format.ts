@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Presentation helpers. Colors resolve to theme CSS variables (ui-conventions) — no hardcoded hex
 // here, so the theme stays the single source of truth. User-facing words (state/http/relative-time
 // labels, units of time) resolve through the global i18next instance so they follow the active

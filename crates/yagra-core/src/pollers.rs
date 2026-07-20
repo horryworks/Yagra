@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Durable poller inventory persistence (ADR-009).
 //!
 //! The `pollers` table is the *durable* record of which pollers have ever registered — first/last

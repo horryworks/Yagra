@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Group detail pane (shown in the split when a group row is selected, instead of a node detail).
 // No tabs: a header (type eyebrow · breadcrumb name · counts · Edit/Add actions) over a Health
 // rollup (full-width bar + per-state legend) and the group's direct member nodes. Subgroup-only

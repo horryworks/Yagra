@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { PoolSummary } from '../types/api';
 import i18n from '../i18n';

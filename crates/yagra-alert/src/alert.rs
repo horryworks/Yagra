@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Alert identity: dedup and grouping keys.
 //!
 //! Dedup collapses duplicate alerts for the same `(node, check, severity)`; grouping rolls

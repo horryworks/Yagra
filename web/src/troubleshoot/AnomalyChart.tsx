@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Anomaly sparkline — plots the finding's REAL series (from the job's detail payload): the
 // learned baseline band (mean ± σ, series-1 @14%), the dashed expected mean, the actual line, and
 // the recent/anomalous segment redrawn in the severity colour with a marker over the recent

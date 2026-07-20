@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The metric-store seam: where poll results are written and read back.
 //!
 //! [`MetricStore`] abstracts the TSDB so the API and the result consumer don't care

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Presentational alert rows (worst-first), shared by the dashboard widget and the Active
 // alerts triage screen. Each row: severity dot + node + root-cause + flapping flag + acked
 // pill + age. Triage-only per §3.2 — NO Ack *control* here (Yagra holds no ack action; that's

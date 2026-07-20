@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Canonical responsive layout boundary + viewport-mode plumbing (ADR-027, ui-conventions.md
 // "Responsive / mobile"). ONE boundary (768px), exposed two ways:
 //   1. React hooks (useSyncExternalStore over matchMedia) for JS-side decisions.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! yagra-hoststats — the host self-metrics collector (self-observability, monitoring-conventions).
 //!
 //! Produces a [`yagra_common::HostSample`] (CPU %, load average, memory, and per-watched-filesystem

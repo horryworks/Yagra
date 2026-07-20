@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { NAV, sectionForPath, sectionItems, sidebarGroups } from './nav';
 import enNav from './locales/en/nav.json';

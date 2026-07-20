@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-secrets — envelope encryption for monitoring credentials at rest (ADR-018).
 //!
 //! Each secret is encrypted with a fresh per-secret **DEK** (AES-256-GCM); the DEK is then

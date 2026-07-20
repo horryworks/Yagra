@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Small Troubleshoot display helpers: relative timestamps and turning a stored job's params
 // back into a re-run request (the "Retry" / "Re-run" path).
 

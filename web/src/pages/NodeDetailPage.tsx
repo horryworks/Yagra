@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Node detail route (/nodes/:nodeId). A thin wrapper around the shared <NodeDetail> view — the same
 // component rendered inline in the Nodes split — so the deep route and the inline pane never drift.
 // It supplies the page chrome (breadcrumb), keeps the active sub-tab in the URL (`?tab=…`) so a

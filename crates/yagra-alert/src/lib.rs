@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-alert — alert engine.
 //!
 //! Turns a stream of raw evaluated states into a clean alert signal: dwell-time

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! SNMP v2c GET + GETBULK table walk over a pure-Rust client (`csnmp`) — ADR-021 PoC.
 //!
 //! This validates the pure-Rust path before any net-snmp FFI fallback. v3 (auth/priv)
