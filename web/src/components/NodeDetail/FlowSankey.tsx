@@ -19,6 +19,17 @@ const LABEL_W = 168; // horizontal room reserved for the address labels on each 
 const NODE_W = 12;
 const NODE_GAP = 6;
 
+/** Minimum vertical slot per endpoint — enough for a 2-line (IP + AS) label. Each node's bar is
+ *  centered in a slot at least this tall, so adjacent label centers stay ≥ MIN_NODE_H + NODE_GAP
+ *  apart and never overlap, even when a flow is byte-tiny (its bar stays thin; only the slot grows). */
+export const MIN_NODE_H = 30;
+/** Target height of the byte-proportional "body": the largest single flow's bar is at most this tall.
+ *  Bigger flows still dominate visually; the diagram's real height is driven by the slot floors when
+ *  many small flows are present. */
+const BODY_H = 240;
+/** Top/bottom padding so the first/last node's label isn't clipped at the SVG edge. */
+const PAD_Y = 6;
+
 /** Longest AS label drawn on a node before it's clipped with an ellipsis (full text in the title).
  *  Sized to fit the reserved LABEL_W at the AS line's font. */
 const AS_LABEL_MAX = 22;
@@ -59,8 +70,10 @@ export interface SankeyModel {
 
 /**
  * Lay out a Sankey from conversations. src hosts stack in the left column and dst hosts in the
- * right, each sized by total bytes; a constant vertical scale keeps every ribbon's thickness ∝ its
- * bytes at both ends. Returns `null` when there's nothing to draw.
+ * right; a constant vertical scale keeps every ribbon's (and bar's) thickness ∝ its bytes at both
+ * ends. Each host also gets a minimum vertical *slot* (MIN_NODE_H) so its label never collides with
+ * a neighbour's, even for byte-tiny flows — the bar stays thin, only the label room grows, and the
+ * diagram gets taller when many small flows are present. Returns `null` when there's nothing to draw.
  */
 export function buildSankey(conversations: FlowConversation[]): SankeyModel | null {
   const links = conversations.filter((c) => c.bytes > 0).slice(0, SANKEY_MAX_LINKS);
@@ -86,12 +99,17 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
   }
 
   const total = links.reduce((s, c) => s + c.bytes, 0);
-  const maxNodes = Math.max(srcOrder.length, dstOrder.length);
-  const height = Math.max(200, maxNodes * 30);
-  const usableSrc = height - NODE_GAP * (srcOrder.length - 1);
-  const usableDst = height - NODE_GAP * (dstOrder.length - 1);
-  // One scale for both columns ⇒ each ribbon has the same thickness at its src and dst ends.
-  const scale = Math.min(usableSrc, usableDst) / total;
+  // One scale for both columns ⇒ each ribbon has the same thickness at its src and dst ends. Bars and
+  // ribbons stay byte-proportional; the slot floor below only reserves label room, not bar size.
+  const scale = BODY_H / total;
+
+  // Each endpoint's slot is floored at MIN_NODE_H so its (up to 2-line) label always has room; the
+  // diagram's height is the taller column's stacked slots. Bars/ribbons remain proportional.
+  const slotOf = (t: number) => Math.max(MIN_NODE_H, t * scale);
+  const columnHeight = (order: string[], totals: Map<string, number>) =>
+    order.reduce((s, k) => s + slotOf(totals.get(k) ?? 0), 0) + NODE_GAP * (order.length - 1);
+  const contentH = Math.max(160, columnHeight(srcOrder, srcTotals), columnHeight(dstOrder, dstTotals));
+  const height = contentH + 2 * PAD_Y;
 
   const leftBarX = LABEL_W;
   const rightBarX = VIEW_W - LABEL_W - NODE_W;
@@ -104,16 +122,19 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
     labelX: number,
     asOf: Map<string, string | undefined>,
   ) => {
-    const stackH =
-      order.reduce((s, k) => s + (totals.get(k) ?? 0) * scale, 0) + NODE_GAP * (order.length - 1);
-    let y = Math.max(0, (height - stackH) / 2);
+    // Center this column's stack within the content band.
+    let slotTop = PAD_Y + Math.max(0, (contentH - columnHeight(order, totals)) / 2);
     const boxes = new Map<string, { cursor: number }>();
     const nodes: SankeyNode[] = [];
     for (const k of order) {
-      const h = (totals.get(k) ?? 0) * scale;
-      boxes.set(k, { cursor: y });
-      nodes.push({ key: `${anchor}-${k}`, label: k, sub: asOf.get(k), x, y, h, anchor, labelX });
-      y += h + NODE_GAP;
+      const t = totals.get(k) ?? 0;
+      const slotH = slotOf(t);
+      const barH = Math.max(1, t * scale); // honest, byte-proportional bar (thin flow ⇒ thin bar)
+      const barTop = slotTop + (slotH - barH) / 2; // center the bar (and its ribbons) in the slot
+      boxes.set(k, { cursor: barTop });
+      // Label sits at barTop + barH/2 = slot center ⇒ centers stay ≥ MIN_NODE_H + NODE_GAP apart.
+      nodes.push({ key: `${anchor}-${k}`, label: k, sub: asOf.get(k), x, y: barTop, h: barH, anchor, labelX });
+      slotTop += slotH + NODE_GAP;
     }
     return { boxes, nodes };
   };
