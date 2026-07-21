@@ -311,6 +311,27 @@ fn flow_filters_sql(q: &FlowQuery) -> String {
     s
 }
 
+/// Build the top-conversations SQL. The AS aggregates are aliased to `src_asn`/`dst_asn` — **never**
+/// the column names `src_as`/`dst_as`. Aliasing `any(src_as) AS src_as` would shadow the column, and
+/// the asn drill-down filter (`flow_filters_sql` emits `AND (src_as = N OR dst_as = N)`) would then
+/// bind that reference to the aggregate alias; ClickHouse rejects an aggregate in `WHERE`
+/// (`ILLEGAL_AGGREGATION`), 500-ing the whole query. A distinct alias keeps the filter bound to the
+/// column so the AS drill-down actually narrows the conversations (and thus the Sankey).
+fn conversations_sql(q: &FlowQuery) -> String {
+    let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
+    let limit = q.limit.clamp(1, 1000);
+    let filters = flow_filters_sql(q);
+    // `any(src_as)`/`any(dst_as)` keep one row per (src,dst): grouping by AS too would split a
+    // conversation if its stored AS ever varied. AS-per-IP is effectively stable, so `any` is safe.
+    format!(
+        "SELECT src_ip AS s, dst_ip AS d, any(src_as) AS src_asn, any(dst_as) AS dst_asn, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
+         FROM flow_records
+         WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+         GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
+        q.node_id
+    )
+}
+
 // ─── ClickHouse (live) ────────────────────────────────────────────────────────────────
 
 /// A [`FlowStore`] backed by ClickHouse over its HTTP interface.
@@ -496,18 +517,7 @@ impl FlowStore for ChStore {
     }
 
     async fn top_conversations(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowConversation>> {
-        let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-        let limit = q.limit.clamp(1, 1000);
-        let filters = flow_filters_sql(q);
-        // `any(src_as)`/`any(dst_as)` keep one row per (src,dst): grouping by AS too would split a
-        // conversation if its stored AS ever varied. AS-per-IP is effectively stable, so `any` is safe.
-        let sql = format!(
-            "SELECT src_ip AS s, dst_ip AS d, any(src_as) AS src_as, any(dst_as) AS dst_as, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
-             FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
-        );
+        let sql = conversations_sql(q);
         Ok(self
             .query_json(&sql)
             .await?
@@ -515,8 +525,8 @@ impl FlowStore for ChStore {
             .map(|v| FlowConversation {
                 src: normalize_ch_ip(&j_str(v, "s")),
                 dst: normalize_ch_ip(&j_str(v, "d")),
-                src_asn: j_u64(v, "src_as") as u32,
-                dst_asn: j_u64(v, "dst_as") as u32,
+                src_asn: j_u64(v, "src_asn") as u32,
+                dst_asn: j_u64(v, "dst_asn") as u32,
                 src_as_name: None, // resolved by the API layer
                 dst_as_name: None,
                 bytes: j_u64(v, "bytes"),
@@ -884,6 +894,42 @@ mod tests {
         // v6 unchanged.
         let v6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
         assert_eq!(normalize_ch_ip(&ip_to_ch(v6)), "2001:db8::1");
+    }
+
+    #[test]
+    fn conversations_sql_asn_filter_does_not_shadow_columns() {
+        // Regression: the AS aggregates must not be aliased to the column names `src_as`/`dst_as`.
+        // If they are, the asn drill-down filter (`AND (src_as = N OR dst_as = N)`) binds to the
+        // aggregate alias and ClickHouse errors `ILLEGAL_AGGREGATION` (aggregate in WHERE), 500-ing
+        // the conversations query so the table AND Sankey silently stop reflecting the AS filter.
+        let q = FlowQuery {
+            node_id: Uuid::from_u128(1),
+            from_unix_ms: 0,
+            to_unix_ms: 100_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+            asn: Some(15169),
+        };
+        let sql = conversations_sql(&q);
+        // No aggregate is aliased *exactly* to a filtered column (the collision is `AS src_as,` /
+        // `AS dst_as,` — note the delimiter, so this doesn't false-match the correct `AS src_asn`).
+        assert!(
+            !sql.contains("AS src_as,") && !sql.contains("AS src_as "),
+            "alias shadows src_as column: {sql}"
+        );
+        assert!(
+            !sql.contains("AS dst_as,") && !sql.contains("AS dst_as "),
+            "alias shadows dst_as column: {sql}"
+        );
+        assert!(sql.contains("any(src_as) AS src_asn"), "{sql}");
+        assert!(sql.contains("any(dst_as) AS dst_asn"), "{sql}");
+        // The asn filter still references the real columns (so it actually narrows).
+        assert!(
+            sql.contains("AND (src_as = 15169 OR dst_as = 15169)"),
+            "{sql}"
+        );
     }
 
     #[test]
