@@ -6,7 +6,7 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.16.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
+> Status: **v0.1.17.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -25,8 +25,11 @@ polling**. Users access it through the WebUI.
 > available** — multiple instances with automatic leader election and failover (opt-in). In an HA
 > set, **user sessions can be shared across cores** (opt-in) so a failover no longer forces re-login,
 > and **remote pollers on an exposed bus can be scoped to their own pool's credentials** (opt-in),
-> narrowing what a compromised poller can reach. HA stores remain a configuration step away, not a
-> rewrite.
+> narrowing what a compromised poller can reach. **AI assistants can now query Yagra through a built-in,
+> opt-in MCP tool surface** at `/mcp` — mostly read-only status, metrics, flow, and event queries plus
+> on-demand Troubleshoot analyses, alongside a few audited write actions (acknowledge an alert, open a
+> maintenance window, poll now); it is authenticated by API token and cannot change device
+> configuration. HA stores remain a configuration step away, not a rewrite.
 
 ## Components
 

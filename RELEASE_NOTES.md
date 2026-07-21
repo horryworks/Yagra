@@ -1,5 +1,39 @@
 # Release Notes
 
+## v0.1.17
+
+**Talk to Yagra from an AI assistant.** Yagra now ships a built-in **MCP (Model Context Protocol)
+server** — an opt-in, authenticated tool surface at `/mcp` that lets an AI client (Claude Code/Desktop,
+or any MCP-capable assistant) query live monitoring state and run diagnostics in your own words. It is
+off by default and, when enabled, is mostly read-only; the few write tools are permission-gated and
+audited, and nothing can change device configuration.
+
+### New Features
+- **MCP server (AI / automation tool surface)** — enable with `YAGRA_ENABLE_MCP` to expose a
+  Streamable-HTTP MCP endpoint at `/mcp` on the API port. It offers **15 tools**: read tools for fleet
+  summary, nodes, node status, active/historical alerts, metrics, topology, traffic flows, and passive
+  events (syslog/traps/webhooks); on-demand **Troubleshoot analyses** (anomaly / correlation / capacity /
+  flap); and **three write tools** — acknowledge an alert, open a maintenance window, and trigger an
+  immediate poll. Tool output is sanitized (monitoring credentials never leave the system) and there is
+  **no tool that configures or changes a network device**.
+- **API tokens** — a new **Settings ▸ API tokens** page issues long-lived `yat_` tokens (each with a role
+  and group scope) for non-browser clients such as an MCP assistant. The raw token is shown **once** at
+  creation and only its hash is stored; issuing and revoking are admin actions and are audited.
+
+### Improvements
+- **On-demand analyses are rate- and concurrency-limited.** The Troubleshoot analysis runner now caps how
+  many analyses run at once (`YAGRA_ANALYSIS_MAX_CONCURRENT`, default 4) and how many may start per minute
+  (`YAGRA_ANALYSIS_RATE_PER_MIN`, default 30); when saturated, the API returns `429` instead of piling on
+  work. This bounds the cost of both the UI and the new MCP analysis tools.
+
+### Security
+- **Per-tool authorization and audit for MCP write actions.** Every MCP write tool re-checks the caller's
+  role (RBAC) and records an audit entry; the surface is fail-closed — if the caller can't be authorized,
+  the write is refused. A **Viewer** token stays read-only.
+- **Resolved two High-severity advisories in the frontend build toolchain** by updating transitive dev
+  dependencies (`brace-expansion`, `js-yaml`). These are build-time only and never shipped in the product,
+  but the dependency tree is now clean.
+
 ## v0.1.16
 
 **Licensing and flow-ingestion hardening.** Yagra is now released under the **GNU Affero General
