@@ -1400,7 +1400,21 @@ async fn get_node_flow_conversations(
     };
     let fq = flow_query_params(node_id, &q);
     match store.top_conversations(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
+        Ok(mut rows) => {
+            // Resolve AS org names from the hot-swappable IP→ASN table (same pattern as top-as).
+            let db = st.ipasn.read().unwrap().clone();
+            if let Some(db) = &db {
+                for r in &mut rows {
+                    if r.src_asn != 0 {
+                        r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
+                    }
+                    if r.dst_asn != 0 {
+                        r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
+                    }
+                }
+            }
+            Json(rows).into_response()
+        }
         Err(e) => flow_query_failed("conversations", &e),
     }
 }
@@ -9739,6 +9753,59 @@ mod tests {
         let json = body_json(resp).await;
         assert_eq!(json.as_array().unwrap().len(), 1);
         assert_eq!(json[0]["asn"], 13335);
+    }
+
+    #[tokio::test]
+    async fn flow_conversations_carry_as() {
+        // The conversations endpoint surfaces per-flow src/dst ASN (name-resolution is the
+        // `ipasn` layer's job; `st.ipasn` is None here so the `*_as_name` stay null).
+        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        let node = Uuid::from_u128(11);
+        let store = InMemoryFlowStore::default();
+        store
+            .insert_batch(&[FlowRow {
+                node_id: node,
+                ts_unix_ms: 1_000_000,
+                exporter_ip: "192.168.1.1".parse().unwrap(),
+                if_index: 2,
+                src_ip: "10.0.0.2".parse().unwrap(),
+                dst_ip: "17.248.221.6".parse().unwrap(),
+                src_port: 40000,
+                dst_port: 443,
+                proto: 6,
+                tos: 0,
+                src_as: 0,     // internal host, unknown AS
+                dst_as: 15169, // Google
+                bytes: 5000,
+                packets: 50,
+                flows: 1,
+            }])
+            .await
+            .unwrap();
+
+        let mut st = state_with(Arc::new(InMemorySink::default()));
+        st.flows = Some(Arc::new(store));
+        let app = router(st);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/nodes/{node}/flow/conversations?from=0&to=100000"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json[0]["src"], "10.0.0.2");
+        assert_eq!(json[0]["dst"], "17.248.221.6");
+        assert_eq!(json[0]["src_asn"], 0);
+        assert_eq!(json[0]["dst_asn"], 15169);
+        // No IP→ASN table wired ⇒ names stay null.
+        assert!(json[0]["src_as_name"].is_null());
+        assert!(json[0]["dst_as_name"].is_null());
     }
 
     #[test]

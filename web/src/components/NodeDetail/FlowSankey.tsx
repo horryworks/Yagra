@@ -6,7 +6,7 @@
 // palette. The table beside it keeps the exact, sortable numbers.
 
 import { useMemo } from 'react';
-import { formatBytes } from '../../lib/format';
+import { formatBytes, formatAsn } from '../../lib/format';
 import { PALETTE } from '../MetricChart/MetricChart';
 import type { FlowConversation } from '../../types/api';
 import './FlowSankey.css';
@@ -19,7 +19,13 @@ const LABEL_W = 168; // horizontal room reserved for the address labels on each 
 const NODE_W = 12;
 const NODE_GAP = 6;
 
+/** Longest AS label drawn on a node before it's clipped with an ellipsis (full text in the title).
+ *  Sized to fit the reserved LABEL_W at the AS line's font. */
+const AS_LABEL_MAX = 22;
+
 const num = (n: number): string => n.toFixed(1);
+
+const truncate = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
 /** One src→dst ribbon. */
 export interface SankeyBand {
@@ -34,6 +40,8 @@ export interface SankeyBand {
 export interface SankeyNode {
   key: string;
   label: string;
+  /** AS label for this host (`AS15169 · GOOGLE`), shown under the IP; absent when the AS is unknown. */
+  sub?: string;
   x: number;
   y: number;
   h: number;
@@ -69,6 +77,14 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
   const srcIndex = new Map(srcOrder.map((k, i) => [k, i]));
   const dstIndex = new Map(dstOrder.map((k, i) => [k, i]));
 
+  // Per-host AS label (an IP's AS is stable, so first sighting wins). `undefined` ⇒ no AS line.
+  const srcAs = new Map<string, string | undefined>();
+  const dstAs = new Map<string, string | undefined>();
+  for (const c of links) {
+    if (!srcAs.has(c.src)) srcAs.set(c.src, formatAsn(c.src_asn, c.src_as_name) ?? undefined);
+    if (!dstAs.has(c.dst)) dstAs.set(c.dst, formatAsn(c.dst_asn, c.dst_as_name) ?? undefined);
+  }
+
   const total = links.reduce((s, c) => s + c.bytes, 0);
   const maxNodes = Math.max(srcOrder.length, dstOrder.length);
   const height = Math.max(200, maxNodes * 30);
@@ -86,6 +102,7 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
     x: number,
     anchor: 'start' | 'end',
     labelX: number,
+    asOf: Map<string, string | undefined>,
   ) => {
     const stackH =
       order.reduce((s, k) => s + (totals.get(k) ?? 0) * scale, 0) + NODE_GAP * (order.length - 1);
@@ -95,14 +112,14 @@ export function buildSankey(conversations: FlowConversation[]): SankeyModel | nu
     for (const k of order) {
       const h = (totals.get(k) ?? 0) * scale;
       boxes.set(k, { cursor: y });
-      nodes.push({ key: `${anchor}-${k}`, label: k, x, y, h, anchor, labelX });
+      nodes.push({ key: `${anchor}-${k}`, label: k, sub: asOf.get(k), x, y, h, anchor, labelX });
       y += h + NODE_GAP;
     }
     return { boxes, nodes };
   };
 
-  const srcCol = placeColumn(srcOrder, srcTotals, leftBarX, 'end', leftBarX - 6);
-  const dstCol = placeColumn(dstOrder, dstTotals, rightBarX, 'start', rightBarX + NODE_W + 6);
+  const srcCol = placeColumn(srcOrder, srcTotals, leftBarX, 'end', leftBarX - 6, srcAs);
+  const dstCol = placeColumn(dstOrder, dstTotals, rightBarX, 'start', rightBarX + NODE_W + 6, dstAs);
 
   const x0 = leftBarX + NODE_W;
   const x1 = rightBarX;
@@ -184,8 +201,15 @@ export function FlowSankey({
             textAnchor={n.anchor}
             dominantBaseline="middle"
           >
-            {n.label}
-            <title>{n.label}</title>
+            <tspan x={num(n.labelX)} dy={n.sub ? '-0.35em' : '0'}>
+              {n.label}
+            </tspan>
+            {n.sub && (
+              <tspan className="flow-sankey-as" x={num(n.labelX)} dy="1.2em">
+                {truncate(n.sub, AS_LABEL_MAX)}
+              </tspan>
+            )}
+            <title>{n.sub ? `${n.label} · ${n.sub}` : n.label}</title>
           </text>
         </g>
       ))}

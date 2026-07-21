@@ -3,9 +3,18 @@ import { describe, it, expect } from 'vitest';
 import { buildSankey, SANKEY_MAX_LINKS } from './FlowSankey';
 import type { FlowConversation } from '../../types/api';
 
-const convo = (src: string, dst: string, bytes: number): FlowConversation => ({
+const convo = (
+  src: string,
+  dst: string,
+  bytes: number,
+  as?: { srcAsn?: number; srcName?: string; dstAsn?: number; dstName?: string },
+): FlowConversation => ({
   src,
   dst,
+  src_asn: as?.srcAsn,
+  dst_asn: as?.dstAsn,
+  src_as_name: as?.srcName,
+  dst_as_name: as?.dstName,
   bytes,
   packets: Math.round(bytes / 100),
   flows: 1,
@@ -31,6 +40,17 @@ describe('buildSankey', () => {
     expect(google.path.startsWith('M ')).toBe(true);
     // Two distinct sources + two distinct destinations = four column nodes.
     expect(model!.nodes).toHaveLength(4);
+  });
+
+  it('carries each host AS onto its column node, omitting it when unknown', () => {
+    const model = buildSankey([
+      convo('10.0.0.1', '17.248.221.6', 1000, { dstAsn: 15169, dstName: 'GOOGLE' }),
+    ]);
+    const dst = model!.nodes.find((n) => n.label === '17.248.221.6')!;
+    expect(dst.sub).toBe('AS15169 · GOOGLE');
+    // The internal source has no AS ⇒ no sub-line.
+    const src = model!.nodes.find((n) => n.label === '10.0.0.1')!;
+    expect(src.sub).toBeUndefined();
   });
 
   it('caps the number of ribbons drawn to keep the diagram legible', () => {

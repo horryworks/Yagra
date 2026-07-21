@@ -328,6 +328,14 @@ export function alertWhat(row: {
   return { kind: 'metric', metric: row.metric, condition, observed };
 }
 
+/** An autonomous-system label: `AS15169 · GOOGLE` (with name) or `AS15169` (number only), or
+ *  `null` when the ASN is unknown/absent (0) — callers omit the AS line in that case. The org
+ *  name is device/registry data, shown verbatim (not localized). */
+export function formatAsn(asn?: number, name?: string | null): string | null {
+  if (!asn) return null;
+  return name ? `AS${asn} · ${name}` : `AS${asn}`;
+}
+
 /** Compact, unit-less SI suffix (k/M/G/T) for a plain number — for chart axis ticks so big
  *  values (e.g. 455000) render as "455k" instead of being clipped. */
 export function formatSi(n: number): string {

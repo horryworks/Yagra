@@ -58,10 +58,15 @@ export interface FlowTalker {
   flows: number;
 }
 
-/** A src→dst conversation with summed traffic (`/nodes/:id/flow/conversations`). */
+/** A src→dst conversation with summed traffic (`/nodes/:id/flow/conversations`). `*_asn` 0 = unknown;
+ *  `*_as_name` is filled when the IP→ASN table resolves it. Optional for N-1 tolerance. */
 export interface FlowConversation {
   src: string;
   dst: string;
+  src_asn?: number;
+  dst_asn?: number;
+  src_as_name?: string | null;
+  dst_as_name?: string | null;
   bytes: number;
   packets: number;
   flows: number;

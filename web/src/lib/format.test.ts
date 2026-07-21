@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   alertWhat,
   deriveMem,
+  formatAsn,
   formatBps,
   formatBytes,
   formatCount,
@@ -35,6 +36,15 @@ describe('format', () => {
     expect(stateColorVar('ok')).toBe('var(--status-up)');
     expect(stateColorVar('warning')).toBe('var(--status-warning)');
     expect(stateColorVar('maintenance')).toBe('var(--status-maintenance)');
+  });
+
+  it('formats an AS label, or null when the ASN is unknown', () => {
+    expect(formatAsn(15169, 'GOOGLE')).toBe('AS15169 · GOOGLE');
+    expect(formatAsn(15169)).toBe('AS15169');
+    expect(formatAsn(15169, null)).toBe('AS15169');
+    // 0 / undefined ⇒ unknown, caller omits the AS line.
+    expect(formatAsn(0, 'ignored')).toBeNull();
+    expect(formatAsn(undefined)).toBeNull();
   });
 
   it('resolves a node state to a concrete color (never a CSS var), falling back without a DOM', () => {

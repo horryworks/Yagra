@@ -4,6 +4,11 @@
   display: block;
   width: 100%;
   height: auto;
+  /* Cap at the diagram's natural design size (VIEW_W in FlowSankey.tsx) and centre it. Without
+     this the SVG's fixed 760-unit coordinate system scales past 1:1 on wide panes / browser zoom,
+     blowing up the whole diagram — labels included, since their font-size lives in user units. */
+  max-width: 760px;
+  margin-inline: auto;
 }
 
 .flow-sankey-band {
@@ -24,6 +29,13 @@
   fill: var(--text-secondary);
 }
 
+/* AS sub-line under the IP: proportional (it's a name, not an address), smaller and dimmer. */
+.flow-sankey-as {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  fill: var(--text-tertiary);
+}
+
 /* Click-to-filter: clicking a src/dst node drills into that peer. */
 .flow-sankey-g.clickable {
   cursor: pointer;
@@ -33,4 +45,7 @@
 }
 .flow-sankey-g.clickable:hover .flow-sankey-label {
   fill: var(--text-primary);
+}
+.flow-sankey-g.clickable:hover .flow-sankey-as {
+  fill: var(--text-secondary);
 }

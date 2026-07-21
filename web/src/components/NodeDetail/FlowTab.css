@@ -79,8 +79,13 @@
   color: var(--accent-hover);
 }
 
-/* Clickable IP in the conversations table — reset the button chrome, keep the mono cell look. */
+/* Clickable IP in the conversations table — reset the button chrome, keep the mono cell look.
+   Stacks the IP over its AS sub-line (mirrors the Sankey label). */
 .nd-flow-ip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
   padding: 0;
   border: none;
   background: none;
@@ -91,6 +96,12 @@
 }
 .nd-flow-ip:hover .mono {
   color: var(--accent-color);
+}
+
+/* AS sub-line under a conversation IP: proportional, smaller, dimmer (matches .flow-sankey-as). */
+.nd-flow-as {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
 }
 
 .nd-flow-error {

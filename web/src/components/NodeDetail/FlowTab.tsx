@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
-import { formatBytes } from '../../lib/format';
+import { formatBytes, formatAsn } from '../../lib/format';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
   FlowAsAgg,
@@ -220,17 +220,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   );
   const portRows = useMemo(() => toRows(ports, (x) => portLabel(x.port), (x) => x.bytes), [ports]);
   const asRows = useMemo(
-    () =>
-      toRows(
-        asAgg,
-        (x) =>
-          x.asn === 0
-            ? t('flow.as.unknown')
-            : x.name
-              ? `AS${x.asn} · ${x.name}`
-              : `AS${x.asn}`,
-        (x) => x.bytes,
-      ),
+    () => toRows(asAgg, (x) => formatAsn(x.asn, x.name) ?? t('flow.as.unknown'), (x) => x.bytes),
     [asAgg, t],
   );
 
@@ -240,21 +230,29 @@ export function FlowTab({ node }: { node: NodeDetail }) {
         key: 'src',
         header: t('flow.col.source'),
         width: '1fr',
-        render: (r) => (
-          <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.src)}>
-            <span className="mono">{r.src}</span>
-          </button>
-        ),
+        render: (r) => {
+          const as = formatAsn(r.src_asn, r.src_as_name);
+          return (
+            <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.src)}>
+              <span className="mono">{r.src}</span>
+              {as && <span className="nd-flow-as">{as}</span>}
+            </button>
+          );
+        },
       },
       {
         key: 'dst',
         header: t('flow.col.destination'),
         width: '1fr',
-        render: (r) => (
-          <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.dst)}>
-            <span className="mono">{r.dst}</span>
-          </button>
-        ),
+        render: (r) => {
+          const as = formatAsn(r.dst_asn, r.dst_as_name);
+          return (
+            <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.dst)}>
+              <span className="mono">{r.dst}</span>
+              {as && <span className="nd-flow-as">{as}</span>}
+            </button>
+          );
+        },
       },
       {
         key: 'bytes',

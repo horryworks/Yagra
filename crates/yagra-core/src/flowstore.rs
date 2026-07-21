@@ -132,13 +132,23 @@ pub struct FlowTalker {
     pub flows: u64,
 }
 
-/// A conversation: a src→dst pair with summed traffic.
+/// A conversation: a src→dst pair with summed traffic. `src_asn`/`dst_asn` are the stored
+/// per-flow AS numbers (0 = unknown); the `*_as_name` fields are resolved from the IP→ASN table
+/// at the API layer (the store leaves them `None`), mirroring [`FlowAsAgg`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FlowConversation {
     /// Source address.
     pub src: String,
     /// Destination address.
     pub dst: String,
+    /// Source autonomous-system number (0 = unknown).
+    pub src_asn: u32,
+    /// Destination autonomous-system number (0 = unknown).
+    pub dst_asn: u32,
+    /// Source AS organization name, if resolvable (filled at the API layer).
+    pub src_as_name: Option<String>,
+    /// Destination AS organization name, if resolvable (filled at the API layer).
+    pub dst_as_name: Option<String>,
     /// Bytes.
     pub bytes: u64,
     /// Packets.
@@ -489,8 +499,10 @@ impl FlowStore for ChStore {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
         let filters = flow_filters_sql(q);
+        // `any(src_as)`/`any(dst_as)` keep one row per (src,dst): grouping by AS too would split a
+        // conversation if its stored AS ever varied. AS-per-IP is effectively stable, so `any` is safe.
         let sql = format!(
-            "SELECT src_ip AS s, dst_ip AS d, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
+            "SELECT src_ip AS s, dst_ip AS d, any(src_as) AS src_as, any(dst_as) AS dst_as, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
              WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
              GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
@@ -503,6 +515,10 @@ impl FlowStore for ChStore {
             .map(|v| FlowConversation {
                 src: normalize_ch_ip(&j_str(v, "s")),
                 dst: normalize_ch_ip(&j_str(v, "d")),
+                src_asn: j_u64(v, "src_as") as u32,
+                dst_asn: j_u64(v, "dst_as") as u32,
+                src_as_name: None, // resolved by the API layer
+                dst_as_name: None,
                 bytes: j_u64(v, "bytes"),
                 packets: j_u64(v, "packets"),
                 flows: j_u64(v, "flows"),
@@ -695,7 +711,9 @@ impl FlowStore for InMemoryFlowStore {
 
     async fn top_conversations(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowConversation>> {
         use std::collections::HashMap;
-        let mut agg: HashMap<(String, String), (u64, u64, u64)> = HashMap::new();
+        // Value tuple: (bytes, packets, flows, src_as, dst_as) — AS is any-of-window (last wins),
+        // mirroring the store's `any(src_as)`/`any(dst_as)`.
+        let mut agg: HashMap<(String, String), (u64, u64, u64, u32, u32)> = HashMap::new();
         for r in self.in_window(q) {
             let e = agg
                 .entry((r.src_ip.to_string(), r.dst_ip.to_string()))
@@ -703,16 +721,24 @@ impl FlowStore for InMemoryFlowStore {
             e.0 += r.bytes;
             e.1 += r.packets;
             e.2 += u64::from(r.flows);
+            e.3 = r.src_as;
+            e.4 = r.dst_as;
         }
         let mut out: Vec<FlowConversation> = agg
             .into_iter()
-            .map(|((src, dst), (bytes, packets, flows))| FlowConversation {
-                src,
-                dst,
-                bytes,
-                packets,
-                flows,
-            })
+            .map(
+                |((src, dst), (bytes, packets, flows, src_asn, dst_asn))| FlowConversation {
+                    src,
+                    dst,
+                    src_asn,
+                    dst_asn,
+                    src_as_name: None,
+                    dst_as_name: None,
+                    bytes,
+                    packets,
+                    flows,
+                },
+            )
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
         out.truncate(q.limit.clamp(1, 1000) as usize);
@@ -919,6 +945,33 @@ mod tests {
         let protos = store.top_protocols(&q).await.unwrap();
         assert_eq!(protos[0].proto, 6);
         assert_eq!(protos[0].bytes, 1500);
+    }
+
+    #[tokio::test]
+    async fn in_memory_conversations_carry_stored_as() {
+        let node = Uuid::from_u128(1);
+        let store = InMemoryFlowStore::default();
+        let mut r = row(node, "10.0.0.2", "17.248.221.6", 443, 6, 1000, 1_000);
+        r.src_as = 0; // internal host, unknown AS
+        r.dst_as = 15169; // Google (per-row, exporter-provided or write-time enriched)
+        store.insert_batch(&[r]).await.unwrap();
+
+        let q = FlowQuery {
+            node_id: node,
+            from_unix_ms: 0,
+            to_unix_ms: 10_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+            asn: None,
+        };
+        let convos = store.top_conversations(&q).await.unwrap();
+        assert_eq!(convos[0].src_asn, 0);
+        assert_eq!(convos[0].dst_asn, 15169);
+        // The store never resolves names — that's the API layer's job.
+        assert_eq!(convos[0].src_as_name, None);
+        assert_eq!(convos[0].dst_as_name, None);
     }
 
     #[tokio::test]
