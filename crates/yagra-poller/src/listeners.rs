@@ -17,6 +17,12 @@
 //! into an [`EventMsg`], and published on `yagra.events` for core to match. Publish failures
 //! are logged and counted, never fatal — UDP event delivery is best-effort by nature.
 //!
+//! The **original datagram** rides along on `EventMsg.raw` (base64, ADR-034) so core can forward
+//! it byte-exact to external collectors. It is attached *after* the rate-limit / oversize /
+//! parse / community gates, so anything Yagra dropped is never forwarded either. Cost is ~1.3×
+//! on `yagra.events`; every other field is lossy (lossy-UTF-8, 4096-char clip, 32-varbind cap),
+//! which is exactly why the bytes have to be carried rather than reconstructed.
+//!
 //! Enabled per poller via env (`YAGRA_SYSLOG_BIND` / `YAGRA_TRAP_BIND`); unset = off.
 //! This is site-deployment config, deliberately *not* config-over-bus (ADR-020 covers
 //! per-device secrets, not which sockets a site's poller opens).
@@ -30,7 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use uuid::Uuid;
-use yagra_bus::{Bus, EventKind, EventMsg, BUS_SCHEMA_VERSION};
+use yagra_bus::{encode_raw, Bus, EventKind, EventMsg, BUS_SCHEMA_VERSION};
 use yagra_ingest::{
     build_inform_response, clip_event_text, parse_syslog, parse_trap, SourceLimiter, TrapError,
 };
@@ -89,6 +95,10 @@ pub async fn run_syslog_listener<B: Bus>(
             trap_oid: None,
             varbinds: Vec::new(),
             truncated: parsed.truncated,
+            // The original datagram, for byte-exact forwarding (ADR-034). Encoded here because
+            // `buf` is reused by the next `recv_from` — nothing downstream can recover it.
+            raw: Some(encode_raw(&buf[..len])),
+            src_port: Some(peer.port()),
         };
         publish(bus.as_ref(), event, peer.ip(), len).await;
     }
@@ -177,6 +187,10 @@ pub async fn run_trap_listener<B: Bus>(
             trap_oid: Some(trap.trap_oid),
             varbinds: trap.varbinds,
             truncated,
+            // The original PDU, for byte-exact forwarding (ADR-034). Doubly worth carrying for
+            // traps: the parsed form keeps only the first 32 varbinds, clipped to 256 chars.
+            raw: Some(encode_raw(&buf[..len])),
+            src_port: Some(peer.port()),
         };
         publish(bus.as_ref(), event, peer.ip(), len).await;
     }

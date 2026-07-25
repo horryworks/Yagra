@@ -2995,6 +2995,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4777,6 +4786,7 @@ version = "0.1.17"
 dependencies = [
  "async-nats",
  "async-trait",
+ "data-encoding",
  "futures",
  "serde",
  "serde_json",
@@ -4817,6 +4827,9 @@ dependencies = [
  "regex",
  "reqwest",
  "rmcp",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -4824,6 +4837,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",
@@ -4835,7 +4849,9 @@ dependencies = [
  "yagra-bus",
  "yagra-common",
  "yagra-discovery",
+ "yagra-forward",
  "yagra-hoststats",
+ "yagra-ingest",
  "yagra-secrets",
  "yagra-telemetry",
  "yagra-topology",
@@ -4847,6 +4863,21 @@ name = "yagra-discovery"
 version = "0.1.17"
 dependencies = [
  "yagra-common",
+]
+
+[[package]]
+name = "yagra-forward"
+version = "0.1.17"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "snmp2",
+ "thiserror 2.0.18",
+ "uuid",
+ "yagra-bus",
+ "yagra-ingest",
 ]
 
 [[package]]

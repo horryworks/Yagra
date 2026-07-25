@@ -15,13 +15,13 @@ pub mod subjects;
 
 pub use bus::{Bus, BusError, InMemoryBus, SyncBus};
 pub use messages::{
-    AuthRevoke, CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface,
+    encode_raw, AuthRevoke, CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface,
     DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, DnsCheck, EventKind, EventMsg,
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
-    MerakiDeviceRef, NodeJobs, PollJob, PollResult, Sample, SnmpCheck, SnmpColumn, SnmpMetaColumn,
-    SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext,
-    WorkingSetDelta, WorkingSetSnapshot, BUS_SCHEMA_VERSION, HEARTBEAT_SECS, OFFLINE_AFTER_SECS,
-    SNAPSHOT_CHUNK_NODES,
+    MerakiDeviceRef, NodeJobs, PollJob, PollResult, RawFlowDatagram, RawFlowProto, Sample,
+    SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncMsg,
+    SyncRequest, TraceContext, WorkingSetDelta, WorkingSetSnapshot, BUS_SCHEMA_VERSION,
+    CAP_FLOW_RELAY, CAP_RAW_CAPTURE, HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};

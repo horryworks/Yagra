@@ -409,6 +409,13 @@ async fn run_heartbeat_loop<B>(
             inflight: u32::try_from(inflight.load(Ordering::Relaxed)).unwrap_or(u32::MAX),
             results_total: results_total.load(Ordering::Relaxed),
             listeners: listeners.clone(),
+            // This build attaches the original datagram to passive events (ADR-034), so core may
+            // promise byte-exact forwarding for anything this poller received. An N-1 poller sends
+            // no caps, and core degrades that poller's traffic to re-rendered output + a warning.
+            caps: vec![
+                yagra_bus::CAP_RAW_CAPTURE.to_owned(),
+                yagra_bus::CAP_FLOW_RELAY.to_owned(),
+            ],
             host: Some(host_collector.sample()),
         };
         if let Err(e) = bus.publish_heartbeat(hb).await {
@@ -532,6 +539,11 @@ async fn spawn_event_listeners(
         let top_n = env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
         let bucket_secs = u32::try_from(env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
         let state = Arc::new(std::sync::Mutex::new(flow::FlowState::new(top_n)));
+        // Verbatim relay for forwarding (ADR-034 Increment 2). Unconditional: the aggregate above is
+        // irreversible (bucketed, top-N, folded), so without the original datagrams a flow
+        // forwarding destination could never be honoured — and making it a toggle would turn
+        // fidelity into a configuration question. The tee is shared by both protocol readers.
+        let (raw_tee, raw_relay) = flow::raw_flow_tee(poller_id.to_owned(), pool.clone());
         let mut any_bound = false;
 
         if let Some(bind) = flow_bind {
@@ -549,6 +561,7 @@ async fn spawn_event_listeners(
                                 state.clone(),
                                 flow_limiter.clone(),
                                 flow::FlowProto::Netflow,
+                                Some(raw_tee.clone()),
                             ),
                         );
                     }
@@ -572,6 +585,7 @@ async fn spawn_event_listeners(
                                 state.clone(),
                                 flow_limiter.clone(),
                                 flow::FlowProto::Sflow,
+                                Some(raw_tee.clone()),
                             ),
                         );
                     }
@@ -580,8 +594,9 @@ async fn spawn_event_listeners(
             }
         }
 
-        // One flush ticker publishes per-exporter FlowBatches every bucket — spawned only if at
-        // least one protocol socket bound (nothing to flush otherwise).
+        // One flush ticker publishes per-exporter FlowBatches every bucket, and one relay task
+        // publishes the verbatim datagrams — both spawned only if at least one protocol socket
+        // bound (nothing to flush or relay otherwise).
         if any_bound {
             spawn_cancellable(
                 shutdown,
@@ -593,6 +608,7 @@ async fn spawn_event_listeners(
                     bucket_secs,
                 ),
             );
+            spawn_cancellable(shutdown, flow::run_raw_flow_relay(bus.clone(), raw_relay));
         }
     }
 

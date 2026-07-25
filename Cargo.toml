@@ -8,6 +8,7 @@
 #   crates/yagra-discovery = Discovery & classification      [lib]
 #   crates/yagra-alert     = Alert engine                    [lib]
 #   crates/yagra-ingest    = Passive-event parsing (syslog/trap) [lib]
+#   crates/yagra-forward   = Forwarding filters + renderers  [lib]
 #   crates/yagra-bus       = Task queue / bus                [lib]
 #   crates/yagra-transport = ICMP/SNMP/HTTP abstraction      [lib]
 #   crates/yagra-topology  = Topology & dependency graph     [lib]
@@ -29,6 +30,7 @@ members = [
     "crates/yagra-discovery",
     "crates/yagra-alert",
     "crates/yagra-ingest",
+    "crates/yagra-forward",
     "crates/yagra-poller",
     "crates/yagra-core",
 ]
@@ -96,6 +98,17 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 libc = "0.2"
 # Email notifications (SMTP, async/rustls — no native TLS, no NASM)
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+# Syslog over TLS for forwarding (RFC 5425, ADR-034 Increment 2). rustls is already in the tree via
+# reqwest/sqlx/lettre; these entries name it directly so the forwarder can build its own ClientConfig
+# (per-destination trust anchors). `ring` is pinned as the crypto provider **explicitly at the call
+# site**: both `ring` and `aws_lc_rs` end up enabled through the dependency graph, and with both on
+# rustls refuses to pick a process default — `ClientConfig::builder()` would panic at runtime.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# System trust anchors for TLS destinations (the container's CA bundle).
+rustls-native-certs = "0.8"
+# PEM → DER for an operator-supplied CA certificate. Pure Rust, no NASM.
+rustls-pemfile = "2"
 # Serialization / types
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

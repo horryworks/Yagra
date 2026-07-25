@@ -7,7 +7,7 @@
 //! implementation (the production path) slots in behind the same trait later.
 
 use crate::messages::{
-    EventMsg, FlowBatch, HeartbeatMsg, PollJob, PollResult, SyncMsg, SyncRequest,
+    EventMsg, FlowBatch, HeartbeatMsg, PollJob, PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -46,6 +46,14 @@ pub trait Bus: Send + Sync {
     /// Defaulted to a no-op `Ok` so an implementation without a flow channel still compiles; the
     /// real transports override it.
     async fn publish_flows(&self, _batch: FlowBatch) -> Result<(), BusError> {
+        Ok(())
+    }
+    /// Relay one received flow-export datagram **verbatim** for core's forwarder (ADR-034
+    /// Increment 2). Separate from [`Bus::publish_flows`] because the aggregate batch is lossy by
+    /// construction and cannot reproduce what the exporter sent. Same best-effort contract: a failed
+    /// publish is dropped, not buffered. Defaulted to a no-op `Ok` so an implementation without the
+    /// channel still compiles; the real transports override it.
+    async fn publish_raw_flow(&self, _datagram: RawFlowDatagram) -> Result<(), BusError> {
         Ok(())
     }
     /// Whether the bus is currently connected to its broker. The poller's store-and-forward sink
@@ -90,6 +98,10 @@ pub struct InMemoryBus {
     // Edge-aggregated flow batches (Phase 3, ADR-031) — a separate channel from `events` mirroring
     // how the NATS transport isolates flow on its own `yagra.flows` subject.
     flows: broadcast::Sender<FlowBatch>,
+    // Verbatim flow datagrams for forwarding (ADR-034 Increment 2) — again a separate channel,
+    // mirroring the separate `yagra.flows.raw` subject, so a test can assert that the aggregate and
+    // the raw relay never cross.
+    raw_flows: broadcast::Sender<RawFlowDatagram>,
     // Control plane (ADR-009/020). `sync`/`pool_jobs` carry the routing key alongside the
     // message — the subscriber filters to its own poller id / pool, mirroring how the NATS
     // transport isolates them via per-poller / per-pool subjects.
@@ -108,6 +120,7 @@ impl InMemoryBus {
         let (results_backfill, _) = broadcast::channel(capacity);
         let (events, _) = broadcast::channel(capacity);
         let (flows, _) = broadcast::channel(capacity);
+        let (raw_flows, _) = broadcast::channel(capacity);
         let (heartbeats, _) = broadcast::channel(capacity);
         let (sync_requests, _) = broadcast::channel(capacity);
         let (sync, _) = broadcast::channel(capacity);
@@ -118,6 +131,7 @@ impl InMemoryBus {
             results_backfill,
             events,
             flows,
+            raw_flows,
             heartbeats,
             sync_requests,
             sync,
@@ -155,6 +169,12 @@ impl InMemoryBus {
     #[must_use]
     pub fn subscribe_flows(&self) -> broadcast::Receiver<FlowBatch> {
         self.flows.subscribe()
+    }
+
+    /// Subscribe to verbatim flow datagrams (core side, ADR-034 Increment 2).
+    #[must_use]
+    pub fn subscribe_raw_flows(&self) -> broadcast::Receiver<RawFlowDatagram> {
+        self.raw_flows.subscribe()
     }
 
     /// Subscribe to poller heartbeats (core side).
@@ -216,6 +236,11 @@ impl Bus for InMemoryBus {
 
     async fn publish_flows(&self, batch: FlowBatch) -> Result<(), BusError> {
         let _ = self.flows.send(batch);
+        Ok(())
+    }
+
+    async fn publish_raw_flow(&self, datagram: RawFlowDatagram) -> Result<(), BusError> {
+        let _ = self.raw_flows.send(datagram);
         Ok(())
     }
 }
@@ -344,6 +369,8 @@ mod tests {
             trap_oid: None,
             varbinds: Vec::new(),
             truncated: false,
+            raw: None,
+            src_port: None,
         };
         bus.publish_event(event.clone()).await.unwrap();
 
@@ -386,6 +413,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn raw_flow_datagram_reaches_only_the_raw_subscriber() {
+        use crate::messages::{encode_raw, RawFlowDatagram, RawFlowProto, BUS_SCHEMA_VERSION};
+
+        let bus = InMemoryBus::new(8);
+        let mut raw = bus.subscribe_raw_flows();
+        let mut aggregate = bus.subscribe_flows();
+
+        let dg = RawFlowDatagram {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: Some("tokyo".into()),
+            exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 51_234,
+            proto: RawFlowProto::Netflow,
+            at_unix_ms: 1_700_000_000_000,
+            bytes: encode_raw(&[0x00, 0x09, 0xff]),
+        };
+        bus.publish_raw_flow(dg.clone()).await.unwrap();
+
+        assert_eq!(raw.recv().await.unwrap(), dg);
+        // The ClickHouse consumer must never see a raw datagram — that isolation mirrors the
+        // separate `yagra.flows.raw` subject.
+        assert!(aggregate.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn publish_without_subscribers_is_ok() {
         let bus = InMemoryBus::new(8);
         let job = PollJob::icmp(
@@ -419,6 +472,7 @@ mod tests {
             inflight: 0,
             results_total: 0,
             listeners: Vec::new(),
+            caps: Vec::new(),
             host: None,
         };
         SyncBus::publish_heartbeat(&bus, hb.clone()).await.unwrap();

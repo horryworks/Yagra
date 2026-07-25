@@ -55,6 +55,19 @@ pub fn flows() -> String {
     format!("{ROOT}.flows")
 }
 
+/// Subject pollers publish **verbatim flow-export datagrams** on, consumed by core's forwarder
+/// (ADR-034 Increment 2). Deliberately separate from [`flows`]: that carries edge-aggregated batches
+/// for ClickHouse, which are lossy by construction (1-minute buckets, top-N, folded 5-tuples) and so
+/// can never reconstruct what the exporter sent. Forwarding needs the bytes themselves.
+///
+/// The separate subject is also the N-1 safety valve — a core that predates forwarding never
+/// subscribes here, so a newer poller's datagrams are dropped by the broker rather than
+/// mis-consumed. Note `yagra.flows` is subscribed as an **exact** token, so it does not match this.
+#[must_use]
+pub fn flows_raw() -> String {
+    format!("{ROOT}.flows.raw")
+}
+
 /// Subject core publishes discovery sweep jobs on; pollers subscribe (queue group).
 #[must_use]
 pub fn discovery_jobs() -> String {
@@ -177,6 +190,16 @@ mod tests {
         assert_ne!(flows(), results());
         assert_ne!(flows(), events());
         assert!(!flows().starts_with("yagra.results"));
+    }
+
+    #[test]
+    fn raw_flow_subject_is_stable_and_isolated_from_the_aggregate_stream() {
+        assert_eq!(flows_raw(), "yagra.flows.raw");
+        // The ClickHouse consumer subscribes the exact token `yagra.flows`, which in NATS does not
+        // match `yagra.flows.raw` — so raw datagrams can never be mis-parsed as FlowBatches.
+        assert_ne!(flows_raw(), flows());
+        assert!(flows_raw().starts_with("yagra.flows."));
+        assert_ne!(flows_raw(), events());
     }
 
     #[test]

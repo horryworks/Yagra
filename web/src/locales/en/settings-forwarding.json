@@ -1,0 +1,172 @@
+{
+  "note": "Relay received syslog, SNMP traps and flow exports on to external collectors. Core does the sending, so only one egress point has to be allowed through a firewall.",
+  "unavailable": "Managing forwarding requires the admin role.",
+  "signInPrompt": "Sign in to manage forwarding destinations.",
+  "empty": "No forwarding destinations yet. Nothing is being relayed.",
+  "count_one": "destination",
+  "count_other": "destinations",
+  "securityNote": "Forwarded messages leave Yagra. Syslog bodies routinely carry credentials — send them only to a collector you trust, over a network you trust.",
+
+  "add": {
+    "button": "New destination",
+    "title": "New forwarding destination"
+  },
+  "edit": { "title": "Edit forwarding destination" },
+  "delete": {
+    "title": "Delete destination",
+    "confirm": "Delete \"{{name}}\"? Nothing further will be forwarded to it."
+  },
+
+  "cols": {
+    "name": "Name",
+    "source": "Source",
+    "target": "Destination",
+    "scope": "Scope",
+    "fidelity": "Fidelity",
+    "filter": "Filter",
+    "health": "Health",
+    "actions": "Actions"
+  },
+
+  "actions": {
+    "edit": "Edit",
+    "test": "Send test message",
+    "delete": "Delete"
+  },
+
+  "source": {
+    "syslog": "Syslog",
+    "trap": "SNMP trap",
+    "flow": "Flow export"
+  },
+  "dest": {
+    "syslog_udp": "Syslog over UDP",
+    "syslog_tcp": "Syslog over TCP",
+    "syslog_tls": "Syslog over TLS (RFC 5425)",
+    "snmp_trap_udp": "SNMPv2c trap over UDP",
+    "flow_udp": "Flow export over UDP"
+  },
+  "scope": { "allPools": "All pools" },
+  "status": {
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "fidelity": {
+    "verbatim": "Original",
+    "rendered": "Rebuilt"
+  },
+
+  "field": {
+    "name": "Name",
+    "namePlaceholder": "central-siem",
+    "source": "Forward",
+    "dest": "Send as",
+    "target": "Collector",
+    "targetPlaceholder": "siem.example.com:514",
+    "targetHint": "host:port. Use [address]:port for a literal IPv6 address.",
+    "pool": "Poller pool",
+    "poolPlaceholder": "all pools",
+    "fidelity": "Fidelity",
+    "fidelityHint": "Original relays the datagram exactly as received. Rebuilt regenerates it from the parsed fields, which loses RFC 5424 structured data, non-UTF-8 bytes, text past 4096 characters, and varbinds past the 32nd.",
+    "fidelityImpossible": "This pairing cannot carry the original bytes, so the message is always rebuilt.",
+    "fidelityVerbatimOnly": "A flow export is a template plus many records in one binary datagram, so it can only be relayed exactly as received.",
+    "caCert": "CA certificate",
+    "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
+    "caCertHint": "Optional. Paste the PEM certificate of the CA that signed the collector, if it is not in the system trust store. The collector's certificate is always verified — there is no way to turn that off.",
+    "community": "SNMP community",
+    "communityHint": "Used only when a trap has to be rebuilt. A relayed original carries the device's own community.",
+    "communityKept": "unchanged",
+    "rateLimit": "Rate limit",
+    "rateLimitPlaceholder": "no limit",
+    "rateLimitHint": "Messages per second. Excess is dropped and counted, never queued.",
+    "enabled": "Status",
+
+    "source_ip": "Source address",
+    "kind": "Event kind",
+    "facility": "Facility",
+    "severity": "Severity",
+    "hostname": "Hostname",
+    "app_name": "App name",
+    "message": "Message",
+    "trap_oid": "Trap OID",
+    "varbind": "Varbind",
+    "src_addr": "Flow source",
+    "dst_addr": "Flow destination",
+    "proto": "Protocol",
+    "src_port": "Source port",
+    "dst_port": "Destination port",
+    "src_as": "Source AS",
+    "dst_as": "Destination AS"
+  },
+
+  "valuePlaceholder": {
+    "source_ip": "10.0.0.0/8, 192.168.1.5",
+    "severity": "4 (warning and worse)",
+    "facility": "23",
+    "trap_oid": "1.3.6.1.6.3.1.1.5.",
+    "message": "LINEPROTO-5-",
+    "varbind": "ge-0/0/1",
+    "src_addr": "10.0.0.0/8",
+    "dst_addr": "8.8.8.0/24",
+    "proto": "tcp, udp or a number",
+    "dst_port": "443",
+    "dst_as": "15169"
+  },
+
+  "op": {
+    "eq": "is",
+    "ne": "is not",
+    "contains": "contains",
+    "not_contains": "does not contain",
+    "prefix": "starts with",
+    "regex": "matches regex",
+    "not_regex": "does not match regex",
+    "in_list": "is one of",
+    "in_cidr": "is inside",
+    "not_in_cidr": "is outside",
+    "lte": "at most",
+    "gte": "at least"
+  },
+
+  "filter": {
+    "label": "Filter",
+    "add": "Add condition",
+    "remove": "Remove condition",
+    "none": "Everything",
+    "emptyHint": "No conditions — the whole stream is forwarded.",
+    "flowAnyRecord": "A flow datagram carries many records at once. If any record matches, the whole datagram is forwarded — the records that did not match go with it. Records cannot be removed without re-encoding the export into a different datagram.",
+    "count_one": "{{count}} condition ({{mode}})",
+    "count_other": "{{count}} conditions ({{mode}})",
+    "mode": {
+      "all": "all must match",
+      "any": "any may match"
+    }
+  },
+
+  "health": {
+    "counts": "{{sent}} sent / {{dropped}} lost",
+    "paused": "Paused",
+    "degraded": "Rebuilt",
+    "degradedHint": "Some messages were rebuilt because no original payload was available."
+  },
+
+  "test": {
+    "title": "Test: {{name}}",
+    "ok": "The test message was handed to the collector. Check that it arrived on the other side.",
+    "failed": "Delivery failed: {{error}}"
+  },
+
+  "warn": {
+    "noRawCapture": "These pollers do not yet supply the original bytes, so their messages are rebuilt even for destinations set to Original: {{pollers}}. They will start supplying them once upgraded.",
+    "noFlowRelay": "These pollers do not yet relay flow datagrams, so nothing at all is forwarded from the exporters they receive: {{pollers}}. Upgrade them to start the relay.",
+    "standby": "This core is a standby. Destinations can be edited here, but the active core does the forwarding."
+  },
+
+  "err": {
+    "load": "Could not load forwarding destinations.",
+    "save": "Could not save the destination.",
+    "delete": "Could not delete the destination.",
+    "test": "Could not run the test.",
+    "duplicate": "A destination with that name already exists."
+  }
+}

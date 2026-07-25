@@ -31,3 +31,14 @@
 select.field {
   cursor: pointer;
 }
+
+/* Multi-line variant: the fixed input height would clip it, and pasted blocks (PEM, scripts) are
+   monospace by nature. Resizing is vertical-only so it can't break a modal's column layout. */
+.field.field-area {
+  height: auto;
+  min-height: 84px;
+  padding: 6px 10px;
+  font-family: var(--font-family);
+  line-height: 1.4;
+  resize: vertical;
+}

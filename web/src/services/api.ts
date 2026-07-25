@@ -109,6 +109,10 @@ import type {
   ApiTokenSummary,
   ApiTokenInput,
   CreatedApiToken,
+  ForwardDestination,
+  ForwardDestinationInput,
+  ForwardStatus,
+  ForwardTestResult,
 } from '../types/api';
 
 /** Request body to create a collection item (scalar or table). */
@@ -1466,4 +1470,29 @@ export const api = {
   /** Revoke (soft-delete) an API token. */
   revokeApiToken: (id: string): Promise<void> =>
     request(`/api-tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ── Forwarding (Settings ▸ Forwarding, ManageConfig) — the passive-data tee (ADR-034) ──
+  /** List forwarding destinations (never the stored secret). */
+  listForwardDestinations: (): Promise<ForwardDestination[]> => request('/forwarding/destinations'),
+
+  /** Create a forwarding destination. */
+  createForwardDestination: (body: ForwardDestinationInput): Promise<{ id: string }> =>
+    request('/forwarding/destinations', jsonBody('POST', body)),
+
+  /** Update a forwarding destination; omitting `community` keeps the stored one. */
+  updateForwardDestination: (id: string, body: ForwardDestinationInput): Promise<void> =>
+    request(`/forwarding/destinations/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+
+  /** Delete a forwarding destination. */
+  deleteForwardDestination: (id: string): Promise<void> =>
+    request(`/forwarding/destinations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Send one synthetic message to a destination. A transport failure comes back as
+   *  `{ delivered: false, error }` (HTTP 200) — the configuration is the caller's, not a server
+   *  fault, and the error text is what the admin needs to fix it. */
+  testForwardDestination: (id: string): Promise<ForwardTestResult> =>
+    request(`/forwarding/destinations/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+
+  /** Live forwarding counters + any online poller that cannot supply original bytes. */
+  forwardingStatus: (): Promise<ForwardStatus> => request('/forwarding/status'),
 };

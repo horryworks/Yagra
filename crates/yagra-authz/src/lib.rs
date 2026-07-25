@@ -73,11 +73,14 @@ pub fn allow_list(scope: &PollerScope) -> Permissions {
         // shared static account historically omitted it, which blocked backfill on the remote bus).
         // `flows` is the edge-aggregated flow-batch subject (ADR-031): a remote-site poller running a
         // flow listener publishes here, so it must be granted or its batches are rejected on the bus.
+        // `flows.raw` is the verbatim datagram relay that feeds forwarding (ADR-034 Increment 2) —
+        // omitting it would silently strand flow forwarding for every remote site.
         publish: vec![
             subjects::results(),
             subjects::results_backfill(),
             subjects::events(),
             subjects::flows(),
+            subjects::flows_raw(),
             subjects::discovery_results(),
             subjects::heartbeat(),
             subjects::sync_request(),
@@ -516,6 +519,8 @@ mod tests {
         assert!(perms.publish.contains(&"yagra.results".to_owned()));
         assert!(perms.publish.contains(&"yagra.results.backfill".to_owned()));
         assert!(perms.publish.contains(&"yagra.flows".to_owned()));
+        // ...and flows.raw (ADR-034 Increment 2 — the verbatim relay that feeds flow forwarding).
+        assert!(perms.publish.contains(&"yagra.flows.raw".to_owned()));
         assert!(perms.publish.contains(&"yagra.poller.heartbeat".to_owned()));
     }
 

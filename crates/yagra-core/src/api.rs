@@ -113,6 +113,11 @@ pub struct AdminState {
     /// Long-lived API tokens (PATs) for non-browser clients (ADR-028): backs Settings ▸ API tokens
     /// and the MCP auth gate. Admin-managed; the raw token is shown once at creation, never stored.
     pub api_tokens: Arc<crate::apitokens::ApiTokenStore>,
+    /// Forwarding destinations (ADR-034): backs Settings ▸ Forwarding. Present on every core so
+    /// destination CRUD works from either; only the leader's dispatcher actually sends.
+    pub forward: Arc<crate::forward_store::ForwardStore>,
+    /// Live forwarding status + the poke that makes a destination edit take effect immediately.
+    pub forward_handle: crate::forward::ForwardHandle,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -382,6 +387,22 @@ pub fn router(state: ApiState) -> Router {
             get(list_api_tokens).post(create_api_token),
         )
         .route("/api/v1/api-tokens/:id", delete(revoke_api_token))
+        // Forwarding ("tee", ADR-034): relay received syslog/traps to external collectors.
+        // `ManageConfig`-gated and audited by `audit_mw` — a destination sends log bodies, which
+        // routinely carry credentials, off-box.
+        .route(
+            "/api/v1/forwarding/destinations",
+            get(list_forward_destinations).post(create_forward_destination),
+        )
+        .route(
+            "/api/v1/forwarding/destinations/:id",
+            put(update_forward_destination).delete(delete_forward_destination),
+        )
+        .route(
+            "/api/v1/forwarding/destinations/:id/test",
+            post(test_forward_destination),
+        )
+        .route("/api/v1/forwarding/status", get(forwarding_status))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/me", get(auth_me))
@@ -4490,6 +4511,446 @@ async fn revoke_api_token(
     }
 }
 
+// ── Forwarding destinations (the passive-data tee, ADR-034) ─────────────────────────────────────
+
+/// Request body for creating/updating a forwarding destination.
+#[derive(Deserialize)]
+struct ForwardDestinationBody {
+    /// Human label (unique, 1–120 chars).
+    name: String,
+    /// Whether the forwarder should send to it. Defaults to enabled.
+    #[serde(default = "default_true")]
+    enabled: bool,
+    /// Which received stream to tee.
+    source_kind: yagra_forward::SourceKind,
+    /// How to speak to the collector.
+    dest_kind: yagra_forward::DestKind,
+    /// `host:port` of the collector.
+    target: String,
+    /// Restrict to one poller pool; omitted/null = every pool.
+    #[serde(default)]
+    pool: Option<String>,
+    /// Relay the original bytes (default) rather than re-rendering from the parsed fields.
+    #[serde(default = "default_true")]
+    verbatim: bool,
+    /// The filter; omitted = forward the whole stream.
+    #[serde(default)]
+    filter: yagra_forward::FilterExpr,
+    /// Optional messages/second ceiling.
+    #[serde(default)]
+    rate_limit_per_sec: Option<u32>,
+    /// SNMP community for re-encoded traps (`snmp_trap_udp` only). Sealed at rest; on update,
+    /// omitting it keeps the stored value.
+    #[serde(default)]
+    community: Option<String>,
+    /// PEM certificate(s) to trust for a TLS destination, in addition to the system roots. Not a
+    /// secret, so unlike `community` it round-trips and an empty value clears it.
+    #[serde(default)]
+    ca_cert: Option<String>,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Validate a destination body and turn it into store input. Everything an operator can get wrong
+/// is rejected here, so the forwarder only ever sees configurations it can honour. The error is
+/// boxed so the `Ok`/`Err` size gap stays small (`clippy::result_large_err`).
+fn validate_forward_body(
+    st: &ApiState,
+    body: ForwardDestinationBody,
+) -> Result<crate::forward_store::ForwardDestinationInput, Box<Response>> {
+    let bad = |code: &str, msg: &str| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            code,
+            msg.to_owned(),
+        ))
+    };
+
+    let name = body.name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err(bad("invalid_name", "name must be 1–120 characters"));
+    }
+    let target = body.target.trim().to_owned();
+    let Some((_, port)) = split_host_port(&target) else {
+        return Err(bad(
+            "invalid_target",
+            "target must be host:port (use [addr]:port for a literal IPv6 address)",
+        ));
+    };
+    if !body.dest_kind.accepts(body.source_kind) {
+        return Err(bad(
+            "incompatible_kinds",
+            "that destination kind cannot carry that source stream",
+        ));
+    }
+    // Refusing verbatim here (rather than quietly ignoring it) keeps the UI honest: a trap PDU sent
+    // to a syslog collector would be undecodable, so that pairing is always re-rendered.
+    if body.verbatim && !body.dest_kind.supports_verbatim(body.source_kind) {
+        return Err(bad(
+            "verbatim_unsupported",
+            "byte-exact relay is not possible for this source/destination pairing",
+        ));
+    }
+    // ...and the converse for flow: a template-bound binary export has no rendered form, so
+    // "rebuild from the parsed fields" is not a choice that exists.
+    if !body.verbatim && !body.dest_kind.supports_rendered(body.source_kind) {
+        return Err(bad(
+            "rendered_unsupported",
+            "a flow export can only be relayed byte-for-byte — there is no rendered form",
+        ));
+    }
+    if body.rate_limit_per_sec == Some(0) {
+        return Err(bad(
+            "invalid_rate_limit",
+            "rate limit must be greater than zero, or omitted for no limit",
+        ));
+    }
+    let pool = body
+        .pool
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty());
+    if pool.as_ref().is_some_and(|p| p.chars().count() > 64) {
+        return Err(bad("invalid_pool", "pool must be at most 64 characters"));
+    }
+
+    // Compile the filter now so a broken expression is a 400, never a destination that silently
+    // drops everything (or, worse, forwards everything) once the dispatcher picks it up.
+    yagra_forward::compile(&body.filter).map_err(|e| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_filter",
+            e.to_string(),
+        ))
+    })?;
+    // A condition on a field the stream never carries can only ever be a mistake.
+    if let Some(c) = body
+        .filter
+        .conditions
+        .iter()
+        .find(|c| !c.field.applies_to(body.source_kind))
+    {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_filter",
+            format!(
+                "field `{}` never appears on {} events",
+                c.field.as_str(),
+                body.source_kind.as_str()
+            ),
+        )));
+    }
+
+    // Loop guard: forwarding Yagra's own output back into one of its own listeners amplifies
+    // without bound. Core can only see the *ports* pollers bind (a heartbeat advertises the bind
+    // address, not the poller's routable address), so this catches the realistic mistake — aiming a
+    // destination at localhost on a listener port — and cannot catch every possible cycle.
+    if let Some(admin) = st.admin.as_ref() {
+        let loopback_target = target_is_local(&target);
+        if loopback_target
+            && admin
+                .coordinator
+                .listener_ports(std::time::Instant::now())
+                .contains(&port)
+        {
+            return Err(bad(
+                "self_loop",
+                "that target is one of Yagra's own listeners — forwarding to it would loop",
+            ));
+        }
+    }
+
+    let community = body
+        .community
+        .map(|c| c.trim().to_owned())
+        .filter(|c| !c.is_empty());
+    if community.is_some() && body.dest_kind != yagra_forward::DestKind::SnmpTrapUdp {
+        return Err(bad(
+            "invalid_community",
+            "a community only applies to an SNMP trap destination",
+        ));
+    }
+
+    let ca_cert = body
+        .ca_cert
+        .map(|c| c.trim().to_owned())
+        .filter(|c| !c.is_empty());
+    if ca_cert.is_some() && !body.dest_kind.is_tls() {
+        return Err(bad(
+            "invalid_ca_cert",
+            "a CA certificate only applies to a TLS destination",
+        ));
+    }
+    // Parse now so a mistyped certificate is a 400 rather than a destination that fails every
+    // handshake with an error only visible on the status page.
+    if let Some(pem) = ca_cert.as_deref() {
+        if pem.len() > MAX_CA_CERT_BYTES {
+            return Err(bad(
+                "invalid_ca_cert",
+                "the CA certificate is too large (max 64 KiB)",
+            ));
+        }
+        let mut cursor = std::io::Cursor::new(pem.as_bytes());
+        let parsed = rustls_pemfile::certs(&mut cursor).collect::<Result<Vec<_>, _>>();
+        if parsed.map(|c| c.is_empty()).unwrap_or(true) {
+            return Err(bad(
+                "invalid_ca_cert",
+                "that is not a PEM certificate (expected a -----BEGIN CERTIFICATE----- block)",
+            ));
+        }
+    }
+
+    Ok(crate::forward_store::ForwardDestinationInput {
+        name,
+        enabled: body.enabled,
+        source_kind: body.source_kind,
+        dest_kind: body.dest_kind,
+        target,
+        pool,
+        verbatim: body.verbatim,
+        filter: body.filter,
+        rate_limit_per_sec: body.rate_limit_per_sec,
+        ca_cert,
+        secret: community
+            .map(|community| crate::forward_store::DestSecret::SnmpCommunity { community }),
+    })
+}
+
+/// Ceiling on a destination's PEM trust bundle. Generous for a chain, small enough that the column
+/// cannot be used as arbitrary storage.
+const MAX_CA_CERT_BYTES: usize = 64 * 1024;
+
+/// Split `host:port`, accepting `[::1]:514` for a literal IPv6 address. Returns `None` unless both
+/// halves are present and the port is a valid non-zero number.
+fn split_host_port(target: &str) -> Option<(String, u16)> {
+    let (host, port) = if let Some(rest) = target.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')?;
+        (host.to_owned(), rest.strip_prefix(':')?)
+    } else {
+        let (host, port) = target.rsplit_once(':')?;
+        // A bare IPv6 literal has several colons and no brackets — reject it rather than treating
+        // its last group as a port.
+        if host.contains(':') {
+            return None;
+        }
+        (host.to_owned(), port)
+    };
+    let port: u16 = port.parse().ok()?;
+    if host.is_empty() || host.len() > 255 || port == 0 {
+        return None;
+    }
+    Some((host, port))
+}
+
+/// Whether a target names this machine. Only literal forms are checked — resolving a hostname here
+/// would block the handler on DNS, and the guard this backs is best-effort by design.
+fn target_is_local(target: &str) -> bool {
+    let Some((host, _)) = split_host_port(target) else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
+}
+
+async fn list_forward_destinations(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.forward.list().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "forwarding destination list failed");
+            internal("failed to list forwarding destinations")
+        }
+    }
+}
+
+async fn create_forward_destination(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ForwardDestinationBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let input = match validate_forward_body(&st, body) {
+        Ok(input) => input,
+        Err(resp) => return *resp,
+    };
+    match admin.forward.count().await {
+        Ok(n) if n >= crate::forward_store::MAX_DESTINATIONS => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "too_many_destinations",
+                format!(
+                    "at most {} forwarding destinations are supported",
+                    crate::forward_store::MAX_DESTINATIONS
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "forwarding destination count failed");
+            return internal("failed to create the forwarding destination");
+        }
+    }
+    match admin.forward.create(&input).await {
+        Ok(id) => {
+            admin.forward_handle.poke();
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+        }
+        Err(e) => {
+            if e.downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error)
+                .is_some_and(|db| db.is_unique_violation())
+            {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "duplicate_name",
+                    "a forwarding destination with that name already exists".to_owned(),
+                );
+            }
+            tracing::error!(error = %e, "forwarding destination create failed");
+            internal("failed to create the forwarding destination")
+        }
+    }
+}
+
+async fn update_forward_destination(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ForwardDestinationBody>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let input = match validate_forward_body(&st, body) {
+        Ok(input) => input,
+        Err(resp) => return *resp,
+    };
+    match admin.forward.update(id, &input).await {
+        Ok(true) => {
+            admin.forward_handle.poke();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => not_found("not_found", "no such forwarding destination".to_owned()),
+        Err(e) => {
+            if e.downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error)
+                .is_some_and(|db| db.is_unique_violation())
+            {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "duplicate_name",
+                    "a forwarding destination with that name already exists".to_owned(),
+                );
+            }
+            tracing::error!(error = %e, "forwarding destination update failed");
+            internal("failed to update the forwarding destination")
+        }
+    }
+}
+
+async fn delete_forward_destination(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.forward.delete(id).await {
+        // Idempotent: a missing id is a no-op 204.
+        Ok(_) => {
+            admin.forward_handle.poke();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "forwarding destination delete failed");
+            internal("failed to delete the forwarding destination")
+        }
+    }
+}
+
+/// Send one synthetic message to a destination and report what happened. Deliberately independent
+/// of the running senders so a still-disabled destination can be validated, and so the caller gets
+/// the transport error itself rather than "check the logs".
+async fn test_forward_destination(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    // `get_open` ignores `enabled` and decrypts the secret: the point of the button is validating a
+    // destination *before* turning it on, and testing with the wrong community would be worthless.
+    let open = match admin.forward.get_open(id).await {
+        Ok(Some(open)) => open,
+        Ok(None) => return not_found("not_found", "no such forwarding destination".to_owned()),
+        Err(e) => {
+            tracing::error!(error = %e, "forwarding destination load failed");
+            return internal("failed to load the forwarding destination");
+        }
+    };
+    match crate::forward::send_test(&open).await {
+        Ok(()) => Json(serde_json::json!({ "delivered": true })).into_response(),
+        // Not a 5xx: the destination's configuration is the caller's, and the text is the
+        // transport error (never a payload — syslog bodies carry credentials).
+        Err(e) => Json(serde_json::json!({ "delivered": false, "error": e })).into_response(),
+    }
+}
+
+/// Live forwarding status: per-destination counters plus any online poller that cannot supply the
+/// original bytes, so a byte-exact destination silently degrading is visible in the UI.
+async fn forwarding_status(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let destinations = admin.forward_handle.status();
+    let now = std::time::Instant::now();
+    let pollers_without_raw_capture = admin
+        .coordinator
+        .pollers_missing_cap(yagra_bus::CAP_RAW_CAPTURE, now);
+    // Separate from raw capture on purpose: an Increment-1 poller attaches raw bytes to events but
+    // relays no flow datagrams at all, so a flow destination fed only by such pollers receives
+    // *nothing* — a different failure from "byte-exact silently degraded to rendered".
+    let pollers_without_flow_relay = admin
+        .coordinator
+        .pollers_missing_cap(yagra_bus::CAP_FLOW_RELAY, now);
+    Json(serde_json::json!({
+        "destinations": destinations,
+        "pollers_without_raw_capture": pollers_without_raw_capture,
+        "pollers_without_flow_relay": pollers_without_flow_relay,
+        // False on an HA standby, whose dispatcher is not running (destination CRUD still works).
+        "sending": st.is_leader.load(std::sync::atomic::Ordering::Acquire),
+    }))
+    .into_response()
+}
+
 // ── OIDC login (external IdP, ADR-010 Phase 3) ──────────────────────────────────────────────────
 
 /// Begin an OIDC login: return the IdP authorization URL the browser should be sent to. The CSRF
@@ -8153,6 +8614,10 @@ async fn ingest_webhook(
         trap_oid: None,
         varbinds: Vec::new(),
         truncated,
+        // Webhook bodies are JSON, not a datagram — there is no wire form to forward verbatim,
+        // and the body can hold the shared secret. Forwarding renders from the parsed fields.
+        raw: None,
+        src_port: None,
     };
     engine
         .handle_event(
@@ -11839,6 +12304,52 @@ mod tests {
         assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN))).is_ok());
     }
 
+    #[test]
+    fn host_port_split_handles_ipv6_literals_and_rejects_ambiguity() {
+        assert_eq!(
+            split_host_port("siem.example.com:514"),
+            Some(("siem.example.com".to_owned(), 514))
+        );
+        assert_eq!(
+            split_host_port("10.0.0.5:1514"),
+            Some(("10.0.0.5".to_owned(), 1514))
+        );
+        // A literal v6 address needs brackets; without them its colons are ambiguous, so it is
+        // rejected rather than silently parsed as `2001:db8::1` port `1`.
+        assert_eq!(
+            split_host_port("[2001:db8::1]:514"),
+            Some(("2001:db8::1".to_owned(), 514))
+        );
+        for bad in [
+            "2001:db8::1:514",
+            "siem.example.com",
+            ":514",
+            "host:0",
+            "host:70000",
+            "host:syslog",
+            "",
+        ] {
+            assert_eq!(split_host_port(bad), None, "{bad} should not parse");
+        }
+    }
+
+    #[test]
+    fn local_target_detection_covers_the_loop_guard_cases() {
+        for local in [
+            "localhost:514",
+            "LOCALHOST:514",
+            "127.0.0.1:514",
+            "[::1]:162",
+        ] {
+            assert!(target_is_local(local), "{local}");
+        }
+        // 0.0.0.0 is "this host" too — a destination pointing there loops just as readily.
+        assert!(target_is_local("0.0.0.0:514"));
+        for remote in ["10.0.0.5:514", "siem.example.com:514", "not-a-target"] {
+            assert!(!target_is_local(remote), "{remote}");
+        }
+    }
+
     /// A live registry view for the merge tests (online → recent, offline → stale).
     fn live_view(id: &str, pool: &str, online: bool) -> PollerView {
         PollerView {
@@ -11853,6 +12364,8 @@ mod tests {
             inflight: 0,
             results_total: 42,
             host: None,
+            listeners: Vec::new(),
+            caps: Vec::new(),
         }
     }
 

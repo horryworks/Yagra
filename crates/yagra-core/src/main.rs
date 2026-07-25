@@ -27,6 +27,8 @@ mod discovery;
 mod dns_check;
 mod events;
 mod flowstore;
+mod forward;
+mod forward_store;
 mod groups;
 mod history;
 mod ipasn;
@@ -520,6 +522,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     ));
 
     // ── HA leader election (ADR-016) ────────────────────────────────────────────────────────────
+    // Forwarding ("tee", ADR-034): received syslog/traps are also relayed to external collectors.
+    // The store backs Settings ▸ Forwarding on every core; the dispatcher is leader-only (below) so
+    // a passive core never double-sends. With no destinations configured this is inert.
+    let forward_store = Arc::new(forward_store::ForwardStore::from_env(repo.pool()));
+    let (forward_handle, forward_runner) = forward::prepare(forward_store.clone());
+
     // `is_leader` drives `/readyz` and the `yagra_core_is_leader` gauge. With HA off this core is
     // always the leader (ready); with HA on it flips true only once the advisory lock is won.
     let is_leader = Arc::new(AtomicBool::new(!cfg.enable_ha));
@@ -562,6 +570,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let reports_repo = reports_repo.clone();
         let reports = reports.clone();
         let dns_checks = dns_checks.clone();
+        let forward_handle = forward_handle.clone();
         async move {
             // Coordinator registry: heartbeats + snapshot requests.
             let hb = Box::pin(bus.subscribe_heartbeats().await?);
@@ -635,12 +644,21 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 spawn_cancellable(&shutdown, discovery.clone().run_consumer(results));
             }
 
+            // Forwarding dispatcher (ADR-034). Leader-only so a passive core never double-sends;
+            // it owns the sender tasks and reloads destinations on every config change.
+            tokio::spawn(forward_runner.run(shutdown.clone()));
+
             // Passive-event pipeline: consumer + TTL sweeper + persist/action writers (ADR-024).
+            // The consumer also tees each message to the forwarder before rule matching.
             {
                 let stream = Box::pin(bus.subscribe_events().await?);
                 spawn_cancellable(
                     &shutdown,
-                    events::consume_events(stream, event_engine.clone()),
+                    events::consume_events(
+                        stream,
+                        event_engine.clone(),
+                        Some(forward_handle.clone()),
+                    ),
                 );
             }
             spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
@@ -662,6 +680,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 spawn_cancellable(
                     &shutdown,
                     consume_flows(flow_stream, flow_tx, repo.clone(), ipasn.clone()),
+                );
+            }
+
+            // Verbatim flow relay (ADR-034 Increment 2): pollers publish every received flow
+            // datagram on `yagra.flows.raw`, and the forwarder tees the ones a destination wants.
+            // Subscribed unconditionally — independently of the ClickHouse tier above, since flow
+            // forwarding is useful without a flow store — and cheap when unused: `offer_flow`
+            // returns after one relaxed load when no flow destination exists. The WAN cost is paid
+            // by the poller's publish either way; this hop is core↔NATS.
+            {
+                let raw_flows = Box::pin(bus.subscribe_raw_flows().await?);
+                spawn_cancellable(
+                    &shutdown,
+                    consume_raw_flows(raw_flows, forward_handle.clone()),
                 );
             }
 
@@ -791,6 +823,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         coordinator: coordinator.clone(),
         pollers: poller_repo.clone(),
         api_tokens: Arc::new(apitokens::ApiTokenStore::new(repo.pool().clone())),
+        forward: forward_store,
+        forward_handle,
     }));
     // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
     // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
@@ -1545,6 +1579,21 @@ fn should_reload_on_miss(
     exporter_ip: std::net::IpAddr,
 ) -> bool {
     !addr_map.contains_key(&exporter_ip) && missed.insert(exporter_ip)
+}
+
+/// Consume verbatim flow datagrams from `yagra.flows.raw` and tee them to the forwarder (ADR-034
+/// Increment 2). Deliberately does nothing else: these datagrams exist only so a forwarding
+/// destination can be given what the exporter actually sent. ClickHouse is fed by the aggregate
+/// stream above, and duplicating that here would double-count every flow.
+async fn consume_raw_flows<S>(mut stream: S, forward: crate::forward::ForwardHandle)
+where
+    S: Stream<Item = yagra_bus::RawFlowDatagram> + Unpin,
+{
+    while let Some(datagram) = stream.next().await {
+        // Never blocks: with no flow destination this is one relaxed atomic load, and a full inlet
+        // drops and counts rather than back-pressuring the subscription into a NATS slow-consumer.
+        forward.offer_flow(&datagram);
+    }
 }
 
 /// Consume edge-aggregated flow batches from the bus, resolve each exporter to a node (via the same

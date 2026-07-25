@@ -13,7 +13,7 @@
 use crate::bus::{Bus, BusError, SyncBus};
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, SyncMsg, SyncRequest,
+    PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -258,6 +258,28 @@ impl NatsBus {
                 Ok(batch) => Some(batch),
                 Err(e) => {
                     tracing::warn!(error = %e, "dropping malformed FlowBatch from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Subscribe to verbatim flow datagrams — core side (ADR-034 Increment 2, mirrors
+    /// [`Self::subscribe_flows`]). Malformed messages are skipped. Only a forwarding-aware core
+    /// subscribes here, so a newer poller's relay degrades safely on an older core (dropped).
+    pub async fn subscribe_raw_flows(
+        &self,
+    ) -> Result<impl Stream<Item = RawFlowDatagram>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::flows_raw())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe raw flows: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<RawFlowDatagram>(&msg.payload) {
+                Ok(dg) => Some(dg),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed RawFlowDatagram from bus");
                     None
                 }
             }
@@ -534,6 +556,15 @@ impl Bus for NatsBus {
             .publish(subjects::flows(), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish flow batch: {e}")))
+    }
+
+    async fn publish_raw_flow(&self, datagram: RawFlowDatagram) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&datagram)
+            .map_err(|e| BusError::Publish(format!("encode raw flow datagram: {e}")))?;
+        self.client
+            .publish(subjects::flows_raw(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish raw flow datagram: {e}")))
     }
 
     fn is_connected(&self) -> bool {

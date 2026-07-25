@@ -736,6 +736,8 @@ mod tests {
             trap_oid: None,
             varbinds: Vec::new(),
             truncated: false,
+            raw: None,
+            src_port: None,
         }
     }
 

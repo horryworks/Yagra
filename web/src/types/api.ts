@@ -349,6 +349,137 @@ export interface CreatedApiToken {
   token: string;
 }
 
+// ── Forwarding ("tee", ADR-034) — relay received syslog/traps to external collectors ────────────
+
+/** Which received stream a destination tees (core `yagra_forward::SourceKind`). */
+export type ForwardSourceKind = 'syslog' | 'trap' | 'flow';
+
+/** How a destination is spoken to (core `yagra_forward::DestKind`). */
+export type ForwardDestKind =
+  | 'syslog_udp'
+  | 'syslog_tcp'
+  | 'syslog_tls'
+  | 'snmp_trap_udp'
+  | 'flow_udp';
+
+/** A filter condition's subject (core `yagra_forward::FilterField`). For flow, `source_ip` is the
+ *  exporting device and `kind` is the wire format (`netflow`/`sflow`); the record's own endpoints
+ *  are `src_addr`/`dst_addr`. */
+export type ForwardFilterField =
+  | 'source_ip'
+  | 'pool'
+  | 'kind'
+  | 'facility'
+  | 'severity'
+  | 'hostname'
+  | 'app_name'
+  | 'message'
+  | 'trap_oid'
+  | 'varbind'
+  | 'src_addr'
+  | 'dst_addr'
+  | 'proto'
+  | 'src_port'
+  | 'dst_port'
+  | 'src_as'
+  | 'dst_as';
+
+/** A filter condition's comparison (core `yagra_forward::FilterOp`). */
+export type ForwardFilterOp =
+  | 'eq'
+  | 'ne'
+  | 'contains'
+  | 'not_contains'
+  | 'prefix'
+  | 'regex'
+  | 'not_regex'
+  | 'in_list'
+  | 'in_cidr'
+  | 'not_in_cidr'
+  | 'lte'
+  | 'gte';
+
+/** One `field op value` test. `value` is always a string; core parses it per field type. */
+export interface ForwardCondition {
+  field: ForwardFilterField;
+  op: ForwardFilterOp;
+  value: string;
+}
+
+/** A destination's filter (core `yagra_forward::FilterExpr`). No conditions = forward everything. */
+export interface ForwardFilter {
+  mode: 'all' | 'any';
+  conditions: ForwardCondition[];
+}
+
+/** A forwarding destination (`GET /api/v1/forwarding/destinations`, core `ForwardDestination`).
+ *  `has_secret` reports whether a sealed secret (the SNMP community) is stored — the value itself
+ *  is never returned. */
+export interface ForwardDestination {
+  id: string;
+  name: string;
+  enabled: boolean;
+  source_kind: ForwardSourceKind;
+  dest_kind: ForwardDestKind;
+  target: string;
+  pool: string | null;
+  verbatim: boolean;
+  filter: ForwardFilter;
+  rate_limit_per_sec: number | null;
+  /** Extra PEM trust anchor for a TLS destination. Not a secret, so it round-trips. */
+  ca_cert: string | null;
+  has_secret: boolean;
+}
+
+/** Create/update payload. Omitting `community` on update keeps the stored value; `ca_cert` is not a
+ *  secret and is always sent, so clearing it removes the pinned CA. */
+export interface ForwardDestinationInput {
+  name: string;
+  enabled: boolean;
+  source_kind: ForwardSourceKind;
+  dest_kind: ForwardDestKind;
+  target: string;
+  pool?: string | null;
+  verbatim: boolean;
+  filter: ForwardFilter;
+  rate_limit_per_sec?: number | null;
+  ca_cert?: string | null;
+  community?: string;
+}
+
+/** One destination's live counters (core `forward::DestStatus`). `rendered` counts messages that
+ *  were sent re-rendered despite `verbatim`, because no original payload was available. */
+export interface ForwardDestStatus {
+  id: string;
+  name: string;
+  sent: number;
+  filtered: number;
+  dropped: number;
+  errors: number;
+  rendered: number;
+  queue_depth: number;
+  circuit_open: boolean;
+  last_success_unix_ms: number | null;
+  last_error: string | null;
+}
+
+/** `GET /api/v1/forwarding/status`. `sending` is false on an HA standby, whose dispatcher is idle. */
+export interface ForwardStatus {
+  destinations: ForwardDestStatus[];
+  /** Online pollers that attach no original bytes to events — byte-exact silently degrades. */
+  pollers_without_raw_capture: string[];
+  /** Online pollers that relay no flow datagrams at all — a flow destination receives *nothing*
+   *  from them, which is a different failure from degraded fidelity. */
+  pollers_without_flow_relay: string[];
+  sending: boolean;
+}
+
+/** `POST /api/v1/forwarding/destinations/:id/test` — the transport result, not an HTTP error. */
+export interface ForwardTestResult {
+  delivered: boolean;
+  error?: string;
+}
+
 /** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). Split by functional
  *  `category` (role) × `vendor`-NOS family; `category` is the kebab-case `ProfileCategory` token. */
 export interface ProfileSummary {

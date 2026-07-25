@@ -1,0 +1,764 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Forwarding (Settings ▸ Forwarding): relay received syslog / SNMP traps / flow exports on to
+// external collectors — a SIEM, an existing syslog estate, an analytics pipeline (ADR-034).
+// ManageConfig-gated and audited: a destination sends log bodies, which routinely carry
+// credentials, off-box.
+//
+// Data-table standard v2: a toolbar (New + count) over the shared `DataTable`, edit/test/delete as
+// per-row OverflowMenu actions with modals. The form mirrors core's validation rules through the
+// pure helpers in `forwardingOptions.ts`, so an impossible combination is never offered.
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { api, ApiError } from '../services/api';
+import { useAuthStore } from '../store';
+import type {
+  ForwardCondition,
+  ForwardDestKind,
+  ForwardDestStatus,
+  ForwardDestination,
+  ForwardDestinationInput,
+  ForwardFilterField,
+  ForwardFilterOp,
+  ForwardSourceKind,
+  ForwardStatus,
+} from '../types/api';
+import {
+  destKindsForSource,
+  fieldsForSource,
+  opsForField,
+  reconcileDraft,
+  supportsRendered,
+  supportsVerbatim,
+  usesCommunity,
+  usesTls,
+} from './forwardingOptions';
+import { PageHeader } from '../components/ui/PageHeader';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Modal } from '../components/ui/Modal';
+import { TextInput, TextArea, Select } from '../components/ui/Field';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { OverflowMenu } from '../components/ui/OverflowMenu';
+import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
+import './ForwardingPage.css';
+
+const SOURCE_KINDS: ForwardSourceKind[] = ['syslog', 'trap', 'flow'];
+const STATUS_POLL_MS = 10_000;
+
+const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
+
+/** The editable shape of the modal form — flattened so the condition rows are easy to splice. */
+interface Draft {
+  name: string;
+  enabled: boolean;
+  source_kind: ForwardSourceKind;
+  dest_kind: ForwardDestKind;
+  target: string;
+  pool: string;
+  verbatim: boolean;
+  mode: 'all' | 'any';
+  conditions: ForwardCondition[];
+  rate_limit: string;
+  community: string;
+  ca_cert: string;
+}
+
+function emptyDraft(): Draft {
+  return {
+    name: '',
+    enabled: true,
+    source_kind: 'syslog',
+    dest_kind: 'syslog_udp',
+    target: '',
+    pool: '',
+    verbatim: true,
+    mode: 'all',
+    conditions: [],
+    rate_limit: '',
+    community: '',
+    ca_cert: '',
+  };
+}
+
+function draftFrom(row: ForwardDestination): Draft {
+  return {
+    name: row.name,
+    enabled: row.enabled,
+    source_kind: row.source_kind,
+    dest_kind: row.dest_kind,
+    target: row.target,
+    pool: row.pool ?? '',
+    verbatim: row.verbatim,
+    mode: row.filter?.mode ?? 'all',
+    conditions: row.filter?.conditions ?? [],
+    rate_limit: row.rate_limit_per_sec == null ? '' : String(row.rate_limit_per_sec),
+    community: '',
+    ca_cert: row.ca_cert ?? '',
+  };
+}
+
+function toInput(d: Draft): ForwardDestinationInput {
+  const rate = d.rate_limit.trim();
+  return {
+    name: d.name.trim(),
+    enabled: d.enabled,
+    source_kind: d.source_kind,
+    dest_kind: d.dest_kind,
+    target: d.target.trim(),
+    pool: d.pool.trim() || null,
+    verbatim: d.verbatim,
+    filter: { mode: d.mode, conditions: d.conditions },
+    rate_limit_per_sec: rate ? Number(rate) : null,
+    // Always sent (unlike the community): a CA certificate is not a secret, so the form holds its
+    // current value and clearing the box has to remove it.
+    ca_cert: usesTls(d.dest_kind) ? d.ca_cert.trim() || null : null,
+    // Omitted rather than blank: core keeps the stored community when the field is absent.
+    ...(usesCommunity(d.dest_kind) && d.community.trim()
+      ? { community: d.community.trim() }
+      : {}),
+  };
+}
+
+/** Table columns. Renderers close over `t`, so the caller rebuilds them on a language switch. */
+function destinationColumns(
+  t: TFunction,
+  status: Map<string, ForwardDestStatus>,
+  onEdit: (row: ForwardDestination) => void,
+  onTest: (row: ForwardDestination) => void,
+  onDelete: (row: ForwardDestination) => void,
+): Column<ForwardDestination>[] {
+  return [
+    {
+      key: 'name',
+      header: t('cols.name'),
+      width: '1fr',
+      render: (r) => (
+        <span className="fwd-name">
+          {r.name}
+          {!r.enabled && <Badge tone="neutral">{t('status.disabled')}</Badge>}
+        </span>
+      ),
+    },
+    {
+      key: 'source',
+      header: t('cols.source'),
+      width: '110px',
+      render: (r) => <Badge tone="info">{t(`source.${r.source_kind}`)}</Badge>,
+    },
+    {
+      key: 'target',
+      header: t('cols.target'),
+      width: '1fr',
+      render: (r) => (
+        <span className="fwd-target">
+          <span className="mono">{r.target}</span>
+          <span className="fwd-sub">{t(`dest.${r.dest_kind}`)}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'scope',
+      header: t('cols.scope'),
+      width: '120px',
+      render: (r) => r.pool ?? <span className="muted">{t('scope.allPools')}</span>,
+    },
+    {
+      key: 'fidelity',
+      header: t('cols.fidelity'),
+      width: '120px',
+      render: (r) => (
+        <Badge tone={r.verbatim ? 'up' : 'neutral'}>
+          {t(r.verbatim ? 'fidelity.verbatim' : 'fidelity.rendered')}
+        </Badge>
+      ),
+    },
+    {
+      key: 'filter',
+      header: t('cols.filter'),
+      width: '130px',
+      render: (r) => {
+        const n = r.filter?.conditions?.length ?? 0;
+        return n === 0 ? (
+          <span className="muted">{t('filter.none')}</span>
+        ) : (
+          <span>{t('filter.count', { count: n, mode: t(`filter.mode.${r.filter.mode}`) })}</span>
+        );
+      },
+    },
+    {
+      key: 'health',
+      header: t('cols.health'),
+      width: '210px',
+      render: (r) => {
+        const s = status.get(r.id);
+        if (!s) return <span className="muted">—</span>;
+        return (
+          <span className="fwd-health">
+            {s.circuit_open && <Badge tone="critical">{t('health.paused')}</Badge>}
+            <span className="mono" title={s.last_error ?? undefined}>
+              {t('health.counts', { sent: s.sent, dropped: s.dropped + s.errors })}
+            </span>
+            {s.rendered > 0 && r.verbatim && (
+              <Badge tone="warning" title={t('health.degradedHint')}>
+                {t('health.degraded')}
+              </Badge>
+            )}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'actions',
+      header: t('cols.actions'),
+      width: '96px',
+      align: 'right',
+      render: (r) => (
+        <OverflowMenu
+          actions={[
+            { label: t('actions.edit'), icon: <EditIcon />, onClick: () => onEdit(r) },
+            { label: t('actions.test'), icon: <PowerIcon />, onClick: () => onTest(r) },
+            {
+              label: t('actions.delete'),
+              icon: <TrashIcon />,
+              danger: true,
+              onClick: () => onDelete(r),
+            },
+          ]}
+        />
+      ),
+    },
+  ];
+}
+
+/** One `field op value` row of the filter builder. */
+function ConditionRow({
+  t,
+  source,
+  condition,
+  onChange,
+  onRemove,
+}: {
+  t: TFunction;
+  source: ForwardSourceKind;
+  condition: ForwardCondition;
+  onChange: (next: ForwardCondition) => void;
+  onRemove: () => void;
+}) {
+  const ops = opsForField(condition.field);
+  return (
+    <div className="fwd-cond">
+      <Select
+        value={condition.field}
+        onChange={(e) => {
+          const field = e.target.value as ForwardFilterField;
+          // Keep the operator only if the new field's type still accepts it.
+          const op = opsForField(field).includes(condition.op) ? condition.op : opsForField(field)[0];
+          onChange({ ...condition, field, op });
+        }}
+      >
+        {fieldsForSource(source).map((f) => (
+          <option key={f} value={f}>
+            {t(`field.${f}`)}
+          </option>
+        ))}
+      </Select>
+      <Select
+        value={condition.op}
+        onChange={(e) => onChange({ ...condition, op: e.target.value as ForwardFilterOp })}
+      >
+        {ops.map((op) => (
+          <option key={op} value={op}>
+            {t(`op.${op}`)}
+          </option>
+        ))}
+      </Select>
+      <TextInput
+        value={condition.value}
+        placeholder={t(`valuePlaceholder.${condition.field}`, { defaultValue: '' })}
+        onChange={(e) => onChange({ ...condition, value: e.target.value })}
+      />
+      <Button variant="outline" onClick={onRemove} aria-label={t('filter.remove')}>
+        ×
+      </Button>
+    </div>
+  );
+}
+
+/** Create/edit a destination. `existing` null = create. */
+function DestinationModal({
+  existing,
+  onClose,
+  onSaved,
+}: {
+  existing: ForwardDestination | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation('settings-forwarding');
+  const [draft, setDraft] = useState<Draft>(() => (existing ? draftFrom(existing) : emptyDraft()));
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Every mutation goes through this so the draft can never hold a combination core would reject.
+  const update = (patch: Partial<Draft>) => setDraft((d) => reconcileDraft({ ...d, ...patch }));
+
+  const verbatimPossible = supportsVerbatim(draft.source_kind, draft.dest_kind);
+  const renderedPossible = supportsRendered(draft.source_kind, draft.dest_kind);
+  const ready = draft.name.trim() !== '' && draft.target.trim() !== '';
+
+  const submit = () => {
+    if (!ready) return;
+    setBusy(true);
+    setError(null);
+    const body = toInput(draft);
+    const call = existing
+      ? api.updateForwardDestination(existing.id, body)
+      : api.createForwardDestination(body).then(() => undefined);
+    call.then(onSaved).catch((e: unknown) => {
+      setError(
+        e instanceof ApiError && e.code === 'duplicate_name'
+          ? t('err.duplicate')
+          : errMsg(e, t('err.save')),
+      );
+      setBusy(false);
+    });
+  };
+
+  return (
+    <Modal
+      title={t(existing ? 'edit.title' : 'add.title')}
+      size="wide"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
+            {t('common:actions.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="modal-field">
+        <label className="modal-field-label">{t('field.name')}</label>
+        <TextInput
+          value={draft.name}
+          placeholder={t('field.namePlaceholder')}
+          onChange={(e) => update({ name: e.target.value })}
+          autoFocus
+        />
+      </div>
+
+      <div className="fwd-row">
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.source')}</label>
+          <Select
+            value={draft.source_kind}
+            onChange={(e) => update({ source_kind: e.target.value as ForwardSourceKind })}
+          >
+            {SOURCE_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {t(`source.${k}`)}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.dest')}</label>
+          <Select
+            value={draft.dest_kind}
+            onChange={(e) => update({ dest_kind: e.target.value as ForwardDestKind })}
+          >
+            {destKindsForSource(draft.source_kind).map((k) => (
+              <option key={k} value={k}>
+                {t(`dest.${k}`)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+
+      <div className="fwd-row">
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.target')}</label>
+          <TextInput
+            value={draft.target}
+            placeholder={t('field.targetPlaceholder')}
+            onChange={(e) => update({ target: e.target.value })}
+          />
+          <span className="modal-hint">{t('field.targetHint')}</span>
+        </div>
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.pool')}</label>
+          <TextInput
+            value={draft.pool}
+            placeholder={t('field.poolPlaceholder')}
+            onChange={(e) => update({ pool: e.target.value })}
+          />
+        </div>
+      </div>
+
+      <div className="modal-field">
+        <label className="modal-field-label">{t('field.fidelity')}</label>
+        <Select
+          value={draft.verbatim ? 'verbatim' : 'rendered'}
+          disabled={!verbatimPossible || !renderedPossible}
+          onChange={(e) => update({ verbatim: e.target.value === 'verbatim' })}
+        >
+          <option value="verbatim">{t('fidelity.verbatim')}</option>
+          <option value="rendered">{t('fidelity.rendered')}</option>
+        </Select>
+        <span className="modal-hint">
+          {!renderedPossible
+            ? t('field.fidelityVerbatimOnly')
+            : verbatimPossible
+              ? t('field.fidelityHint')
+              : t('field.fidelityImpossible')}
+        </span>
+      </div>
+
+      {usesTls(draft.dest_kind) && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.caCert')}</label>
+          <TextArea
+            value={draft.ca_cert}
+            placeholder={t('field.caCertPlaceholder')}
+            spellCheck={false}
+            onChange={(e) => update({ ca_cert: e.target.value })}
+          />
+          <span className="modal-hint">{t('field.caCertHint')}</span>
+        </div>
+      )}
+
+      {usesCommunity(draft.dest_kind) && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.community')}</label>
+          <TextInput
+            type="password"
+            value={draft.community}
+            placeholder={existing?.has_secret ? t('field.communityKept') : 'public'}
+            onChange={(e) => update({ community: e.target.value })}
+          />
+          <span className="modal-hint">{t('field.communityHint')}</span>
+        </div>
+      )}
+
+      <div className="modal-field">
+        <label className="modal-field-label">{t('field.rateLimit')}</label>
+        <TextInput
+          value={draft.rate_limit}
+          inputMode="numeric"
+          placeholder={t('field.rateLimitPlaceholder')}
+          onChange={(e) => update({ rate_limit: e.target.value.replace(/[^0-9]/g, '') })}
+        />
+        <span className="modal-hint">{t('field.rateLimitHint')}</span>
+      </div>
+
+      <div className="modal-field">
+        <label className="modal-field-label">{t('filter.label')}</label>
+        <div className="fwd-mode">
+          <Select
+            value={draft.mode}
+            onChange={(e) => update({ mode: e.target.value as 'all' | 'any' })}
+          >
+            <option value="all">{t('filter.mode.all')}</option>
+            <option value="any">{t('filter.mode.any')}</option>
+          </Select>
+          <Button
+            variant="outline"
+            onClick={() => {
+              const field = fieldsForSource(draft.source_kind)[0];
+              update({
+                conditions: [
+                  ...draft.conditions,
+                  { field, op: opsForField(field)[0], value: '' },
+                ],
+              });
+            }}
+          >
+            + {t('filter.add')}
+          </Button>
+        </div>
+        {/* A flow export is a template + many records, and records cannot be removed from one
+            without re-encoding it. Saying so here is the difference between a filter that behaves
+            surprisingly and one that behaves as documented. */}
+        {draft.source_kind === 'flow' && draft.conditions.length > 0 && (
+          <span className="modal-hint fwd-warn">{t('filter.flowAnyRecord')}</span>
+        )}
+        {draft.conditions.length === 0 ? (
+          <span className="modal-hint">{t('filter.emptyHint')}</span>
+        ) : (
+          draft.conditions.map((c, i) => (
+            <ConditionRow
+              // Conditions are an ordered list with no stable id; the index is the identity here.
+              key={i}
+              t={t}
+              source={draft.source_kind}
+              condition={c}
+              onChange={(next) =>
+                update({ conditions: draft.conditions.map((old, j) => (j === i ? next : old)) })
+              }
+              onRemove={() =>
+                update({ conditions: draft.conditions.filter((_, j) => j !== i) })
+              }
+            />
+          ))
+        )}
+      </div>
+
+      <div className="modal-field">
+        <label className="modal-field-label">{t('field.enabled')}</label>
+        <Select
+          value={draft.enabled ? 'on' : 'off'}
+          onChange={(e) => update({ enabled: e.target.value === 'on' })}
+        >
+          <option value="on">{t('status.enabled')}</option>
+          <option value="off">{t('status.disabled')}</option>
+        </Select>
+      </div>
+
+      <p className="modal-hint fwd-warn">{t('securityNote')}</p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Confirm + delete a destination. */
+function DeleteModal({
+  row,
+  onClose,
+  onDone,
+}: {
+  row: ForwardDestination;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('settings-forwarding');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal
+      title={t('delete.title')}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              api
+                .deleteForwardDestination(row.id)
+                .then(onDone)
+                .catch((e: unknown) => {
+                  setError(errMsg(e, t('err.delete')));
+                  setBusy(false);
+                });
+            }}
+          >
+            {t('actions.delete')}
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-confirm-text">{t('delete.confirm', { name: row.name })}</p>
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+export function ForwardingPage() {
+  const { t } = useTranslation('settings-forwarding');
+  const authed = useAuthStore((s) => s.authed);
+  const [rows, setRows] = useState<ForwardDestination[]>([]);
+  const [status, setStatus] = useState<ForwardStatus | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ForwardDestination | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<ForwardDestination | null>(null);
+  const [testResult, setTestResult] = useState<{ name: string; text: string } | null>(null);
+
+  const load = useCallback(() => {
+    setError(null);
+    api
+      .listForwardDestinations()
+      .then((list) => {
+        setRows(list);
+        setUnavailable(false);
+      })
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setUnavailable(true);
+        else setError(errMsg(e, t('err.load')));
+      })
+      .finally(() => setLoading(false));
+  }, [t]);
+
+  useEffect(() => {
+    if (authed) load();
+    else setLoading(false);
+  }, [authed, load]);
+
+  // Counters are live, so poll them separately from the (edit-driven) destination list.
+  useEffect(() => {
+    if (!authed || unavailable) return undefined;
+    let alive = true;
+    const tick = () => {
+      api
+        .forwardingStatus()
+        .then((s) => {
+          if (alive) setStatus(s);
+        })
+        .catch(() => {
+          /* transient: the table simply shows no counters this cycle */
+        });
+    };
+    tick();
+    const id = window.setInterval(tick, STATUS_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [authed, unavailable]);
+
+  const statusById = useMemo(
+    () => new Map((status?.destinations ?? []).map((s) => [s.id, s])),
+    [status],
+  );
+
+  const runTest = useCallback(
+    (row: ForwardDestination) => {
+      api
+        .testForwardDestination(row.id)
+        .then((r) =>
+          setTestResult({
+            name: row.name,
+            text: r.delivered ? t('test.ok') : t('test.failed', { error: r.error ?? '' }),
+          }),
+        )
+        .catch((e: unknown) => setTestResult({ name: row.name, text: errMsg(e, t('err.test')) }));
+    },
+    [t],
+  );
+
+  const columns = useMemo(
+    () => destinationColumns(t, statusById, setEditing, runTest, setDeleting),
+    [t, statusById, runTest],
+  );
+
+  // A byte-exact destination cannot be honoured for traffic from a poller that predates raw
+  // capture — say so rather than silently shipping re-rendered output.
+  const staleP = status?.pollers_without_raw_capture ?? [];
+  const wantsVerbatim = rows.some((r) => r.enabled && r.verbatim && r.source_kind !== 'flow');
+  // A poller that predates the flow relay sends no datagrams at all, so a flow destination fed only
+  // by such pollers receives nothing — a harder failure than degraded fidelity, and worth its own
+  // wording rather than being folded into the banner above.
+  const noFlowRelay = status?.pollers_without_flow_relay ?? [];
+  const wantsFlow = rows.some((r) => r.enabled && r.source_kind === 'flow');
+
+  return (
+    <div className="page-fill">
+      <PageHeader
+        title={t('nav:settings.forwarding')}
+        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.forwarding') }]}
+        note={t('note')}
+      />
+
+      {!authed ? (
+        <Card>
+          <p className="muted">{t('signInPrompt')}</p>
+        </Card>
+      ) : unavailable ? (
+        <Card>
+          <p className="muted">{t('unavailable')}</p>
+        </Card>
+      ) : (
+        <>
+          {wantsVerbatim && staleP.length > 0 && (
+            <Card>
+              <p className="fwd-warn">{t('warn.noRawCapture', { pollers: staleP.join(', ') })}</p>
+            </Card>
+          )}
+          {wantsFlow && noFlowRelay.length > 0 && (
+            <Card>
+              <p className="fwd-warn">
+                {t('warn.noFlowRelay', { pollers: noFlowRelay.join(', ') })}
+              </p>
+            </Card>
+          )}
+          {status && !status.sending && (
+            <Card>
+              <p className="muted">{t('warn.standby')}</p>
+            </Card>
+          )}
+
+          <TableToolbar>
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('add.button')}
+            </Button>
+            <TableSpacer />
+            <ResultCount shown={rows.length} noun={t('count', { count: rows.length })} />
+          </TableToolbar>
+
+          {error && <p className="form-error">{error}</p>}
+
+          <DataTable
+            rows={rows}
+            columns={columns}
+            rowKey={(r) => r.id}
+            loading={loading}
+            empty={t('empty')}
+          />
+        </>
+      )}
+
+      {(adding || editing) && (
+        <DestinationModal
+          existing={editing}
+          onClose={() => {
+            setAdding(false);
+            setEditing(null);
+          }}
+          onSaved={() => {
+            setAdding(false);
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteModal
+          row={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            load();
+          }}
+        />
+      )}
+      {testResult && (
+        <Modal
+          title={t('test.title', { name: testResult.name })}
+          onClose={() => setTestResult(null)}
+          footer={
+            <Button variant="primary" onClick={() => setTestResult(null)}>
+              {t('common:actions.close')}
+            </Button>
+          }
+        >
+          <p className="modal-confirm-text">{testResult.text}</p>
+        </Modal>
+      )}
+    </div>
+  );
+}

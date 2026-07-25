@@ -1,0 +1,28 @@
+[package]
+name = "yagra-forward"
+description = "Yagra-forward — filters and wire renderers for forwarding received passive data (ADR-034)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The wire contract this crate filters and renders. No cycle: yagra-bus knows nothing of forwarding.
+yagra-bus = { path = "../yagra-bus" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Operator-supplied message patterns. The `regex` crate is linear-time, so a hostile pattern
+# cannot ReDoS the hot path (same rationale as the event-rule matcher).
+regex = { workspace = true }
+# RFC 5424 TIMESTAMP rendering.
+chrono = { workspace = true }
+# Re-encoding a v2c trap when the original PDU is unavailable (N-1 poller).
+snmp2 = { workspace = true }
+
+[dev-dependencies]
+# Round-trip assertions: render → parse must yield the same fields.
+yagra-ingest = { path = "../yagra-ingest" }
+uuid = { workspace = true }

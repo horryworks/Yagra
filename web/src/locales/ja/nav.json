@@ -45,6 +45,7 @@
   "settings": {
     "systemHealth": "システムヘルス",
     "pollers": "ポーラー",
+    "forwarding": "転送",
     "integrations": "連携",
     "credentials": "認証情報とシークレット",
     "users": "ユーザー",
@@ -81,6 +82,7 @@
     "troubleshootRuns": "バックグラウンド分析ジョブとレポート",
     "settingsCredentials": "SNMP・API 認証情報（暗号化して保存）",
     "settingsPollers": "分散ポーラーの状態",
+    "settingsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
     "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン"
   },
   "shell": {

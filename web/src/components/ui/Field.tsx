@@ -3,12 +3,23 @@
 // one stylesheet so every form field looks identical. Focus = accent border (not outline),
 // per ui-conventions interactive states.
 
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import './Field.css';
 
 export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={['field', className].filter(Boolean).join(' ')} {...rest} />;
+}
+
+/** Multi-line variant of {@link TextInput} for pasted blocks (PEM certificates, scripts). Shares
+ *  the same `.field` styling so it sits in a form identically. */
+export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea className={['field', 'field-area', className].filter(Boolean).join(' ')} {...rest} />;
 }
 
 /** Required-field marker: a red asterisk that also announces "required" to assistive tech.

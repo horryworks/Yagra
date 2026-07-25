@@ -1654,11 +1654,22 @@ impl EventEngine {
 }
 
 /// Drain events off the bus into the engine. Returns when the stream ends.
-pub async fn consume_events<S>(mut events: S, engine: Arc<EventEngine>)
-where
+///
+/// When forwarding is configured (ADR-034), each message is also offered to the forwarder **before**
+/// rule matching — so a destination receives the full firehose, unaffected by the burst dedup that
+/// exists to keep alerts sane. `offer` never blocks: a full inlet drops the copy and counts it, so
+/// forwarding can never slow intake or alerting.
+pub async fn consume_events<S>(
+    mut events: S,
+    engine: Arc<EventEngine>,
+    forward: Option<crate::forward::ForwardHandle>,
+) where
     S: Stream<Item = EventMsg> + Unpin,
 {
     while let Some(msg) = events.next().await {
+        if let Some(forward) = forward.as_ref() {
+            forward.offer(&msg);
+        }
         engine.handle_event(msg, None).await;
     }
     tracing::warn!("event stream ended");
@@ -2232,6 +2243,8 @@ mod tests {
             trap_oid: None,
             varbinds: Vec::new(),
             truncated: false,
+            raw: None,
+            src_port: None,
         }
     }
 
@@ -2253,6 +2266,8 @@ mod tests {
             trap_oid: Some(trap_oid.into()),
             varbinds: vec![("1.3.6.1.2.1.2.2.1.1.4".into(), "4".into())],
             truncated: false,
+            raw: None,
+            src_port: None,
         }
     }
 

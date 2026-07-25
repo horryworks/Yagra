@@ -1,0 +1,90 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ Forwarding (ADR-034). The list reuses the shared DataTable/Badge/toolbar styles; only
+   the filter builder and the two-up form rows need layout here. Colors/fonts come from theme
+   variables (ui-conventions). */
+
+.fwd-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Target address over its transport, so the cell reads as one unit. */
+.fwd-target {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fwd-sub {
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+.fwd-health {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Security / degradation notes: warning-toned but not an alert badge. */
+.fwd-warn {
+  color: var(--status-warning);
+}
+
+/* Two fields side by side in the modal, stacking on narrow viewports. */
+.fwd-row {
+  display: flex;
+  gap: 12px;
+}
+
+.fwd-row > .modal-field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* all/any selector + "add condition" on one line above the condition rows. */
+.fwd-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fwd-mode > select {
+  max-width: 220px;
+}
+
+/* One filter condition: field / operator / value / remove. */
+.fwd-cond {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fwd-cond > select {
+  flex: 0 0 auto;
+  max-width: 200px;
+}
+
+.fwd-cond > input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .fwd-row,
+  .fwd-cond {
+    flex-wrap: wrap;
+  }
+
+  .fwd-cond > select,
+  .fwd-cond > input {
+    max-width: none;
+    flex: 1 1 140px;
+  }
+}

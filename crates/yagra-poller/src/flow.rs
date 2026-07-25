@@ -8,15 +8,24 @@
 //! Instead they are folded into per-exporter top-N aggregates over a bucket window ([`FlowState`]),
 //! and a separate flush ticker publishes one [`FlowBatch`] per exporter per bucket on `yagra.flows`.
 //!
+//! Alongside the aggregate, every accepted datagram is relayed **verbatim** on `yagra.flows.raw`
+//! ([`RawFlowTee`], ADR-034 Increment 2) so core's forwarder can tee it to an external collector.
+//! The aggregate cannot serve that purpose: bucketing, top-N truncation and 5-tuple folding are all
+//! irreversible. The relay is unconditional — a capture toggle would make forwarding fidelity depend
+//! on configuration — and hands off through a bounded channel so the receive loop never awaits a
+//! publish.
+//!
 //! Best-effort, loss-tolerant tier (ADR-017): a publish failure is counted and dropped, never
 //! buffered. Parsing shares the `yagra-ingest` never-panic contract; the socket setup, source rate
 //! limiter, and timestamp helper are reused verbatim from [`crate::listeners`].
 
 use crate::listeners::{allow, now_unix_ms};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use yagra_bus::{Bus, FlowBatch, FlowRecord, BUS_SCHEMA_VERSION};
+use tokio::sync::mpsc;
+use yagra_bus::{encode_raw, Bus, FlowBatch, FlowRecord, RawFlowDatagram, BUS_SCHEMA_VERSION};
 use yagra_ingest::{
     parse_flow_export, parse_sflow, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter,
 };
@@ -24,27 +33,21 @@ use yagra_ingest::{
 /// Flow datagrams beyond this are rejected outright (a NetFlow/IPFIX export never approaches it).
 const FLOW_BUF_BYTES: usize = 64 * 1024;
 
+/// Hand-off depth between the reader sockets and the raw-datagram publisher. A datagram is ~1.5 kB,
+/// so this bounds the relay's buffer at a few MB; past it the oldest-arriving surplus is dropped and
+/// counted rather than stalling `recv_from` (which would drop datagrams in the kernel instead, with
+/// no counter to show for it).
+const RAW_FLOW_CHANNEL_CAP: usize = 4096;
+
 /// Which flow-export wire format a listener socket speaks. NetFlow v5/v9 and IPFIX share the
 /// template-based [`parse_flow_export`] path (and the :2055-style collector port); sFlow rides its
 /// own datagram shape on its own port (:6343) via [`parse_sflow`]. Both decode to `RawFlow` and feed
 /// the same per-exporter aggregator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlowProto {
-    /// NetFlow v5 / v9 / IPFIX (template-based; edge template cache used).
-    Netflow,
-    /// sFlow v5 (packet-sampling; sampling-rate scaled at parse time).
-    Sflow,
-}
-
-impl FlowProto {
-    /// Low-cardinality metric label for this protocol.
-    fn label(self) -> &'static str {
-        match self {
-            FlowProto::Netflow => "netflow",
-            FlowProto::Sflow => "sflow",
-        }
-    }
-}
+///
+/// This is the bus type itself, not a parallel copy: the value the listener was configured with is
+/// the value that rides `yagra.flows.raw`, so core decodes with the parser the receiver actually
+/// used and the two can never drift.
+pub use yagra_bus::RawFlowProto as FlowProto;
 
 /// Shared, mutation-only edge state for the flow listeners: the template cache (learned from
 /// template FlowSets) and the per-exporter top-N aggregators. Held behind a `std::sync::Mutex`; the
@@ -65,15 +68,106 @@ impl FlowState {
     }
 }
 
+/// One received datagram queued for the raw relay. Kept as bytes so the receive loop's only extra
+/// work is a `Vec` copy — base64 encoding and message assembly happen on the publisher task.
+struct RawFlowItem {
+    exporter: IpAddr,
+    src_port: u16,
+    proto: FlowProto,
+    at_unix_ms: i64,
+    bytes: Vec<u8>,
+}
+
+/// The verbatim-relay inlet handed to each flow reader socket (ADR-034 Increment 2).
+/// [`Self::offer`] never blocks, so a slow bus can never back-pressure datagram reception.
+pub struct RawFlowTee {
+    tx: mpsc::Sender<RawFlowItem>,
+}
+
+impl RawFlowTee {
+    /// Queue one received datagram for relay. A full queue drops it and counts it — flow is a
+    /// best-effort tier, and losing a forwarded copy must never cost a received flow record.
+    fn offer(&self, exporter: IpAddr, src_port: u16, proto: FlowProto, bytes: &[u8]) {
+        let item = RawFlowItem {
+            exporter,
+            src_port,
+            proto,
+            at_unix_ms: now_unix_ms(),
+            bytes: bytes.to_vec(),
+        };
+        if self.tx.try_send(item).is_err() {
+            metrics::counter!("yagra_flow_raw_dropped_total", "reason" => "channel_full")
+                .increment(1);
+        }
+    }
+}
+
+/// The publisher half of the raw relay: the queue plus the identity stamped onto every datagram.
+/// Owned by the task [`run_raw_flow_relay`] runs on.
+pub struct RawFlowRelay {
+    rx: mpsc::Receiver<RawFlowItem>,
+    poller_id: String,
+    pool: Option<String>,
+}
+
+/// Build the raw-relay pair. The tee is shared across every flow reader socket; the relay is moved
+/// into one [`run_raw_flow_relay`] task.
+#[must_use]
+pub fn raw_flow_tee(poller_id: String, pool: Option<String>) -> (Arc<RawFlowTee>, RawFlowRelay) {
+    let (tx, rx) = mpsc::channel(RAW_FLOW_CHANNEL_CAP);
+    (
+        Arc::new(RawFlowTee { tx }),
+        RawFlowRelay {
+            rx,
+            poller_id,
+            pool,
+        },
+    )
+}
+
+/// Publish queued datagrams verbatim on `yagra.flows.raw`. Runs until the inlet closes; a publish
+/// failure is counted and dropped (best-effort tier — never buffered, never retried).
+pub async fn run_raw_flow_relay<B: Bus>(bus: Arc<B>, mut relay: RawFlowRelay) {
+    while let Some(item) = relay.rx.recv().await {
+        let bytes = item.bytes.len() as u64;
+        let datagram = RawFlowDatagram {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: relay.poller_id.clone(),
+            pool: relay.pool.clone(),
+            exporter_ip: item.exporter,
+            src_port: item.src_port,
+            proto: item.proto,
+            at_unix_ms: item.at_unix_ms,
+            bytes: encode_raw(&item.bytes),
+        };
+        match bus.publish_raw_flow(datagram).await {
+            Ok(()) => {
+                metrics::counter!("yagra_flow_raw_relayed_total", "proto" => item.proto.as_str())
+                    .increment(1);
+                metrics::counter!("yagra_flow_raw_bytes_total").increment(bytes);
+            }
+            Err(e) => {
+                metrics::counter!("yagra_flow_raw_dropped_total", "reason" => "publish_error")
+                    .increment(1);
+                tracing::debug!(exporter = %item.exporter, error = %e, "failed to relay raw flow datagram");
+            }
+        }
+    }
+}
+
 /// Run one flow-listener reader loop until the socket errors persistently. Received datagrams are
 /// rate-limited, parsed according to `proto` (NetFlow/IPFIX vs sFlow), and folded into `state`;
 /// nothing is published here (the flush ticker does that). NetFlow and sFlow readers can share one
 /// `state` — both decode to `RawFlow` and merge into the same per-exporter aggregator.
+///
+/// `tee` relays each accepted datagram verbatim for forwarding (ADR-034). `None` disables the relay,
+/// which the tests use to exercise reception alone.
 pub async fn run_flow_listener(
     sock: UdpSocket,
     state: Arc<Mutex<FlowState>>,
     limiter: Arc<Mutex<SourceLimiter>>,
     proto: FlowProto,
+    tee: Option<Arc<RawFlowTee>>,
 ) {
     let mut buf = vec![0u8; FLOW_BUF_BYTES];
     loop {
@@ -84,7 +178,7 @@ pub async fn run_flow_listener(
                 continue;
             }
         };
-        metrics::counter!("yagra_flow_datagrams_received_total", "proto" => proto.label())
+        metrics::counter!("yagra_flow_datagrams_received_total", "proto" => proto.as_str())
             .increment(1);
         if len >= FLOW_BUF_BYTES {
             metrics::counter!("yagra_flow_datagrams_dropped_total", "reason" => "oversize")
@@ -119,8 +213,15 @@ pub async fn run_flow_listener(
         };
         match outcome {
             Ok(n) => {
+                // Relay only what Yagra itself accepted, so a forwarding destination and the flow
+                // tab agree on what was received. `n == 0` still relays: a NetFlow v9 / IPFIX
+                // template set carries no records but is exactly what a downstream collector needs
+                // to decode everything after it.
+                if let Some(tee) = tee.as_ref() {
+                    tee.offer(exporter, peer.port(), proto, &buf[..len]);
+                }
                 if n > 0 {
-                    metrics::counter!("yagra_flow_records_total", "proto" => proto.label())
+                    metrics::counter!("yagra_flow_records_total", "proto" => proto.as_str())
                         .increment(n as u64);
                 }
             }
@@ -290,6 +391,7 @@ mod tests {
             state.clone(),
             limiter(),
             FlowProto::Netflow,
+            None,
         ));
         // 1-second bucket so the test flushes quickly.
         tokio::spawn(run_flow_flusher(
@@ -401,6 +503,7 @@ mod tests {
             state.clone(),
             limiter(),
             FlowProto::Sflow,
+            None,
         ));
         tokio::spawn(run_flow_flusher(
             bus.clone(),
@@ -448,6 +551,7 @@ mod tests {
             state.clone(),
             limiter(),
             FlowProto::Netflow,
+            None,
         ));
         tokio::spawn(run_flow_flusher(
             bus.clone(),
@@ -466,5 +570,103 @@ mod tests {
         // No flow batch should ever arrive (give the flusher a couple of ticks).
         let got = tokio::time::timeout(std::time::Duration::from_millis(2500), flows.recv()).await;
         assert!(got.is_err(), "garbage must not produce a flow batch");
+    }
+
+    /// Spin up a listener with the raw relay attached and return its bus + socket address.
+    async fn listener_with_relay(proto: FlowProto) -> (Arc<InMemoryBus>, std::net::SocketAddr) {
+        let bus = Arc::new(InMemoryBus::new(16));
+        let state = Arc::new(Mutex::new(FlowState::new(500)));
+        let (tee, relay) = raw_flow_tee("edge-1".into(), Some("tokyo".into()));
+        tokio::spawn(run_raw_flow_relay(bus.clone(), relay));
+
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = sock.local_addr().unwrap();
+        tokio::spawn(run_flow_listener(sock, state, limiter(), proto, Some(tee)));
+        (bus, addr)
+    }
+
+    /// The relay's whole point: what arrives on `yagra.flows.raw` is byte-identical to the datagram
+    /// the exporter sent — the aggregate could never reproduce it.
+    #[tokio::test]
+    async fn accepted_datagram_is_relayed_byte_for_byte() {
+        let (bus, addr) = listener_with_relay(FlowProto::Netflow).await;
+        let mut raw = bus.subscribe_raw_flows();
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let pkt = nf9_one_record(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(8, 8, 8, 8), 4096);
+        client.send_to(&pkt, addr).await.unwrap();
+        let sent_from = client.local_addr().unwrap();
+
+        let dg = tokio::time::timeout(std::time::Duration::from_secs(5), raw.recv())
+            .await
+            .expect("raw datagram within timeout")
+            .unwrap();
+        assert_eq!(dg.datagram().unwrap(), pkt, "bytes must be untouched");
+        assert_eq!(dg.poller_id, "edge-1");
+        assert_eq!(dg.pool.as_deref(), Some("tokyo"));
+        assert_eq!(dg.exporter_ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(dg.src_port, sent_from.port());
+        assert_eq!(dg.proto, FlowProto::Netflow);
+    }
+
+    /// A NetFlow v9 template-only datagram decodes to zero records, but a downstream collector
+    /// cannot decode anything after it without the template — so it must still be relayed.
+    #[tokio::test]
+    async fn template_only_datagram_carries_no_records_but_is_still_relayed() {
+        let (bus, addr) = listener_with_relay(FlowProto::Netflow).await;
+        let mut raw = bus.subscribe_raw_flows();
+        let mut flows = bus.subscribe_flows();
+
+        // The template set of a v9 export, with the data set stripped off.
+        let full = nf9_one_record(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(8, 8, 8, 8), 4096);
+        // header(20) + template set(4 + 4 + 6*4) = 52 bytes; the rest is the data set.
+        let template_only = full[..52].to_vec();
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.send_to(&template_only, addr).await.unwrap();
+
+        let dg = tokio::time::timeout(std::time::Duration::from_secs(5), raw.recv())
+            .await
+            .expect("raw datagram within timeout")
+            .unwrap();
+        assert_eq!(dg.datagram().unwrap(), template_only);
+        // ...and it produced no aggregate records, which is exactly why the aggregate stream cannot
+        // stand in for the relay.
+        assert!(flows.try_recv().is_err());
+    }
+
+    /// Garbage is dropped by reception, so it must not be forwarded either: a destination should
+    /// receive what Yagra received, not what Yagra refused.
+    #[tokio::test]
+    async fn unparseable_datagram_is_not_relayed() {
+        let (bus, addr) = listener_with_relay(FlowProto::Netflow).await;
+        let mut raw = bus.subscribe_raw_flows();
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(&[0xFF, 0x00, 0x13, 0x37], addr)
+            .await
+            .unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), raw.recv()).await;
+        assert!(got.is_err(), "garbage must not be relayed");
+    }
+
+    /// The reception path must not depend on the relay draining: a stalled publisher fills the
+    /// bounded queue, and `offer` has to drop rather than await.
+    #[tokio::test]
+    async fn a_full_relay_queue_drops_instead_of_blocking_reception() {
+        let (tee, relay) = raw_flow_tee("edge-1".into(), None);
+        // No relay task spawned — nothing ever drains the queue.
+        let exporter = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        for _ in 0..(RAW_FLOW_CHANNEL_CAP + 64) {
+            // Would hang here if `offer` awaited capacity.
+            tee.offer(exporter, 2055, FlowProto::Netflow, b"x");
+        }
+        assert_eq!(
+            relay.rx.len(),
+            RAW_FLOW_CHANNEL_CAP,
+            "queue must stay bounded"
+        );
     }
 }

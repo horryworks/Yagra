@@ -45,6 +45,7 @@
   "settings": {
     "systemHealth": "System health",
     "pollers": "Pollers",
+    "forwarding": "Forwarding",
     "integrations": "Integrations",
     "credentials": "Credentials & secrets",
     "users": "Users",
@@ -81,6 +82,7 @@
     "troubleshootRuns": "Background analysis jobs and their reports",
     "settingsCredentials": "SNMP and API credentials, encrypted at rest",
     "settingsPollers": "Distributed poller fleet status",
+    "settingsForwarding": "Relay received syslog and traps to external collectors",
     "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients"
   },
   "shell": {

@@ -115,6 +115,12 @@ struct PollerEntry {
     /// The poller host's latest resource sample (CPU/load/mem/disk), from its heartbeat. `None`
     /// until the first beat carrying host telemetry (an N-1 poller never sets it).
     host: Option<HostSample>,
+    /// Passive-event listeners it has bound, e.g. `syslog:0.0.0.0:1514` (ADR-024). Used by the
+    /// forwarding loop guard (ADR-034) and shown on the Pollers view.
+    listeners: Vec<String>,
+    /// Capabilities its build advertises, e.g. `raw-capture` (ADR-034). Empty from an N-1 poller,
+    /// which is exactly what lets the Forwarding page say "this poller cannot do byte-exact yet".
+    caps: Vec<String>,
     /// When core last wrote this poller to the durable PG inventory (throttle bookkeeping).
     last_upserted: Option<Instant>,
 }
@@ -162,6 +168,10 @@ pub struct PollerView {
     pub results_total: u64,
     /// The poller host's latest resource sample (CPU/load/mem/disk), if it reports host telemetry.
     pub host: Option<HostSample>,
+    /// Passive-event listeners it has bound, e.g. `syslog:0.0.0.0:1514`.
+    pub listeners: Vec<String>,
+    /// Capabilities its build advertises (empty from an N-1 poller).
+    pub caps: Vec<String>,
 }
 
 /// Live poller registry + working-set publisher (ADR-009/020).
@@ -250,6 +260,8 @@ impl<B: SyncBus> Coordinator<B> {
                     inflight: 0,
                     results_total: 0,
                     host: None,
+                    listeners: Vec::new(),
+                    caps: Vec::new(),
                     last_upserted: None,
                 });
             if known {
@@ -281,6 +293,8 @@ impl<B: SyncBus> Coordinator<B> {
             entry.working_set_specs = hb.working_set_specs;
             entry.inflight = hb.inflight;
             entry.results_total = hb.results_total;
+            entry.listeners.clone_from(&hb.listeners);
+            entry.caps.clone_from(&hb.caps);
             if hb.host.is_some() {
                 entry.host = hb.host.clone(); // keep the last known sample if a beat omits it
             }
@@ -372,6 +386,8 @@ impl<B: SyncBus> Coordinator<B> {
                     inflight: 0,
                     results_total: 0,
                     host: None,
+                    listeners: Vec::new(),
+                    caps: Vec::new(),
                     last_upserted: None,
                 });
             entry.needs_snapshot = true;
@@ -624,10 +640,42 @@ impl<B: SyncBus> Coordinator<B> {
                 inflight: e.inflight,
                 results_total: st.results_seen.get(id).copied().unwrap_or(0),
                 host: e.host.clone(),
+                listeners: e.listeners.clone(),
+                caps: e.caps.clone(),
             })
             .collect();
         views.sort_by(|a, b| a.id.cmp(&b.id));
         views
+    }
+
+    /// Ports that currently-online pollers have bound as passive-event listeners. Backs the
+    /// forwarding loop guard (ADR-034): sending Yagra's own output back into one of its own
+    /// listeners would amplify without bound.
+    pub fn listener_ports(&self, now: Instant) -> HashSet<u16> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        st.pollers
+            .values()
+            .filter(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
+            .flat_map(|e| e.listeners.iter())
+            // Labels look like `syslog:0.0.0.0:1514` / `trap:[::]:1162` — the port is the last token.
+            .filter_map(|label| label.rsplit(':').next()?.parse::<u16>().ok())
+            .collect()
+    }
+
+    /// Ids of online pollers whose build does **not** advertise `cap`. The Forwarding page uses this
+    /// to say "byte-exact is configured but these pollers can't supply the original bytes yet"
+    /// instead of silently shipping re-rendered output.
+    pub fn pollers_missing_cap(&self, cap: &str, now: Instant) -> Vec<String> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        let mut ids: Vec<String> = st
+            .pollers
+            .iter()
+            .filter(|(_, e)| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
+            .filter(|(_, e)| !e.caps.iter().any(|c| c == cap))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// Count one poll result core consumed off the bus as produced by `poller_id`. Called on the
@@ -691,6 +739,7 @@ mod tests {
             inflight: 0,
             results_total: 0,
             listeners: Vec::new(),
+            caps: Vec::new(),
             host: None,
         }
     }

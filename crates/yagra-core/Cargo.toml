@@ -20,6 +20,12 @@ yagra-authz = { path = "../yagra-authz" }
 yagra-topology = { path = "../yagra-topology" }
 yagra-alert = { path = "../yagra-alert" }
 yagra-discovery = { path = "../yagra-discovery" }
+# Forwarding filters + wire renderers for the passive-data tee (ADR-034).
+yagra-forward = { path = "../yagra-forward" }
+# Flow-export parsing for the forwarder (ADR-034 Increment 2). A relayed NetFlow/IPFIX/sFlow
+# datagram is filtered on its decoded records, so core needs the same parser the poller receives
+# with — and the same bounded template cache. Reception itself still happens only on the poller.
+yagra-ingest = { path = "../yagra-ingest" }
 yagra-secrets = { path = "../yagra-secrets" }
 yagra-transport = { path = "../yagra-transport" }
 yagra-telemetry = { path = "../yagra-telemetry" }
@@ -62,6 +68,11 @@ rmcp = { workspace = true }
 schemars = { workspace = true }
 # tokio-util (CancellationToken) for the MCP service config — already in the tree; named directly.
 tokio-util = { workspace = true }
+# Syslog-over-TLS forwarding destinations (RFC 5425, ADR-034 Increment 2).
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+rustls-pemfile = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

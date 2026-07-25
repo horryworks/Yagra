@@ -40,6 +40,7 @@ import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { AuthSettingsPage } from './pages/AuthSettingsPage';
 import { ApiTokensPage } from './pages/ApiTokensPage';
+import { ForwardingPage } from './pages/ForwardingPage';
 import { TopologyMapPage } from './pages/TopologyMapPage';
 import { DependencyPage } from './pages/DependencyPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
@@ -116,6 +117,7 @@ export function AppRoutes() {
         <Route path="settings" element={<Navigate to="/settings/system-health" replace />} />
         <Route path="settings/system-health" element={<SystemHealthPage />} />
         <Route path="settings/pollers" element={<PollersPage />} />
+        <Route path="settings/forwarding" element={<ForwardingPage />} />
         <Route path="settings/integrations" element={<IntegrationsCatalogPage />} />
         <Route path="settings/integrations/meraki" element={<MerakiIntegrationPage />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />

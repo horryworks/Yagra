@@ -15,6 +15,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
+# RFC 4648 base64 for the raw passive-event payload carried in `EventMsg.raw` (ADR-034).
+# JSON has no byte-string type and `Vec<u8>` serializes as an array of numbers (~3-4× the
+# bytes), so the wire form is base64 and the encode/decode contract lives in this crate.
+data-encoding = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 # Live NATS bus adapter (ADR-007). Gated so unit tests / lib-only consumers don't

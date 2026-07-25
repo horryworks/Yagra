@@ -1,0 +1,172 @@
+{
+  "note": "受信した syslog・SNMP トラップ・フローエクスポートを外部コレクタへ中継します。送出は core が行うので、ファイアウォールで許可する出口は 1 箇所で済みます。",
+  "unavailable": "転送の管理には管理者ロールが必要です。",
+  "signInPrompt": "転送先を管理するにはサインインしてください。",
+  "empty": "転送先がまだありません。現在、何も中継していません。",
+  "count_one": "件の転送先",
+  "count_other": "件の転送先",
+  "securityNote": "転送されたメッセージは Yagra の外へ出ます。syslog 本文には資格情報が含まれることがあります。信頼できるコレクタへ、信頼できる経路でのみ送ってください。",
+
+  "add": {
+    "button": "転送先を追加",
+    "title": "転送先の追加"
+  },
+  "edit": { "title": "転送先の編集" },
+  "delete": {
+    "title": "転送先の削除",
+    "confirm": "「{{name}}」を削除しますか? 以後この宛先へは何も転送されません。"
+  },
+
+  "cols": {
+    "name": "名前",
+    "source": "対象",
+    "target": "転送先",
+    "scope": "範囲",
+    "fidelity": "忠実度",
+    "filter": "フィルタ",
+    "health": "状態",
+    "actions": "操作"
+  },
+
+  "actions": {
+    "edit": "編集",
+    "test": "テスト送信",
+    "delete": "削除"
+  },
+
+  "source": {
+    "syslog": "Syslog",
+    "trap": "SNMP トラップ",
+    "flow": "フローエクスポート"
+  },
+  "dest": {
+    "syslog_udp": "Syslog (UDP)",
+    "syslog_tcp": "Syslog (TCP)",
+    "syslog_tls": "Syslog (TLS / RFC 5425)",
+    "snmp_trap_udp": "SNMPv2c トラップ (UDP)",
+    "flow_udp": "フローエクスポート (UDP)"
+  },
+  "scope": { "allPools": "全プール" },
+  "status": {
+    "enabled": "有効",
+    "disabled": "無効"
+  },
+  "fidelity": {
+    "verbatim": "原本",
+    "rendered": "復元品"
+  },
+
+  "field": {
+    "name": "名前",
+    "namePlaceholder": "central-siem",
+    "source": "転送するもの",
+    "dest": "送信形式",
+    "target": "コレクタ",
+    "targetPlaceholder": "siem.example.com:514",
+    "targetHint": "host:port 形式。IPv6 リテラルは [アドレス]:ポート と書きます。",
+    "pool": "ポーラプール",
+    "poolPlaceholder": "全プール",
+    "fidelity": "忠実度",
+    "fidelityHint": "「原本」は受信したデータグラムをそのまま中継します。「復元品」はパース済みフィールドから組み立て直すため、RFC 5424 の構造化データ・非 UTF-8 バイト・4096 文字を超える本文・33 個目以降の varbind が失われます。",
+    "fidelityImpossible": "この組み合わせでは原本を運べないため、常に復元品を送信します。",
+    "fidelityVerbatimOnly": "フローエクスポートは 1 つのバイナリデータグラムにテンプレートと多数のレコードが入った形式のため、受信したままの中継しかできません。",
+    "caCert": "CA 証明書",
+    "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
+    "caCertHint": "任意。コレクタの証明書に署名した CA がシステムの信頼ストアに無い場合、その PEM 証明書を貼り付けてください。コレクタの証明書検証は常に行われ、無効化する手段はありません。",
+    "community": "SNMP コミュニティ",
+    "communityHint": "トラップを組み立て直す場合にのみ使います。原本を中継するときは機器自身のコミュニティがそのまま乗ります。",
+    "communityKept": "変更しない",
+    "rateLimit": "レート上限",
+    "rateLimitPlaceholder": "無制限",
+    "rateLimitHint": "1 秒あたりのメッセージ数。超過分はキューに積まず破棄し、件数を計上します。",
+    "enabled": "状態",
+
+    "source_ip": "送信元アドレス",
+    "kind": "イベント種別",
+    "facility": "ファシリティ",
+    "severity": "重大度",
+    "hostname": "ホスト名",
+    "app_name": "アプリ名",
+    "message": "メッセージ",
+    "trap_oid": "トラップ OID",
+    "varbind": "varbind",
+    "src_addr": "フロー送信元",
+    "dst_addr": "フロー宛先",
+    "proto": "プロトコル",
+    "src_port": "送信元ポート",
+    "dst_port": "宛先ポート",
+    "src_as": "送信元 AS",
+    "dst_as": "宛先 AS"
+  },
+
+  "valuePlaceholder": {
+    "source_ip": "10.0.0.0/8, 192.168.1.5",
+    "severity": "4 (warning 以上)",
+    "facility": "23",
+    "trap_oid": "1.3.6.1.6.3.1.1.5.",
+    "message": "LINEPROTO-5-",
+    "varbind": "ge-0/0/1",
+    "src_addr": "10.0.0.0/8",
+    "dst_addr": "8.8.8.0/24",
+    "proto": "tcp / udp または番号",
+    "dst_port": "443",
+    "dst_as": "15169"
+  },
+
+  "op": {
+    "eq": "が次と一致",
+    "ne": "が次と不一致",
+    "contains": "が次を含む",
+    "not_contains": "が次を含まない",
+    "prefix": "が次で始まる",
+    "regex": "が正規表現に一致",
+    "not_regex": "が正規表現に不一致",
+    "in_list": "が次のいずれか",
+    "in_cidr": "が次の範囲内",
+    "not_in_cidr": "が次の範囲外",
+    "lte": "が次以下",
+    "gte": "が次以上"
+  },
+
+  "filter": {
+    "label": "フィルタ",
+    "add": "条件を追加",
+    "remove": "条件を削除",
+    "none": "すべて",
+    "emptyHint": "条件なし — ストリーム全体を転送します。",
+    "flowAnyRecord": "フローのデータグラムは複数のレコードをまとめて運びます。いずれか 1 つのレコードが条件に一致すれば、データグラム全体を転送します — 一致しなかったレコードも一緒に流れます。エクスポートを別のデータグラムに再エンコードしない限り、レコード単位で取り除くことはできません。",
+    "count_one": "{{count}} 条件 ({{mode}})",
+    "count_other": "{{count}} 条件 ({{mode}})",
+    "mode": {
+      "all": "すべて一致",
+      "any": "いずれか一致"
+    }
+  },
+
+  "health": {
+    "counts": "送信 {{sent}} / 欠落 {{dropped}}",
+    "paused": "停止中",
+    "degraded": "復元品",
+    "degradedHint": "原本が得られなかったため、一部のメッセージを組み立て直して送信しました。"
+  },
+
+  "test": {
+    "title": "テスト: {{name}}",
+    "ok": "テストメッセージをコレクタへ送信しました。受信側に届いているか確認してください。",
+    "failed": "送信に失敗しました: {{error}}"
+  },
+
+  "warn": {
+    "noRawCapture": "次のポーラはまだ原本のバイト列を送らないため、「原本」設定の宛先でも復元品になります: {{pollers}}。アップグレード後に原本が届くようになります。",
+    "noFlowRelay": "次のポーラはまだフローデータグラムを中継しないため、そのポーラが受信したエクスポータからは何も転送されません: {{pollers}}。アップグレードすると中継が始まります。",
+    "standby": "この core はスタンバイです。ここで転送先を編集できますが、実際の送出はアクティブな core が行います。"
+  },
+
+  "err": {
+    "load": "転送先を読み込めませんでした。",
+    "save": "転送先を保存できませんでした。",
+    "delete": "転送先を削除できませんでした。",
+    "test": "テストを実行できませんでした。",
+    "duplicate": "同じ名前の転送先が既に存在します。"
+  }
+}

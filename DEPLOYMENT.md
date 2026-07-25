@@ -42,6 +42,22 @@ Yagra is two long-running binaries plus a static WebUI, backed by four stores/bu
 | `4222` | — | `YAGRA_NATS_PORT` | NATS bus | internal; published **only** with TLS+auth (D) |
 | `5432` / `6379` / `8428` / `9428` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs | internal only |
 
+> **Outbound (forwarding).** Settings ▸ Forwarding relays received syslog / SNMP traps / flow
+> exports on to external collectors. **Core** does the sending — not the pollers — so only core
+> needs egress to the collector's `host:port` (UDP, TCP, or TLS). Nothing is sent until you add a
+> destination. A TLS destination verifies the collector's certificate against the container's system
+> trust store; for a private CA, paste its PEM into the destination — there is no way to disable
+> verification.
+>
+> **Bus bandwidth cost.** So that forwarding can relay what a device actually sent, pollers carry the
+> original bytes to core whether or not any destination exists today: passive events gain a base64
+> `raw` field (**≈1.3× on `yagra.events`** — about +1.4 MB/s at 5000 msg/s), and every received flow
+> datagram is relayed verbatim on `yagra.flows.raw` (**≈370 kbit/s at 1000 flows/s, ≈3.7 Mbit/s at
+> 10 000**, on top of the aggregated `yagra.flows` stream). This is deliberate — a capture toggle
+> would make forwarding fidelity depend on configuration rather than being a property of the system —
+> but it is real WAN traffic for a **remote-site poller**, so size the site link accordingly. Core
+> itself pays nothing per message when no destination is configured.
+
 ---
 
 ## A — Single node, Docker (build from source)<a id="a--single-node-docker-build"></a>

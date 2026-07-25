@@ -23,6 +23,18 @@ const fn default_version() -> u16 {
     BUS_SCHEMA_VERSION
 }
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
+/// datagram to passive events ([`EventMsg::raw`], ADR-034). Core requires it before promising a
+/// forwarding destination byte-exact output.
+pub const CAP_RAW_CAPTURE: &str = "raw-capture";
+
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it relays received flow-export
+/// datagrams verbatim on [`crate::subjects::flows_raw`] ([`RawFlowDatagram`], ADR-034 Increment 2).
+/// Distinct from [`CAP_RAW_CAPTURE`] because the two shipped separately: an Increment-1 poller
+/// attaches raw bytes to events but publishes no flow datagrams at all, so a flow destination fed
+/// only by such pollers receives nothing rather than degraded output.
+pub const CAP_FLOW_RELAY: &str = "flow-relay";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -510,6 +522,12 @@ pub struct HeartbeatMsg {
     /// Passive-event listeners the poller has bound (e.g. `syslog:514`, `trap:162`).
     #[serde(default)]
     pub listeners: Vec<String>,
+    /// Optional capabilities this poller build advertises, e.g. [`CAP_RAW_CAPTURE`]. Lets core tell
+    /// "this poller cannot do X" apart from "this poller is misconfigured" during a rolling upgrade
+    /// (ADR-017) instead of silently degrading — the Forwarding page surfaces the difference.
+    /// Empty from an N-1 poller.
+    #[serde(default)]
+    pub caps: Vec<String>,
     /// The poller host's own resource sample (CPU/load/memory/disk) for self-observability. `None`
     /// from an N-1 poller that predates host telemetry — core then simply shows no host data for
     /// it. Core is the single writer of the resulting `yagra_host_*` series to the TSDB (remote
@@ -1165,6 +1183,36 @@ pub struct EventMsg {
     /// Whether the original message was clipped to the size cap.
     #[serde(default)]
     pub truncated: bool,
+    /// The **original datagram**, base64-encoded (ADR-034 forwarding). Every other field on this
+    /// message is lossy — the text is lossy-UTF-8 and clipped to 4096 chars, and only the first 32
+    /// varbinds survive — so byte-exact forwarding to an external collector needs the bytes
+    /// themselves. Pollers attach this for syslog/trap; `None` for webhooks and from an N-1 poller
+    /// that predates forwarding (core then falls back to re-rendering from the parsed fields).
+    ///
+    /// Use [`encode_raw`] / [`EventMsg::raw_bytes`] rather than encoding at the call site.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+    /// Source port of the datagram. Kept alongside `source_ip` because a forwarding target may want
+    /// the full peer address; `None` for webhooks and from an N-1 poller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_port: Option<u16>,
+}
+
+/// Encode a raw datagram for [`EventMsg::raw`] (RFC 4648 standard base64, with padding).
+#[must_use]
+pub fn encode_raw(bytes: &[u8]) -> String {
+    data_encoding::BASE64.encode(bytes)
+}
+
+impl EventMsg {
+    /// Decode [`EventMsg::raw`] back to the original datagram. Returns `None` when the producer
+    /// attached no raw payload, or when the payload is not valid base64 (a corrupt field must not
+    /// take down the consumer — the caller falls back to re-rendering from the parsed fields).
+    #[must_use]
+    pub fn raw_bytes(&self) -> Option<Vec<u8>> {
+        let raw = self.raw.as_deref()?;
+        data_encoding::BASE64.decode(raw.as_bytes()).ok()
+    }
 }
 
 // ── Flow records (Phase 3, ADR-031) — edge-received NetFlow/IPFIX/sFlow, pre-aggregated ─────
@@ -1234,6 +1282,81 @@ pub struct FlowRecord {
     pub packets: u64,
     /// Number of original flow records folded into this row.
     pub flows: u32,
+}
+
+// ── Raw flow datagrams (ADR-034 Increment 2) — verbatim relay for forwarding ────────────────
+
+/// Which flow-export wire format a datagram carries. Also the poller listener's protocol selector
+/// (`yagra_poller::flow::FlowProto` is an alias of this) so the value on the wire and the value the
+/// listener was configured with can never drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawFlowProto {
+    /// NetFlow v5 / v9 / IPFIX (template-based).
+    Netflow,
+    /// sFlow v5 (packet sampling).
+    Sflow,
+}
+
+impl RawFlowProto {
+    /// Stable string form (matches the serde tag; also the metric label and the `kind` filter field).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Netflow => "netflow",
+            Self::Sflow => "sflow",
+        }
+    }
+}
+
+/// One received flow-export datagram relayed **verbatim**, published on
+/// [`crate::subjects::flows_raw`] for core's forwarder (ADR-034 Increment 2).
+///
+/// This is deliberately *not* a second copy of [`FlowBatch`]. The batch is edge-aggregated —
+/// 1-minute buckets, top-N by bytes, identical 5-tuples folded, and every field outside the
+/// aggregation key (TCP flags, ToS, ifIndex, next-hop, per-flow start/end times) discarded — so a
+/// downstream collector could never be given back what the exporter actually sent. Forwarding
+/// promises "what Yagra received, unchanged", which only the original bytes can satisfy. Both
+/// streams therefore ride the bus: the aggregate for ClickHouse (ADR-031), the datagram for the tee.
+///
+/// A poller publishes these continuously once a flow listener is bound — there is no capture toggle,
+/// because a toggle would make forwarding fidelity a function of configuration rather than a
+/// property of the system. The cost is the raw datagram volume on the bus (a NetFlow v9 export is
+/// ~1400 bytes carrying ~30 records, so ~370 kbit/s at 1000 flows/s); see DEPLOYMENT.md.
+///
+/// Best-effort, loss-tolerant tier like the rest of flow (ADR-017): a failed publish is counted and
+/// dropped, never buffered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawFlowDatagram {
+    /// Message schema version (defaulted for forward-compat).
+    #[serde(default = "default_version")]
+    pub schema_version: u16,
+    /// Poller that received the datagram.
+    pub poller_id: String,
+    /// Which poller pool received it, if the poller declares one.
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// Source address of the datagram — the exporting device.
+    pub exporter_ip: IpAddr,
+    /// Source port of the datagram.
+    #[serde(default)]
+    pub src_port: u16,
+    /// The wire format, so core decodes with the right parser without sniffing.
+    pub proto: RawFlowProto,
+    /// Reception time at the edge, as Unix time in milliseconds (UTC).
+    pub at_unix_ms: i64,
+    /// The original datagram, base64-encoded. Encode with [`encode_raw`], decode with
+    /// [`RawFlowDatagram::datagram`].
+    pub bytes: String,
+}
+
+impl RawFlowDatagram {
+    /// Decode [`Self::bytes`] back to the original datagram. Returns `None` when the payload is not
+    /// valid base64 — a corrupt field must not take down the consumer.
+    #[must_use]
+    pub fn datagram(&self) -> Option<Vec<u8>> {
+        data_encoding::BASE64.decode(self.bytes.as_bytes()).ok()
+    }
 }
 
 #[cfg(test)]
@@ -1548,11 +1671,71 @@ mod tests {
             trap_oid: None,
             varbinds: Vec::new(),
             truncated: false,
+            raw: Some(encode_raw(b"<188>link down on ge-0/0/1")),
+            src_port: Some(54_321),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"kind\":\"syslog\""));
         let back: EventMsg = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
+        // The raw payload survives the round trip byte-for-byte — that is the whole point of
+        // carrying it (ADR-034): re-rendering from the parsed fields is lossy.
+        assert_eq!(
+            back.raw_bytes().as_deref(),
+            Some(&b"<188>link down on ge-0/0/1"[..])
+        );
+    }
+
+    #[test]
+    fn event_msg_without_raw_decodes_to_none_and_omits_the_field() {
+        let event = EventMsg {
+            schema_version: BUS_SCHEMA_VERSION,
+            event_id: Uuid::nil(),
+            kind: EventKind::Webhook,
+            at_unix_ms: 0,
+            source_ip: None,
+            pool: None,
+            message: "alert".into(),
+            facility: None,
+            syslog_severity: None,
+            hostname: None,
+            app_name: None,
+            trap_oid: None,
+            varbinds: Vec::new(),
+            truncated: false,
+            raw: None,
+            src_port: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // `skip_serializing_if` keeps the common (webhook / no-capture) case off the wire entirely.
+        assert!(!json.contains("\"raw\""), "{json}");
+        assert!(!json.contains("\"src_port\""), "{json}");
+        assert_eq!(event.raw_bytes(), None);
+    }
+
+    #[test]
+    fn corrupt_raw_payload_decodes_to_none_instead_of_panicking() {
+        let mut event = EventMsg {
+            schema_version: BUS_SCHEMA_VERSION,
+            event_id: Uuid::nil(),
+            kind: EventKind::Syslog,
+            at_unix_ms: 0,
+            source_ip: None,
+            pool: None,
+            message: "x".into(),
+            facility: None,
+            syslog_severity: None,
+            hostname: None,
+            app_name: None,
+            trap_oid: None,
+            varbinds: Vec::new(),
+            truncated: false,
+            raw: Some("!!!not base64!!!".into()),
+            src_port: None,
+        };
+        assert_eq!(event.raw_bytes(), None);
+        event.raw = Some(encode_raw(&[0xff, 0x00, 0xfe]));
+        assert_eq!(event.raw_bytes(), Some(vec![0xff, 0x00, 0xfe]));
     }
 
     #[test]
@@ -1572,6 +1755,9 @@ mod tests {
         assert!(event.source_ip.is_none());
         assert!(event.varbinds.is_empty());
         assert!(!event.truncated);
+        // N-1 poller (pre-ADR-034): no raw payload — core falls back to re-rendering.
+        assert!(event.raw.is_none());
+        assert!(event.src_port.is_none());
     }
 
     #[test]
@@ -1648,6 +1834,69 @@ mod tests {
         assert_eq!(batch.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(batch.dropped, 0); // defaulted
         assert!(batch.records.is_empty());
+    }
+
+    #[test]
+    fn raw_flow_datagram_round_trips_and_decodes_to_the_original_bytes() {
+        // A NetFlow v9 header's leading bytes include 0x00 — the payload must survive as *bytes*,
+        // which is the whole reason it is base64 rather than a string field.
+        let original = [0x00u8, 0x09, 0x00, 0x01, 0xff, 0xfe, 0x00, 0x7f];
+        let dg = RawFlowDatagram {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: Some("tokyo".into()),
+            exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            src_port: 51_234,
+            proto: RawFlowProto::Netflow,
+            at_unix_ms: 1_700_000_000_000,
+            bytes: encode_raw(&original),
+        };
+        let json = serde_json::to_string(&dg).unwrap();
+        assert!(json.contains("\"proto\":\"netflow\""), "{json}");
+        let back: RawFlowDatagram = serde_json::from_str(&json).unwrap();
+        assert_eq!(dg, back);
+        assert_eq!(back.datagram().unwrap(), original.to_vec());
+    }
+
+    #[test]
+    fn minimal_raw_flow_datagram_defaults_version_pool_and_port() {
+        let json = r#"{
+            "poller_id": "edge-1",
+            "exporter_ip": "2001:db8::1",
+            "proto": "sflow",
+            "at_unix_ms": 0,
+            "bytes": "",
+            "future_field": "ignored"
+        }"#;
+        let dg: RawFlowDatagram = serde_json::from_str(json).unwrap();
+        assert_eq!(dg.schema_version, BUS_SCHEMA_VERSION);
+        assert_eq!(dg.pool, None);
+        assert_eq!(dg.src_port, 0);
+        assert!(dg.exporter_ip.is_ipv6()); // never assume v4
+        assert_eq!(dg.datagram().unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn corrupt_raw_flow_payload_decodes_to_none_instead_of_panicking() {
+        let dg = RawFlowDatagram {
+            schema_version: BUS_SCHEMA_VERSION,
+            poller_id: "edge-1".into(),
+            pool: None,
+            exporter_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            src_port: 0,
+            proto: RawFlowProto::Netflow,
+            at_unix_ms: 0,
+            bytes: "not base64!!".into(),
+        };
+        assert!(dg.datagram().is_none());
+    }
+
+    #[test]
+    fn raw_flow_proto_str_matches_serde_tag() {
+        for proto in [RawFlowProto::Netflow, RawFlowProto::Sflow] {
+            let tag = serde_json::to_string(&proto).unwrap();
+            assert_eq!(tag, format!("\"{}\"", proto.as_str()));
+        }
     }
 
     #[test]
@@ -1939,6 +2188,7 @@ mod tests {
             inflight: 1,
             results_total: 100,
             listeners: vec!["syslog:514".into()],
+            caps: vec![CAP_RAW_CAPTURE.to_owned()],
             host: Some(yagra_common::HostSample {
                 cpu_pct: 12.5,
                 mem_used_bytes: 2,
@@ -1969,6 +2219,7 @@ mod tests {
         assert_eq!(hb.last_seq, 0);
         assert!(hb.listeners.is_empty());
         assert!(hb.host.is_none()); // N-1 poller: no host telemetry
+        assert!(hb.caps.is_empty()); // N-1 poller: advertises no capabilities (ADR-034)
     }
 
     #[test]

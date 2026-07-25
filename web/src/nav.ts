@@ -239,6 +239,13 @@ export const NAV: NavSection[] = [
             mono: 'Po',
           },
           {
+            labelKey: 'settings.forwarding',
+            descKey: 'descriptions.settingsForwarding',
+            path: '/settings/forwarding',
+            implemented: true,
+            mono: 'Fw',
+          },
+          {
             labelKey: 'settings.integrations',
             path: '/settings/integrations',
             implemented: true,
