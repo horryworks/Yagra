@@ -94,56 +94,62 @@
   "toast": {
     "startFailed": "Could not start the analysis."
   },
-  "anomaly": {
-    "note": "Baseline-relative deviations across every collected series. Each finding is scored by how far and how unusually it left its learned envelope.",
-    "windows": {
-      "d1": "last 24 h",
-      "d7": "last 7 d",
-      "d30": "last 30 d"
+  "report": {
+    "common": {
+      "score": "score",
+      "processing": "Running analysis…",
+      "idle": {
+        "ready": "Set the scope and window above, then run the analysis.",
+        "running": "An analysis is running — open it from Analysis runs, or start a new one above."
+      },
+      "jobMissing": "That analysis run no longer exists. Run a new one above.",
+      "terminal": "Analysis {{state}}{{detail}}. Adjust the scope and run again.",
+      "finished": "finished {{time}}",
+      "notice": "Not available: {{reason}}",
+      "noticePlain": "This analysis could not read one of its data tiers.",
+      "capped": "results were capped",
+      "summary": {
+        "critical": "critical",
+        "warning": "warning",
+        "total": "total",
+        "nodes": "nodes"
+      },
+      "filters": {
+        "all": "All"
+      },
+      "sort": {
+        "label": "Sort",
+        "byScore": "by score",
+        "byNode": "by node"
+      },
+      "list": {
+        "emptyFiltered": "Nothing matches the current filter.",
+        "emptyAll": "No findings — nothing stood out in this scope and window."
+      },
+      "toast": {
+        "runFirst": "Run an analysis first."
+      },
+      "windows": {
+        "h1": "last 1 h",
+        "h6": "last 6 h",
+        "d1": "last 24 h",
+        "d7": "last 7 d",
+        "d30": "last 30 d"
+      },
+      "baselines": {
+        "d7": "7 d trailing",
+        "d14": "14 d trailing",
+        "d30": "30 d trailing"
+      }
     },
-    "baselines": {
-      "d14": "14 d trailing",
-      "d30": "30 d trailing"
-    },
-    "phases": {
-      "baseline": "Fetching baseline…",
-      "fit": "Fitting per-metric models…",
-      "score": "Scoring residuals…",
-      "rank": "Ranking & classifying findings…"
-    },
-    "card": {
-      "score": "score"
-    },
-    "processing": {
-      "title": "Running analysis…"
-    },
-    "toast": {
-      "exportSoon": "Export to CSV is coming soon.",
-      "runFirst": "Run an analysis first."
-    },
-    "empty": {
-      "running": "An analysis is running — open it from Analysis runs, or start a new one above.",
-      "idle": "Set the scope and window above, then Run analysis to detect anomalies."
-    },
-    "terminalNote": "Analysis {{state}}{{detail}}. Adjust the scope and run again.",
-    "summary": {
-      "critical": "critical",
-      "warning": "warning",
-      "total": "total",
-      "nodes": "nodes",
-      "finished": "finished {{time}}"
-    },
-    "filters": {
-      "allKinds": "All kinds"
-    },
-    "sort": {
-      "label": "Sort",
-      "byScore": "by score",
-      "byNode": "by node"
-    },
-    "list": {
-      "emptyKind": "No anomalies of this kind in the current scope.",
-      "emptyAll": "No anomalies found — everything is within its learned envelope."
+    "anomaly": {
+      "note": "Baseline-relative deviations across every collected series. Each finding is scored by how far and how unusually it left its learned envelope.",
+      "phases": {
+        "baseline": "Fetching baseline…",
+        "fit": "Fitting per-metric models…",
+        "score": "Scoring residuals…",
+        "rank": "Ranking & classifying findings…"
+      }
     }
   },
   "scope": {

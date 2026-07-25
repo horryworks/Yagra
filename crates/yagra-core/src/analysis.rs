@@ -1238,11 +1238,7 @@ impl AnalysisRunner {
                 kind: "event_storm".to_owned(),
                 when_label: rel_label(peak_bucket, to),
                 duration: format!("{peak:.0} in {}m", EVENT_BUCKET_SECS / 60),
-                detail: serde_json::json!({
-                    "peak": peak,
-                    "baseline_mean": mean(&baseline),
-                    "bucket_secs": EVENT_BUCKET_SECS,
-                }),
+                detail: storm_detail(peak, mean(&baseline), peak_bucket),
             });
         }
         finalize(&mut findings);
@@ -1543,9 +1539,7 @@ impl AnalysisRunner {
                 kind: "traffic_anomaly".to_owned(),
                 when_label: rel_label(peak_t, to),
                 duration: format!("{} peak", human_bytes(peak)),
-                detail: serde_json::json!({
-                    "peak_bytes": peak, "baseline_mean_bytes": mean(&baseline),
-                }),
+                detail: traffic_detail(peak, mean(&baseline), peak_t),
             });
         }
         finalize(&mut findings);
@@ -2378,6 +2372,31 @@ const INCIDENT_NODE_CAP: usize = 20;
 /// Per-node split of event-bucket counts for `event_storm`: (baseline counts, recent (bucket, count)).
 type StormBuckets = (Vec<f64>, Vec<(i64, f64)>);
 
+/// The `event_storm` finding detail. `peak_at` is the peak bucket's start (Unix **seconds**) so the
+/// WebUI can render a *localized* relative time instead of falling back to the pre-rendered English
+/// `when_label` — the label itself is built by `rel_label` and can't go through `t()`. Purely
+/// additive to the JSONB blob (older rows simply lack the key, and the UI falls back), so this is
+/// N-1 safe with no migration. Split out from the engine fn so it is unit-testable — the engine
+/// itself needs a live event store.
+fn storm_detail(peak: f64, baseline_mean: f64, peak_at: i64) -> serde_json::Value {
+    serde_json::json!({
+        "peak": peak,
+        "baseline_mean": baseline_mean,
+        "bucket_secs": EVENT_BUCKET_SECS,
+        "peak_at": peak_at,
+    })
+}
+
+/// The `traffic_anomaly` finding detail — the flow twin of [`storm_detail`], carrying the same
+/// additive `peak_at` (Unix seconds) for a localizable relative label.
+fn traffic_detail(peak_bytes: f64, baseline_mean_bytes: f64, peak_at: i64) -> serde_json::Value {
+    serde_json::json!({
+        "peak_bytes": peak_bytes,
+        "baseline_mean_bytes": baseline_mean_bytes,
+        "peak_at": peak_at,
+    })
+}
+
 /// One dated signal on an incident timeline (`incident_correlate`).
 struct IncidentSignal {
     at_s: i64,
@@ -2767,6 +2786,25 @@ mod tests {
             assert_eq!(AnalysisTool::from_str(t.as_str()), Some(t));
         }
         assert_eq!(AnalysisTool::from_str("nope"), None);
+    }
+
+    #[test]
+    fn storm_detail_carries_peak_at_for_a_localizable_label() {
+        // `when_label` is pre-rendered English (`rel_label`), so the WebUI needs the raw peak time
+        // to format a JA-correct relative label. Regression guard: don't drop `peak_at`.
+        let d = storm_detail(42.0, 3.5, 1_700_000_000);
+        assert_eq!(d["peak"], 42.0);
+        assert_eq!(d["baseline_mean"], 3.5);
+        assert_eq!(d["peak_at"], 1_700_000_000_i64);
+        assert_eq!(d["bucket_secs"], EVENT_BUCKET_SECS);
+    }
+
+    #[test]
+    fn traffic_detail_carries_peak_at_for_a_localizable_label() {
+        let d = traffic_detail(1_048_576.0, 1024.0, 1_700_000_500);
+        assert_eq!(d["peak_bytes"], 1_048_576.0);
+        assert_eq!(d["baseline_mean_bytes"], 1024.0);
+        assert_eq!(d["peak_at"], 1_700_000_500_i64);
     }
 
     #[test]

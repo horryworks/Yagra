@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { KINDS, METHODS, TOOLS, kindMeta, toolById } from './data';
+import { KINDS, METHODS, TOOLS, kindMeta, reportPathFor, toolById } from './data';
 
 describe('troubleshoot catalog data', () => {
   it('every tool has a unique id and a known method', () => {
@@ -31,11 +31,14 @@ describe('troubleshoot catalog data', () => {
     );
   });
 
-  it('only Anomaly Detection exposes a report path (others have no report screen yet)', () => {
-    expect(toolById('anomaly')?.reportPath).toBe('/troubleshoot/anomaly');
-    expect(toolById('correlation')?.reportPath).toBeUndefined();
-    expect(toolById('capacity')?.reportPath).toBeUndefined();
-    expect(toolById('flap')?.reportPath).toBeUndefined();
+  it('a report path, when present, is the canonical per-tool report route', () => {
+    // Reports land per tool (1:1 with the scan) across several increments, so this asserts the SHAPE
+    // rather than the set; `report/registry.test.ts` owns the stronger invariant — a tool advertises
+    // a reportPath exactly when it has a report body.
+    for (const t of TOOLS) {
+      if (t.reportPath) expect(t.reportPath, t.id).toBe(reportPathFor(t.id));
+    }
+    expect(toolById('anomaly')?.reportPath).toBe('/troubleshoot/report/anomaly');
   });
 
   it('depth is within the 1–5 pip range', () => {

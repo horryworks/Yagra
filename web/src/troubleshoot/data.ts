@@ -53,8 +53,17 @@ export interface Tool {
   desc: string;
   /** i18next key for the "Surfaces …" reveal line. */
   reveal: string;
-  /** Report route, only for tools whose report screen exists (Anomaly today). */
+  /**
+   * Report route — set **only** on tools that have a body in the report registry, so a "View →"
+   * button never lands on a redirect. Always [`reportPathFor`]`(id)`; every tool gets one as the
+   * per-tool reports land (see `report/registry.tsx`).
+   */
   reportPath?: string;
+}
+
+/** The canonical report URL for a tool (`/troubleshoot/report/:tool`, see `report/registry.tsx`). */
+export function reportPathFor(id: AnalysisToolKey): string {
+  return `/troubleshoot/report/${id}`;
 }
 
 export const TOOLS: Tool[] = [
@@ -68,7 +77,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.anomaly.scope',
     desc: 'tools.anomaly.desc',
     reveal: 'tools.anomaly.reveal',
-    reportPath: '/troubleshoot/anomaly',
+    reportPath: '/troubleshoot/report/anomaly',
   },
   {
     id: 'correlation',

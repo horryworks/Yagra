@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Report-family styles. Kept out of troubleshoot.css (already 21 KB) and imported once by
+   ReportShell. The report spine — .ts-cfgbar / .ts-processing* / .ts-res-* / .ts-chip* / .ts-anom* /
+   .ts-empty-note — is reused from troubleshoot.css unchanged; only genuinely new pieces live here. */
+
+/* Wrapper so a summary stat can carry its own leading separator without breaking the flex row. */
+.tsr-stat-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Tier-unavailable notice (e.g. a flow analysis run with the flow tier off). Informational, not a
+   failure — so it borrows the neutral info accent, never a status colour. */
+.tsr-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--severity-info);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.tsr-notice-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--severity-info);
+  color: var(--bg-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-2xs);
+  font-weight: 700;
+}

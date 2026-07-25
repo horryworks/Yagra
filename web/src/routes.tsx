@@ -4,7 +4,7 @@
 // ComingSoon so the structure is complete and navigable. Unknown paths fall back to the
 // dashboard.
 
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './components/shell/AppShell';
 import { ComingSoon } from './components/ui/ComingSoon';
 import { LoginPage } from './pages/LoginPage';
@@ -44,7 +44,14 @@ import { TopologyMapPage } from './pages/TopologyMapPage';
 import { DependencyPage } from './pages/DependencyPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
 import { RunsPage } from './troubleshoot/RunsPage';
-import { AnomalyReportPage } from './troubleshoot/AnomalyReportPage';
+import { ReportRoutePage } from './troubleshoot/report/ReportRoutePage';
+
+/** Redirect that keeps the query string — a bare `<Navigate to="/x"/>` drops it, which would strip
+ *  the `?job=<id>` off existing `/troubleshoot/anomaly?job=…` links and land on an empty report. */
+function RedirectPreservingQuery({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={{ pathname: to, search }} replace />;
+}
 
 export function AppRoutes() {
   return (
@@ -94,7 +101,14 @@ export function AppRoutes() {
         {/* Troubleshoot — deep diagnostics run as background jobs */}
         <Route path="troubleshoot" element={<TroubleshootCatalogPage />} />
         <Route path="troubleshoot/runs" element={<RunsPage />} />
-        <Route path="troubleshoot/anomaly" element={<AnomalyReportPage />} />
+        {/* One parameterized route serves every tool's report — adding a report touches only the
+          registry, never this file. The old per-tool path stays as a redirect for live deep links
+          (toasts, bookmarks), preserving `?job=`. */}
+      <Route path="troubleshoot/report/:tool" element={<ReportRoutePage />} />
+      <Route
+        path="troubleshoot/anomaly"
+        element={<RedirectPreservingQuery to="/troubleshoot/report/anomaly" />}
+      />
         <Route path="troubleshoot/scheduled" element={<ComingSoon />} />
         <Route path="troubleshoot/findings" element={<ComingSoon />} />
 
