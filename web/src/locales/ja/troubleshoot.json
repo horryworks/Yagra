@@ -438,6 +438,44 @@
         "compare": "前の期間と宛先を比較中…",
         "rank": "新規宛先をランク付け中…"
       }
+    },
+    "flow_scan": {
+      "note": "異常に多数の宛先やポートへ通信している送信元です。散布図は2つの攻撃形態を分離します。右下は1つの開放サービスを探す水平スキャン、左上は少数のホストを調べる垂直スキャンです。",
+      "shape": "スキャンの形状",
+      "noun": "送信元",
+      "searchPlaceholder": "送信元アドレスを検索…",
+      "cardCounts": "宛先 {{dst}} · ポート {{ports}}",
+      "axis": {
+        "dst": "宛先数",
+        "ports": "ポート数"
+      },
+      "pattern": {
+        "horizontal": "水平",
+        "vertical": "垂直"
+      },
+      "cols": {
+        "source": "送信元",
+        "node": "検出元",
+        "dst": "宛先数",
+        "ports": "ポート数",
+        "flows": "フロー数",
+        "pattern": "形状"
+      },
+      "summary": {
+        "sources": "送信元",
+        "widestFanout": "最大ファンアウト",
+        "deepestSweep": "最大ポート数",
+        "flows": "フロー数"
+      },
+      "sort": {
+        "byDst": "宛先数順",
+        "byPorts": "ポート数順",
+        "byFlows": "フロー数順"
+      },
+      "phases": {
+        "scan": "ファンアウトをスキャン中…",
+        "rank": "スキャン送信元をランク付け中…"
+      }
     }
   },
   "scope": {

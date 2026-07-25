@@ -14,6 +14,7 @@ import { CorrelationBody } from './bodies/CorrelationBody';
 import { EventFlapBody } from './bodies/EventFlapBody';
 import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
+import { FlowScanBody } from './bodies/FlowScanBody';
 import { NewDestinationBody } from './bodies/NewDestinationBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
 import { SeverityShiftBody } from './bodies/SeverityShiftBody';
@@ -30,6 +31,7 @@ import {
   groupByRule,
   maxDetail,
   nodeSummaryStats,
+  scanPattern,
   sevOf,
   sumDetail,
   totalLabel,
@@ -537,6 +539,56 @@ const newDestination: ReportDescriptor = {
   ],
 };
 
+/**
+ * Flow scan counts **sources**, and deliberately has NO node stat: observed live, one job returned
+ * 12 findings all on a single node, so a "nodes" number would read `1` and hide twelve scanners.
+ */
+const flowScan: ReportDescriptor = {
+  tool: 'flow_scan',
+  i18nKey: 'report.flow_scan',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.flow_scan.summary.sources', value: totalLabel },
+    {
+      labelKey: 'report.flow_scan.summary.widestFanout',
+      value: (f) => {
+        const d = maxDetail(f, 'distinct_dst');
+        return d === undefined ? '—' : fmtCount(d);
+      },
+    },
+    {
+      labelKey: 'report.flow_scan.summary.deepestSweep',
+      value: (f) => {
+        const p = maxDetail(f, 'distinct_ports');
+        return p === undefined ? '—' : fmtCount(p);
+      },
+    },
+    {
+      labelKey: 'report.flow_scan.summary.flows',
+      separatorBefore: true,
+      value: (f) => fmtCount(sumDetail(f, 'flows')),
+    },
+  ],
+  phaseKeys: ['report.flow_scan.phases.scan', 'report.flow_scan.phases.rank'],
+  Body: FlowScanBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'source', cell: (f) => detailStr(f, 'src') ?? '' },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'distinct_dst', cell: (f) => String(detailNum(f, 'distinct_dst') ?? '') },
+    { header: 'distinct_ports', cell: (f) => String(detailNum(f, 'distinct_ports') ?? '') },
+    { header: 'flows', cell: (f) => String(detailNum(f, 'flows') ?? '') },
+    {
+      header: 'pattern',
+      cell: (f) => scanPattern(detailNum(f, 'distinct_dst') ?? 0, detailNum(f, 'distinct_ports') ?? 0),
+    },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
@@ -550,4 +602,5 @@ export const REPORTS: ReportRegistry = {
   traffic_anomaly: trafficAnomaly,
   talker_shift: talkerShift,
   new_destination: newDestination,
+  flow_scan: flowScan,
 };

@@ -224,6 +224,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.flow_scan.scope',
     desc: 'tools.flow_scan.desc',
     reveal: 'tools.flow_scan.reveal',
+    reportPath: '/troubleshoot/report/flow_scan',
   },
   // ── Cross-store ──
   {

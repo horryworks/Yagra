@@ -325,3 +325,60 @@
 .tsr-section .ts-section-label {
   margin-bottom: var(--space-2);
 }
+
+/* ── Scan-shape scatter (flow_scan) ── */
+
+.tsr-scanplot {
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+}
+
+/* Region shading is a hint only — each region also carries a text label, since colour alone must
+   never be the sole cue. */
+.tsr-scan-region {
+  opacity: 0.07;
+}
+
+.tsr-scan-region.horizontal {
+  fill: var(--series-6);
+}
+
+.tsr-scan-region.vertical {
+  fill: var(--series-3);
+}
+
+.tsr-scan-frame {
+  fill: none;
+  stroke: var(--border-color);
+  stroke-width: 1;
+}
+
+/* dst = ports: above it a vertical probe, below it a horizontal sweep. */
+.tsr-scan-diagonal {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.tsr-scan-tick,
+.tsr-scan-region-label {
+  fill: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 9px;
+}
+
+.tsr-scan-dot {
+  fill: var(--series-6);
+  stroke: var(--bg-primary);
+  stroke-width: 1;
+}
+
+.tsr-scan-dot.warn {
+  fill: var(--status-warning);
+}
+
+.tsr-scan-dot.crit {
+  fill: var(--status-critical);
+}

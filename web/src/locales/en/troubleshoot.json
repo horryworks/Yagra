@@ -451,6 +451,44 @@
         "compare": "Comparing destinations against the previous window…",
         "rank": "Ranking new destinations…"
       }
+    },
+    "flow_scan": {
+      "note": "Sources contacting an abnormal number of distinct destinations or ports. The scatter separates the two attack shapes: far right and low is a horizontal sweep hunting one open service; high and left is a vertical probe mapping a few hosts.",
+      "shape": "Scan shape",
+      "noun": "sources",
+      "searchPlaceholder": "Search source address…",
+      "cardCounts": "{{dst}} destinations · {{ports}} ports",
+      "axis": {
+        "dst": "distinct destinations",
+        "ports": "distinct ports"
+      },
+      "pattern": {
+        "horizontal": "Horizontal",
+        "vertical": "Vertical"
+      },
+      "cols": {
+        "source": "Source",
+        "node": "Seen on",
+        "dst": "Destinations",
+        "ports": "Ports",
+        "flows": "Flows",
+        "pattern": "Shape"
+      },
+      "summary": {
+        "sources": "sources",
+        "widestFanout": "widest fan-out",
+        "deepestSweep": "most ports",
+        "flows": "flows"
+      },
+      "sort": {
+        "byDst": "by destinations",
+        "byPorts": "by ports",
+        "byFlows": "by flows"
+      },
+      "phases": {
+        "scan": "Scanning fan-out…",
+        "rank": "Ranking scanning sources…"
+      }
     }
   },
   "scope": {

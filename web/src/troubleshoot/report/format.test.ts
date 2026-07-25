@@ -13,6 +13,7 @@ import {
   groupByRule,
   humanDays,
   maxDetail,
+  scanPattern,
   sevOf,
   sumDetail,
   toCsv,
@@ -99,6 +100,14 @@ describe('bucketing helpers match the backend', () => {
   it('calls one flap per hour chronic', () => {
     expect(flapBucket(1)).toBe('chronic');
     expect(flapBucket(0.99)).toBe('intermittent');
+  });
+
+  it('classifies scan shape like Rust, resolving the tie to horizontal', () => {
+    expect(scanPattern(4496, 20)).toBe('horizontal'); // sweep: many hosts, one service
+    expect(scanPattern(20, 85)).toBe('vertical'); // probe: few hosts, many ports
+    // The backend uses `>=`, so an equal count is horizontal on both sides. If this ever disagreed,
+    // the UI badge would contradict the engine's own scoring.
+    expect(scanPattern(50, 50)).toBe('horizontal');
   });
 });
 

@@ -162,6 +162,18 @@ export function flapBucket(perHour: number): 'chronic' | 'intermittent' {
 }
 
 /**
+ * Scan shape from a source's fan-out. Many hosts ⇒ a horizontal sweep (hunting one open service);
+ * many ports ⇒ a vertical probe (mapping a few hosts).
+ *
+ * Mirrors the backend's `distinct_dst >= distinct_ports` **including the tie**, which resolves to
+ * horizontal — the backend ships this classification only inside an English `duration` string, so it
+ * has to be recomputed here to be localizable, and it must agree exactly.
+ */
+export function scanPattern(distinctDst: number, distinctPorts: number): 'horizontal' | 'vertical' {
+  return distinctDst >= distinctPorts ? 'horizontal' : 'vertical';
+}
+
+/**
  * The rule name behind an `event_flap` finding. The backend encodes it as `event:{rule_name}` in
  * `metric`; the `rule_id` in `detail` is a grouping key only and must never be rendered (no raw
  * UUIDs in the UI).
