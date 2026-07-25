@@ -10,7 +10,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useTroubleshootStore } from './store';
-import { toolById } from './data';
+import { reportPathFor, toolById } from './data';
 import { relTime, inputFromJob } from './format';
 import type { AnalysisJob } from '../types/api';
 
@@ -24,17 +24,16 @@ function RunRow({ job }: { job: AnalysisJob }) {
   const tool = toolById(job.tool);
   // `tool.name` is an i18next key (see data.ts); an unknown tool falls back to its raw backend id.
   const name = tool ? t(tool.name) : job.tool;
-  const reportPath = tool?.reportPath;
+  // Every tool has a report now, so the path is derived from the job's own tool key — a job from a
+  // future backend the catalog doesn't know yet still resolves (the route redirects if unknown).
+  const reportPath = reportPathFor(job.tool);
 
-  const view = () => {
-    if (reportPath) navigate(`${reportPath}?job=${encodeURIComponent(job.id)}`);
-    else showToast(t('runs.toast.reportSoon', { name }));
-  };
+  const view = () => navigate(`${reportPath}?job=${encodeURIComponent(job.id)}`);
 
   const retry = async () => {
     try {
       const fresh = await createJob(inputFromJob(job));
-      showToast(t('runs.toast.requeued', { name }), reportPath ? `${reportPath}?job=${fresh.id}` : undefined);
+      showToast(t('runs.toast.requeued', { name }), `${reportPath}?job=${fresh.id}`);
     } catch {
       showToast(t('runs.toast.requeueFailed'));
     }

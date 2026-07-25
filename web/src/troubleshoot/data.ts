@@ -249,6 +249,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.incident_correlate.scope',
     desc: 'tools.incident_correlate.desc',
     reveal: 'tools.incident_correlate.reveal',
+    reportPath: '/troubleshoot/report/incident_correlate',
   },
 ];
 

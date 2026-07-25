@@ -25,7 +25,6 @@
     },
     "analysisError": "analysis error",
     "toast": {
-      "reportSoon": "A report screen for {{name}} is coming soon.",
       "requeued": "{{name}} re-queued.",
       "requeueFailed": "Could not re-queue the analysis."
     }
@@ -511,6 +510,38 @@
       "phases": {
         "check": "Checking traffic concentration…",
         "rank": "Ranking dominant conversations…"
+      }
+    },
+    "incident_correlate": {
+      "note": "Nodes where signals of more than one kind coincided — a metric anomaly, passive events, and the dominant flow. The timeline is the point: the ORDER in which they arrived is what points at a cause.",
+      "mix": "Signal mix across incidents",
+      "signals_one": "{{count}} signal",
+      "signals_other": "{{count}} signals",
+      "began": "began {{time}}",
+      "lane": {
+        "metric": "Metric",
+        "event": "Events",
+        "flow": "Flow",
+        "other": "Other"
+      },
+      "has": {
+        "metric": "has metric",
+        "event": "has events",
+        "flow": "has flow"
+      },
+      "summary": {
+        "incidents": "incidents",
+        "signals": "signals",
+        "kinds": "signal kinds",
+        "nodes": "nodes"
+      },
+      "sort": {
+        "byEarliest": "earliest first",
+        "bySignals": "by signal count"
+      },
+      "phases": {
+        "assemble": "Assembling incident timeline…",
+        "rank": "Ranking incidents…"
       }
     }
   },

@@ -15,6 +15,7 @@ import { EventFlapBody } from './bodies/EventFlapBody';
 import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
 import { FlowScanBody } from './bodies/FlowScanBody';
+import { IncidentCorrelateBody } from './bodies/IncidentCorrelateBody';
 import { NewDestinationBody } from './bodies/NewDestinationBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
 import { SaturationBody } from './bodies/SaturationBody';
@@ -35,10 +36,13 @@ import {
   scanPattern,
   sevOf,
   sumDetail,
+  timelineKinds,
+  timelineLength,
   totalLabel,
 } from './format';
 import { splitDestinations } from './newDestination';
-import type { ReportDescriptor, ReportRegistry } from './types';
+import type { AnalysisToolKey } from '../../types/api';
+import type { ReportDescriptor } from './types';
 
 /** Window presets most tools share (the shell resolves the keys with `t()` at render). */
 export const WINDOW_PRESETS = {
@@ -634,7 +638,47 @@ const saturation: ReportDescriptor = {
   ],
 };
 
-export const REPORTS: ReportRegistry = {
+/**
+ * Incident correlate counts **incidents** and the signals inside them. Its findings are only emitted
+ * when >=2 signals of >=2 kinds coincide, so "signals" is the number that says how much evidence
+ * there is — the thing an operator triages on.
+ */
+const incidentCorrelate: ReportDescriptor = {
+  tool: 'incident_correlate',
+  i18nKey: 'report.incident_correlate',
+  controls: {
+    controls: ['scope', 'window', 'sensitivity'],
+    windows: [WINDOW_PRESETS.h6, WINDOW_PRESETS.d1, WINDOW_PRESETS.d7],
+    defaults: { windowSecs: 86_400, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.incident_correlate.summary.incidents', value: totalLabel },
+    {
+      labelKey: 'report.incident_correlate.summary.signals',
+      value: (f) => fmtCount(f.reduce((n, x) => n + timelineLength(x), 0)),
+    },
+    {
+      labelKey: 'report.incident_correlate.summary.kinds',
+      value: (f) => String(new Set(f.flatMap((x) => timelineKinds(x))).size),
+    },
+    {
+      labelKey: 'report.incident_correlate.summary.nodes',
+      separatorBefore: true,
+      value: (f) => String(countNodes(f)),
+    },
+  ],
+  phaseKeys: ['report.incident_correlate.phases.assemble', 'report.incident_correlate.phases.rank'],
+  Body: IncidentCorrelateBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'signals', cell: (f) => String(timelineLength(f)) },
+    { header: 'kinds', cell: (f) => timelineKinds(f).join(' ') },
+    { header: 'when', cell: (f) => f.when_label },
+  ],
+};
+
+export const REPORTS: Record<AnalysisToolKey, ReportDescriptor> = {
   anomaly,
   correlation,
   capacity,
@@ -649,4 +693,5 @@ export const REPORTS: ReportRegistry = {
   new_destination: newDestination,
   flow_scan: flowScan,
   saturation,
+  incident_correlate: incidentCorrelate,
 };

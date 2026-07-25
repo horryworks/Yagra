@@ -53,13 +53,15 @@ describe('troubleshoot report registry', () => {
     }
   });
 
-  it('a tool advertises a report path exactly when it has a report body', () => {
-    // The biconditional is what keeps each rollout increment shippable: a half-wired tool would
-    // otherwise show a "View →" button that redirects straight back to the catalog.
+  it('every tool has a report and advertises its canonical path', () => {
+    // 1:1 between scan and report is now total. `REPORTS` is typed as a full
+    // `Record<AnalysisToolKey, …>`, so adding a tool without a report is a compile error; this
+    // asserts the catalog side (the reportPath the View buttons use) stays in lockstep.
     for (const tool of TOOLS) {
-      expect(Boolean(REPORTS[tool.id]), tool.id).toBe(Boolean(tool.reportPath));
-      if (tool.reportPath) expect(tool.reportPath, tool.id).toBe(`/troubleshoot/report/${tool.id}`);
+      expect(REPORTS[tool.id], tool.id).toBeDefined();
+      expect(tool.reportPath, tool.id).toBe(`/troubleshoot/report/${tool.id}`);
     }
+    expect(Object.keys(REPORTS).sort()).toEqual(TOOLS.map((t) => t.id).sort());
   });
 
   it('summary stats tolerate no findings and never count notice rows', () => {

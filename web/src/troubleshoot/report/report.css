@@ -417,3 +417,154 @@
   color: var(--text-secondary);
   font-size: var(--font-xs);
 }
+
+/* ── Incident timeline (incident_correlate) ── */
+
+/* This report opts out of the .ts-anom row grid: an incident is a sequence, so each one is a
+   full-width card whose ordering is the payload. */
+.tsr-incidents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tsr-incident {
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--severity-info);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary);
+}
+
+.tsr-incident.sev-warn {
+  border-left-color: var(--status-warning);
+}
+
+.tsr-incident.sev-crit {
+  border-left-color: var(--status-critical);
+}
+
+.tsr-incident-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.tsr-incident-score {
+  font-family: var(--font-family);
+  font-size: var(--font-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.tsr-incident-node {
+  font-weight: 600;
+}
+
+.tsr-incident-meta {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.tsr-timeline {
+  width: 100%;
+  height: auto;
+}
+
+.tsr-tl-lane {
+  stroke: var(--border-color);
+  stroke-width: 1;
+}
+
+.tsr-tl-lane-label {
+  fill: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 9px;
+}
+
+.tsr-tl-axis {
+  fill: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 9px;
+}
+
+/* Lane colour is categorical (which store the signal came from); severity tone rides on the stroke
+   so both dimensions are readable at once. */
+.tsr-tl-dot {
+  fill: var(--series-1);
+  stroke: var(--bg-secondary);
+  stroke-width: 1.5;
+}
+
+.tsr-tl-dot.event {
+  fill: var(--series-5);
+}
+
+.tsr-tl-dot.flow {
+  fill: var(--series-6);
+}
+
+.tsr-tl-dot.other {
+  fill: var(--text-tertiary);
+}
+
+.tsr-tl-dot.crit {
+  stroke: var(--status-critical);
+}
+
+.tsr-tl-dot.warn {
+  stroke: var(--status-warning);
+}
+
+.tsr-signal-list {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tsr-signal {
+  display: grid;
+  grid-template-columns: 72px 150px 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--font-xs);
+}
+
+.tsr-signal-kind {
+  font-family: var(--ui-font-family);
+  font-weight: 600;
+}
+
+.tsr-signal-time {
+  color: var(--text-tertiary);
+}
+
+.tsr-signal-label {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tsr-signal.crit .tsr-signal-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .tsr-signal {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .tsr-incident-meta {
+    margin-left: 0;
+  }
+
+  .tsr-incident-head {
+    flex-wrap: wrap;
+  }
+}

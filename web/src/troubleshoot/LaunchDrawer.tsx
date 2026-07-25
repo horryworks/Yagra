@@ -12,7 +12,7 @@ import { Button } from '../components/ui/Button';
 import { Segmented } from './Segmented';
 import { ScopePicker } from './ScopePicker';
 import { allScope, type ScopeValue } from './scope';
-import { METHODS, toolById, type Tool } from './data';
+import { METHODS, toolById, type Tool, reportPathFor } from './data';
 import { useTroubleshootStore } from './store';
 import type { AnalysisJobInput } from '../types/api';
 
@@ -124,7 +124,7 @@ export function LaunchDrawer() {
       closeDrawer();
       showToast(
         t('launch.toast.started', { name: t(tool.name) }),
-        tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
+        `${reportPathFor(tool.id)}?job=${job.id}`,
       );
     } catch {
       showToast(t('toast.startFailed'));

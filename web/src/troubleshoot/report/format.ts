@@ -234,6 +234,28 @@ export function groupByRule(findings: AnalysisFinding[]): RuleGroup[] {
     .sort((a, b) => b.cycles - a.cycles);
 }
 
+/** The signal array of an `incident_correlate` finding, defensively (a non-array detail ⇒ empty). */
+function timelineOf(f: AnalysisFinding): { at?: unknown; kind?: unknown }[] {
+  const raw = (f.detail as { timeline?: unknown } | null | undefined)?.timeline;
+  return Array.isArray(raw) ? (raw as { at?: unknown; kind?: unknown }[]) : [];
+}
+
+/** How many signals an incident finding carries — the "how much evidence" number. */
+export function timelineLength(f: AnalysisFinding): number {
+  return timelineOf(f).length;
+}
+
+/** The distinct signal kinds in an incident (metric/event/flow/…), for the mix and CSV. */
+export function timelineKinds(f: AnalysisFinding): string[] {
+  return [
+    ...new Set(
+      timelineOf(f)
+        .map((s) => (typeof s.kind === 'string' ? s.kind : undefined))
+        .filter((k): k is string => Boolean(k)),
+    ),
+  ];
+}
+
 /** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
 function csvField(v: string): string {
   return `"${v.replace(/"/g, '""')}"`;

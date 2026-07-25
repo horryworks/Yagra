@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
-import { METHODS, type Tool } from './data';
+import { METHODS, type Tool, reportPathFor } from './data';
 import { useTroubleshootStore } from './store';
 import { defaultAnalysisInput } from './scope';
 
@@ -61,7 +61,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
       const job = await createJob(defaultAnalysisInput(tool.id, t));
       showToast(
         t('toolCard.toast.startedAll', { name: t(tool.name) }),
-        tool.reportPath ? `${tool.reportPath}?job=${job.id}` : undefined,
+        `${reportPathFor(tool.id)}?job=${job.id}`,
       );
     } catch {
       showToast(t('toast.startFailed'));
