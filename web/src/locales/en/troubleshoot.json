@@ -422,6 +422,35 @@
         "compare": "Comparing talkers against the previous window…",
         "rank": "Ranking new talkers…"
       }
+    },
+    "new_destination": {
+      "note": "Traffic to a destination that wasn't there in the baseline window. A new external AS can mean C2 or exfiltration; a new port usually means a new service or a scan. The two are listed separately because they are different findings with different severity ceilings.",
+      "showAria": "Which destinations to show",
+      "show": {
+        "both": "Both",
+        "as": "AS only",
+        "ports": "Ports only"
+      },
+      "asHeading_one": "New destination AS ({{count}})",
+      "asHeading_other": "New destination AS ({{count}})",
+      "portHeading_one": "New destination port ({{count}})",
+      "portHeading_other": "New destination ports ({{count}})",
+      "topAs": "By volume",
+      "topPorts": "By volume",
+      "newAs": "new AS",
+      "newPort": "new port",
+      "noAs": "No new destination AS in this window.",
+      "noPorts": "No new destination ports in this window.",
+      "summary": {
+        "newAs": "new AS",
+        "newPorts": "new ports",
+        "asBytes": "bytes to new AS",
+        "portBytes": "bytes to new ports"
+      },
+      "phases": {
+        "compare": "Comparing destinations against the previous window…",
+        "rank": "Ranking new destinations…"
+      }
     }
   },
   "scope": {

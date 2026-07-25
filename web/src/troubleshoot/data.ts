@@ -212,6 +212,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.new_destination.scope',
     desc: 'tools.new_destination.desc',
     reveal: 'tools.new_destination.reveal',
+    reportPath: '/troubleshoot/report/new_destination',
   },
   {
     id: 'flow_scan',

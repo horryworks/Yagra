@@ -315,3 +315,13 @@
   font-size: var(--font-2xs);
   font-weight: 700;
 }
+
+/* A titled section within a report body — used where one job legitimately produces two different
+   kinds of finding (new_destination's AS rows vs port rows), which must not be merged into one list. */
+.tsr-section {
+  margin-bottom: var(--space-4);
+}
+
+.tsr-section .ts-section-label {
+  margin-bottom: var(--space-2);
+}

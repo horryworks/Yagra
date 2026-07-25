@@ -14,6 +14,7 @@ import { CorrelationBody } from './bodies/CorrelationBody';
 import { EventFlapBody } from './bodies/EventFlapBody';
 import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
+import { NewDestinationBody } from './bodies/NewDestinationBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
 import { SeverityShiftBody } from './bodies/SeverityShiftBody';
 import { TalkerShiftBody } from './bodies/TalkerShiftBody';
@@ -33,6 +34,7 @@ import {
   sumDetail,
   totalLabel,
 } from './format';
+import { splitDestinations } from './newDestination';
 import type { ReportDescriptor, ReportRegistry } from './types';
 
 /** Window presets most tools share (the shell resolves the keys with `t()` at render). */
@@ -491,6 +493,50 @@ const talkerShift: ReportDescriptor = {
   ],
 };
 
+/**
+ * New destination counts each shape separately — AS rows and port rows are different findings with
+ * different score ceilings (the backend caps ports at 74), so one merged total would mislead.
+ */
+const newDestination: ReportDescriptor = {
+  tool: 'new_destination',
+  i18nKey: 'report.new_destination',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    {
+      labelKey: 'report.new_destination.summary.newAs',
+      value: (f) => String(splitDestinations(f).as.length),
+    },
+    {
+      labelKey: 'report.new_destination.summary.newPorts',
+      value: (f) => String(splitDestinations(f).ports.length),
+    },
+    {
+      labelKey: 'report.new_destination.summary.asBytes',
+      separatorBefore: true,
+      value: (f) => formatBytes(splitDestinations(f).as.reduce((s, x) => s + x.dest.bytes, 0)),
+    },
+    {
+      labelKey: 'report.new_destination.summary.portBytes',
+      value: (f) => formatBytes(splitDestinations(f).ports.reduce((s, x) => s + x.dest.bytes, 0)),
+    },
+  ],
+  phaseKeys: ['report.new_destination.phases.compare', 'report.new_destination.phases.rank'],
+  Body: NewDestinationBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'kind', cell: (f) => f.metric },
+    { header: 'asn', cell: (f) => String(detailNum(f, 'asn') ?? '') },
+    { header: 'as_name', cell: (f) => detailStr(f, 'as_name') ?? '' },
+    { header: 'port', cell: (f) => String(detailNum(f, 'port') ?? '') },
+    { header: 'bytes', cell: (f) => String(detailNum(f, 'bytes') ?? '') },
+    { header: 'node', cell: (f) => f.node_name },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
@@ -503,4 +549,5 @@ export const REPORTS: ReportRegistry = {
   auth_probe: authProbe,
   traffic_anomaly: trafficAnomaly,
   talker_shift: talkerShift,
+  new_destination: newDestination,
 };
