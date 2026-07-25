@@ -158,6 +158,55 @@ pub struct EventRow {
     pub action: String,
 }
 
+/// Per-node event count in one time bucket — the input to the Troubleshoot `event_storm` analysis.
+#[derive(Debug, Clone)]
+pub struct EventBucketCount {
+    pub node_id: Uuid,
+    /// Bucket start, Unix seconds.
+    pub bucket_start_s: i64,
+    pub count: i64,
+}
+
+/// Fire/clear churn for one (node, rule) pair — the input to the Troubleshoot `event_flap` analysis.
+#[derive(Debug, Clone)]
+pub struct EventFlapStat {
+    pub node_id: Uuid,
+    pub rule_id: Uuid,
+    pub rule_name: String,
+    /// `fired` + `refreshed` rows in the window.
+    pub fires: i64,
+    /// `cleared` rows in the window.
+    pub clears: i64,
+}
+
+/// Per-node syslog-severity count — the input to the Troubleshoot `severity_shift` analysis.
+#[derive(Debug, Clone)]
+pub struct EventSeverityCount {
+    pub node_id: Uuid,
+    /// Syslog severity 0–7 (0 = emergency … 7 = debug).
+    pub severity: i16,
+    pub count: i64,
+}
+
+/// A high-volume unmatched-event signature — the input to the Troubleshoot `rule_gap` analysis.
+#[derive(Debug, Clone)]
+pub struct EventSignatureCount {
+    pub kind: String,
+    /// The clustering key (trap OID or syslog app-name).
+    pub signature: String,
+    pub count: i64,
+    /// A representative node the signature was seen on (for the finding's node link).
+    pub sample_node: Option<Uuid>,
+}
+
+/// Authentication-signal volume from one source — the input to the Troubleshoot `auth_probe` analysis.
+#[derive(Debug, Clone)]
+pub struct EventAuthSource {
+    pub source_ip: Option<String>,
+    pub node_id: Option<Uuid>,
+    pub count: i64,
+}
+
 /// One received event queued for the async batch persist writer. Carries the raw [`EventMsg`] plus
 /// the correlation/planning outputs the matcher derived, so the writer can fan it out to
 /// PostgreSQL and/or the log store without re-deriving anything.
@@ -565,6 +614,173 @@ impl EventRepo {
                     message: row.try_get("message")?,
                     matched_rule_id: row.try_get("matched_rule_id")?,
                     action: row.try_get("action")?,
+                })
+            })
+            .collect()
+    }
+
+    // ── Troubleshoot analytics (ADR-022 event/flow increment) ──
+    // Read-only aggregates over `events` for the passive-monitoring analyses. All are parameterized
+    // (never string-interpolated) and windowed by `at_unix_ms`. NB: when the VictoriaLogs log store
+    // is enabled, PostgreSQL retains only alert-linked rows (ADR-024) — so the count-based analyses
+    // (`event_storm`/`severity_shift`/`rule_gap`) then see the alert-linked subset, while `event_flap`
+    // keys on fired/cleared rows (always alert-linked, hence complete). Analyses note this in-summary.
+
+    /// Per-(node, time-bucket) event counts across `[from_ms, to_ms]`. Uncorrelated events (no node)
+    /// are excluded — an event storm is attributed to a device.
+    pub async fn event_counts_by_bucket(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        bucket_secs: i64,
+    ) -> anyhow::Result<Vec<EventBucketCount>> {
+        let b = bucket_secs.max(1);
+        let rows = sqlx::query(
+            "SELECT node_id, (at_unix_ms / 1000 / $3) * $3 AS bucket, count(*) AS n \
+             FROM events \
+             WHERE node_id IS NOT NULL AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
+             GROUP BY node_id, bucket",
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(b)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(EventBucketCount {
+                    node_id: row.try_get("node_id")?,
+                    bucket_start_s: row.try_get::<i64, _>("bucket")?,
+                    count: row.try_get::<i64, _>("n")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Fire/clear churn per (node, rule) across `[from_ms, to_ms]` — the raw material for
+    /// `event_flap` (repeated linkDown/linkUp, BGP session churn). Only alert-linked rows.
+    pub async fn event_flap_stats(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> anyhow::Result<Vec<EventFlapStat>> {
+        let rows = sqlx::query(
+            "SELECT e.node_id, e.matched_rule_id, COALESCE(r.name, 'rule') AS rule_name, \
+                    count(*) FILTER (WHERE e.action IN ('fired','refreshed')) AS fires, \
+                    count(*) FILTER (WHERE e.action = 'cleared') AS clears \
+             FROM events e LEFT JOIN event_rules r ON r.id = e.matched_rule_id \
+             WHERE e.node_id IS NOT NULL AND e.matched_rule_id IS NOT NULL \
+               AND e.at_unix_ms >= $1 AND e.at_unix_ms <= $2 \
+             GROUP BY e.node_id, e.matched_rule_id, r.name",
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(EventFlapStat {
+                    node_id: row.try_get("node_id")?,
+                    rule_id: row.try_get("matched_rule_id")?,
+                    rule_name: row.try_get("rule_name")?,
+                    fires: row.try_get::<i64, _>("fires")?,
+                    clears: row.try_get::<i64, _>("clears")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Per-(node, syslog-severity) counts across `[from_ms, to_ms]` — the input to `severity_shift`.
+    pub async fn event_severity_counts(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> anyhow::Result<Vec<EventSeverityCount>> {
+        let rows = sqlx::query(
+            "SELECT node_id, syslog_severity, count(*) AS n \
+             FROM events \
+             WHERE kind = 'syslog' AND node_id IS NOT NULL AND syslog_severity IS NOT NULL \
+               AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
+             GROUP BY node_id, syslog_severity",
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(EventSeverityCount {
+                    node_id: row.try_get("node_id")?,
+                    severity: row.try_get::<i16, _>("syslog_severity")?,
+                    count: row.try_get::<i64, _>("n")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Top unmatched-event signatures (trap OID or syslog app-name) across `[from_ms, to_ms]` —
+    /// the coverage gaps `rule_gap` surfaces. Unmatched rows only.
+    pub async fn event_unmatched_signatures(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventSignatureCount>> {
+        let rows = sqlx::query(
+            "SELECT kind, COALESCE(trap_oid, app_name) AS sig, count(*) AS n, \
+                    min(node_id) AS sample_node \
+             FROM events \
+             WHERE matched_rule_id IS NULL AND COALESCE(trap_oid, app_name) IS NOT NULL \
+               AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
+             GROUP BY kind, sig ORDER BY n DESC LIMIT $3",
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(EventSignatureCount {
+                    kind: row.try_get("kind")?,
+                    signature: row.try_get("sig")?,
+                    count: row.try_get::<i64, _>("n")?,
+                    sample_node: row.try_get("sample_node")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Authentication-signal volume grouped by source across `[from_ms, to_ms]` — the input to
+    /// `auth_probe` (authenticationFailure traps + auth-failure syslog).
+    pub async fn event_auth_sources(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventAuthSource>> {
+        let rows = sqlx::query(
+            "SELECT host(source_ip) AS src, node_id, count(*) AS n \
+             FROM events \
+             WHERE at_unix_ms >= $1 AND at_unix_ms <= $2 \
+               AND (trap_oid = '1.3.6.1.6.3.1.1.5.5' \
+                    OR message ILIKE '%authentication fail%' \
+                    OR message ILIKE '%auth failure%' \
+                    OR message ILIKE '%login fail%' \
+                    OR message ILIKE '%failed password%') \
+             GROUP BY src, node_id ORDER BY n DESC LIMIT $3",
+        )
+        .bind(from_ms)
+        .bind(to_ms)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(EventAuthSource {
+                    source_ip: row.try_get("src")?,
+                    node_id: row.try_get("node_id")?,
+                    count: row.try_get::<i64, _>("n")?,
                 })
             })
             .collect()

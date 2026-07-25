@@ -11,7 +11,23 @@ describe('troubleshoot catalog data', () => {
 
   it('tool ids match the backend tool keys', () => {
     expect(TOOLS.map((t) => t.id).sort()).toEqual(
-      ['anomaly', 'capacity', 'correlation', 'flap'].sort(),
+      [
+        'anomaly',
+        'capacity',
+        'correlation',
+        'flap',
+        'event_storm',
+        'event_flap',
+        'severity_shift',
+        'rule_gap',
+        'auth_probe',
+        'traffic_anomaly',
+        'talker_shift',
+        'new_destination',
+        'flow_scan',
+        'saturation',
+        'incident_correlate',
+      ].sort(),
     );
   });
 

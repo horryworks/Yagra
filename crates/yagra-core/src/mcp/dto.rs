@@ -317,7 +317,9 @@ pub struct AnalysisFindingDto {
     /// The metric involved (or, for correlation, the two series being related).
     pub metric: String,
     /// Finding kind/shape: `spike`/`level`/`drift`/`flat`/`season` (anomaly), `capacity`, `flap`,
-    /// or `correlation`.
+    /// `correlation`, or one of the event/flow kinds (`event_storm`, `event_flap`, `severity_shift`,
+    /// `rule_gap`, `auth_probe`, `traffic_anomaly`, `talker_shift`, `new_destination`, `flow_scan`,
+    /// `saturation`, `incident_correlate`).
     pub kind: String,
     /// Relative "when" label (e.g. `2h ago`, `co-rising`, `N flaps`).
     pub when_label: String,

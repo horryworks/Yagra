@@ -17,7 +17,7 @@
 import type { AnalysisToolKey } from '../types/api';
 
 /** Analysis technique behind a tool — colours it on the card (categorical, series palette). */
-export type Method = 'stat' | 'ml' | 'topo' | 'probe';
+export type Method = 'stat' | 'ml' | 'topo' | 'probe' | 'passive' | 'flow';
 
 export interface MethodMeta {
   /** i18next key (troubleshoot ns) for the method label — resolve with `t()` at the call site. */
@@ -31,6 +31,8 @@ export const METHODS: Record<Method, MethodMeta> = {
   ml: { label: 'methods.ml', color: 'var(--series-2)' },
   topo: { label: 'methods.topo', color: 'var(--series-3)' },
   probe: { label: 'methods.probe', color: 'var(--series-4)' },
+  passive: { label: 'methods.passive', color: 'var(--series-5)' },
+  flow: { label: 'methods.flow', color: 'var(--series-6)' },
 };
 
 export interface Tool {
@@ -100,6 +102,130 @@ export const TOOLS: Tool[] = [
     scope: 'tools.flap.scope',
     desc: 'tools.flap.desc',
     reveal: 'tools.flap.reveal',
+  },
+  // ── Passive monitoring (events, ADR-024) ──
+  {
+    id: 'event_storm',
+    mono: 'Es',
+    name: 'tools.event_storm.name',
+    method: 'passive',
+    depth: 2,
+    est: 'tools.event_storm.est',
+    scope: 'tools.event_storm.scope',
+    desc: 'tools.event_storm.desc',
+    reveal: 'tools.event_storm.reveal',
+  },
+  {
+    id: 'event_flap',
+    mono: 'Ef',
+    name: 'tools.event_flap.name',
+    method: 'passive',
+    depth: 2,
+    est: 'tools.event_flap.est',
+    scope: 'tools.event_flap.scope',
+    desc: 'tools.event_flap.desc',
+    reveal: 'tools.event_flap.reveal',
+  },
+  {
+    id: 'severity_shift',
+    mono: 'Sv',
+    name: 'tools.severity_shift.name',
+    method: 'passive',
+    depth: 2,
+    est: 'tools.severity_shift.est',
+    scope: 'tools.severity_shift.scope',
+    desc: 'tools.severity_shift.desc',
+    reveal: 'tools.severity_shift.reveal',
+  },
+  {
+    id: 'rule_gap',
+    mono: 'Rg',
+    name: 'tools.rule_gap.name',
+    method: 'passive',
+    depth: 1,
+    est: 'tools.rule_gap.est',
+    scope: 'tools.rule_gap.scope',
+    desc: 'tools.rule_gap.desc',
+    reveal: 'tools.rule_gap.reveal',
+  },
+  {
+    id: 'auth_probe',
+    mono: 'Au',
+    name: 'tools.auth_probe.name',
+    method: 'passive',
+    depth: 1,
+    est: 'tools.auth_probe.est',
+    scope: 'tools.auth_probe.scope',
+    desc: 'tools.auth_probe.desc',
+    reveal: 'tools.auth_probe.reveal',
+  },
+  // ── Flow monitoring (ClickHouse, ADR-031) ──
+  {
+    id: 'traffic_anomaly',
+    mono: 'Ta',
+    name: 'tools.traffic_anomaly.name',
+    method: 'flow',
+    depth: 3,
+    est: 'tools.traffic_anomaly.est',
+    scope: 'tools.traffic_anomaly.scope',
+    desc: 'tools.traffic_anomaly.desc',
+    reveal: 'tools.traffic_anomaly.reveal',
+  },
+  {
+    id: 'talker_shift',
+    mono: 'Ts',
+    name: 'tools.talker_shift.name',
+    method: 'flow',
+    depth: 2,
+    est: 'tools.talker_shift.est',
+    scope: 'tools.talker_shift.scope',
+    desc: 'tools.talker_shift.desc',
+    reveal: 'tools.talker_shift.reveal',
+  },
+  {
+    id: 'new_destination',
+    mono: 'Nd',
+    name: 'tools.new_destination.name',
+    method: 'flow',
+    depth: 2,
+    est: 'tools.new_destination.est',
+    scope: 'tools.new_destination.scope',
+    desc: 'tools.new_destination.desc',
+    reveal: 'tools.new_destination.reveal',
+  },
+  {
+    id: 'flow_scan',
+    mono: 'Sc',
+    name: 'tools.flow_scan.name',
+    method: 'flow',
+    depth: 2,
+    est: 'tools.flow_scan.est',
+    scope: 'tools.flow_scan.scope',
+    desc: 'tools.flow_scan.desc',
+    reveal: 'tools.flow_scan.reveal',
+  },
+  // ── Cross-store ──
+  {
+    id: 'saturation',
+    mono: 'St',
+    name: 'tools.saturation.name',
+    method: 'flow',
+    depth: 3,
+    est: 'tools.saturation.est',
+    scope: 'tools.saturation.scope',
+    desc: 'tools.saturation.desc',
+    reveal: 'tools.saturation.reveal',
+  },
+  {
+    id: 'incident_correlate',
+    mono: 'Ic',
+    name: 'tools.incident_correlate.name',
+    method: 'topo',
+    depth: 4,
+    est: 'tools.incident_correlate.est',
+    scope: 'tools.incident_correlate.scope',
+    desc: 'tools.incident_correlate.desc',
+    reveal: 'tools.incident_correlate.reveal',
   },
 ];
 

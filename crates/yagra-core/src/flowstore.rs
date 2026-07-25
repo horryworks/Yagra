@@ -199,6 +199,23 @@ pub struct FlowAsAgg {
     pub flows: u64,
 }
 
+/// A per-source fan-out row: how many distinct destinations / destination ports one source address
+/// touched in the window. The signal for horizontal (many hosts) / vertical (many ports) scans and
+/// worm spread — the input to the Troubleshoot `flow_scan` analysis and the `flow_fanout` MCP tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowFanout {
+    /// Source address.
+    pub src: String,
+    /// Distinct destination addresses contacted.
+    pub distinct_dst: u64,
+    /// Distinct destination ports contacted.
+    pub distinct_ports: u64,
+    /// Distinct flows.
+    pub flows: u64,
+    /// Bytes.
+    pub bytes: u64,
+}
+
 /// A trend point: bytes/packets for one protocol at one 5-minute bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FlowPoint {
@@ -237,6 +254,9 @@ pub trait FlowStore: Send + Sync {
     async fn top_as(&self, q: &FlowQuery, dir: AsDir) -> anyhow::Result<Vec<FlowAsAgg>>;
     /// Bytes/packets over time, per protocol, at 5-minute granularity (from the rollup MV).
     async fn series(&self, q: &FlowSeriesQuery) -> anyhow::Result<Vec<FlowPoint>>;
+    /// Per-source fan-out (distinct destinations / destination ports), highest fan-out first —
+    /// the scan/worm signal (`flow_scan`, `flow_fanout`).
+    async fn fanout_by_src(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowFanout>>;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────────
@@ -636,6 +656,34 @@ impl FlowStore for ChStore {
             })
             .collect())
     }
+
+    async fn fanout_by_src(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowFanout>> {
+        let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
+        let limit = q.limit.clamp(1, 1000);
+        let filters = flow_filters_sql(q);
+        // `uniqExact` is a distinct-count no existing aggregate exposes; ordered by destination
+        // fan-out (the horizontal-scan signal). All interpolated values are typed (uuid/ints/IpAddr).
+        let sql = format!(
+            "SELECT src_ip AS k, uniqExact(dst_ip) AS d, uniqExact(dst_port) AS p, \
+                    sum(flows) AS flows, sum(bytes) AS bytes
+             FROM flow_records
+             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY src_ip ORDER BY d DESC LIMIT {limit} FORMAT JSONEachRow",
+            q.node_id
+        );
+        Ok(self
+            .query_json(&sql)
+            .await?
+            .iter()
+            .map(|v| FlowFanout {
+                src: normalize_ch_ip(&j_str(v, "k")),
+                distinct_dst: j_u64(v, "d"),
+                distinct_ports: j_u64(v, "p"),
+                flows: j_u64(v, "flows"),
+                bytes: j_u64(v, "bytes"),
+            })
+            .collect())
+    }
 }
 
 // ─── In-memory fake (tests) ───────────────────────────────────────────────────────────
@@ -857,6 +905,31 @@ impl FlowStore for InMemoryFlowStore {
                 packets,
             })
             .collect())
+    }
+
+    async fn fanout_by_src(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowFanout>> {
+        use std::collections::{HashMap, HashSet};
+        let mut agg: HashMap<String, (HashSet<String>, HashSet<u16>, u64, u64)> = HashMap::new();
+        for r in self.in_window(q) {
+            let e = agg.entry(r.src_ip.to_string()).or_default();
+            e.0.insert(r.dst_ip.to_string());
+            e.1.insert(r.dst_port);
+            e.2 += u64::from(r.flows);
+            e.3 += r.bytes;
+        }
+        let mut out: Vec<FlowFanout> = agg
+            .into_iter()
+            .map(|(src, (dsts, ports, flows, bytes))| FlowFanout {
+                src,
+                distinct_dst: dsts.len() as u64,
+                distinct_ports: ports.len() as u64,
+                flows,
+                bytes,
+            })
+            .collect();
+        out.sort_by_key(|r| std::cmp::Reverse(r.distinct_dst));
+        out.truncate(q.limit.clamp(1, 1000) as usize);
+        Ok(out)
     }
 }
 
@@ -1122,5 +1195,38 @@ mod tests {
         let talkers = store.top_talkers(&q_asn).await.unwrap();
         assert_eq!(talkers.len(), 1);
         assert_eq!(talkers[0].addr, "10.0.0.3"); // only the Cloudflare-bound flow survives
+    }
+
+    #[tokio::test]
+    async fn in_memory_fanout_counts_distinct_dst_and_ports() {
+        let node = Uuid::from_u128(1);
+        let store = InMemoryFlowStore::default();
+        // A scanner (10.0.0.9) hits three distinct hosts on three ports; a normal host talks to one.
+        store
+            .insert_batch(&[
+                row(node, "10.0.0.9", "10.0.1.1", 22, 6, 100, 1_000),
+                row(node, "10.0.0.9", "10.0.1.2", 23, 6, 100, 1_100),
+                row(node, "10.0.0.9", "10.0.1.3", 80, 6, 100, 1_200),
+                row(node, "10.0.0.2", "8.8.8.8", 443, 6, 5000, 1_300),
+            ])
+            .await
+            .unwrap();
+        let q = FlowQuery {
+            node_id: node,
+            from_unix_ms: 0,
+            to_unix_ms: 10_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+            asn: None,
+        };
+        let fan = store.fanout_by_src(&q).await.unwrap();
+        // Highest fan-out first: the scanner leads with 3 distinct destinations / 3 ports.
+        assert_eq!(fan[0].src, "10.0.0.9");
+        assert_eq!(fan[0].distinct_dst, 3);
+        assert_eq!(fan[0].distinct_ports, 3);
+        assert_eq!(fan[1].src, "10.0.0.2");
+        assert_eq!(fan[1].distinct_dst, 1);
     }
 }

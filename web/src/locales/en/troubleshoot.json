@@ -163,7 +163,9 @@
     "stat": "Statistical",
     "ml": "ML",
     "topo": "Topology",
-    "probe": "Active probe"
+    "probe": "Active probe",
+    "passive": "Passive events",
+    "flow": "Flow"
   },
   "kinds": {
     "spike": "Spike",
@@ -200,6 +202,83 @@
       "scope": "reachability · 24h–7d",
       "desc": "Scans reachability state churn to surface nodes that bounce up/down and quietly drop sessions.",
       "reveal": "flap rate · churn windows"
+    },
+    "event_storm": {
+      "name": "Event Storm",
+      "est": "~1–2 min",
+      "scope": "syslog / traps · per node",
+      "desc": "Baselines each node's passive-event rate and flags a sudden surge — boot loops, interface churn, or a chatty misconfiguration.",
+      "reveal": "volume spikes · noisiest nodes"
+    },
+    "event_flap": {
+      "name": "Event Flap",
+      "est": "~1–2 min",
+      "scope": "event rules · per node",
+      "desc": "Counts repeated fire↔clear cycles of the same event rule — linkDown/linkUp thrash and BGP session churn the reachability flap analysis can't see.",
+      "reveal": "fire/clear cycles · unstable links & peers"
+    },
+    "severity_shift": {
+      "name": "Severity Shift",
+      "est": "~1–2 min",
+      "scope": "syslog severity · per node",
+      "desc": "Detects a node whose syslog severity mix skews toward error/critical versus its baseline — a quiet degradation signal.",
+      "reveal": "error-rate rise · severity mix"
+    },
+    "rule_gap": {
+      "name": "Rule Gap",
+      "est": "~1 min",
+      "scope": "unmatched events · fleet",
+      "desc": "Clusters high-volume unmatched events by signature so you can see which traps or messages deserve an event rule.",
+      "reveal": "top unmatched signatures · coverage gaps"
+    },
+    "auth_probe": {
+      "name": "Auth Probe",
+      "est": "~1 min",
+      "scope": "auth failures · by source",
+      "desc": "Clusters authentication-failure traps and syslog by source to surface brute-force attempts or a misconfigured NMS.",
+      "reveal": "auth-failure bursts · offending sources"
+    },
+    "traffic_anomaly": {
+      "name": "Traffic Anomaly",
+      "est": "~1–3 min",
+      "scope": "flow bytes · per node",
+      "desc": "Baselines each node's flow volume and flags a spike — DDoS, saturation, a runaway backup, or exfiltration.",
+      "reveal": "byte/packet spikes · volume baseline"
+    },
+    "talker_shift": {
+      "name": "Talker Shift",
+      "est": "~1–3 min",
+      "scope": "top talkers · window vs window",
+      "desc": "Compares the top talkers this window to the previous one to surface a newly dominant host — a new heavy source or rogue device.",
+      "reveal": "new dominant talkers · rank changes"
+    },
+    "new_destination": {
+      "name": "New Destination",
+      "est": "~1–3 min",
+      "scope": "dst AS / port · window vs window",
+      "desc": "Flags traffic to a destination AS or port absent from the baseline window — a new external destination, service, or scan target.",
+      "reveal": "new external AS · new ports"
+    },
+    "flow_scan": {
+      "name": "Scan Detection",
+      "est": "~1–3 min",
+      "scope": "source fan-out · per node",
+      "desc": "Finds a source contacting an abnormal number of distinct destinations or ports — horizontal/vertical scans and worm spread.",
+      "reveal": "scanning sources · fan-out"
+    },
+    "saturation": {
+      "name": "Link Saturation",
+      "est": "~1–3 min",
+      "scope": "flow + interface · per node",
+      "desc": "Surfaces a single conversation dominating a busy node's traffic and attaches the node's current interface throughput as context.",
+      "reveal": "link hogs · dominant conversation"
+    },
+    "incident_correlate": {
+      "name": "Incident Correlate",
+      "est": "~2–4 min",
+      "scope": "metric + events + flow · per node",
+      "desc": "Assembles a cross-signal timeline for a node — a metric anomaly, passive events, and the dominant flow — when they coincide, for root-cause triage.",
+      "reveal": "cross-signal timeline · likely root cause"
     }
   }
 }

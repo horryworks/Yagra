@@ -35,7 +35,7 @@ use crate::ack::AckView;
 use crate::analysis::{AnalysisTool, CreateError, JobParams, ScopeKind};
 use crate::api::ApiState;
 use crate::events::EventFilter;
-use crate::flowstore::{AsDir, FlowQuery};
+use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
 use crate::mcp::dto::{
     AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
     InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
@@ -293,8 +293,10 @@ impl YagraMcp {
     #[tool(
         description = "Top traffic flows for a node from the flow tier. `kind` is \
                        talkers|conversations|ports|protocols|as (default talkers). `from`/`to` are \
-                       Unix seconds (default: last hour); `limit` is clamped by the store. Returns an \
-                       availability note when the flow tier is not enabled."
+                       Unix seconds (default: last hour); `limit` is clamped by the store. Optional \
+                       drill-down filters: `proto`, `port`, `peer` (an IP), `asn`; for kind=as, `dir` \
+                       is src|dst (default dst). Conversations/as rows carry resolved AS names when the \
+                       IP→ASN table is loaded. Returns an availability note when the flow tier is off."
     )]
     async fn top_flows(
         &self,
@@ -303,17 +305,11 @@ impl YagraMcp {
         let Some(flows) = self.state.flows.as_ref() else {
             return tool_unavailable("top_flows", "flow tier not enabled on this core");
         };
-        let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
-        let from_s = p.from.unwrap_or(to_s - DEFAULT_WINDOW_SECS);
-        let q = FlowQuery {
-            node_id: p.node_id,
-            from_unix_ms: from_s.saturating_mul(1000),
-            to_unix_ms: to_s.saturating_mul(1000),
-            limit: p.limit.unwrap_or(100),
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+        let q = flow_query_from(&p);
+        let dir = if p.dir.as_deref() == Some("src") {
+            AsDir::Src
+        } else {
+            AsDir::Dst
         };
         let kind = p.kind.as_deref().unwrap_or("talkers");
         let result: anyhow::Result<Value> = match kind {
@@ -321,10 +317,10 @@ impl YagraMcp {
                 .top_talkers(&q)
                 .await
                 .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
-            "conversations" => flows
-                .top_conversations(&q)
-                .await
-                .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
+            "conversations" => flows.top_conversations(&q).await.and_then(|mut r| {
+                self.resolve_conversation_as_names(&mut r);
+                serde_json::to_value(r).map_err(Into::into)
+            }),
             "ports" => flows
                 .top_ports(&q)
                 .await
@@ -333,10 +329,10 @@ impl YagraMcp {
                 .top_protocols(&q)
                 .await
                 .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
-            "as" => flows
-                .top_as(&q, AsDir::Dst)
-                .await
-                .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
+            "as" => flows.top_as(&q, dir).await.and_then(|mut r| {
+                self.resolve_as_names(&mut r);
+                serde_json::to_value(r).map_err(Into::into)
+            }),
             _ => {
                 return tool_bad_params(
                     "top_flows",
@@ -351,14 +347,37 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "Per-source flow fan-out for a node: how many distinct destinations and \
+                       destination ports each source contacted, highest fan-out first (scan / worm \
+                       triage). Same window/filters as top_flows (`from`/`to`/`limit`/`proto`/`port`/\
+                       `peer`/`asn`). Returns an availability note when the flow tier is off."
+    )]
+    async fn flow_fanout(
+        &self,
+        Parameters(p): Parameters<TopFlowsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(flows) = self.state.flows.as_ref() else {
+            return tool_unavailable("flow_fanout", "flow tier not enabled on this core");
+        };
+        match flows.fanout_by_src(&flow_query_from(&p)).await {
+            Ok(rows) => ok_json("flow_fanout", &rows),
+            Err(e) => tool_error("flow_fanout", "query flow fan-out", &e),
+        }
+    }
+
+    #[tool(
         description = "Run an on-demand Troubleshoot analysis and wait for its findings (read-only: it \
-                       reads metric history and returns findings, and never notifies or changes device \
-                       configuration). `tool` is anomaly|correlation|capacity|flap. `scope` is \
-                       all|group|node (default all); for group/node pass `scope_id` (a UUID). Optional \
-                       `window_secs`, `baseline_secs`, `sensitivity` (0.5–6.0), `depth` \
-                       (quick|standard|exhaustive), and `family` (all|reachability_interface|system) \
-                       tune the run. Blocks up to ~2 minutes; if the job is still running it returns \
-                       the job id to poll with get_analysis_findings. Rate-limited; requires live mode."
+                       reads metric/event/flow history and returns findings, and never notifies or \
+                       changes device configuration). `tool` is one of: metric — anomaly, correlation, \
+                       capacity, flap; passive events — event_storm, event_flap, severity_shift, \
+                       rule_gap, auth_probe; flow — traffic_anomaly, talker_shift, new_destination, \
+                       flow_scan; cross-store — saturation, incident_correlate. (flow_* need the flow \
+                       tier enabled, else they return an info finding.) `scope` is all|group|node \
+                       (default all); for group/node pass `scope_id` (a UUID). Optional `window_secs`, \
+                       `baseline_secs`, `sensitivity` (0.5–6.0), `depth` (quick|standard|exhaustive), \
+                       and `family` (all|reachability_interface|system) tune the run. Blocks up to ~2 \
+                       minutes; if still running it returns the job id to poll with \
+                       get_analysis_findings. Rate-limited; requires live mode."
     )]
     async fn run_analysis(
         &self,
@@ -370,7 +389,9 @@ impl YagraMcp {
         let Some(tool) = AnalysisTool::from_str(&p.tool) else {
             return tool_bad_params(
                 "run_analysis",
-                "`tool` must be anomaly, correlation, capacity, or flap",
+                "`tool` must be one of: anomaly, correlation, capacity, flap, event_storm, \
+                 event_flap, severity_shift, rule_gap, auth_probe, traffic_anomaly, talker_shift, \
+                 new_destination, flow_scan, saturation, incident_correlate",
             );
         };
         let scope = p.scope.as_deref().unwrap_or("all");
@@ -612,6 +633,86 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "Passive-event statistics for triage over a window: the noisiest nodes by event \
+                       volume, the syslog severity mix, and the top unmatched-event signatures (rule \
+                       gaps to consider writing). `from`/`to` are Unix seconds (default: last 24h); \
+                       optional `node_id` narrows the volume/severity views. Requires live mode."
+    )]
+    async fn event_stats(
+        &self,
+        Parameters(p): Parameters<EventStatsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("event_stats", "event stats requires live mode");
+        };
+        let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
+        let from_s = p.from.unwrap_or(to_s - 86_400);
+        let (from_ms, to_ms) = (from_s.saturating_mul(1000), to_s.saturating_mul(1000));
+        // Volume: sum per-node hourly buckets over the window.
+        let buckets = match admin
+            .events
+            .event_counts_by_bucket(from_ms, to_ms, 3600)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => return tool_error("event_stats", "event volume", &e),
+        };
+        let mut per_node: HashMap<Uuid, i64> = HashMap::new();
+        for b in &buckets {
+            if p.node_id.is_none_or(|n| n == b.node_id) {
+                *per_node.entry(b.node_id).or_default() += b.count;
+            }
+        }
+        let mut top_nodes: Vec<(Uuid, i64)> = per_node.into_iter().collect();
+        top_nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
+        top_nodes.truncate(20);
+        let names = self
+            .resolve_names(top_nodes.iter().map(|(id, _)| *id))
+            .await;
+        let volume: Vec<Value> = top_nodes
+            .iter()
+            .map(|(id, c)| {
+                serde_json::json!({ "node_id": id, "node_name": names.get(id).cloned(), "count": c })
+            })
+            .collect();
+        // Severity mix.
+        let sev = admin
+            .events
+            .event_severity_counts(from_ms, to_ms)
+            .await
+            .unwrap_or_default();
+        let mut sev_mix: BTreeMap<i16, i64> = BTreeMap::new();
+        for s in &sev {
+            if p.node_id.is_none_or(|n| n == s.node_id) {
+                *sev_mix.entry(s.severity).or_default() += s.count;
+            }
+        }
+        let severity_mix: Vec<Value> = sev_mix
+            .iter()
+            .map(|(sev, c)| serde_json::json!({ "severity": sev, "count": c }))
+            .collect();
+        // Top unmatched signatures (rule gaps) — cross-node, so the node filter isn't applied here.
+        let sigs = admin
+            .events
+            .event_unmatched_signatures(from_ms, to_ms, 20)
+            .await
+            .unwrap_or_default();
+        let unmatched: Vec<Value> = sigs
+            .iter()
+            .map(|s| {
+                serde_json::json!({ "kind": s.kind, "signature": s.signature, "count": s.count })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "window": { "from": from_s, "to": to_s },
+            "top_nodes_by_volume": volume,
+            "severity_mix": severity_mix,
+            "unmatched_signatures": unmatched,
+        });
+        ok_json_value("event_stats", body)
+    }
+
+    #[tool(
         description = "Acknowledge an active alert (or clear its ack). Requires ack-alerts permission. \
                        Identify the alert by `node_id` + `check_id` + `severity` — all from \
                        get_active_alerts or get_node_status. `acked` defaults true; set false to clear. \
@@ -825,6 +926,29 @@ impl YagraMcp {
             None => HashMap::new(),
         }
     }
+
+    /// Fill `src_as_name`/`dst_as_name` on conversation rows from the hot-swappable IP→ASN table
+    /// (a no-op when the table is unloaded). Mirrors the REST flow handler so the MCP surface returns
+    /// the same enriched rows.
+    fn resolve_conversation_as_names(&self, rows: &mut [FlowConversation]) {
+        let Some(db) = self.state.ipasn.read().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        for r in rows.iter_mut() {
+            r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
+            r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
+        }
+    }
+
+    /// Fill `name` on top-AS rows from the IP→ASN table (no-op when unloaded).
+    fn resolve_as_names(&self, rows: &mut [FlowAsAgg]) {
+        let Some(db) = self.state.ipasn.read().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        for r in rows.iter_mut() {
+            r.name = db.name_of(r.asn).map(str::to_owned);
+        }
+    }
 }
 
 // ── Tool parameter structs (schemas derived for `tools/list`) ─────────────────────────────────────
@@ -897,11 +1021,23 @@ struct TopFlowsParams {
     to: Option<i64>,
     /// Max rows to return (clamped by the store).
     limit: Option<u32>,
+    /// Optional IP-protocol filter (e.g. 6 = TCP, 17 = UDP).
+    proto: Option<u8>,
+    /// Optional destination-port filter.
+    port: Option<u16>,
+    /// Optional peer filter — an IP address that must be the source or destination.
+    peer: Option<String>,
+    /// Optional AS filter — an ASN that must be the source or destination AS.
+    asn: Option<u32>,
+    /// For kind=as, which side to aggregate: src or dst (default dst).
+    dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct RunAnalysisParams {
-    /// Which diagnostic to run: anomaly, correlation, capacity, or flap.
+    /// Which diagnostic to run: anomaly, correlation, capacity, flap (metric); event_storm,
+    /// event_flap, severity_shift, rule_gap, auth_probe (passive events); traffic_anomaly,
+    /// talker_shift, new_destination, flow_scan (flow); saturation, incident_correlate (cross-store).
     tool: String,
     /// Scope: all, group, or node (default all).
     scope: Option<String>,
@@ -949,6 +1085,16 @@ struct EventSearchParams {
     until: Option<String>,
     /// Max events to return (1–500, default 100).
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EventStatsParams {
+    /// Restrict the volume/severity views to one node (UUID).
+    node_id: Option<Uuid>,
+    /// Window start, Unix seconds (default: 24 hours ago).
+    from: Option<i64>,
+    /// Window end, Unix seconds (default: now).
+    to: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1032,6 +1178,25 @@ fn record_tool(tool: &str, outcome: &str) {
 /// Whether an analysis job has reached a terminal lifecycle state (no further progress).
 fn is_terminal(state: &str) -> bool {
     matches!(state, "done" | "failed" | "cancelled")
+}
+
+/// Build a [`FlowQuery`] from the shared flow-tool params: default trailing-hour window, typed
+/// drill-down filters (an unparseable `peer` is ignored, never interpolated). Shared by `top_flows`
+/// and `flow_fanout`.
+fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
+    let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
+    let from_s = p.from.unwrap_or(to_s - DEFAULT_WINDOW_SECS);
+    let peer: Option<std::net::IpAddr> = p.peer.as_deref().and_then(|s| s.parse().ok());
+    FlowQuery {
+        node_id: p.node_id,
+        from_unix_ms: from_s.saturating_mul(1000),
+        to_unix_ms: to_s.saturating_mul(1000),
+        limit: p.limit.unwrap_or(100),
+        proto: p.proto,
+        dst_port: p.port,
+        peer,
+        asn: p.asn,
+    }
 }
 
 /// The authenticated caller `mcp_auth_mw` inserted into the request extensions, if it has `perm`

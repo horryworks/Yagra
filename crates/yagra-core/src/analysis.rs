@@ -13,18 +13,22 @@
 //! broadcast over SSE) and writes findings when done. Job metadata + findings are metadata, so
 //! they live in PostgreSQL ([`AnalysisRepo`], ADR-004).
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tokio::sync::{broadcast, Semaphore};
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
+use crate::events::{EventFilter, EventRepo, EventRow, EventSeverityCount};
+use crate::flowstore::{AsDir, FlowQuery, FlowSeriesQuery, FlowStore};
 use crate::groups::{group_subtree, GroupRepo};
+use crate::ipasn::IpAsnHandle;
 use crate::repo::NodeRepo;
 use crate::store::{MetricPoint, MetricStore};
 
@@ -91,7 +95,10 @@ fn charge_window(q: &mut VecDeque<Instant>, now: Instant, window: Duration, max:
 
 // ── Tool / state / scope enums ──────────────────────────────────────────────────────
 
-/// Which diagnostic an analysis job runs.
+/// Which diagnostic an analysis job runs. The first four read VictoriaMetrics (ADR-022); the
+/// `event_*` kinds read the passive-event store (`events`, ADR-024) and the `flow_*`/`traffic_*`/
+/// `talker_*`/`new_destination`/`scan` kinds read the flow store (ClickHouse, ADR-031). `saturation`
+/// and `incident_correlate` are cross-store. All remain read-only + admission-bounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisTool {
@@ -103,6 +110,31 @@ pub enum AnalysisTool {
     Capacity,
     /// Reachability/link state churn (flap analysis).
     Flap,
+    // ── Passive monitoring (events) ──
+    /// Per-node passive-event volume spike vs baseline.
+    EventStorm,
+    /// Repeated fire↔clear churn of the same event rule per node.
+    EventFlap,
+    /// Syslog severity mix skewing toward error/critical vs baseline.
+    SeverityShift,
+    /// High-volume unmatched events clustered by signature (missing rule coverage).
+    RuleGap,
+    /// Authentication-failure clustering by source (brute force / misconfigured NMS).
+    AuthProbe,
+    // ── Flow monitoring (ClickHouse) ──
+    /// Node/interface flow-volume anomaly vs baseline.
+    TrafficAnomaly,
+    /// A newly dominant talker/conversation vs a baseline window.
+    TalkerShift,
+    /// Traffic to a destination AS/port absent from the baseline window.
+    NewDestination,
+    /// A source contacting an abnormal number of distinct destinations/ports (scan/worm).
+    FlowScan,
+    // ── Cross-store ──
+    /// A single conversation dominating a busy node's traffic (link-hog / saturation).
+    Saturation,
+    /// Cross-signal incident timeline (metric anomaly + events + flow shift) for a node.
+    IncidentCorrelate,
 }
 
 impl AnalysisTool {
@@ -113,6 +145,17 @@ impl AnalysisTool {
             AnalysisTool::Correlation => "correlation",
             AnalysisTool::Capacity => "capacity",
             AnalysisTool::Flap => "flap",
+            AnalysisTool::EventStorm => "event_storm",
+            AnalysisTool::EventFlap => "event_flap",
+            AnalysisTool::SeverityShift => "severity_shift",
+            AnalysisTool::RuleGap => "rule_gap",
+            AnalysisTool::AuthProbe => "auth_probe",
+            AnalysisTool::TrafficAnomaly => "traffic_anomaly",
+            AnalysisTool::TalkerShift => "talker_shift",
+            AnalysisTool::NewDestination => "new_destination",
+            AnalysisTool::FlowScan => "flow_scan",
+            AnalysisTool::Saturation => "saturation",
+            AnalysisTool::IncidentCorrelate => "incident_correlate",
         }
     }
 
@@ -123,6 +166,17 @@ impl AnalysisTool {
             "correlation" => Some(AnalysisTool::Correlation),
             "capacity" => Some(AnalysisTool::Capacity),
             "flap" => Some(AnalysisTool::Flap),
+            "event_storm" => Some(AnalysisTool::EventStorm),
+            "event_flap" => Some(AnalysisTool::EventFlap),
+            "severity_shift" => Some(AnalysisTool::SeverityShift),
+            "rule_gap" => Some(AnalysisTool::RuleGap),
+            "auth_probe" => Some(AnalysisTool::AuthProbe),
+            "traffic_anomaly" => Some(AnalysisTool::TrafficAnomaly),
+            "talker_shift" => Some(AnalysisTool::TalkerShift),
+            "new_destination" => Some(AnalysisTool::NewDestination),
+            "flow_scan" => Some(AnalysisTool::FlowScan),
+            "saturation" => Some(AnalysisTool::Saturation),
+            "incident_correlate" => Some(AnalysisTool::IncidentCorrelate),
             _ => None,
         }
     }
@@ -501,6 +555,13 @@ pub struct AnalysisRunner {
     nodes: Arc<NodeRepo>,
     /// Group hierarchy — to expand a "group" scope to the group + its descendant subgroups.
     groups: Arc<GroupRepo>,
+    /// Passive-event store (ADR-024) — read by the `event_*` analyses and `incident_correlate`.
+    events: Arc<EventRepo>,
+    /// Flow store (ClickHouse, ADR-031), `None` when the flow tier is off — the `flow_*`/`traffic_*`/
+    /// `talker_*`/`new_destination`/`scan`/`saturation` analyses no-op with an info finding then.
+    flows: Option<Arc<dyn FlowStore>>,
+    /// IP→ASN table handle for resolving AS names in flow findings (`new_destination`).
+    ipasn: IpAsnHandle,
     tx: broadcast::Sender<String>,
     cancels: Mutex<std::collections::HashMap<Uuid, Arc<AtomicBool>>>,
     /// Concurrency cap (ADR-028 Increment 2 WS-A): a permit is held for each running job's lifetime.
@@ -520,6 +581,9 @@ impl AnalysisRunner {
         store: Arc<dyn MetricStore>,
         nodes: Arc<NodeRepo>,
         groups: Arc<GroupRepo>,
+        events: Arc<EventRepo>,
+        flows: Option<Arc<dyn FlowStore>>,
+        ipasn: IpAsnHandle,
     ) -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         let max_concurrent = env_cap("YAGRA_ANALYSIS_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
@@ -529,6 +593,9 @@ impl AnalysisRunner {
             store,
             nodes,
             groups,
+            events,
+            flows,
+            ipasn,
             tx,
             cancels: Mutex::new(std::collections::HashMap::new()),
             slots: Arc::new(Semaphore::new(max_concurrent)),
@@ -694,6 +761,50 @@ impl AnalysisRunner {
             AnalysisTool::Flap => self.run_flap(id, params, &node_ids, &names, cancel).await,
             AnalysisTool::Correlation => {
                 self.run_correlation(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::EventStorm => {
+                self.run_event_storm(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::EventFlap => {
+                self.run_event_flap(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::SeverityShift => {
+                self.run_severity_shift(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::RuleGap => {
+                self.run_rule_gap(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::AuthProbe => {
+                self.run_auth_probe(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::TrafficAnomaly => {
+                self.run_traffic_anomaly(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::TalkerShift => {
+                self.run_talker_shift(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::NewDestination => {
+                self.run_new_destination(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::FlowScan => {
+                self.run_flow_scan(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::Saturation => {
+                self.run_saturation(id, params, &node_ids, &names, cancel)
+                    .await
+            }
+            AnalysisTool::IncidentCorrelate => {
+                self.run_incident_correlate(id, params, &node_ids, &names, cancel)
                     .await
             }
         }
@@ -1065,6 +1176,872 @@ impl AnalysisRunner {
         let summary = format!("{} correlated pairs", findings.len());
         Ok(Some((findings, summary)))
     }
+
+    // ── Engine: Event Storm (passive) ─────────────────────────────────────────────
+    //
+    // Per node: bucket the passive-event volume, learn a baseline rate, and flag a recent bucket
+    // whose count spikes past the sensitivity σ (boot loop, interface churn, chatty misconfig).
+    async fn run_event_storm(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let from = to - params.baseline_secs.max(6 * 3600);
+        let recent_cutoff = to - params.window_secs.max(600);
+        let sigma = params.sensitivity.max(0.5);
+        self.progress(id, 25, "Reading event volume…").await;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let rows = self
+            .events
+            .event_counts_by_bucket(from * 1000, to * 1000, EVENT_BUCKET_SECS)
+            .await?;
+        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
+        // node → (baseline bucket counts, recent bucket counts with their bucket time).
+        let mut per_node: HashMap<Uuid, StormBuckets> = HashMap::new();
+        for r in rows {
+            if !scope.contains(&r.node_id) {
+                continue;
+            }
+            let e = per_node.entry(r.node_id).or_default();
+            if r.bucket_start_s < recent_cutoff {
+                e.0.push(r.count as f64);
+            } else {
+                e.1.push((r.bucket_start_s, r.count as f64));
+            }
+        }
+        self.progress(id, 75, "Scoring volume spikes…").await;
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (node, (baseline, recent)) in per_node {
+            let (peak_bucket, peak) =
+                recent
+                    .iter()
+                    .copied()
+                    .fold((0i64, 0f64), |a, (t, c)| if c > a.1 { (t, c) } else { a });
+            if peak < EVENT_STORM_FLOOR {
+                continue;
+            }
+            let Some(score) = burst_score(&baseline, peak, sigma) else {
+                continue;
+            };
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(node),
+                node_name: name_lookup(names, &node),
+                metric: "event_rate".to_owned(),
+                kind: "event_storm".to_owned(),
+                when_label: rel_label(peak_bucket, to),
+                duration: format!("{peak:.0} in {}m", EVENT_BUCKET_SECS / 60),
+                detail: serde_json::json!({
+                    "peak": peak,
+                    "baseline_mean": mean(&baseline),
+                    "bucket_secs": EVENT_BUCKET_SECS,
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} nodes with event-volume spikes", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Event Flap (passive) ──────────────────────────────────────────────
+    //
+    // Repeated fire↔clear of the same event rule per node (linkDown/linkUp thrash, BGP session
+    // churn) — complements the ICMP-only `flap`. A completed cycle is one fire paired with a clear.
+    async fn run_event_flap(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let from = to - params.window_secs.max(6 * 3600);
+        self.progress(id, 30, "Reading event churn…").await;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let stats = self.events.event_flap_stats(from * 1000, to * 1000).await?;
+        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
+        let window_hours = ((to - from) as f64 / 3600.0).max(1.0);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for s in stats {
+            if !scope.contains(&s.node_id) {
+                continue;
+            }
+            let cycles = s.fires.min(s.clears);
+            if cycles < 2 {
+                continue;
+            }
+            let score = flap_score(u32::try_from(cycles).unwrap_or(u32::MAX));
+            let rate = cycles as f64 / window_hours;
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(s.node_id),
+                node_name: name_lookup(names, &s.node_id),
+                metric: format!("event:{}", s.rule_name),
+                kind: "event_flap".to_owned(),
+                when_label: format!("{cycles} cycles"),
+                duration: format!("{rate:.1}/h"),
+                detail: serde_json::json!({
+                    "rule_id": s.rule_id, "fires": s.fires, "clears": s.clears,
+                    "cycles": cycles, "per_hour": rate,
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} event-flapping (rule, node) pairs", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Severity Shift (passive) ──────────────────────────────────────────
+    //
+    // A node whose syslog severity mix skews toward error/critical in the recent window vs its
+    // baseline — a quiet degradation signal.
+    async fn run_severity_shift(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let from = to - params.baseline_secs.max(6 * 3600);
+        let recent_cutoff = to - params.window_secs.max(600);
+        self.progress(id, 30, "Reading severity mix…").await;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let baseline = self
+            .events
+            .event_severity_counts(from * 1000, recent_cutoff * 1000)
+            .await?;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let recent = self
+            .events
+            .event_severity_counts(recent_cutoff * 1000, to * 1000)
+            .await?;
+        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
+        let base_frac = severity_high_fractions(&baseline, &scope);
+        let recent_frac = severity_high_fractions(&recent, &scope);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (node, (rhigh, rtotal, rfrac)) in &recent_frac {
+            if *rtotal < SEVERITY_FLOOR {
+                continue;
+            }
+            let bfrac = base_frac.get(node).map_or(0.0, |x| x.2);
+            let Some(score) = severity_shift_score(bfrac, *rfrac) else {
+                continue;
+            };
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(*node),
+                node_name: name_lookup(names, node),
+                metric: "syslog_severity".to_owned(),
+                kind: "severity_shift".to_owned(),
+                when_label: format!("{:.0}% err+", rfrac * 100.0),
+                duration: format!("was {:.0}%", bfrac * 100.0),
+                detail: serde_json::json!({
+                    "recent_high_frac": rfrac, "baseline_high_frac": bfrac,
+                    "recent_high": rhigh, "recent_total": rtotal,
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} nodes with a severity shift", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Rule Gap (passive) ────────────────────────────────────────────────
+    //
+    // High-volume unmatched events clustered by signature (trap OID / syslog app-name): "you're
+    // receiving N of these but no rule matches — consider one". Coverage advice, capped at warning.
+    async fn run_rule_gap(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let from = to - params.window_secs.max(86_400);
+        self.progress(id, 35, "Clustering unmatched events…").await;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let sigs = self
+            .events
+            .event_unmatched_signatures(from * 1000, to * 1000, 200)
+            .await?;
+        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
+        let all_scope = params.scope_kind == ScopeKind::All;
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for s in sigs {
+            if s.count < RULE_GAP_FLOOR {
+                continue;
+            }
+            if !all_scope && !s.sample_node.is_some_and(|n| scope.contains(&n)) {
+                continue;
+            }
+            let score = gap_score(s.count);
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: s.sample_node,
+                node_name: s
+                    .sample_node
+                    .map_or_else(|| "fleet".to_owned(), |n| name_lookup(names, &n)),
+                metric: format!("{}:{}", s.kind, s.signature),
+                kind: "rule_gap".to_owned(),
+                when_label: format!("{} events", s.count),
+                duration: "unmatched".to_owned(),
+                detail: serde_json::json!({
+                    "kind": s.kind, "signature": s.signature, "count": s.count,
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} unmatched-event signatures (rule gaps)", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Auth Probe (passive) ──────────────────────────────────────────────
+    //
+    // authenticationFailure traps + auth-failure syslog clustered by source — brute force or a
+    // misconfigured NMS hammering SNMP/SSH.
+    async fn run_auth_probe(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let from = to - params.window_secs.max(3600);
+        self.progress(id, 35, "Clustering auth failures…").await;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let sources = self
+            .events
+            .event_auth_sources(from * 1000, to * 1000, 100)
+            .await?;
+        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
+        let all_scope = params.scope_kind == ScopeKind::All;
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for s in sources {
+            if s.count < AUTH_FLOOR {
+                continue;
+            }
+            if !all_scope && !s.node_id.is_some_and(|n| scope.contains(&n)) {
+                continue;
+            }
+            let score = auth_score(s.count);
+            let src = s.source_ip.clone().unwrap_or_else(|| "unknown".to_owned());
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: s.node_id,
+                node_name: s
+                    .node_id
+                    .map_or_else(|| src.clone(), |n| name_lookup(names, &n)),
+                metric: "auth_failures".to_owned(),
+                kind: "auth_probe".to_owned(),
+                when_label: format!("{} failures", s.count),
+                duration: src,
+                detail: serde_json::json!({ "source_ip": s.source_ip, "count": s.count }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} auth-failure sources", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Traffic Anomaly (flow) ────────────────────────────────────────────
+    //
+    // Per node: sum flow bytes per 5-minute bucket, learn a baseline, flag a recent spike (DDoS,
+    // saturation, runaway backup, exfiltration).
+    async fn run_traffic_anomaly(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let Some(flows) = self.flows.clone() else {
+            return Ok(Some(flow_tier_off()));
+        };
+        let to = now_s();
+        let from = to - params.baseline_secs.max(6 * 3600);
+        let recent_cutoff = to - params.window_secs.max(600);
+        let sigma = params.sensitivity.max(0.5);
+        let total = node_ids.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in node_ids.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(id, 15 + (i * 70 / total) as i32, "Reading flow volume…")
+                .await;
+            let q = FlowSeriesQuery {
+                node_id: *node,
+                from_unix_ms: from * 1000,
+                to_unix_ms: to * 1000,
+                proto: None,
+            };
+            let pts = flows.series(&q).await.unwrap_or_default();
+            if pts.len() < MIN_POINTS {
+                continue;
+            }
+            let mut per_bucket: std::collections::BTreeMap<i64, f64> =
+                std::collections::BTreeMap::new();
+            for p in &pts {
+                *per_bucket.entry(p.ts_unix_ms / 1000).or_default() += p.bytes as f64;
+            }
+            let baseline: Vec<f64> = per_bucket
+                .iter()
+                .filter(|(t, _)| **t < recent_cutoff)
+                .map(|(_, v)| *v)
+                .collect();
+            let recent: Vec<(i64, f64)> = per_bucket
+                .iter()
+                .filter(|(t, _)| **t >= recent_cutoff)
+                .map(|(t, v)| (*t, *v))
+                .collect();
+            if recent.is_empty() || baseline.len() < MIN_POINTS / 2 {
+                continue;
+            }
+            let (peak_t, peak) =
+                recent
+                    .iter()
+                    .copied()
+                    .fold((0i64, 0f64), |a, (t, c)| if c > a.1 { (t, c) } else { a });
+            let Some(score) = burst_score(&baseline, peak, sigma) else {
+                continue;
+            };
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(*node),
+                node_name: name_lookup(names, node),
+                metric: "flow_bytes".to_owned(),
+                kind: "traffic_anomaly".to_owned(),
+                when_label: rel_label(peak_t, to),
+                duration: format!("{} peak", human_bytes(peak)),
+                detail: serde_json::json!({
+                    "peak_bytes": peak, "baseline_mean_bytes": mean(&baseline),
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} nodes with flow-volume anomalies", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Talker Shift (flow) ───────────────────────────────────────────────
+    //
+    // A talker that is newly dominant vs the previous equal-length window (new heavy host / exfil
+    // source / rogue device).
+    async fn run_talker_shift(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let Some(flows) = self.flows.clone() else {
+            return Ok(Some(flow_tier_off()));
+        };
+        let to = now_s();
+        let window = params.window_secs.max(1800);
+        let recent_from = to - window;
+        let base_from = to - 2 * window;
+        let total = node_ids.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in node_ids.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(id, 15 + (i * 70 / total) as i32, "Comparing talkers…")
+                .await;
+            let recent_q = FlowQuery {
+                node_id: *node,
+                from_unix_ms: recent_from * 1000,
+                to_unix_ms: to * 1000,
+                limit: 10,
+                proto: None,
+                dst_port: None,
+                peer: None,
+                asn: None,
+            };
+            let base_q = FlowQuery {
+                from_unix_ms: base_from * 1000,
+                to_unix_ms: recent_from * 1000,
+                limit: 100,
+                ..recent_q
+            };
+            let recent = flows.top_talkers(&recent_q).await.unwrap_or_default();
+            if recent.is_empty() {
+                continue;
+            }
+            let base = flows.top_talkers(&base_q).await.unwrap_or_default();
+            let base_keys: HashSet<String> = base.iter().map(|t| t.addr.clone()).collect();
+            let recent_keys: Vec<String> = recent.iter().map(|t| t.addr.clone()).collect();
+            let Some((addr, rank)) = first_novel(&recent_keys, &base_keys) else {
+                continue;
+            };
+            let bytes = recent
+                .iter()
+                .find(|t| t.addr == addr)
+                .map_or(0, |t| t.bytes);
+            if bytes < TALKER_FLOOR {
+                continue;
+            }
+            let score = novelty_score(rank);
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(*node),
+                node_name: name_lookup(names, node),
+                metric: "top_talker".to_owned(),
+                kind: "talker_shift".to_owned(),
+                when_label: format!("new #{}", rank + 1),
+                duration: human_bytes(bytes as f64),
+                detail: serde_json::json!({ "addr": addr, "bytes": bytes, "rank": rank + 1 }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} nodes with a new dominant talker", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: New Destination (flow) ────────────────────────────────────────────
+    //
+    // Traffic to a destination AS or port absent from the baseline window — a new external
+    // destination (possible C2/exfil), a new service, or a scan target.
+    async fn run_new_destination(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let Some(flows) = self.flows.clone() else {
+            return Ok(Some(flow_tier_off()));
+        };
+        let to = now_s();
+        let window = params.window_secs.max(1800);
+        let recent_from = to - window;
+        let base_from = to - 2 * window;
+        let total = node_ids.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in node_ids.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(id, 15 + (i * 70 / total) as i32, "Comparing destinations…")
+                .await;
+            let recent_q = FlowQuery {
+                node_id: *node,
+                from_unix_ms: recent_from * 1000,
+                to_unix_ms: to * 1000,
+                limit: 10,
+                proto: None,
+                dst_port: None,
+                peer: None,
+                asn: None,
+            };
+            let base_q = FlowQuery {
+                from_unix_ms: base_from * 1000,
+                to_unix_ms: recent_from * 1000,
+                limit: 200,
+                ..recent_q
+            };
+            // Destination AS novelty (the headline signal, using the AS enrichment).
+            let recent_as = flows
+                .top_as(&recent_q, AsDir::Dst)
+                .await
+                .unwrap_or_default();
+            let base_as = flows.top_as(&base_q, AsDir::Dst).await.unwrap_or_default();
+            let base_as_keys: HashSet<String> = base_as
+                .iter()
+                .filter(|a| a.asn != 0)
+                .map(|a| a.asn.to_string())
+                .collect();
+            let recent_as_keys: Vec<String> = recent_as
+                .iter()
+                .filter(|a| a.asn != 0)
+                .map(|a| a.asn.to_string())
+                .collect();
+            if let Some((asn_str, rank)) = first_novel(&recent_as_keys, &base_as_keys) {
+                let asn: u32 = asn_str.parse().unwrap_or(0);
+                let bytes = recent_as
+                    .iter()
+                    .find(|a| a.asn == asn)
+                    .map_or(0, |a| a.bytes);
+                if bytes >= DEST_FLOOR {
+                    let name = self.resolve_as_name(asn);
+                    let score = novelty_score(rank);
+                    findings.push(NewFinding {
+                        score,
+                        severity: severity_for(score).to_owned(),
+                        node_id: Some(*node),
+                        node_name: name_lookup(names, node),
+                        metric: "dst_as".to_owned(),
+                        kind: "new_destination".to_owned(),
+                        when_label: format!("AS{asn}"),
+                        duration: name.clone().unwrap_or_else(|| human_bytes(bytes as f64)),
+                        detail: serde_json::json!({ "asn": asn, "as_name": name, "bytes": bytes }),
+                    });
+                }
+            }
+            // Destination port novelty (noisier — score capped just under warning).
+            let recent_ports = flows.top_ports(&recent_q).await.unwrap_or_default();
+            let base_ports = flows.top_ports(&base_q).await.unwrap_or_default();
+            let base_port_keys: HashSet<String> =
+                base_ports.iter().map(|p| p.port.to_string()).collect();
+            let recent_port_keys: Vec<String> =
+                recent_ports.iter().map(|p| p.port.to_string()).collect();
+            if let Some((port_str, rank)) = first_novel(&recent_port_keys, &base_port_keys) {
+                let port: u16 = port_str.parse().unwrap_or(0);
+                let bytes = recent_ports
+                    .iter()
+                    .find(|p| p.port == port)
+                    .map_or(0, |p| p.bytes);
+                if bytes >= DEST_FLOOR {
+                    let score = novelty_score(rank).min(74.0);
+                    findings.push(NewFinding {
+                        score,
+                        severity: severity_for(score).to_owned(),
+                        node_id: Some(*node),
+                        node_name: name_lookup(names, node),
+                        metric: "dst_port".to_owned(),
+                        kind: "new_destination".to_owned(),
+                        when_label: format!("port {port}"),
+                        duration: human_bytes(bytes as f64),
+                        detail: serde_json::json!({ "port": port, "bytes": bytes }),
+                    });
+                }
+            }
+        }
+        finalize(&mut findings);
+        let summary = format!("{} new destination signals", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Flow Scan (flow) ──────────────────────────────────────────────────
+    //
+    // A source contacting an abnormal number of distinct destinations (horizontal) or destination
+    // ports (vertical) — scan / worm behaviour, via the ClickHouse distinct-count fan-out.
+    async fn run_flow_scan(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let Some(flows) = self.flows.clone() else {
+            return Ok(Some(flow_tier_off()));
+        };
+        let to = now_s();
+        let from = to - params.window_secs.max(1800);
+        let total = node_ids.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in node_ids.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(id, 15 + (i * 70 / total) as i32, "Scanning fan-out…")
+                .await;
+            let q = FlowQuery {
+                node_id: *node,
+                from_unix_ms: from * 1000,
+                to_unix_ms: to * 1000,
+                limit: 50,
+                proto: None,
+                dst_port: None,
+                peer: None,
+                asn: None,
+            };
+            let fan = flows.fanout_by_src(&q).await.unwrap_or_default();
+            for f in fan {
+                let Some(score) = scan_score(f.distinct_dst, f.distinct_ports) else {
+                    continue;
+                };
+                let (kind_label, n) = if f.distinct_dst >= f.distinct_ports {
+                    ("horizontal", f.distinct_dst)
+                } else {
+                    ("vertical", f.distinct_ports)
+                };
+                findings.push(NewFinding {
+                    score,
+                    severity: severity_for(score).to_owned(),
+                    node_id: Some(*node),
+                    node_name: name_lookup(names, node),
+                    metric: "flow_fanout".to_owned(),
+                    kind: "flow_scan".to_owned(),
+                    when_label: format!("{} → {} dst", f.src, f.distinct_dst),
+                    duration: format!("{kind_label} · {n}"),
+                    detail: serde_json::json!({
+                        "src": f.src, "distinct_dst": f.distinct_dst,
+                        "distinct_ports": f.distinct_ports, "flows": f.flows,
+                    }),
+                });
+            }
+        }
+        finalize(&mut findings);
+        let summary = format!("{} scanning sources", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Saturation (cross-store) ──────────────────────────────────────────
+    //
+    // A single conversation dominating a busy node's traffic (link hog). Concentration comes from
+    // the flow store; the node's current interface throughput (TSDB) is attached as context.
+    async fn run_saturation(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let Some(flows) = self.flows.clone() else {
+            return Ok(Some(flow_tier_off()));
+        };
+        let to = now_s();
+        let from = to - params.window_secs.max(900);
+        let total = node_ids.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in node_ids.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(
+                id,
+                15 + (i * 70 / total) as i32,
+                "Checking traffic concentration…",
+            )
+            .await;
+            let conv_q = FlowQuery {
+                node_id: *node,
+                from_unix_ms: from * 1000,
+                to_unix_ms: to * 1000,
+                limit: 5,
+                proto: None,
+                dst_port: None,
+                peer: None,
+                asn: None,
+            };
+            let convos = flows.top_conversations(&conv_q).await.unwrap_or_default();
+            let Some(top) = convos.first() else {
+                continue;
+            };
+            let proto_q = FlowQuery {
+                limit: 256,
+                ..conv_q
+            };
+            let protos = flows.top_protocols(&proto_q).await.unwrap_or_default();
+            let node_total = protos
+                .iter()
+                .map(|p| p.bytes)
+                .sum::<u64>()
+                .max(top.bytes)
+                .max(1);
+            let ratio = top.bytes as f64 / node_total as f64;
+            let Some(score) = concentration_score(ratio) else {
+                continue;
+            };
+            let iface_bps = self.node_throughput_bps(*node).await;
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(*node),
+                node_name: name_lookup(names, node),
+                metric: "flow_concentration".to_owned(),
+                kind: "saturation".to_owned(),
+                when_label: format!("{:.0}% one flow", ratio * 100.0),
+                duration: format!("{} → {}", top.src, top.dst),
+                detail: serde_json::json!({
+                    "src": top.src, "dst": top.dst, "conversation_bytes": top.bytes,
+                    "node_bytes": node_total, "ratio": ratio, "interface_bps": iface_bps,
+                }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} nodes with a dominant conversation", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    // ── Engine: Incident Correlate (cross-store) ──────────────────────────────────
+    //
+    // For each node, assemble a cross-signal timeline over the window: a reachability metric anomaly
+    // (TSDB), passive events (events store), and the dominant flow (ClickHouse). Emit a finding only
+    // when ≥2 signals of ≥2 distinct kinds coincide — the root-cause on-ramp (ADR-029). Single-node
+    // for now; topology-neighbour expansion is a follow-up.
+    async fn run_incident_correlate(
+        &self,
+        id: Uuid,
+        params: &JobParams,
+        node_ids: &[Uuid],
+        names: &HashMap<Uuid, String>,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<Option<(Vec<NewFinding>, String)>> {
+        let to = now_s();
+        let window = params.window_secs.max(3600);
+        let from = to - window;
+        let nodes = &node_ids[..node_ids.len().min(INCIDENT_NODE_CAP)];
+        let total = nodes.len().max(1);
+        let mut findings: Vec<NewFinding> = Vec::new();
+        for (i, node) in nodes.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            self.progress(
+                id,
+                15 + (i * 75 / total) as i32,
+                "Assembling incident timeline…",
+            )
+            .await;
+            let mut signals: Vec<IncidentSignal> = Vec::new();
+            // 1) Reachability metric anomaly.
+            let step = read_step(from, to);
+            let rtt = self.gauge_range(*node, "icmp_rtt_ms", from, to, step).await;
+            if rtt.len() >= MIN_POINTS {
+                if let Some(a) = score_anomaly(
+                    &rtt,
+                    to - params.window_secs.max(600),
+                    params.sensitivity.max(2.0),
+                ) {
+                    signals.push(IncidentSignal {
+                        at_s: a.when_s,
+                        severity: a.score,
+                        kind: "metric",
+                        label: format!("icmp_rtt_ms {}", a.kind),
+                    });
+                }
+            }
+            // 2) Passive events on the node.
+            let filter = EventFilter {
+                since: DateTime::from_timestamp(from, 0),
+                node_id: Some(*node),
+                ..Default::default()
+            };
+            let events = self
+                .events
+                .list_events(&filter, 20)
+                .await
+                .unwrap_or_default();
+            for e in events.iter().take(8) {
+                signals.push(IncidentSignal {
+                    at_s: e.at_unix_ms / 1000,
+                    severity: event_signal_severity(&e.action, e.syslog_severity),
+                    kind: "event",
+                    label: incident_event_label(e),
+                });
+            }
+            // 3) Dominant flow conversation.
+            if let Some(flows) = self.flows.clone() {
+                let q = FlowQuery {
+                    node_id: *node,
+                    from_unix_ms: from * 1000,
+                    to_unix_ms: to * 1000,
+                    limit: 1,
+                    proto: None,
+                    dst_port: None,
+                    peer: None,
+                    asn: None,
+                };
+                if let Ok(cs) = flows.top_conversations(&q).await {
+                    if let Some(c) = cs.first() {
+                        signals.push(IncidentSignal {
+                            at_s: to,
+                            severity: 40.0,
+                            kind: "flow",
+                            label: format!(
+                                "top flow {} → {} ({})",
+                                c.src,
+                                c.dst,
+                                human_bytes(c.bytes as f64)
+                            ),
+                        });
+                    }
+                }
+            }
+            // Cross-signal evidence required: ≥2 signals across ≥2 kinds.
+            let kinds: HashSet<&str> = signals.iter().map(|s| s.kind).collect();
+            if signals.len() < 2 || kinds.len() < 2 {
+                continue;
+            }
+            signals.sort_by_key(|s| s.at_s);
+            let score = signals.iter().map(|s| s.severity).fold(0.0, f64::max);
+            let earliest = signals.first().map_or(to, |s| s.at_s);
+            let timeline: Vec<serde_json::Value> = signals
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "at": s.at_s, "kind": s.kind, "label": s.label, "severity": s.severity,
+                    })
+                })
+                .collect();
+            findings.push(NewFinding {
+                score,
+                severity: severity_for(score).to_owned(),
+                node_id: Some(*node),
+                node_name: name_lookup(names, node),
+                metric: "incident".to_owned(),
+                kind: "incident_correlate".to_owned(),
+                when_label: rel_label(earliest, to),
+                duration: format!("{} signals", signals.len()),
+                detail: serde_json::json!({ "timeline": timeline }),
+            });
+        }
+        finalize(&mut findings);
+        let summary = format!("{} correlated incidents", findings.len());
+        Ok(Some((findings, summary)))
+    }
+
+    /// Resolve an AS number to its organization name via the hot-swappable IP→ASN table (`None`
+    /// when the table is unloaded or the ASN is unknown/0).
+    fn resolve_as_name(&self, asn: u32) -> Option<String> {
+        if asn == 0 {
+            return None;
+        }
+        let db = self.ipasn.read().ok()?.clone();
+        db.and_then(|d| d.name_of(asn).map(str::to_owned))
+    }
+
+    /// Best-effort current total interface throughput (bits/sec) for a node from the TSDB — context
+    /// for the saturation finding. `None` when the node has no interface series.
+    async fn node_throughput_bps(&self, node: Uuid) -> Option<f64> {
+        let live = self.store.node_interface_live(node, 300).await;
+        if live.is_empty() {
+            return None;
+        }
+        let bytes: f64 = live
+            .values()
+            .map(|v| v.in_bps.unwrap_or(0.0) + v.out_bps.unwrap_or(0.0))
+            .sum();
+        Some(bytes * 8.0)
+    }
 }
 
 /// A candidate series for correlation (its label, variance, and points).
@@ -1379,6 +2356,232 @@ fn rel_label(at_s: i64, now_s: i64) -> String {
     }
 }
 
+// ── Event/flow analysis maths + constants (ADR-022 event/flow increment, unit-tested) ──
+
+/// Bucket width for event-storm volume counting (seconds).
+const EVENT_BUCKET_SECS: i64 = 300;
+/// Minimum peak-bucket event count before an event storm is worth reporting.
+const EVENT_STORM_FLOOR: f64 = 5.0;
+/// Minimum recent syslog volume before a severity shift is meaningful.
+const SEVERITY_FLOOR: i64 = 10;
+/// Minimum count for an unmatched signature to count as a rule gap.
+const RULE_GAP_FLOOR: i64 = 20;
+/// Minimum auth-failure count from a source before flagging.
+const AUTH_FLOOR: i64 = 5;
+/// Minimum bytes a novel talker must carry to be a real shift (1 MB).
+const TALKER_FLOOR: u64 = 1_000_000;
+/// Minimum bytes a novel destination must carry (0.5 MB).
+const DEST_FLOOR: u64 = 500_000;
+/// Hard node cap for the per-node multi-store incident correlation.
+const INCIDENT_NODE_CAP: usize = 20;
+
+/// Per-node split of event-bucket counts for `event_storm`: (baseline counts, recent (bucket, count)).
+type StormBuckets = (Vec<f64>, Vec<(i64, f64)>);
+
+/// One dated signal on an incident timeline (`incident_correlate`).
+struct IncidentSignal {
+    at_s: i64,
+    severity: f64,
+    kind: &'static str,
+    label: String,
+}
+
+/// The flow-tier-off result: a single info finding + summary (mirrors `top_flows`' availability note).
+fn flow_tier_off() -> (Vec<NewFinding>, String) {
+    (
+        vec![info_finding("flow", "flow tier not enabled on this core")],
+        "flow tier not enabled".to_owned(),
+    )
+}
+
+/// A zero-score info finding carrying a note (used for the flow-tier-off case).
+fn info_finding(metric: &str, note: &str) -> NewFinding {
+    NewFinding {
+        score: 0.0,
+        severity: "info".to_owned(),
+        node_id: None,
+        node_name: "—".to_owned(),
+        metric: metric.to_owned(),
+        kind: "info".to_owned(),
+        when_label: String::new(),
+        duration: String::new(),
+        detail: serde_json::json!({ "note": note }),
+    }
+}
+
+/// Sort findings by score (highest first) and cap at [`MAX_FINDINGS`].
+fn finalize(findings: &mut Vec<NewFinding>) {
+    findings.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    findings.truncate(MAX_FINDINGS);
+}
+
+/// Upward-spike score: how far a recent peak exceeds the baseline mean, in σ, mapped to 0..100 (at
+/// the σ threshold → 75; ~1.5× → ~100). `None` if within threshold or the baseline is empty. Unlike
+/// [`score_anomaly`] this is one-sided (only *more* volume/traffic matters for storms/DDoS).
+fn burst_score(baseline: &[f64], recent_peak: f64, sigma: f64) -> Option<f64> {
+    if baseline.is_empty() {
+        return None;
+    }
+    let m = mean(baseline);
+    let sd = stddev(baseline, m).max(m.max(1.0) * 1e-3);
+    let sig = sigma.max(0.5);
+    let z = (recent_peak - m) / sd;
+    if z < sig {
+        return None;
+    }
+    Some((75.0 * z / sig).clamp(0.0, 100.0))
+}
+
+/// Per-node high-severity (syslog ≤ 3: err/crit/alert/emerg) fraction, restricted to `scope`.
+/// Returns `node → (high_count, total_count, fraction)`.
+fn severity_high_fractions(
+    counts: &[EventSeverityCount],
+    scope: &HashSet<Uuid>,
+) -> HashMap<Uuid, (i64, i64, f64)> {
+    let mut acc: HashMap<Uuid, (i64, i64)> = HashMap::new();
+    for c in counts {
+        if !scope.contains(&c.node_id) {
+            continue;
+        }
+        let e = acc.entry(c.node_id).or_default();
+        e.1 += c.count;
+        if c.severity <= 3 {
+            e.0 += c.count;
+        }
+    }
+    acc.into_iter()
+        .map(|(k, (high, total))| {
+            let frac = if total > 0 {
+                high as f64 / total as f64
+            } else {
+                0.0
+            };
+            (k, (high, total, frac))
+        })
+        .collect()
+}
+
+/// Severity-shift score from the baseline vs recent high-severity fraction. `None` if the recent
+/// mix didn't skew meaningfully more toward error/critical.
+fn severity_shift_score(baseline_frac: f64, recent_frac: f64) -> Option<f64> {
+    let delta = recent_frac - baseline_frac;
+    if delta < 0.15 {
+        return None;
+    }
+    Some((60.0 + delta * 60.0).clamp(0.0, 100.0))
+}
+
+/// Score an unmatched-signature volume (rule-coverage gap). Capped at warning — advice, not an outage.
+fn gap_score(count: i64) -> f64 {
+    if count >= 500 {
+        80.0
+    } else if count >= 100 {
+        72.0
+    } else {
+        60.0
+    }
+}
+
+/// Score an auth-failure volume from one source.
+fn auth_score(count: i64) -> f64 {
+    if count >= 50 {
+        90.0
+    } else if count >= 10 {
+        78.0
+    } else {
+        62.0
+    }
+}
+
+/// The highest-ranked recent key absent from the baseline set, with its 0-based rank.
+fn first_novel(recent: &[String], baseline: &HashSet<String>) -> Option<(String, usize)> {
+    recent
+        .iter()
+        .enumerate()
+        .find(|(_, k)| !baseline.contains(*k))
+        .map(|(i, k)| (k.clone(), i))
+}
+
+/// Novelty score by the rank a new key entered at (a brand-new #1 is the strongest signal).
+fn novelty_score(rank: usize) -> f64 {
+    match rank {
+        0 => 82.0,
+        1 => 74.0,
+        2 => 66.0,
+        _ => 55.0,
+    }
+}
+
+/// Scan score from a source's distinct destination / port fan-out. `None` below the scan floor.
+fn scan_score(distinct_dst: u64, distinct_ports: u64) -> Option<f64> {
+    let d = distinct_dst.max(distinct_ports);
+    if d < 50 {
+        return None;
+    }
+    if d >= 500 {
+        Some(92.0)
+    } else if d >= 150 {
+        Some(80.0)
+    } else {
+        Some(66.0)
+    }
+}
+
+/// Concentration score from the top conversation's share of a node's traffic. `None` below 50%.
+fn concentration_score(top_ratio: f64) -> Option<f64> {
+    if top_ratio < 0.5 {
+        return None;
+    }
+    Some((60.0 + (top_ratio - 0.5) * 80.0).clamp(0.0, 100.0))
+}
+
+/// Human byte size (`1.2GB`, `512B`) for flow-finding labels.
+fn human_bytes(b: f64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b.max(0.0);
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{v:.0}{}", U[i])
+    } else {
+        format!("{v:.1}{}", U[i])
+    }
+}
+
+/// Severity weight for a passive event on an incident timeline: a fired alert is strongest, else
+/// scale by syslog severity.
+fn event_signal_severity(action: &str, syslog_severity: Option<i16>) -> f64 {
+    match action {
+        "fired" => 85.0,
+        "refreshed" => 70.0,
+        "cleared" => 60.0,
+        _ => match syslog_severity {
+            Some(s) if s <= 2 => 80.0,
+            Some(3) => 65.0,
+            Some(4) => 50.0,
+            _ => 35.0,
+        },
+    }
+}
+
+/// A compact label for one event on an incident timeline (trap/app name + clipped message).
+fn incident_event_label(e: &EventRow) -> String {
+    let head = e
+        .trap_name
+        .clone()
+        .or_else(|| e.app_name.clone())
+        .unwrap_or_else(|| e.kind.clone());
+    let msg: String = e.message.chars().take(60).collect();
+    format!("{head}: {msg}")
+}
+
 // ── Metric classification (by name) ───────────────────────────────────────────────────
 
 /// Gauges suitable for anomaly/correlation: numeric, continuous, not raw counters or discrete
@@ -1549,10 +2752,101 @@ mod tests {
             AnalysisTool::Correlation,
             AnalysisTool::Capacity,
             AnalysisTool::Flap,
+            AnalysisTool::EventStorm,
+            AnalysisTool::EventFlap,
+            AnalysisTool::SeverityShift,
+            AnalysisTool::RuleGap,
+            AnalysisTool::AuthProbe,
+            AnalysisTool::TrafficAnomaly,
+            AnalysisTool::TalkerShift,
+            AnalysisTool::NewDestination,
+            AnalysisTool::FlowScan,
+            AnalysisTool::Saturation,
+            AnalysisTool::IncidentCorrelate,
         ] {
             assert_eq!(AnalysisTool::from_str(t.as_str()), Some(t));
         }
         assert_eq!(AnalysisTool::from_str("nope"), None);
+    }
+
+    #[test]
+    fn burst_score_flags_upward_spike_only() {
+        let baseline = vec![10.0, 12.0, 11.0, 9.0, 10.0, 11.0];
+        // A big upward peak past 3σ scores; a value within the baseline does not.
+        assert!(burst_score(&baseline, 60.0, 3.0).is_some());
+        assert!(burst_score(&baseline, 11.0, 3.0).is_none());
+        // One-sided: a drop below the mean is never a burst.
+        assert!(burst_score(&baseline, 0.0, 3.0).is_none());
+        assert!(burst_score(&[], 100.0, 3.0).is_none());
+    }
+
+    #[test]
+    fn severity_shift_needs_a_real_skew() {
+        assert!(severity_shift_score(0.1, 0.15).is_none()); // +0.05, below threshold
+        let s = severity_shift_score(0.1, 0.6).unwrap(); // +0.5 skew
+        assert!(s > 75.0);
+    }
+
+    #[test]
+    fn severity_high_fractions_counts_err_and_worse() {
+        let scope: HashSet<Uuid> = [Uuid::from_u128(1)].into_iter().collect();
+        let counts = vec![
+            EventSeverityCount {
+                node_id: Uuid::from_u128(1),
+                severity: 3,
+                count: 3,
+            }, // err → high
+            EventSeverityCount {
+                node_id: Uuid::from_u128(1),
+                severity: 6,
+                count: 7,
+            }, // info → not high
+            EventSeverityCount {
+                node_id: Uuid::from_u128(9),
+                severity: 0,
+                count: 100,
+            }, // out of scope
+        ];
+        let f = severity_high_fractions(&counts, &scope);
+        let (high, total, frac) = f[&Uuid::from_u128(1)];
+        assert_eq!((high, total), (3, 10));
+        assert!((frac - 0.3).abs() < 1e-9);
+        assert!(!f.contains_key(&Uuid::from_u128(9)));
+    }
+
+    #[test]
+    fn first_novel_finds_highest_ranked_new_key() {
+        let baseline: HashSet<String> = ["a".to_owned(), "b".to_owned()].into_iter().collect();
+        let recent = vec!["a".to_owned(), "z".to_owned(), "b".to_owned()];
+        assert_eq!(first_novel(&recent, &baseline), Some(("z".to_owned(), 1)));
+        // Nothing new → None.
+        let recent2 = vec!["a".to_owned(), "b".to_owned()];
+        assert_eq!(first_novel(&recent2, &baseline), None);
+    }
+
+    #[test]
+    fn scan_and_concentration_thresholds() {
+        assert!(scan_score(10, 5).is_none());
+        assert_eq!(scan_score(600, 3), Some(92.0));
+        assert_eq!(scan_score(3, 200), Some(80.0)); // vertical scan on the port axis
+        assert!(concentration_score(0.4).is_none());
+        assert_eq!(concentration_score(1.0), Some(100.0));
+    }
+
+    #[test]
+    fn human_bytes_scales_units() {
+        assert_eq!(human_bytes(512.0), "512B");
+        assert_eq!(human_bytes(1536.0), "1.5KB");
+        assert_eq!(human_bytes(5.0 * 1024.0 * 1024.0 * 1024.0), "5.0GB");
+    }
+
+    #[test]
+    fn event_signal_severity_ranks_fired_highest() {
+        assert!(event_signal_severity("fired", None) > event_signal_severity("cleared", None));
+        assert!(
+            event_signal_severity("none", Some(0)) > event_signal_severity("none", Some(6)),
+            "emergency syslog outweighs debug"
+        );
     }
 
     #[test]

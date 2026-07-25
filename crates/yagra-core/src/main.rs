@@ -482,17 +482,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             );
         }
     }
-    // Troubleshoot analysis runner (ADR-022): TSDB-read background diagnostics. The orphan-reconcile
-    // (fail jobs left `running` by a previous process) is a leader-only DB mutation — deferred to
-    // `leader_work` so a standby never fails the live leader's in-flight jobs; `analysis_repo` is
-    // held for it. The runner itself serves the API on all cores.
+    // Troubleshoot analysis runner (ADR-022): read-only background diagnostics. Reads VictoriaMetrics
+    // plus, for the event/flow analyses (ADR-024/031 increment), the passive-event store and the flow
+    // store (both read-only + admission-bounded — still a "read"). The orphan-reconcile (fail jobs
+    // left `running` by a previous process) is a leader-only DB mutation — deferred to `leader_work`
+    // so a standby never fails the live leader's in-flight jobs; `analysis_repo` is held for it. The
+    // runner itself serves the API on all cores.
     let analysis_repo = Arc::new(analysis::AnalysisRepo::new(repo.pool()));
-    // `group_repo` is created earlier (shared with maintenance/mute scope resolution).
+    // `group_repo` is created earlier (shared with maintenance/mute scope resolution); `events_repo`,
+    // `flows` (None when the flow tier is off), and `ipasn` are shared with the API/ingest paths.
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo.clone(),
         store.clone(),
         repo.clone(),
         group_repo.clone(),
+        events_repo.clone(),
+        flows.clone(),
+        ipasn.clone(),
     ));
 
     // Reports (Dashboard → Reports): a TSDB+PostgreSQL-read background generator in core (mirrors the

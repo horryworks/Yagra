@@ -963,7 +963,25 @@ export interface ApiErrorBody {
 // ── Troubleshoot analysis jobs (ADR-022) ─────────────────────────────────────
 
 /** Which diagnostic a job runs (mirrors the Rust `AnalysisTool`). */
-export type AnalysisToolKey = 'anomaly' | 'correlation' | 'capacity' | 'flap';
+export type AnalysisToolKey =
+  | 'anomaly'
+  | 'correlation'
+  | 'capacity'
+  | 'flap'
+  // Passive monitoring (events, ADR-024)
+  | 'event_storm'
+  | 'event_flap'
+  | 'severity_shift'
+  | 'rule_gap'
+  | 'auth_probe'
+  // Flow monitoring (ClickHouse, ADR-031)
+  | 'traffic_anomaly'
+  | 'talker_shift'
+  | 'new_destination'
+  | 'flow_scan'
+  // Cross-store
+  | 'saturation'
+  | 'incident_correlate';
 
 /** An analysis job row / SSE event (`/api/v1/analysis/jobs`). Timestamps are epoch-millis. */
 export interface AnalysisJob {
