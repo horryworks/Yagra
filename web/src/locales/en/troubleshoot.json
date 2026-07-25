@@ -235,6 +235,58 @@
         "count": "Counting state churn…",
         "rank": "Ranking flapping nodes…"
       }
+    },
+    "event_storm": {
+      "note": "Nodes whose passive-event rate surged past their own learned baseline. What matters is the multiple, not the raw count — 400 events in 5 minutes is routine for a busy aggregation switch and alarming for an access port.",
+      "noisiest": "Highest event peak",
+      "peakInBucket_one": "{{count}} event in {{minutes}} min",
+      "peakInBucket_other": "{{count}} events in {{minutes}} min",
+      "baseline_one": "baseline {{count}}",
+      "baseline_other": "baseline {{count}}",
+      "filters": {
+        "x10": "≥ 10× baseline",
+        "x3": "≥ 3× baseline",
+        "low": "< 3× baseline"
+      },
+      "summary": {
+        "nodes": "storming",
+        "peak": "peak events",
+        "worstRatio": "worst multiple"
+      },
+      "sort": {
+        "byRatio": "by multiple",
+        "byPeak": "by peak count"
+      },
+      "phases": {
+        "read": "Reading event volume…",
+        "score": "Scoring volume spikes…"
+      }
+    },
+    "severity_shift": {
+      "note": "Nodes whose syslog mix skewed toward error-or-worse against their own baseline — a quiet degradation signal. Volume is shown alongside: +40 pp out of 12 events is noise, out of 4,000 it is an incident.",
+      "biggest": "Biggest severity shift",
+      "delta": "+{{pp}} pp",
+      "wasAt": "was {{pct}}%",
+      "volume": "{{high}} of {{total}} at error+",
+      "filters": {
+        "big": "≥ 30 pp",
+        "mid": "≥ 10 pp"
+      },
+      "summary": {
+        "nodes": "shifted",
+        "biggest": "biggest pp jump",
+        "highEvents": "error+ events",
+        "examined": "events examined"
+      },
+      "sort": {
+        "byDelta": "by shift",
+        "byRecent": "by current error rate",
+        "byVolume": "by volume"
+      },
+      "phases": {
+        "read": "Reading severity mix…",
+        "compare": "Comparing against baseline…"
+      }
     }
   },
   "scope": {

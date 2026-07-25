@@ -127,6 +127,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.event_storm.scope',
     desc: 'tools.event_storm.desc',
     reveal: 'tools.event_storm.reveal',
+    reportPath: '/troubleshoot/report/event_storm',
   },
   {
     id: 'event_flap',
@@ -149,6 +150,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.severity_shift.scope',
     desc: 'tools.severity_shift.desc',
     reveal: 'tools.severity_shift.reveal',
+    reportPath: '/troubleshoot/report/severity_shift',
   },
   {
     id: 'rule_gap',

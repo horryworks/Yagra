@@ -42,6 +42,109 @@
   transition: width 0.2s ease;
 }
 
+/* ── Ratio meter (baseline vs peak) ── */
+
+.tsr-ratio {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.tsr-ratio .tsr-meter {
+  position: relative;
+  flex: 1;
+}
+
+/* The overshoot fills the track; the baseline segment is painted over its left end, so the visible
+   remainder IS the excess that made this a finding. */
+.tsr-ratio-excess {
+  position: absolute;
+  inset: 0;
+  background: var(--series-1);
+}
+
+.tsr-ratio-excess.warn {
+  background: var(--status-warning);
+}
+
+.tsr-ratio-excess.crit {
+  background: var(--status-critical);
+}
+
+.tsr-ratio-base {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-right: 1px solid var(--bg-primary);
+  background: var(--bg-tertiary);
+}
+
+.tsr-ratio-val {
+  flex: 0 0 auto;
+  min-width: 46px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
+/* ── Twin track (before → after) ── */
+
+.tsr-twin {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'base val'
+    'recent val';
+  align-items: center;
+  gap: 3px var(--space-2);
+  width: 100%;
+}
+
+.tsr-twin-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.tsr-twin-track:first-of-type {
+  grid-area: base;
+}
+
+.tsr-twin-track:nth-of-type(2) {
+  grid-area: recent;
+}
+
+.tsr-twin-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--series-1);
+}
+
+/* The baseline half is deliberately muted — it is context, not the finding. */
+.tsr-twin-fill.base {
+  background: var(--text-tertiary);
+  opacity: 0.55;
+}
+
+.tsr-twin-fill.warn {
+  background: var(--status-warning);
+}
+
+.tsr-twin-fill.crit {
+  background: var(--status-critical);
+}
+
+.tsr-twin-val {
+  grid-area: val;
+  min-width: 92px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
 /* ── Capacity runway sparkline ── */
 
 /* The near-term (30 day) planning band. */

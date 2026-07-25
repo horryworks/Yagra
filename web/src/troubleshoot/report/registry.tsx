@@ -9,7 +9,9 @@
 import { AnomalyBody } from './bodies/AnomalyBody';
 import { CapacityBody } from './bodies/CapacityBody';
 import { CorrelationBody } from './bodies/CorrelationBody';
+import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
+import { SeverityShiftBody } from './bodies/SeverityShiftBody';
 import {
   correlationDirection,
   detailNum,
@@ -192,9 +194,102 @@ const flap: ReportDescriptor = {
   ],
 };
 
+const eventStorm: ReportDescriptor = {
+  tool: 'event_storm',
+  i18nKey: 'report.event_storm',
+  controls: {
+    controls: ['scope', 'window', 'baseline', 'sensitivity'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    baselines: [BASELINE_PRESETS.d7, BASELINE_PRESETS.d14],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.event_storm.summary.nodes', value: totalLabel },
+    {
+      labelKey: 'report.event_storm.summary.peak',
+      value: (f) => {
+        const p = maxDetail(f, 'peak');
+        return p === undefined ? '—' : fmtCount(Math.round(p));
+      },
+    },
+    {
+      labelKey: 'report.event_storm.summary.worstRatio',
+      separatorBefore: true,
+      value: (f) => {
+        // Nodes with no baseline at all produce an infinite ratio — report the finite worst instead
+        // of rendering "×∞".
+        const ratios = f
+          .map((x) => {
+            const b = detailNum(x, 'baseline_mean') ?? 0;
+            return b > 0 ? (detailNum(x, 'peak') ?? 0) / b : NaN;
+          })
+          .filter((r) => Number.isFinite(r));
+        return ratios.length ? `×${Math.max(...ratios).toFixed(1)}` : '—';
+      },
+    },
+  ],
+  phaseKeys: ['report.event_storm.phases.read', 'report.event_storm.phases.score'],
+  Body: EventStormBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'peak_events', cell: (f) => String(detailNum(f, 'peak') ?? '') },
+    { header: 'baseline_mean', cell: (f) => String(detailNum(f, 'baseline_mean') ?? '') },
+    { header: 'bucket_secs', cell: (f) => String(detailNum(f, 'bucket_secs') ?? '') },
+    { header: 'peak_at_unix', cell: (f) => String(detailNum(f, 'peak_at') ?? '') },
+  ],
+};
+
+const severityShift: ReportDescriptor = {
+  tool: 'severity_shift',
+  i18nKey: 'report.severity_shift',
+  controls: {
+    controls: ['scope', 'window', 'baseline'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    baselines: [BASELINE_PRESETS.d7, BASELINE_PRESETS.d14],
+    defaults: { windowSecs: 21_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.severity_shift.summary.nodes', value: totalLabel },
+    {
+      labelKey: 'report.severity_shift.summary.biggest',
+      value: (f) => {
+        if (!f.length) return '—';
+        const pp = Math.max(
+          ...f.map(
+            (x) => ((detailNum(x, 'recent_high_frac') ?? 0) - (detailNum(x, 'baseline_high_frac') ?? 0)) * 100,
+          ),
+        );
+        return `${pp.toFixed(0)}`;
+      },
+    },
+    {
+      labelKey: 'report.severity_shift.summary.highEvents',
+      separatorBefore: true,
+      value: (f) => fmtCount(sumDetail(f, 'recent_high')),
+    },
+    {
+      labelKey: 'report.severity_shift.summary.examined',
+      value: (f) => fmtCount(sumDetail(f, 'recent_total')),
+    },
+  ],
+  phaseKeys: ['report.severity_shift.phases.read', 'report.severity_shift.phases.compare'],
+  Body: SeverityShiftBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'baseline_high_frac', cell: (f) => String(detailNum(f, 'baseline_high_frac') ?? '') },
+    { header: 'recent_high_frac', cell: (f) => String(detailNum(f, 'recent_high_frac') ?? '') },
+    { header: 'recent_high', cell: (f) => String(detailNum(f, 'recent_high') ?? '') },
+    { header: 'recent_total', cell: (f) => String(detailNum(f, 'recent_total') ?? '') },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
   capacity,
   flap,
+  event_storm: eventStorm,
+  severity_shift: severityShift,
 };

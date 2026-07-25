@@ -84,6 +84,69 @@ export function RightRail({ when, detail }: { when?: ReactNode; detail?: ReactNo
   );
 }
 
+/**
+ * A baseline-vs-peak meter: the learned baseline as a muted segment, the overshoot beyond it in the
+ * severity colour, labelled with the multiple (`×12.4`). Shared by `event_storm` and
+ * `traffic_anomaly` — their details are the same shape modulo units, so `format` swaps the value
+ * formatter rather than the widget. `null` baseline (or 0) means "no baseline to beat", so the whole
+ * track reads as overshoot rather than dividing by zero.
+ */
+export function RatioMeter({
+  peak,
+  baseline,
+  severity,
+  format,
+}: {
+  peak: number;
+  baseline: number;
+  severity: 'crit' | 'warn' | 'info';
+  format: (v: number) => string;
+}) {
+  const ratio = baseline > 0 ? peak / baseline : Infinity;
+  // Baseline share of the peak — the rest of the track is the excess that made this a finding.
+  const basePct = baseline > 0 && peak > 0 ? Math.min(100, (baseline / peak) * 100) : 0;
+  const label = Number.isFinite(ratio) ? `×${ratio.toFixed(1)}` : format(peak);
+  return (
+    <div className="tsr-ratio" title={`${format(peak)} / ${format(baseline)}`}>
+      <div className="tsr-meter">
+        <div className={`tsr-meter-fill tsr-ratio-excess ${severity}`} style={{ width: '100%' }} />
+        <div className="tsr-ratio-base" style={{ width: `${basePct}%` }} />
+      </div>
+      <span className="tsr-ratio-val mono">{label}</span>
+    </div>
+  );
+}
+
+/**
+ * A before→after pair on one shared 0–100% scale: the baseline track above (muted) and the recent
+ * one below (severity-coloured). Reading them as two bars on the same scale is what makes a shift
+ * legible — two percentages side by side do not show it.
+ */
+export function TwinTrack({
+  basePct,
+  recentPct,
+  severity,
+  label,
+}: {
+  basePct: number;
+  recentPct: number;
+  severity: 'crit' | 'warn' | 'info';
+  label: string;
+}) {
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  return (
+    <div className="tsr-twin" title={label}>
+      <div className="tsr-twin-track">
+        <div className="tsr-twin-fill base" style={{ width: `${clamp(basePct)}%` }} />
+      </div>
+      <div className="tsr-twin-track">
+        <div className={`tsr-twin-fill ${severity}`} style={{ width: `${clamp(recentPct)}%` }} />
+      </div>
+      <span className="tsr-twin-val mono">{label}</span>
+    </div>
+  );
+}
+
 export interface ChipOption<T extends string> {
   value: T;
   label: string;
