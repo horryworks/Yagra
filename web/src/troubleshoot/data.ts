@@ -12,7 +12,8 @@
 // (see rules; a module-load `t()` would freeze one language). Only structural/technical fields
 // (id, mono, method, depth, color, reportPath) are literals.
 //
-// `Tool.id` matches the backend `AnalysisToolKey` (anomaly | correlation | capacity | flap).
+// `Tool.id` matches the backend `AnalysisToolKey` — the four metric analyses plus the passive-event
+// (ADR-024) and flow (ADR-031) kinds; `data.test.ts` pins the set against that union.
 
 import type { AnalysisToolKey } from '../types/api';
 
@@ -89,6 +90,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.correlation.scope',
     desc: 'tools.correlation.desc',
     reveal: 'tools.correlation.reveal',
+    reportPath: '/troubleshoot/report/correlation',
   },
   {
     id: 'capacity',
@@ -100,6 +102,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.capacity.scope',
     desc: 'tools.capacity.desc',
     reveal: 'tools.capacity.reveal',
+    reportPath: '/troubleshoot/report/capacity',
   },
   {
     id: 'flap',
@@ -111,6 +114,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.flap.scope',
     desc: 'tools.flap.desc',
     reveal: 'tools.flap.reveal',
+    reportPath: '/troubleshoot/report/flap',
   },
   // ── Passive monitoring (events, ADR-024) ──
   {

@@ -149,6 +149,86 @@
         "score": "残差をスコアリング中…",
         "rank": "検出をランク付け・分類中…"
       }
+    },
+    "correlation": {
+      "note": "期間内で連動して変化したメトリクスのペアです。各検出は2つの系列がどれだけ密接に追随したかでスコア付けされ、アラームが鳴ったものではなく実際に連動したものを示します。",
+      "strongest": "最も強い関係",
+      "samples_other": "{{count}} サンプル",
+      "dir": {
+        "coRising": "同方向",
+        "inverse": "逆方向"
+      },
+      "summary": {
+        "pairs": "ペア",
+        "strongest": "最大 |r|",
+        "coRising": "同方向",
+        "inverse": "逆方向"
+      },
+      "sort": {
+        "byR": "強さ順",
+        "bySamples": "サンプル数順"
+      },
+      "phases": {
+        "collect": "系列を収集中…",
+        "cross": "相互相関を計算中…",
+        "rank": "相関をランク付け中…"
+      }
+    },
+    "capacity": {
+      "note": "使用率をトレンドから外挿し、各リソースが枯渇する時期を推定します。枯渇が近い順に並び、予測線が100%の上限に到達する様子を表示します。",
+      "soonest": "枯渇が近い順",
+      "growth": "+{{rate}} pt/日",
+      "nowAt": "現在 {{pct}}",
+      "tte": {
+        "h_other": "残り {{count}} 時間",
+        "d_other": "残り {{count}} 日",
+        "mo_other": "残り {{count}} ヶ月"
+      },
+      "filters": {
+        "soon": "30日以内",
+        "mid": "30〜90日",
+        "far": "90日超"
+      },
+      "summary": {
+        "resources": "リソース",
+        "within30": "30日以内",
+        "within90": "90日以内",
+        "fastest": "最大 pt/日"
+      },
+      "sort": {
+        "soonest": "枯渇が近い順",
+        "growth": "増加率順"
+      },
+      "phases": {
+        "read": "使用率の履歴を取得中…",
+        "project": "増加を予測中…",
+        "rank": "緊急度でランク付け中…"
+      }
+    },
+    "flap": {
+      "note": "到達性が繰り返し変動するノードです。重要なのは頻度で、1時間に12回は障害ですが1週間に12回はノイズです。そのため1時間あたりのフラップ数で順位付けします。",
+      "worst": "フラップ率が最も高い",
+      "flaps_other": "{{count}} 回フラップ",
+      "perHour": "{{rate}}/時",
+      "bucket": {
+        "chronic": "慢性的",
+        "intermittent": "断続的"
+      },
+      "summary": {
+        "nodes": "フラップ中",
+        "chronic": "慢性的",
+        "totalFlaps": "合計フラップ",
+        "worstRate": "最大 /時"
+      },
+      "sort": {
+        "byRate": "頻度順",
+        "byFlaps": "フラップ数順"
+      },
+      "phases": {
+        "scan": "到達性の履歴をスキャン中…",
+        "count": "状態変動を集計中…",
+        "rank": "フラップするノードをランク付け中…"
+      }
     }
   },
   "scope": {

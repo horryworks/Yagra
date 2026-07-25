@@ -150,6 +150,91 @@
         "score": "Scoring residuals…",
         "rank": "Ranking & classifying findings…"
       }
+    },
+    "correlation": {
+      "note": "Metric pairs that moved together inside the window. Each finding is a relationship between two series, scored by how tightly they track — what actually co-moved, not just what alarmed.",
+      "strongest": "Strongest relationships",
+      "samples_one": "{{count}} sample",
+      "samples_other": "{{count}} samples",
+      "dir": {
+        "coRising": "Co-rising",
+        "inverse": "Inverse"
+      },
+      "summary": {
+        "pairs": "pairs",
+        "strongest": "strongest |r|",
+        "coRising": "co-rising",
+        "inverse": "inverse"
+      },
+      "sort": {
+        "byR": "by strength",
+        "bySamples": "by samples"
+      },
+      "phases": {
+        "collect": "Collecting series…",
+        "cross": "Cross-correlating…",
+        "rank": "Ranking correlations…"
+      }
+    },
+    "capacity": {
+      "note": "Utilization projected forward by trend to estimate when each resource runs out. Sorted soonest-first — the runway shows the projection arriving at the 100% ceiling.",
+      "soonest": "Running out soonest",
+      "growth": "+{{rate}} pp/day",
+      "nowAt": "{{pct}} now",
+      "tte": {
+        "h_one": "{{count}} h left",
+        "h_other": "{{count}} h left",
+        "d_one": "{{count}} day left",
+        "d_other": "{{count}} days left",
+        "mo_one": "{{count}} month left",
+        "mo_other": "{{count}} months left"
+      },
+      "filters": {
+        "soon": "≤ 30 days",
+        "mid": "30–90 days",
+        "far": "> 90 days"
+      },
+      "summary": {
+        "resources": "resources",
+        "within30": "within 30 d",
+        "within90": "within 90 d",
+        "fastest": "fastest pp/day"
+      },
+      "sort": {
+        "soonest": "soonest first",
+        "growth": "by growth rate"
+      },
+      "phases": {
+        "read": "Reading utilization history…",
+        "project": "Projecting growth…",
+        "rank": "Ranking by urgency…"
+      }
+    },
+    "flap": {
+      "note": "Nodes whose reachability keeps bouncing. Rate is what matters — a dozen flaps in an hour is an outage, a dozen over a week is noise — so findings rank by flaps per hour.",
+      "worst": "Worst flap rate",
+      "flaps_one": "{{count}} flap",
+      "flaps_other": "{{count}} flaps",
+      "perHour": "{{rate}}/h",
+      "bucket": {
+        "chronic": "Chronic",
+        "intermittent": "Intermittent"
+      },
+      "summary": {
+        "nodes": "flapping",
+        "chronic": "chronic",
+        "totalFlaps": "total flaps",
+        "worstRate": "worst /h"
+      },
+      "sort": {
+        "byRate": "by rate",
+        "byFlaps": "by flap count"
+      },
+      "phases": {
+        "scan": "Scanning reachability history…",
+        "count": "Counting state churn…",
+        "rank": "Ranking flapping nodes…"
+      }
     }
   },
   "scope": {

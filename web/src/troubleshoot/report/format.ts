@@ -129,6 +129,38 @@ export function sortByDetail(findings: AnalysisFinding[], key: string): Analysis
     .sort((a, b) => (detailNum(b, key) ?? -Infinity) - (detailNum(a, key) ?? -Infinity));
 }
 
+/**
+ * A day count as a localizable magnitude + unit key. Returning the unit rather than a formatted
+ * string is what lets JA say「4ヶ月」— the Rust `human_days` equivalent builds English inline and
+ * cannot go through `t()`.
+ */
+export function humanDays(days: number): { count: number; unit: 'h' | 'd' | 'mo' } {
+  if (!Number.isFinite(days) || days < 0) return { count: 0, unit: 'd' };
+  if (days < 1) return { count: Math.round(days * 24), unit: 'h' };
+  if (days < 90) return { count: Math.round(days), unit: 'd' };
+  return { count: Math.round(days / 30), unit: 'mo' };
+}
+
+/**
+ * Which way a correlated pair moves. `r >= 0` counts as co-rising — matching the backend's `>= 0.0`
+ * exactly, so a perfectly flat pair is bucketed identically on both sides.
+ */
+export function correlationDirection(r: number): 'coRising' | 'inverse' {
+  return r >= 0 ? 'coRising' : 'inverse';
+}
+
+/** Urgency bucket for a capacity projection (mirrors the backend's 7/30/90-day score bands). */
+export function capacityBucket(tteDays: number): 'soon' | 'mid' | 'far' {
+  if (tteDays <= 30) return 'soon';
+  if (tteDays <= 90) return 'mid';
+  return 'far';
+}
+
+/** A node flapping at least once an hour is chronic rather than intermittent. */
+export function flapBucket(perHour: number): 'chronic' | 'intermittent' {
+  return perHour >= 1 ? 'chronic' : 'intermittent';
+}
+
 /** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
 function csvField(v: string): string {
   return `"${v.replace(/"/g, '""')}"`;
