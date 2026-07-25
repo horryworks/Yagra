@@ -161,6 +161,67 @@ export function flapBucket(perHour: number): 'chronic' | 'intermittent' {
   return perHour >= 1 ? 'chronic' : 'intermittent';
 }
 
+/**
+ * The rule name behind an `event_flap` finding. The backend encodes it as `event:{rule_name}` in
+ * `metric`; the `rule_id` in `detail` is a grouping key only and must never be rendered (no raw
+ * UUIDs in the UI).
+ */
+export function eventRuleName(metric: string): string {
+  return metric.startsWith('event:') ? metric.slice('event:'.length) : metric;
+}
+
+/** One rule's churn rolled up across every node it fired on. */
+export interface RuleGroup {
+  /** Grouping key — `detail.rule_id` when present, else the rule name. Never displayed. */
+  key: string;
+  ruleName: string;
+  nodes: number;
+  fires: number;
+  clears: number;
+  cycles: number;
+  /** The worst per-hour rate seen on any single node for this rule. */
+  worstPerHour: number;
+  /** The highest finding score in the group (drives severity/ordering). */
+  score: number;
+}
+
+/**
+ * Roll `event_flap` findings up by rule. A flat list answers "which node is flapping"; this answers
+ * "which RULE is thrashing across the fleet" — a different and often more actionable question, and
+ * one a per-finding list structurally cannot show. Pure, so it is unit-tested directly.
+ */
+export function groupByRule(findings: AnalysisFinding[]): RuleGroup[] {
+  const acc = new Map<string, RuleGroup & { nodeIds: Set<string> }>();
+  for (const f of findings) {
+    const ruleName = eventRuleName(f.metric);
+    const key = detailStr(f, 'rule_id') ?? ruleName;
+    let g = acc.get(key);
+    if (!g) {
+      g = {
+        key,
+        ruleName,
+        nodes: 0,
+        fires: 0,
+        clears: 0,
+        cycles: 0,
+        worstPerHour: 0,
+        score: 0,
+        nodeIds: new Set<string>(),
+      };
+      acc.set(key, g);
+    }
+    g.fires += detailNum(f, 'fires') ?? 0;
+    g.clears += detailNum(f, 'clears') ?? 0;
+    g.cycles += detailNum(f, 'cycles') ?? 0;
+    g.worstPerHour = Math.max(g.worstPerHour, detailNum(f, 'per_hour') ?? 0);
+    g.score = Math.max(g.score, f.score);
+    if (f.node_id) g.nodeIds.add(f.node_id);
+  }
+  return [...acc.values()]
+    .map(({ nodeIds, ...g }) => ({ ...g, nodes: nodeIds.size }))
+    .sort((a, b) => b.cycles - a.cycles);
+}
+
 /** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
 function csvField(v: string): string {
   return `"${v.replace(/"/g, '""')}"`;

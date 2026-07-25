@@ -139,6 +139,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.event_flap.scope',
     desc: 'tools.event_flap.desc',
     reveal: 'tools.event_flap.reveal',
+    reportPath: '/troubleshoot/report/event_flap',
   },
   {
     id: 'severity_shift',

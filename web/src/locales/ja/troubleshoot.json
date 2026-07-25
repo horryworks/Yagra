@@ -331,6 +331,38 @@
         "cluster": "認証失敗をクラスタ化中…",
         "rank": "送信元をランク付け中…"
       }
+    },
+    "event_flap": {
+      "note": "同一のイベントルールが発火と解消を繰り返しているものです。到達性フラップ分析では見えない linkDown/linkUp のばたつきや BGP セッションの変動を捉えます。ルール単位に切り替えると、フリート全体で暴れている1つのルールが分かります。",
+      "worstRules": "フリート全体で問題のあるルール",
+      "groupBy": "グループ化",
+      "byFinding": "ノード単位",
+      "byRule": "ルール単位",
+      "cycles_other": "{{count}} サイクル",
+      "perHour": "{{rate}}/時",
+      "fireClear": "発火 {{fires}} · 解消 {{clears}}",
+      "balanceTitle": "発火 {{fires}} 対 解消 {{clears}} — 発火側が長い場合は、発生したまま解消されていません",
+      "acrossNodes_other": "{{count}} ノードに影響",
+      "worstNode": "最大 {{rate}}/時",
+      "filters": {
+        "cycles5": "5サイクル以上",
+        "rate1": "1回/時以上"
+      },
+      "summary": {
+        "pairs": "ルール/ノード",
+        "rules": "ルール",
+        "nodes": "ノード",
+        "worstRate": "最大サイクル/時"
+      },
+      "sort": {
+        "byCycles": "サイクル順",
+        "byRate": "頻度順",
+        "byRule": "ルール順"
+      },
+      "phases": {
+        "read": "イベントの変動を取得中…",
+        "rank": "フラップするルールをランク付け中…"
+      }
     }
   },
   "scope": {

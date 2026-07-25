@@ -127,6 +127,58 @@
   font-size: var(--font-xs);
 }
 
+/* ── Balance bar (fires vs clears) ── */
+
+/* Two tracks growing outward from a centre axis: fires left, clears right. The asymmetry is the
+   signal — a long left arm with a short right one is "raised and never cleared". */
+.tsr-balance {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+}
+
+.tsr-balance-side {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+/* Fires grow right-to-left away from the axis. */
+.tsr-balance-side.left {
+  justify-content: flex-end;
+}
+
+.tsr-balance-axis {
+  height: 14px;
+  background: var(--border-color);
+}
+
+.tsr-balance-fill {
+  height: 100%;
+}
+
+.tsr-balance-fill.fires {
+  background: var(--series-5);
+}
+
+.tsr-balance-fill.fires.warn {
+  background: var(--status-warning);
+}
+
+.tsr-balance-fill.fires.crit {
+  background: var(--status-critical);
+}
+
+/* Clears are the healthy half — deliberately muted so the eye goes to the fires side. */
+.tsr-balance-fill.clears {
+  background: var(--text-tertiary);
+  opacity: 0.55;
+}
+
 /* ── Twin track (before → after) ── */
 
 .tsr-twin {

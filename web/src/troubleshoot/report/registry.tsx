@@ -10,6 +10,7 @@ import { AnomalyBody } from './bodies/AnomalyBody';
 import { AuthProbeBody } from './bodies/AuthProbeBody';
 import { CapacityBody } from './bodies/CapacityBody';
 import { CorrelationBody } from './bodies/CorrelationBody';
+import { EventFlapBody } from './bodies/EventFlapBody';
 import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
@@ -20,7 +21,9 @@ import {
   countNodes,
   detailNum,
   detailStr,
+  eventRuleName,
   fmtCount,
+  groupByRule,
   maxDetail,
   nodeSummaryStats,
   sevOf,
@@ -364,12 +367,51 @@ const authProbe: ReportDescriptor = {
   ],
 };
 
+/** Event flap's entity is a (rule, node) pair, so the strip counts pairs AND distinct rules. */
+const eventFlap: ReportDescriptor = {
+  tool: 'event_flap',
+  i18nKey: 'report.event_flap',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h6, WINDOW_PRESETS.d1, WINDOW_PRESETS.d7],
+    defaults: { windowSecs: 21_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.event_flap.summary.pairs', value: totalLabel },
+    { labelKey: 'report.event_flap.summary.rules', value: (f) => String(groupByRule(f).length) },
+    {
+      labelKey: 'report.event_flap.summary.nodes',
+      value: (f) => String(countNodes(f)),
+    },
+    {
+      labelKey: 'report.event_flap.summary.worstRate',
+      separatorBefore: true,
+      value: (f) => {
+        const r = maxDetail(f, 'per_hour');
+        return r === undefined ? '—' : r.toFixed(1);
+      },
+    },
+  ],
+  phaseKeys: ['report.event_flap.phases.read', 'report.event_flap.phases.rank'],
+  Body: EventFlapBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'rule', cell: (f) => eventRuleName(f.metric) },
+    { header: 'fires', cell: (f) => String(detailNum(f, 'fires') ?? '') },
+    { header: 'clears', cell: (f) => String(detailNum(f, 'clears') ?? '') },
+    { header: 'cycles', cell: (f) => String(detailNum(f, 'cycles') ?? '') },
+    { header: 'per_hour', cell: (f) => String(detailNum(f, 'per_hour') ?? '') },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
   capacity,
   flap,
   event_storm: eventStorm,
+  event_flap: eventFlap,
   severity_shift: severityShift,
   rule_gap: ruleGap,
   auth_probe: authProbe,

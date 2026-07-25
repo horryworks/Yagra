@@ -340,6 +340,40 @@
         "cluster": "Clustering auth failures…",
         "rank": "Ranking sources…"
       }
+    },
+    "event_flap": {
+      "note": "The same event rule raising and clearing over and over — linkDown/linkUp thrash and BGP session churn that reachability flap analysis can't see. Group by rule to find one rule thrashing fleet-wide.",
+      "worstRules": "Worst rules fleet-wide",
+      "groupBy": "Group by",
+      "byFinding": "By node",
+      "byRule": "By rule",
+      "cycles_one": "{{count}} cycle",
+      "cycles_other": "{{count}} cycles",
+      "perHour": "{{rate}}/h",
+      "fireClear": "{{fires}} fired · {{clears}} cleared",
+      "balanceTitle": "{{fires}} fired vs {{clears}} cleared — a long fired side means raised and never resolved",
+      "acrossNodes_one": "on {{count}} node",
+      "acrossNodes_other": "across {{count}} nodes",
+      "worstNode": "worst {{rate}}/h",
+      "filters": {
+        "cycles5": "≥ 5 cycles",
+        "rate1": "≥ 1/h"
+      },
+      "summary": {
+        "pairs": "rule/node pairs",
+        "rules": "rules",
+        "nodes": "nodes",
+        "worstRate": "worst cycles/h"
+      },
+      "sort": {
+        "byCycles": "by cycles",
+        "byRate": "by rate",
+        "byRule": "by rule"
+      },
+      "phases": {
+        "read": "Reading event churn…",
+        "rank": "Ranking flapping rules…"
+      }
     }
   },
   "scope": {

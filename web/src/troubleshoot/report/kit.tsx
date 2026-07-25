@@ -147,6 +147,41 @@ export function TwinTrack({
   );
 }
 
+/**
+ * Fires vs clears as two segments growing outward from a shared centre line. An **imbalance** is the
+ * point: many fires with few clears means "raised and never resolved" — a different fault from clean
+ * up/down thrash — and a cycle count alone hides that entirely.
+ */
+export function BalanceBar({
+  fires,
+  clears,
+  severity,
+}: {
+  fires: number;
+  clears: number;
+  severity: 'crit' | 'warn' | 'info';
+}) {
+  const { t } = useTranslation('troubleshoot');
+  const peak = Math.max(fires, clears, 1);
+  return (
+    <div
+      className="tsr-balance"
+      title={t('report.event_flap.balanceTitle', { fires, clears })}
+    >
+      <div className="tsr-balance-side left">
+        <div
+          className={`tsr-balance-fill fires ${severity}`}
+          style={{ width: `${(fires / peak) * 100}%` }}
+        />
+      </div>
+      <div className="tsr-balance-axis" />
+      <div className="tsr-balance-side right">
+        <div className="tsr-balance-fill clears" style={{ width: `${(clears / peak) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export interface ChipOption<T extends string> {
   value: T;
   label: string;
