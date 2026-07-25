@@ -7,19 +7,20 @@
 //! this is pure given a node.
 
 use crate::collection::CollectionRepo;
+use crate::dns_check::DnsCheckRepo;
 use crate::secrets::{self, CredentialStore, SnmpV3Secret};
 use crate::url_check::UrlCheckRepo;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpMetaColumn,
-    SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus, DEFAULT_POOL,
+    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn,
+    SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus, DEFAULT_POOL,
 };
 use yagra_common::{
-    builtin_interface_meta_columns, CollectionItem, CollectionKind, Node, NodeId, ProfileId,
-    UrlCheckConfig,
+    builtin_interface_meta_columns, CollectionItem, CollectionKind, DnsCheckConfig, Node, NodeId,
+    ProfileId, UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -121,6 +122,26 @@ pub fn build_http_check(cfg: &UrlCheckConfig) -> HttpCheck {
 #[must_use]
 pub fn build_http_job(node: &Node, check: HttpCheck, interval_secs: u32, job_id: Uuid) -> PollJob {
     PollJob::http(job_id, node.id, node.address, check, interval_secs)
+}
+
+/// Map a stored [`DnsCheckConfig`] into the bus [`DnsCheck`] (ADR-033).
+#[must_use]
+pub fn build_dns_check(cfg: &DnsCheckConfig) -> DnsCheck {
+    DnsCheck {
+        name: cfg.name.clone(),
+        record_type: cfg.record_type,
+        resolver: cfg.resolver,
+        resolver_port: cfg.resolver_port,
+        max_depth: cfg.max_depth,
+        timeout_ms: cfg.timeout_ms,
+    }
+}
+
+/// Build a DNS-monitor poll job. `target` is the node's display address, which a DNS monitor never
+/// pings; the real target is the resolver inside `check`.
+#[must_use]
+pub fn build_dns_job(node: &Node, check: DnsCheck, interval_secs: u32, job_id: Uuid) -> PollJob {
+    PollJob::dns(job_id, node.id, node.address, check, interval_secs)
 }
 
 /// Build the SNMP v3 scalar check for a node from its resolved collection set and v3
@@ -263,6 +284,7 @@ pub fn assemble_node_jobs(
     auth: Option<&SnmpAuth>,
     items: &[CollectionItem],
     url_check: Option<&UrlCheckConfig>,
+    dns_check: Option<&DnsCheckConfig>,
     interval_secs: u32,
 ) -> Vec<(PollJob, &'static str)> {
     // A URL monitor is its own node kind: dispatch the HTTP job and nothing else. ICMP is *not*
@@ -270,6 +292,14 @@ pub fn assemble_node_jobs(
     if let Some(cfg) = url_check {
         let job = build_http_job(node, build_http_check(cfg), interval_secs, Uuid::new_v4());
         return vec![(job, "http")];
+    }
+    // A DNS monitor is likewise its own node kind: the DNS job and nothing else. ICMP is *not*
+    // added — a name has no address of its own, and the resolver need not be pingable. URL is
+    // checked first so a node carrying both rows resolves deterministically; the API edge refuses
+    // to create the second one anyway.
+    if let Some(cfg) = dns_check {
+        let job = build_dns_job(node, build_dns_check(cfg), interval_secs, Uuid::new_v4());
+        return vec![(job, "dns")];
     }
     let mut jobs = Vec::new();
     let probe_identity = node.vendor.is_none();
@@ -316,6 +346,8 @@ pub struct PollDispatcher {
     collection: Arc<CollectionRepo>,
     /// Per-node URL-monitor configs (a node with one is a URL monitor → HTTP job, no ICMP/SNMP).
     url_checks: Arc<UrlCheckRepo>,
+    /// Per-node DNS-monitor configs (a node with one is a DNS monitor → DNS job, no ICMP/SNMP).
+    dns_checks: Arc<DnsCheckRepo>,
     /// Per-node Meraki bindings (a node with one is polled by the org collector → no ICMP/SNMP).
     meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// v2c community fallback for nodes without a bound credential.
@@ -327,12 +359,16 @@ pub struct PollDispatcher {
 }
 
 impl PollDispatcher {
+    // One seam per node kind plus the bus and defaults; splitting them into a config struct would
+    // add indirection without removing anything.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         bus: Arc<NatsBus>,
         creds: Arc<CredentialStore>,
         collection: Arc<CollectionRepo>,
         url_checks: Arc<UrlCheckRepo>,
+        dns_checks: Arc<DnsCheckRepo>,
         meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
         env_community: Option<String>,
         interval_secs: u32,
@@ -342,10 +378,23 @@ impl PollDispatcher {
             creds,
             collection,
             url_checks,
+            dns_checks,
             meraki_devices,
             env_community,
             interval_secs,
         }
+    }
+
+    /// Every node that is a DNS monitor, for the periodic scheduler to preload once per sweep.
+    ///
+    /// Without this the sweep would need a `dns_checks` lookup per node per round — the exact
+    /// per-node round trip the Meraki path already avoids (and which the `url_checks` lookup below
+    /// still pays; a known debt, out of scope here). DNS monitors are few, so the set is tiny.
+    pub async fn dns_node_ids(&self) -> HashSet<Uuid> {
+        self.dns_checks.node_ids().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "dns-check id preload failed; falling back to per-node lookups");
+            HashSet::new()
+        })
     }
 
     /// Resolve a node's poll jobs. A URL monitor (it has a `url_checks` row) gets a single HTTP
@@ -381,12 +430,43 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
     ) -> Vec<(PollJob, &'static str)> {
+        self.build_scheduled_jobs_hinted(node, interval_secs, None)
+            .await
+    }
+
+    /// [`Self::build_scheduled_jobs`] with the sweep's preloaded set of DNS-monitor node ids.
+    ///
+    /// `dns_hint` is what keeps this from adding a second per-node round trip to every sweep: when
+    /// it is present, only nodes in it are looked up, so the 99.9% of the fleet that are ordinary
+    /// devices cost nothing. `None` (the on-demand "poll now" path, a single node) falls back to
+    /// querying directly.
+    pub async fn build_scheduled_jobs_hinted(
+        &self,
+        node: &Node,
+        interval_secs: u32,
+        dns_hint: Option<&HashSet<Uuid>>,
+    ) -> Vec<(PollJob, &'static str)> {
+        let node_uuid = node.id.as_uuid();
         // URL monitor short-circuit: a node with a URL check is HTTP-only.
-        match self.url_checks.get(node.id.as_uuid()).await {
-            Ok(Some(cfg)) => return assemble_node_jobs(node, None, &[], Some(&cfg), interval_secs),
+        match self.url_checks.get(node_uuid).await {
+            Ok(Some(cfg)) => {
+                return assemble_node_jobs(node, None, &[], Some(&cfg), None, interval_secs)
+            }
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
+            }
+        }
+        // DNS monitor short-circuit: a node with a DNS check is DNS-only.
+        if dns_hint.is_none_or(|ids| ids.contains(&node_uuid)) {
+            match self.dns_checks.get(node_uuid).await {
+                Ok(Some(cfg)) => {
+                    return assemble_node_jobs(node, None, &[], None, Some(&cfg), interval_secs)
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(node = %node.id, error = %e, "dns-check load failed; treating as non-DNS node");
+                }
             }
         }
         let auth = resolve_snmp_auth(&self.creds, node, self.env_community.as_deref()).await;
@@ -396,16 +476,24 @@ impl PollDispatcher {
         } else {
             Vec::new()
         };
-        assemble_node_jobs(node, auth.as_ref(), &items, None, interval_secs)
+        assemble_node_jobs(node, auth.as_ref(), &items, None, None, interval_secs)
     }
 
     /// The node's poll jobs as reusable working-set [`JobSpec`]s (ADR-020) — the distributed-pool
-    /// analogue of [`Self::build_node_jobs`], built via [`Self::build_scheduled_jobs`] (Meraki nodes
-    /// are already excluded on the scheduler path, so the per-node Meraki lookup is skipped). The
-    /// per-dispatch `job_id` is dropped here; the poller stamps a fresh one each time it schedules
-    /// the spec locally.
-    pub async fn build_node_specs(&self, node: &Node, interval_secs: u32) -> Vec<JobSpec> {
-        self.build_scheduled_jobs(node, interval_secs)
+    /// analogue of [`Self::build_node_jobs`], built via [`Self::build_scheduled_jobs_hinted`]
+    /// (Meraki nodes are already excluded on the scheduler path, so the per-node Meraki lookup is
+    /// skipped). The per-dispatch `job_id` is dropped here; the poller stamps a fresh one each time
+    /// it schedules the spec locally.
+    ///
+    /// `dns_hint` is the sweep's preloaded DNS-monitor id set — see
+    /// [`Self::build_scheduled_jobs_hinted`] for why it matters at fleet scale.
+    pub async fn build_node_specs(
+        &self,
+        node: &Node,
+        interval_secs: u32,
+        dns_hint: Option<&HashSet<Uuid>>,
+    ) -> Vec<JobSpec> {
+        self.build_scheduled_jobs_hinted(node, interval_secs, dns_hint)
             .await
             .iter()
             .map(|(job, _kind)| JobSpec::from_job(job))
@@ -864,7 +952,7 @@ mod tests {
     #[test]
     fn assemble_without_auth_yields_icmp_only() {
         // No SNMP credential resolved ⇒ liveness only, regardless of the collection set.
-        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], None, 30);
+        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], None, None, 30);
         assert_eq!(kinds(&jobs), vec!["icmp"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Icmp(_)));
     }
@@ -873,9 +961,64 @@ mod tests {
     fn assemble_url_monitor_yields_http_only_no_icmp() {
         // A URL monitor is HTTP-only: no ICMP (target may be non-pingable) and no SNMP.
         let cfg = UrlCheckConfig::new("https://api.example.com/health");
-        let jobs = assemble_node_jobs(&node("url-mon"), None, &[], Some(&cfg), 30);
+        let jobs = assemble_node_jobs(&node("url-mon"), None, &[], Some(&cfg), None, 30);
         assert_eq!(kinds(&jobs), vec!["http"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Http(_)));
+    }
+
+    #[test]
+    fn assemble_dns_monitor_yields_dns_only_no_icmp() {
+        // A DNS monitor is DNS-only: no ICMP (a name has no address of its own, and the resolver
+        // need not be pingable) and no SNMP.
+        let cfg = DnsCheckConfig::new("horryworks.net");
+        let jobs = assemble_node_jobs(&node("dns-mon"), None, &[], None, Some(&cfg), 30);
+        assert_eq!(kinds(&jobs), vec!["dns"]);
+        assert!(matches!(jobs[0].0.check, CheckSpec::Dns(_)));
+    }
+
+    #[test]
+    fn assemble_prefers_url_when_a_node_somehow_has_both_kinds() {
+        // The API edge refuses to create the second row, but if one ever existed the dispatch must
+        // still be deterministic rather than order-dependent.
+        let url = UrlCheckConfig::new("https://api.example.com/health");
+        let dns = DnsCheckConfig::new("horryworks.net");
+        let jobs = assemble_node_jobs(&node("both"), None, &[], Some(&url), Some(&dns), 30);
+        assert_eq!(kinds(&jobs), vec!["http"]);
+    }
+
+    #[test]
+    fn build_dns_check_maps_every_config_field() {
+        let cfg = DnsCheckConfig {
+            name: "horryworks.net".into(),
+            record_type: yagra_common::DnsRecordType::Aaaa,
+            resolver: Some("10.0.0.53".parse().unwrap()),
+            resolver_port: 5353,
+            max_depth: 4,
+            timeout_ms: 1500,
+        };
+        let check = build_dns_check(&cfg);
+        assert_eq!(check.name, "horryworks.net");
+        assert_eq!(check.record_type, yagra_common::DnsRecordType::Aaaa);
+        assert_eq!(check.resolver, Some("10.0.0.53".parse().unwrap()));
+        assert_eq!(check.resolver_port, 5353);
+        assert_eq!(check.max_depth, 4);
+        assert_eq!(check.timeout_ms, 1500);
+    }
+
+    #[test]
+    fn dns_job_targets_the_node_address_not_the_name() {
+        // `target` stays the node's display address; the real target is the resolver in the check.
+        // A DNS monitor is never pinged, so this is display/provenance only.
+        let n = node("dns-mon");
+        let job = build_dns_job(
+            &n,
+            build_dns_check(&DnsCheckConfig::new("horryworks.net")),
+            30,
+            Uuid::nil(),
+        );
+        assert_eq!(job.target, n.address);
+        assert_eq!(job.interval_secs, 30);
+        assert!(!job.probe_identity, "DNS monitors never probe sysDescr");
     }
 
     #[test]
@@ -893,7 +1036,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp", "snmp_table", "icmp"]);
         // The maker is unknown (vendor None), so the scalar SNMP job carries the identity probe.
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
@@ -910,7 +1053,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, 30);
+        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, None, 30);
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
         assert!(
             !snmp.0.probe_identity,
@@ -935,7 +1078,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V3(v3_secret());
-        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp_v3", "snmp_v3_table", "icmp"]);
         assert!(matches!(
             jobs.iter().find(|(_, k)| *k == "snmp_v3").unwrap().0.check,
@@ -960,7 +1103,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V3(v3_secret());
-        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp_v3", "icmp"]);
     }
 }

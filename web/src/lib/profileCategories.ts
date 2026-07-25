@@ -26,6 +26,10 @@ export const PROFILE_CATEGORIES: ProfileCategoryMeta[] = [
   { token: 'printer', labelKey: 'monitoring:categories.printer' },
   { token: 'generic-snmp', labelKey: 'monitoring:categories.generic-snmp' },
   { token: 'ping-only', labelKey: 'monitoring:categories.ping-only' },
+  // Endpoint-monitor kinds: polled over their own protocol rather than SNMP/ICMP, so they sit
+  // after the device classes.
+  { token: 'url-check', labelKey: 'monitoring:categories.url-check' },
+  { token: 'dns-check', labelKey: 'monitoring:categories.dns-check' },
 ];
 
 /** Human label for a category token (falls back to the raw token if unknown). Pass the caller's

@@ -24,6 +24,7 @@ mod config;
 mod config_gen;
 mod dashboard;
 mod discovery;
+mod dns_check;
 mod events;
 mod flowstore;
 mod groups;
@@ -418,14 +419,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // URL monitors: per-node HTTP/HTTPS check configs. Shared by the dispatcher (a node with one
     // becomes an HTTP-only poll) and the admin API (CRUD).
     let url_checks = Arc::new(url_check::UrlCheckRepo::new(repo.pool()));
+    let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
 
-    // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors). Shared by
-    // the periodic scheduler and the on-demand "poll now" API action so both build jobs the same way.
+    // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
+    // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
+    // both build jobs the same way.
     let dispatcher = Arc::new(scheduler::PollDispatcher::new(
         bus.clone(),
         creds.clone(),
         collection.clone(),
         url_checks.clone(),
+        dns_checks.clone(),
         meraki_devices.clone(),
         env_community.clone(),
         cfg.poll_interval_secs,
@@ -557,6 +561,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let analysis_repo = analysis_repo.clone();
         let reports_repo = reports_repo.clone();
         let reports = reports.clone();
+        let dns_checks = dns_checks.clone();
         async move {
             // Coordinator registry: heartbeats + snapshot requests.
             let hb = Box::pin(bus.subscribe_heartbeats().await?);
@@ -590,6 +595,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 history_rx,
                 repo.clone(),
                 history.clone(),
+                dns_checks.clone(),
                 shutdown.clone(),
             ));
             {
@@ -717,6 +723,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                     alerts.clone(),
                     history.clone(),
                     events_repo.clone(),
+                    dns_checks.clone(),
                 ),
             );
             spawn_cancellable(
@@ -777,6 +784,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         analysis,
         reports,
         url_checks,
+        dns_checks,
         meraki_orgs,
         meraki_devices,
         events: events_repo,
@@ -926,6 +934,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
         interfaces: Vec::new(),
         sys_descr: None,
+        dns_chain: None,
         poller_id: None,
         trace_context: Default::default(),
     });
@@ -1077,6 +1086,10 @@ struct MetaRecord {
     node_id: Uuid,
     interfaces: Vec<OwnedIface>,
     identity: Option<(Option<String>, Option<String>)>,
+    /// The DNS resolution chain observed on this poll (DNS monitors only, ADR-033). Same tier as
+    /// the fields above: poller-returned structured strings that belong in PostgreSQL, never in the
+    /// TSDB.
+    dns_chain: Option<yagra_common::DnsChain>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -1196,11 +1209,16 @@ fn persist_metrics_and_meta(
         let id = yagra_discovery::identify(descr);
         (id.vendor.is_some() || id.model.is_some()).then_some((id.vendor, id.model))
     });
-    if !interfaces.is_empty() || identity.is_some() {
+    // A DNS chain rides the same shed-able meta tier. Dropping one only defers recording a change
+    // by a poll — the next observation re-reports the current chain — so the only thing genuinely
+    // lost is a transient change that reverts before the next poll.
+    let dns_chain = result.dns_chain.clone();
+    if !interfaces.is_empty() || identity.is_some() || dns_chain.is_some() {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
             interfaces,
             identity,
+            dns_chain,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -1270,6 +1288,7 @@ async fn run_fleet_health_timeline(
     alerts: Arc<AlertManager>,
     history: Arc<AlertHistoryStore>,
     events_repo: Arc<events::EventRepo>,
+    dns_checks: Arc<dns_check::DnsCheckRepo>,
 ) {
     const SNAPSHOT_SECS: u64 = 300;
     const RETENTION_SECS: i64 = 90 * 86_400;
@@ -1296,6 +1315,12 @@ async fn run_fleet_health_timeline(
         // trims PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
         if let Err(e) = events_repo.prune_old().await {
             tracing::warn!(error = %e, "prune events failed");
+        }
+        // DNS chain history is append-on-change, so a healthy fleet writes almost nothing here —
+        // the canonicalization in `DnsChain::content_key` is exactly what keeps it that way. Prune
+        // on the same 90-day window as alert history so the retention story stays consistent.
+        if let Err(e) = dns_checks.prune_chain_changes(RETENTION_SECS).await {
+            tracing::warn!(error = %e, "prune dns chain history failed");
         }
     }
 }
@@ -1746,6 +1771,7 @@ async fn run_pg_writer(
     mut history_rx: tokio::sync::mpsc::Receiver<HistoryRecord>,
     repo: Arc<NodeRepo>,
     history: Arc<AlertHistoryStore>,
+    dns: Arc<dns_check::DnsCheckRepo>,
     shutdown: CancellationToken,
 ) {
     let mut meta_buf: Vec<MetaRecord> = Vec::with_capacity(RESULT_PERSIST_BATCH_MAX);
@@ -1757,7 +1783,7 @@ async fn run_pg_writer(
                 while let Ok(m) = meta_rx.try_recv() {
                     meta_buf.push(m);
                     if meta_buf.len() >= RESULT_PERSIST_BATCH_MAX {
-                        flush_meta(&repo, &mut meta_buf).await;
+                        flush_meta(&repo, &dns, &mut meta_buf).await;
                     }
                 }
                 while let Ok(h) = history_rx.try_recv() {
@@ -1766,13 +1792,13 @@ async fn run_pg_writer(
                         flush_history(&history, &mut hist_buf).await;
                     }
                 }
-                flush_meta(&repo, &mut meta_buf).await;
+                flush_meta(&repo, &dns, &mut meta_buf).await;
                 flush_history(&history, &mut hist_buf).await;
                 break;
             }
             m = meta_rx.recv() => {
                 let Some(m) = m else {
-                    flush_meta(&repo, &mut meta_buf).await;
+                    flush_meta(&repo, &dns, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -1783,13 +1809,13 @@ async fn run_pg_writer(
                         Err(_) => break,
                     }
                 }
-                flush_meta(&repo, &mut meta_buf).await;
+                flush_meta(&repo, &dns, &mut meta_buf).await;
                 metrics::gauge!("yagra_persist_queue_depth", "stream" => "meta")
                     .set(meta_rx.len() as f64);
             }
             h = history_rx.recv() => {
                 let Some(h) = h else {
-                    flush_meta(&repo, &mut meta_buf).await;
+                    flush_meta(&repo, &dns, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -1810,19 +1836,27 @@ async fn run_pg_writer(
 
 /// Flush buffered metadata: coalesce every buffered result's interfaces into one cross-node upsert
 /// and every identity into one cross-node fill. Best-effort — a DB error is logged, never propagated.
-async fn flush_meta(repo: &Arc<NodeRepo>, buf: &mut Vec<MetaRecord>) {
+async fn flush_meta(
+    repo: &Arc<NodeRepo>,
+    dns: &Arc<dns_check::DnsCheckRepo>,
+    buf: &mut Vec<MetaRecord>,
+) {
     if buf.is_empty() {
         return;
     }
     let count = buf.len() as u64;
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
+    let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     for rec in buf.drain(..) {
         for (ifindex, name, alias, speed) in rec.interfaces {
             iface_rows.push((rec.node_id, ifindex, name, alias, speed));
         }
         if let Some((vendor, model)) = rec.identity {
             ident_rows.push((rec.node_id, vendor, model));
+        }
+        if let Some(chain) = rec.dns_chain {
+            dns_rows.push((rec.node_id, chain));
         }
     }
     if !iface_rows.is_empty() {
@@ -1834,6 +1868,18 @@ async fn flush_meta(repo: &Arc<NodeRepo>, buf: &mut Vec<MetaRecord>) {
         if let Err(e) = repo.fill_node_identity_batch(&ident_rows).await {
             tracing::warn!(error = %e, "batch node-identity fill failed");
         }
+    }
+    // One statement per observation, in arrival order. Deliberately NOT coalesced per node the way
+    // interfaces are: interfaces are idempotent current state, but DNS observations are a
+    // *sequence*, and collapsing two of them for one node would erase a real A→B→A transition. The
+    // loop is bounded by the number of DNS monitors in the batch, which is tens, not thousands.
+    for (node_id, chain) in &dns_rows {
+        if let Err(e) = dns.record_observation(*node_id, chain).await {
+            tracing::warn!(node = %node_id, error = %e, "dns chain observation failed");
+        }
+    }
+    if !dns_rows.is_empty() {
+        metrics::counter!("yagra_dns_chain_persisted_total").increment(dns_rows.len() as u64);
     }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
@@ -2002,6 +2048,12 @@ async fn run_scheduler(
                 // exceed the poll interval. Bounded so the DB connection pool isn't overwhelmed.
                 const SWEEP_BUILD_CONCURRENCY: usize = 16;
 
+                // DNS monitors are a per-node-kind lookup, so preload their ids once per sweep and
+                // let the dispatcher skip the query for every node that isn't one — the same reason
+                // Meraki ids are preloaded above. Without this the sweep would pay one extra round
+                // trip per node per round at fleet scale.
+                let dns_nodes = Arc::new(dispatcher.dns_node_ids().await);
+
                 for (pool, members) in groups {
                     if scheduler::pool_uses_working_set(&pool, &live) {
                         // Build the pool's whole desired working set and let the coordinator diff +
@@ -2012,20 +2064,23 @@ async fn run_scheduler(
                         }
                         // Own each item into the stream and clone the `Arc` per future so no borrow
                         // crosses an `.await` (keeps the concurrent builds free of lifetime coupling).
-                        let desired: HashMap<_, _> =
-                            futures::stream::iter(members)
-                                .map(|(node, secs)| {
-                                    let dispatcher = dispatcher.clone();
-                                    async move {
-                                        (node.id, dispatcher.build_node_specs(&node, secs).await)
-                                    }
-                                })
-                                .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
-                                .filter_map(|(id, specs)| async move {
-                                    (!specs.is_empty()).then_some((id, specs))
-                                })
-                                .collect()
-                                .await;
+                        let desired: HashMap<_, _> = futures::stream::iter(members)
+                            .map(|(node, secs)| {
+                                let dispatcher = dispatcher.clone();
+                                let dns_nodes = dns_nodes.clone();
+                                async move {
+                                    let specs = dispatcher
+                                        .build_node_specs(&node, secs, Some(dns_nodes.as_ref()))
+                                        .await;
+                                    (node.id, specs)
+                                }
+                            })
+                            .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
+                            .filter_map(|(id, specs)| async move {
+                                (!specs.is_empty()).then_some((id, specs))
+                            })
+                            .collect()
+                            .await;
                         new_desired_by_pool.insert(pool.clone(), desired.clone());
                         coordinator.reconcile_pool(&pool, desired, now).await;
                         working_set_pools += 1;
@@ -2039,7 +2094,10 @@ async fn run_scheduler(
                                 continue;
                             }
                             last_dispatched.insert(id, now);
-                            for (job, kind) in dispatcher.build_scheduled_jobs(node, *secs).await {
+                            for (job, kind) in dispatcher
+                                .build_scheduled_jobs_hinted(node, *secs, Some(dns_nodes.as_ref()))
+                                .await
+                            {
                                 jobs_round += 1;
                                 let dispatcher = dispatcher.clone();
                                 let node_id = node.id;
@@ -2513,6 +2571,7 @@ mod tests {
                 if_speed: None,
             }],
             sys_descr: None,
+            dns_chain: None,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         };
@@ -2628,6 +2687,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 9.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         })

@@ -652,6 +652,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 1.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         }

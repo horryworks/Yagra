@@ -23,6 +23,8 @@ reqwest = { workspace = true }
 x509-parser = { workspace = true }
 # Cisco Meraki Dashboard API (JSON) transport.
 serde_json = { workspace = true }
+# DNS name-resolution monitoring transport (ADR-033).
+hickory-resolver = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

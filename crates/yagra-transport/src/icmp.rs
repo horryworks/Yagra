@@ -193,6 +193,14 @@ impl Transport for SurgePingTransport {
         crate::http::probe_http(spec, timeout).await
     }
 
+    async fn resolve_dns(
+        &self,
+        spec: &crate::DnsProbeSpec,
+        timeout: Duration,
+    ) -> Result<crate::DnsChain, TransportError> {
+        crate::dns::resolve_dns(spec, timeout).await
+    }
+
     async fn collect_meraki(
         &self,
         spec: &crate::MerakiCollectSpec,

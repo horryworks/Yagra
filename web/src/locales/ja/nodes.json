@@ -12,7 +12,9 @@
     "parentNode": "親ノード",
     "uptime": "稼働時間",
     "makerPlaceholder": "例: Cisco",
-    "modelPlaceholder": "例: C2960"
+    "modelPlaceholder": "例: C2960",
+    "dnsName": "DNS名",
+    "recordType": "レコード種別"
   },
   "groupType": {
     "site": "サイト",
@@ -56,7 +58,12 @@
     "snmpCredentialOptional": "SNMP認証情報 (任意 — SNMPポーリングを有効化)",
     "parentNodeOptional": "親ノード (任意 — 依存関係による抑制用)",
     "makerOptional": "メーカー (任意)",
-    "modelOptional": "モデル (任意)"
+    "modelOptional": "モデル (任意)",
+    "dnsMonitor": "DNS監視を追加",
+    "typeDns": "DNS監視 (名前解決)",
+    "dnsNamePlaceholder": "例: horryworks.net",
+    "resolverOptional": "リゾルバ (任意)",
+    "resolverPlaceholder": "空欄でシステムリゾルバ"
   },
   "group": {
     "add": "グループを追加",
@@ -87,7 +94,8 @@
     "requestPoll": "ポーリング要求に失敗しました",
     "deleteNode": "ノードの削除に失敗しました",
     "saveNode": "ノードの保存に失敗しました",
-    "setDependency": "依存関係の設定に失敗しました"
+    "setDependency": "依存関係の設定に失敗しました",
+    "addDnsMonitor": "DNS監視の追加に失敗しました"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {
@@ -174,7 +182,31 @@
     "vpnUsers": "VPNユーザー",
     "vpnTunnels": "VPNトンネル",
     "noHistory": "履歴はまだありません…",
-    "systemSnmp": "システム (SNMP)"
+    "systemSnmp": "システム (SNMP)",
+    "dnsMonitor": "DNS監視",
+    "systemResolver": "システムリゾルバ",
+    "resolution": "名前解決",
+    "resolves": "解決可",
+    "doesNotResolve": "解決不可",
+    "resolveTime": "解決時間",
+    "resolutionChain": "解決チェーン",
+    "resolutionHistory": "解決履歴",
+    "noChainYet": "解決結果はまだ記録されていません。",
+    "historyEmpty": "変化は記録されていません（解決結果は安定しています）。",
+    "firstObserved": "初回観測",
+    "lastConfirmed": "最終確認",
+    "changedAt": "変化日時",
+    "dnsFailure": {
+      "nx_domain": "NXDOMAIN (名前が存在しません)",
+      "no_data": "該当種別のレコードなし",
+      "serv_fail": "SERVFAIL (リゾルバエラー)",
+      "refused": "REFUSED (拒否)",
+      "other_rcode": "DNSエラー (RCODE {{rcode}})",
+      "timeout": "タイムアウト",
+      "loop_detected": "{{at}} でCNAMEループ",
+      "depth_exceeded": "チェーンが{{maxDepth}}ホップを超過",
+      "malformed": "不正な応答"
+    }
   },
   "interfaces": {
     "emptyDiscovered": "まだインターフェースが検出されていません。SNMPテーブルウォークの実行後に表示されます — ノードにバインド済みのSNMP認証情報と、収集セット内のテーブルメトリクスが必要です。",

@@ -33,11 +33,13 @@ pub enum ProfileCategory {
     PingOnly,
     /// A URL / HTTP(S) endpoint monitor (no SNMP/ICMP — polled over HTTP).
     UrlCheck,
+    /// A DNS name-resolution monitor (no SNMP/ICMP — polled over DNS, ADR-033).
+    DnsCheck,
 }
 
 impl ProfileCategory {
     /// Every category, in display order (router → switches → … → generic).
-    pub const ALL: [ProfileCategory; 15] = [
+    pub const ALL: [ProfileCategory; 16] = [
         ProfileCategory::Router,
         ProfileCategory::L3Switch,
         ProfileCategory::L2Switch,
@@ -53,6 +55,7 @@ impl ProfileCategory {
         ProfileCategory::GenericSnmp,
         ProfileCategory::PingOnly,
         ProfileCategory::UrlCheck,
+        ProfileCategory::DnsCheck,
     ];
 
     /// The stable kebab-case token stored in the DB / sent over the API.
@@ -74,6 +77,7 @@ impl ProfileCategory {
             ProfileCategory::GenericSnmp => "generic-snmp",
             ProfileCategory::PingOnly => "ping-only",
             ProfileCategory::UrlCheck => "url-check",
+            ProfileCategory::DnsCheck => "dns-check",
         }
     }
 

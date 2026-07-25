@@ -964,6 +964,11 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             Some("Cisco Meraki"),
             Vec::new(),
         ),
+        // DNS name-resolution monitor (ADR-033). Polled over DNS (resolve + CNAME-chain walk), not
+        // SNMP — so it carries no collection templates; the per-node DNS config drives the probe and
+        // the profile only exists to group these nodes and host their default threshold (`dns_up`).
+        // Kept at the array end for seed-id stability (see the note above).
+        prof("DNS name resolution", C::DnsCheck, None, Vec::new()),
     ]
 }
 
@@ -978,6 +983,19 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), names.len(), "duplicate built-in profile name");
+    }
+
+    #[test]
+    fn newest_builtin_profile_stays_at_the_array_end() {
+        // Seed ids are Uuid::from_u128(BASE + index), so inserting a profile mid-array silently
+        // re-keys every profile after it. New profiles must be appended; this pins the most
+        // recently added one (DNS, ADR-033) so a future insertion trips here instead of in prod.
+        let profiles = builtin_profiles();
+        assert_eq!(
+            profiles.last().map(|p| p.name),
+            Some("DNS name resolution"),
+            "append new built-in profiles; never insert mid-array"
+        );
     }
 
     fn item(metric: &str, oid: &str) -> CollectionItem {
@@ -1163,12 +1181,13 @@ mod tests {
     #[test]
     fn every_profile_has_templates_except_ping_only() {
         for p in builtin_profiles() {
-            // ICMP-only (ping), URL/HTTP monitors, and Cisco Meraki *Dashboard API* profiles carry
-            // no SNMP collection templates — the metrics come from the per-node config / the org
-            // collector, not an OID set. (The SNMP "Cisco Meraki MX/MS" profiles still do.)
+            // ICMP-only (ping), URL/HTTP monitors, DNS monitors, and Cisco Meraki *Dashboard API*
+            // profiles carry no SNMP collection templates — the metrics come from the per-node
+            // config / the org collector, not an OID set. (The SNMP "Cisco Meraki MX/MS" profiles
+            // still do.)
             if matches!(
                 p.category,
-                ProfileCategory::PingOnly | ProfileCategory::UrlCheck
+                ProfileCategory::PingOnly | ProfileCategory::UrlCheck | ProfileCategory::DnsCheck
             ) || p.name.ends_with("(API)")
             {
                 assert!(

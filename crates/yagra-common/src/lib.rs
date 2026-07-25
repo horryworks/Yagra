@@ -12,6 +12,7 @@
 pub mod address;
 pub mod classification;
 pub mod collection;
+pub mod dns_check;
 pub mod host;
 pub mod ids;
 pub mod meraki;
@@ -33,6 +34,11 @@ pub use collection::{
     builtin_catalog, builtin_interface_meta_columns, builtin_profiles, builtin_templates,
     resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
     InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED, TEMPLATE_STANDARD_SNMP,
+};
+pub use dns_check::{
+    is_resolver_blocked, normalize_dns_name, validate_dns_name, DnsAnswer, DnsChain,
+    DnsCheckConfig, DnsFailure, DnsHop, DnsRecord, DnsRecordType, METRIC_DNS_ANSWER_COUNT,
+    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
 };
 pub use host::{DiskUsage, HostSample};
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};

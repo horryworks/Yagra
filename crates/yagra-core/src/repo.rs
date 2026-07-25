@@ -1269,6 +1269,44 @@ impl NodeRepo {
                 .await?;
             }
         }
+        // 6. Default threshold for the built-in DNS profile (ADR-033), so a freshly created DNS
+        //    monitor alerts out of the box: `dns_up` below 0.5 ⇒ critical. It reads 0 whenever the
+        //    name does not resolve for ANY reason — NXDOMAIN / SERVFAIL / REFUSED / timeout /
+        //    CNAME loop / depth exceeded — so this one threshold covers them all.
+        //
+        //    NB the bound is 0.5, NOT 1.0. `dns_up` is a 0/1 gauge and the engine's "below"
+        //    comparison is INCLUSIVE (`value <= bound`, thresholds.rs), so 1.0 would fire on the
+        //    healthy value too. That is exactly the mistake migration 0030 had to correct for
+        //    `http_up`; seeds are ON CONFLICT DO NOTHING, so getting it wrong needs a corrective
+        //    migration rather than an edit here.
+        //
+        //    `dns_resolve_ms` is emitted as a graphable gauge but deliberately gets NO seeded
+        //    threshold: resolver latency varies far too much between environments for a default.
+        //
+        //    Reserved stable-id ranges (see migration 0020's header for the others):
+        //      url thresholds 0x…5eeda000…, dns thresholds 0x…5eedb000…
+        const DNS_THRESHOLD_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_b000;
+        if let Some(&dns_profile_id) = profile_id_by_name.get("DNS name resolution") {
+            let scope_id = dns_profile_id.to_string();
+            // (offset, metric, direction, warning, critical, dwell_samples)
+            let defaults = [(0u128, "dns_up", "below", None::<f64>, Some(0.5), 2i32)];
+            for (offset, metric, direction, warning, critical, dwell) in defaults {
+                sqlx::query(
+                    "INSERT INTO thresholds \
+                        (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
+                     VALUES ($1, 'profile', $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(Uuid::from_u128(DNS_THRESHOLD_ID_BASE + offset))
+                .bind(&scope_id)
+                .bind(metric)
+                .bind(direction)
+                .bind(warning)
+                .bind(critical)
+                .bind(dwell)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
         tracing::info!(
             "seeded built-in collection templates + device profiles + classification rules"
         );

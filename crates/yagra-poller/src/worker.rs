@@ -21,12 +21,13 @@ use yagra_bus::{
     SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck, BUS_SCHEMA_VERSION,
 };
 use yagra_common::{
-    IfIndex, InterfaceField, MetricKind, NodeId, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP,
-    METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+    DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
+    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_STATUS_CODE,
+    METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
 };
 use yagra_transport::{
-    HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params, Transport,
-    TransportError,
+    DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
+    Transport, TransportError,
 };
 
 /// sysDescr.0 — system description scalar (the v3 GET form).
@@ -216,6 +217,55 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 }
             }
         }
+        CheckSpec::Dns(dns) => {
+            let timeout = Duration::from_millis(u64::from(dns.timeout_ms));
+            let spec = DnsProbeSpec {
+                name: dns.name.clone(),
+                record_type: dns.record_type,
+                resolver: dns
+                    .resolver
+                    .map(|ip| std::net::SocketAddr::new(ip, dns.resolver_port)),
+                max_depth: dns.max_depth,
+            };
+            match transport.resolve_dns(&spec, timeout).await {
+                Ok(chain) => {
+                    let up = chain.resolved();
+                    let samples = vec![
+                        Sample::gauge(METRIC_DNS_UP, if up { 1.0 } else { 0.0 }),
+                        Sample::gauge(METRIC_DNS_RESOLVE_MS, chain.resolve_ms),
+                        // `as f64` on a hop/answer count is lossless at any realistic size (both
+                        // are capped well below 2^53) and the metric is a float anyway.
+                        Sample::gauge(METRIC_DNS_CHAIN_LENGTH, chain.hops.len() as f64),
+                        Sample::gauge(
+                            METRIC_DNS_ANSWER_COUNT,
+                            chain.terminal_answer_count() as f64,
+                        ),
+                    ];
+                    // Same split as the HTTP arm: "the resolver answered" is reachability, "the
+                    // answer was absent or negative" is a threshold concern. So NXDOMAIN /
+                    // SERVFAIL / REFUSED stay Reachable with dns_up = 0 (the seeded critical
+                    // threshold fires), while a timeout — no answer at all — is Unreachable.
+                    let outcome = match chain.failure {
+                        Some(DnsFailure::Timeout) => CheckOutcome::Unreachable,
+                        _ => CheckOutcome::Reachable,
+                    };
+                    let mut r = result(job, at_unix_ms, outcome, samples);
+                    r.dns_chain = Some(chain);
+                    r
+                }
+                Err(err) => {
+                    // An un-runnable config (bad name / SSRF-blocked resolver / no system
+                    // resolver): record dns_up = 0 so the series exists and alerts can fire.
+                    tracing::warn!(job_id = %job.job_id, error = %err, "dns probe failed");
+                    result(
+                        job,
+                        at_unix_ms,
+                        CheckOutcome::Error,
+                        vec![Sample::gauge(METRIC_DNS_UP, 0.0)],
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -289,6 +339,7 @@ pub async fn execute_meraki(
             samples,
             interfaces,
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         });
@@ -436,6 +487,7 @@ async fn execute_table_walk(
         samples,
         interfaces,
         sys_descr: None,
+        dns_chain: None,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
@@ -625,6 +677,7 @@ fn result(
         samples,
         interfaces: Vec::new(),
         sys_descr: None,
+        dns_chain: None,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
@@ -747,7 +800,17 @@ pub async fn run_stream<S>(
             continue;
         }
 
-        let Some(guard) = limiter.try_begin(job.target).await else {
+        // DNS monitors share a target by design — many names, one resolver, and every check using
+        // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
+        // would therefore drop every DNS check but one on each cycle, so they take the global-only
+        // guard for the same reason Meraki collectors do. Pile-up stays bounded by each check's
+        // total timeout budget (≤30 s, enforced in the transport) plus the global concurrency cap.
+        let guard = if matches!(job.check, CheckSpec::Dns(_)) {
+            limiter.begin_global().await
+        } else {
+            limiter.try_begin(job.target).await
+        };
+        let Some(guard) = guard else {
             metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
             tracing::debug!(target = %job.target, "skipping poll: previous still in flight");
             continue;
@@ -1309,6 +1372,149 @@ mod tests {
             .samples
             .iter()
             .any(|s| s.metric == METRIC_HTTP_STATUS_CODE));
+    }
+
+    // ── DNS name-resolution monitoring (ADR-033) ────────────────────────────────────
+
+    fn dns_job(check: yagra_bus::DnsCheck) -> PollJob {
+        PollJob::dns(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            check,
+            60,
+        )
+    }
+
+    fn dns_check(name: &str) -> yagra_bus::DnsCheck {
+        yagra_bus::DnsCheck {
+            name: name.to_owned(),
+            record_type: yagra_common::DnsRecordType::A,
+            resolver: None,
+            resolver_port: 53,
+            max_depth: 8,
+            timeout_ms: 3000,
+        }
+    }
+
+    /// `horryworks.net → CNAME horry.net → A 10.1.2.3`, the shape from the feature request.
+    fn resolved_chain() -> yagra_common::DnsChain {
+        yagra_common::DnsChain {
+            query: "horryworks.net".into(),
+            record_type: yagra_common::DnsRecordType::A,
+            resolver: "10.0.0.53:53".into(),
+            hops: vec![
+                yagra_common::DnsHop {
+                    name: "horryworks.net".into(),
+                    answers: vec![yagra_common::DnsAnswer {
+                        record: yagra_common::DnsRecord::Cname {
+                            target: "horry.net".into(),
+                        },
+                        ttl: 300,
+                    }],
+                },
+                yagra_common::DnsHop {
+                    name: "horry.net".into(),
+                    answers: vec![yagra_common::DnsAnswer {
+                        record: yagra_common::DnsRecord::A {
+                            addr: "10.1.2.3".parse().unwrap(),
+                        },
+                        ttl: 60,
+                    }],
+                },
+            ],
+            failure: None,
+            resolve_ms: 14.0,
+        }
+    }
+
+    fn failed_chain(failure: yagra_common::DnsFailure) -> yagra_common::DnsChain {
+        yagra_common::DnsChain {
+            hops: Vec::new(),
+            failure: Some(failure),
+            ..resolved_chain()
+        }
+    }
+
+    fn sample_value(r: &PollResult, metric: &str) -> Option<f64> {
+        r.samples
+            .iter()
+            .find(|s| s.metric == metric)
+            .map(|s| s.value)
+    }
+
+    #[tokio::test]
+    async fn dns_resolved_chain_emits_up_one_and_attaches_the_chain() {
+        let t = FakeTransport::reachable(0.0).with_dns(resolved_chain());
+        let r = execute(&dns_job(dns_check("horryworks.net")), &t, 1_000).await;
+
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert_eq!(sample_value(&r, METRIC_DNS_UP), Some(1.0));
+        assert_eq!(sample_value(&r, METRIC_DNS_CHAIN_LENGTH), Some(2.0));
+        assert_eq!(sample_value(&r, METRIC_DNS_ANSWER_COUNT), Some(1.0));
+        assert_eq!(sample_value(&r, METRIC_DNS_RESOLVE_MS), Some(14.0));
+
+        // The chain rides the result so core can persist it; it is NOT expressed as metrics.
+        let chain = r.dns_chain.expect("the chain must travel with the result");
+        assert_eq!(chain.hops.len(), 2);
+        assert_eq!(chain.hops[1].name, "horry.net");
+    }
+
+    #[tokio::test]
+    async fn dns_nxdomain_emits_up_zero_but_stays_reachable() {
+        // The resolver answered — it just said "no such name". Node state stays Ok and the
+        // dns_up threshold is what fires, exactly like a reachable URL returning HTTP 500.
+        let t = FakeTransport::reachable(0.0)
+            .with_dns(failed_chain(yagra_common::DnsFailure::NxDomain));
+        let r = execute(&dns_job(dns_check("nope.example")), &t, 1_000).await;
+
+        assert_eq!(r.outcome, CheckOutcome::Reachable);
+        assert_eq!(sample_value(&r, METRIC_DNS_UP), Some(0.0));
+        assert_eq!(sample_value(&r, METRIC_DNS_ANSWER_COUNT), Some(0.0));
+        assert!(r.dns_chain.is_some(), "a failed chain is still recorded");
+    }
+
+    #[tokio::test]
+    async fn dns_timeout_emits_up_zero_and_unreachable() {
+        // No answer at all — that, and only that, means the target is unreachable.
+        let t =
+            FakeTransport::reachable(0.0).with_dns(failed_chain(yagra_common::DnsFailure::Timeout));
+        let r = execute(&dns_job(dns_check("horryworks.net")), &t, 1_000).await;
+
+        assert_eq!(r.outcome, CheckOutcome::Unreachable);
+        assert_eq!(sample_value(&r, METRIC_DNS_UP), Some(0.0));
+    }
+
+    #[tokio::test]
+    async fn dns_servfail_and_refused_stay_reachable() {
+        for failure in [
+            yagra_common::DnsFailure::ServFail,
+            yagra_common::DnsFailure::Refused,
+            yagra_common::DnsFailure::NoData,
+        ] {
+            let t = FakeTransport::reachable(0.0).with_dns(failed_chain(failure.clone()));
+            let r = execute(&dns_job(dns_check("horryworks.net")), &t, 1_000).await;
+            assert_eq!(r.outcome, CheckOutcome::Reachable, "{failure:?}");
+            assert_eq!(sample_value(&r, METRIC_DNS_UP), Some(0.0), "{failure:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_samples_are_node_level_gauges_with_valid_metric_names() {
+        // Thin-label model (ADR-011): a DNS chain must never become a series label, so every
+        // sample it produces has to be a plain node-level gauge.
+        let t = FakeTransport::reachable(0.0).with_dns(resolved_chain());
+        let r = execute(&dns_job(dns_check("horryworks.net")), &t, 1_000).await;
+        assert_eq!(r.samples.len(), 4);
+        for s in &r.samples {
+            assert!(s.ifindex.is_none(), "{} must be node-level", s.metric);
+            assert_eq!(s.kind, MetricKind::Gauge, "{} must be a gauge", s.metric);
+            assert!(
+                yagra_common::is_valid_metric_name(&s.metric),
+                "{} must be TSDB-safe",
+                s.metric
+            );
+        }
     }
 
     /// Walking skeleton: a job published to the bus flows through the poll loop and a

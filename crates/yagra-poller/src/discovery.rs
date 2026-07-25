@@ -321,9 +321,22 @@ mod tests {
     use std::net::Ipv4Addr;
     use yagra_bus::{DiscoveryCredential, DiscoveryV3};
     use yagra_transport::{
-        HttpProbe, HttpProbeSpec, IcmpProbe, SnmpSample, SnmpStringSample, SnmpTableSample,
-        SnmpTableString, TransportError,
+        DnsChain, DnsProbeSpec, HttpProbe, HttpProbeSpec, IcmpProbe, SnmpSample, SnmpStringSample,
+        SnmpTableSample, SnmpTableString, TransportError,
     };
+
+    /// Discovery never resolves DNS, so both fakes below answer with an empty timed-out chain —
+    /// enough to satisfy the trait without pretending to model a resolution.
+    fn unused_dns_chain() -> DnsChain {
+        DnsChain {
+            query: String::new(),
+            record_type: yagra_transport::DnsRecordType::A,
+            resolver: "unused".to_owned(),
+            hops: Vec::new(),
+            failure: Some(yagra_common::DnsFailure::Timeout),
+            resolve_ms: 0.0,
+        }
+    }
 
     /// Answers SNMP only for a specific v2c community and/or v3 user, so tests can assert
     /// which candidate matched.
@@ -458,6 +471,14 @@ mod tests {
                 response_time_ms: 0.0,
                 cert_days_to_expiry: None,
             })
+        }
+
+        async fn resolve_dns(
+            &self,
+            _spec: &DnsProbeSpec,
+            _timeout: Duration,
+        ) -> Result<DnsChain, TransportError> {
+            Ok(unused_dns_chain())
         }
 
         async fn collect_meraki(
@@ -736,6 +757,14 @@ mod tests {
                     response_time_ms: 0.0,
                     cert_days_to_expiry: None,
                 })
+            }
+
+            async fn resolve_dns(
+                &self,
+                _spec: &DnsProbeSpec,
+                _to: Duration,
+            ) -> Result<DnsChain, TransportError> {
+                Ok(unused_dns_chain())
             }
 
             async fn collect_meraki(

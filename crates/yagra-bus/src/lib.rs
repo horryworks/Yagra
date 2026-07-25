@@ -16,7 +16,7 @@ pub mod subjects;
 pub use bus::{Bus, BusError, InMemoryBus, SyncBus};
 pub use messages::{
     AuthRevoke, CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface,
-    DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, EventKind, EventMsg,
+    DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, DnsCheck, EventKind, EventMsg,
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
     MerakiDeviceRef, NodeJobs, PollJob, PollResult, Sample, SnmpCheck, SnmpColumn, SnmpMetaColumn,
     SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext,

@@ -1,0 +1,136 @@
+/* DNS-monitor section (ADR-033): the resolution chain strip + its change history.
+ *
+ * The chain is a linear sequence, so it is laid out in plain flex DOM rather than SVG. That keeps
+ * hop names and addresses selectable and copyable — operators paste CNAME targets into `dig`
+ * constantly — and it reflows to a column on mobile with no layout maths. */
+
+.dns-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+
+.dns-target-meta {
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+}
+
+/* ── Chain strip ───────────────────────────────────────────────────────────── */
+
+.dns-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.dns-chain-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dns-hop {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  min-width: 0;
+  word-break: break-all;
+}
+
+.dns-hop.terminal {
+  border-color: var(--accent-color);
+}
+
+.dns-hop.failed {
+  border-color: var(--status-critical);
+  color: var(--status-critical);
+}
+
+.dns-hop-value + .dns-hop-value {
+  color: var(--text-secondary);
+}
+
+.dns-edge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.dns-edge-arrow {
+  font-size: var(--font-sm);
+  line-height: 1;
+}
+
+.dns-ttl {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  font-family: var(--ui-font-family);
+}
+
+/* Status colour is paired with text and a dot, never carrying meaning on its own (a11y). */
+.dns-outcome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: var(--font-sm);
+}
+
+.dns-chain-empty {
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  margin-top: 12px;
+}
+
+/* ── History ──────────────────────────────────────────────────────────────── */
+
+.dns-history {
+  margin-top: 20px;
+}
+
+.dns-history-head {
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+  margin-bottom: 8px;
+}
+
+.dns-history-summary {
+  font-family: var(--font-family);
+  word-break: break-all;
+}
+
+/* On mobile the chain reads top-to-bottom; the arrows rotate to match. */
+html[data-viewport='mobile'] .dns-chain {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+html[data-viewport='mobile'] .dns-chain-step {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+html[data-viewport='mobile'] .dns-edge {
+  flex-direction: row;
+  gap: 6px;
+  padding-left: 12px;
+}

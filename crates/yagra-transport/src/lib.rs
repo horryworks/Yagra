@@ -16,6 +16,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 use thiserror::Error;
 
+mod dns;
 mod http;
 mod icmp;
 mod meraki;
@@ -27,7 +28,7 @@ pub use meraki::{
     MerakiOrgInfo,
 };
 
-pub use yagra_common::{HttpMethod, MerakiTier};
+pub use yagra_common::{DnsChain, DnsRecordType, HttpMethod, MerakiTier};
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +99,24 @@ pub struct HttpProbeSpec {
     pub verify_tls: bool,
     /// Follow 3xx redirects.
     pub follow_redirects: bool,
+}
+
+/// What a DNS name-resolution probe needs from the job (ADR-033). The poller maps a
+/// [`yagra_bus::DnsCheck`] into this.
+///
+/// Unlike the other probes there is no separate result type: the probe returns
+/// [`yagra_common::DnsChain`] directly, because the chain *is* the artifact — a transport-local
+/// mirror would be a field-for-field copy the worker had to translate back for no benefit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DnsProbeSpec {
+    /// The name to resolve, e.g. `horryworks.net`.
+    pub name: String,
+    /// Which record type the chain must reach.
+    pub record_type: DnsRecordType,
+    /// Recursive resolver to query; `None` ⇒ the poller container's system resolver.
+    pub resolver: Option<std::net::SocketAddr>,
+    /// Maximum CNAME hops before giving up.
+    pub max_depth: u8,
 }
 
 /// Outcome of an HTTP/HTTPS probe. Raw observations only (ADR-012) — the poller derives
@@ -292,6 +311,20 @@ pub trait Transport: Send + Sync {
         timeout: Duration,
     ) -> Result<HttpProbe, TransportError>;
 
+    /// Resolve a DNS name through one recursive resolver, walking the CNAME chain so every hop is
+    /// observable (ADR-033), and return the chain as observed.
+    ///
+    /// A DNS-level failure (NXDOMAIN / SERVFAIL / REFUSED / timeout / malformed response / CNAME
+    /// loop / depth exceeded) is reported **inside** the returned chain as `failure = Some(..)`,
+    /// not as an `Err` — the same contract as [`Transport::probe_http`]. `Err` is reserved for a
+    /// check that cannot be run at all: an unusable name, an SSRF-blocked resolver address, or no
+    /// system resolver to fall back on. The returned chain is already canonicalized.
+    async fn resolve_dns(
+        &self,
+        spec: &DnsProbeSpec,
+        timeout: Duration,
+    ) -> Result<DnsChain, TransportError>;
+
     /// Run one Cisco Meraki org-scoped collect: page the given tier's Dashboard org-bulk endpoints
     /// (**GET only**, host-allow-listed, paced to `spec.target_rps`, honouring 429/`Retry-After`)
     /// and return raw per-device observations. A transient network/5xx failure yields the partial
@@ -324,6 +357,36 @@ pub struct FakeTransport {
     pub http: HttpProbe,
     /// The observations every Meraki collect returns.
     pub meraki: Vec<MerakiObservation>,
+    /// The chain every DNS resolution returns.
+    pub dns: DnsChain,
+}
+
+/// A canned one-hop chain resolving to `10.1.2.3`, or the same query having timed out.
+fn fake_dns_chain(resolved: bool) -> DnsChain {
+    DnsChain {
+        query: "example.test".to_owned(),
+        record_type: DnsRecordType::A,
+        resolver: "system".to_owned(),
+        hops: if resolved {
+            vec![yagra_common::DnsHop {
+                name: "example.test".to_owned(),
+                answers: vec![yagra_common::DnsAnswer {
+                    record: yagra_common::DnsRecord::A {
+                        addr: std::net::Ipv4Addr::new(10, 1, 2, 3),
+                    },
+                    ttl: 60,
+                }],
+            }]
+        } else {
+            Vec::new()
+        },
+        failure: if resolved {
+            None
+        } else {
+            Some(yagra_common::DnsFailure::Timeout)
+        },
+        resolve_ms: 1.0,
+    }
 }
 
 impl FakeTransport {
@@ -347,6 +410,7 @@ impl FakeTransport {
                 cert_days_to_expiry: None,
             },
             meraki: Vec::new(),
+            dns: fake_dns_chain(true),
         }
     }
 
@@ -370,6 +434,7 @@ impl FakeTransport {
                 cert_days_to_expiry: None,
             },
             meraki: Vec::new(),
+            dns: fake_dns_chain(false),
         }
     }
 
@@ -398,6 +463,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_http(mut self, probe: HttpProbe) -> Self {
         self.http = probe;
+        self
+    }
+
+    /// Set the canned DNS chain this fake returns.
+    #[must_use]
+    pub fn with_dns(mut self, chain: DnsChain) -> Self {
+        self.dns = chain;
         self
     }
 
@@ -523,6 +595,14 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<HttpProbe, TransportError> {
         Ok(self.http.clone())
+    }
+
+    async fn resolve_dns(
+        &self,
+        _spec: &DnsProbeSpec,
+        _timeout: Duration,
+    ) -> Result<DnsChain, TransportError> {
+        Ok(self.dns.clone())
     }
 
     async fn collect_meraki(

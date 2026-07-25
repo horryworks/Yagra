@@ -56,8 +56,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, IfIndex, Node, NodeId,
-    NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
+    is_ssrf_blocked, resolve_collection_set, DiskUsage, DnsCheckConfig, HostSample, IfIndex, Node,
+    NodeId, NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -95,6 +95,8 @@ pub struct AdminState {
     pub reports: Arc<ReportRunner>,
     /// Per-node URL-monitor configs (HTTP/HTTPS endpoint checks).
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
+    /// Per-node DNS-monitor configs plus the observed resolution chains and their history.
+    pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// Per-node Cisco Meraki device bindings.
@@ -216,6 +218,19 @@ pub fn router(state: ApiState) -> Router {
                 .delete(delete_url_check),
         )
         .route("/api/v1/url-monitors", post(create_url_monitor))
+        // DNS name-resolution monitoring (ADR-033).
+        .route(
+            "/api/v1/nodes/:node_id/dns-check",
+            get(get_dns_check)
+                .put(set_dns_check)
+                .delete(delete_dns_check),
+        )
+        .route("/api/v1/nodes/:node_id/dns-chain", get(get_dns_chain))
+        .route(
+            "/api/v1/nodes/:node_id/dns-chain/history",
+            get(list_dns_chain_history),
+        )
+        .route("/api/v1/dns-monitors", post(create_dns_monitor))
         // Cisco Meraki (read-only Dashboard API monitoring).
         .route(
             "/api/v1/meraki/orgs",
@@ -1125,6 +1140,8 @@ struct NodeDetail {
     group_id: Option<Uuid>,
     /// URL-monitor config when this node is a URL monitor; `null` otherwise.
     url_check: Option<UrlCheckConfig>,
+    /// DNS-monitor config when this node is a DNS monitor; `null` otherwise.
+    dns_check: Option<DnsCheckConfig>,
     /// Cisco Meraki binding when this node is a Meraki device; `null` otherwise.
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
 }
@@ -1142,8 +1159,9 @@ async fn get_node(
     };
     match admin.repo.get_node(node_id).await {
         Ok(Some(node)) => {
-            // Best-effort: a URL-check / Meraki load failure shouldn't fail the whole node detail.
+            // Best-effort: a URL/DNS-check or Meraki load failure shouldn't fail the node detail.
             let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
+            let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
             let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
             Json(NodeDetail {
                 id: node.id,
@@ -1156,6 +1174,7 @@ async fn get_node(
                 model: node.model,
                 group_id: node.group.map(|g| g.as_uuid()),
                 url_check,
+                dns_check,
                 meraki_device,
             })
             .into_response()
@@ -5082,6 +5101,398 @@ async fn create_url_monitor(
         let _ = admin.repo.delete_node(node_id).await;
         tracing::error!(error = %e, "create url monitor: save check failed");
         return internal("failed to create url monitor");
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": node_id })),
+    )
+        .into_response()
+}
+
+// ── DNS name-resolution monitoring (ADR-033) ───────────────────────────────────────────────
+
+/// Largest history page a client may request.
+const DNS_HISTORY_MAX_LIMIT: i64 = 200;
+
+/// Validate an operator-supplied DNS check at the API edge, returning it with the name normalized.
+///
+/// Two things are enforced here (security.md — parse into checked values at the edge):
+/// the name must be a syntactically valid DNS name, and a named resolver must not be an
+/// SSRF-blocked address. The resolver policy is deliberately shared with URL monitors: an NMS
+/// legitimately points at internal DNS servers (RFC1918/ULA allowed), while loopback, link-local
+/// (including 169.254.169.254), multicast and the unspecified address are never real targets. The
+/// transport re-checks before opening a socket (defense in depth).
+// Same reasoning as `validate_monitor_url`: the `Err` is the standard axum `Response`.
+#[allow(clippy::result_large_err)]
+fn validate_dns_check(cfg: &DnsCheckConfig) -> Result<DnsCheckConfig, Response> {
+    let Some(name) = yagra_common::validate_dns_name(&cfg.name) else {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_dns_name",
+            format!("not a usable DNS name: {}", cfg.name),
+        ));
+    };
+    if let Some(ip) = cfg.resolver {
+        if yagra_common::is_resolver_blocked(ip) {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "blocked_resolver",
+                format!("resolver address is not allowed: {ip}"),
+            ));
+        }
+    }
+    if cfg.resolver_port == 0 {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_resolver_port",
+            "resolver port must be 1-65535".to_owned(),
+        ));
+    }
+    if !(1..=16).contains(&cfg.max_depth) {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_max_depth",
+            "max_depth must be 1-16".to_owned(),
+        ));
+    }
+    if !(100..=30_000).contains(&cfg.timeout_ms) {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_timeout",
+            "timeout_ms must be 100-30000".to_owned(),
+        ));
+    }
+    Ok(DnsCheckConfig {
+        name,
+        ..cfg.clone()
+    })
+}
+
+async fn get_dns_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.dns_checks.get(node_id).await {
+        Ok(Some(cfg)) => Json(cfg).into_response(),
+        Ok(None) => not_found(
+            "dns_check_not_found",
+            format!("no dns check for node {node_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "get dns check failed");
+            internal("failed to load dns check")
+        }
+    }
+}
+
+/// Create or replace a node's DNS-monitor config. The node must already exist.
+async fn set_dns_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Json(cfg): Json<DnsCheckConfig>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let cfg = match validate_dns_check(&cfg) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match admin.repo.get_node(node_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set dns check: load node failed");
+            return internal("failed to load node");
+        }
+    }
+    // One node, one kind: the scheduler resolves URL before DNS, so allowing both rows would make
+    // the DNS config silently dead. Refuse it explicitly instead.
+    match admin.url_checks.get(node_id).await {
+        Ok(Some(_)) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                "conflicting_monitor_kind",
+                "node is already a URL monitor".to_owned(),
+            )
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "set dns check: url-check lookup failed");
+            return internal("failed to check monitor kind");
+        }
+    }
+    match admin.dns_checks.upsert(node_id, &cfg).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "set dns check failed");
+            internal("failed to save dns check")
+        }
+    }
+}
+
+/// Remove a node's DNS-monitor config (the node and its recorded chains are untouched).
+async fn delete_dns_check(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    match admin.dns_checks.delete(node_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(
+            "dns_check_not_found",
+            format!("no dns check for node {node_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "delete dns check failed");
+            internal("failed to delete dns check")
+        }
+    }
+}
+
+/// The node's current resolution chain, plus how long it has held.
+#[derive(Serialize)]
+struct DnsChainCurrentDto {
+    chain: yagra_common::DnsChain,
+    resolved: bool,
+    failure_kind: Option<String>,
+    first_seen: String,
+    last_seen: String,
+}
+
+async fn get_dns_chain(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.dns_checks.current_chain(node_id).await {
+        Ok(Some(cur)) => Json(DnsChainCurrentDto {
+            chain: cur.chain,
+            resolved: cur.resolved,
+            failure_kind: cur.failure_kind,
+            first_seen: cur.first_seen.to_rfc3339(),
+            last_seen: cur.last_seen.to_rfc3339(),
+        })
+        .into_response(),
+        Ok(None) => not_found(
+            "dns_chain_not_found",
+            format!("no resolution recorded for node {node_id}"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "get dns chain failed");
+            internal("failed to load dns chain")
+        }
+    }
+}
+
+/// One append-on-change history row.
+#[derive(Serialize)]
+struct DnsChainChangeDto {
+    id: i64,
+    at: String,
+    chain: yagra_common::DnsChain,
+    resolved: bool,
+    failure_kind: Option<String>,
+    prev_chain_key: Option<String>,
+}
+
+/// Keyset cursor for the next page (ADR-019 — never OFFSET).
+#[derive(Deserialize)]
+struct DnsHistoryQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    before_at: Option<String>,
+    #[serde(default)]
+    before_id: Option<i64>,
+}
+
+async fn list_dns_chain_history(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<DnsHistoryQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let limit = q.limit.unwrap_or(50).clamp(1, DNS_HISTORY_MAX_LIMIT);
+    // Both cursor halves or neither — a half-specified cursor would silently page from the top.
+    let before = match (q.before_at.as_deref(), q.before_id) {
+        (Some(at), Some(id)) => match chrono::DateTime::parse_from_rfc3339(at) {
+            Ok(ts) => Some((ts.with_timezone(&chrono::Utc), id)),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cursor",
+                    "before_at must be RFC 3339".to_owned(),
+                )
+            }
+        },
+        (None, None) => None,
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_cursor",
+                "before_at and before_id must be given together".to_owned(),
+            )
+        }
+    };
+
+    match admin.dns_checks.list_changes(node_id, before, limit).await {
+        Ok(rows) => {
+            let next = rows
+                .last()
+                .filter(|_| i64::try_from(rows.len()).unwrap_or(0) == limit)
+                .map(|r| serde_json::json!({ "at": r.at.to_rfc3339(), "id": r.id }));
+            let changes: Vec<DnsChainChangeDto> = rows
+                .into_iter()
+                .map(|r| DnsChainChangeDto {
+                    id: r.id,
+                    at: r.at.to_rfc3339(),
+                    chain: r.chain,
+                    resolved: r.resolved,
+                    failure_kind: r.failure_kind,
+                    prev_chain_key: r.prev_chain_key,
+                })
+                .collect();
+            Json(serde_json::json!({ "changes": changes, "next": next })).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "list dns chain history failed");
+            internal("failed to load dns chain history")
+        }
+    }
+}
+
+/// Create a DNS monitor in one call: a node bound to the built-in DNS profile (so it inherits the
+/// default `dns_up` threshold) plus its DNS-check config.
+///
+/// The check config is spelled out rather than `#[serde(flatten)]`ed (as `CreateUrlMonitor` does)
+/// because both the node and the check have a `name`: flattening would bind them to the same JSON
+/// key and silently force the display label to equal the resolved name.
+#[derive(Deserialize)]
+struct CreateDnsMonitor {
+    /// Display name for the node.
+    name: String,
+    /// The DNS name to resolve.
+    dns_name: String,
+    #[serde(default)]
+    parent_id: Option<Uuid>,
+    #[serde(default)]
+    pool: Option<String>,
+    #[serde(default)]
+    record_type: yagra_common::DnsRecordType,
+    #[serde(default)]
+    resolver: Option<std::net::IpAddr>,
+    #[serde(default)]
+    resolver_port: Option<u16>,
+    #[serde(default)]
+    max_depth: Option<u8>,
+    #[serde(default)]
+    timeout_ms: Option<u32>,
+}
+
+impl CreateDnsMonitor {
+    /// The check config this request describes, with server-side defaults filled in.
+    fn config(&self) -> DnsCheckConfig {
+        let base = DnsCheckConfig::new(self.dns_name.clone());
+        DnsCheckConfig {
+            record_type: self.record_type,
+            resolver: self.resolver,
+            resolver_port: self.resolver_port.unwrap_or(base.resolver_port),
+            max_depth: self.max_depth.unwrap_or(base.max_depth),
+            timeout_ms: self.timeout_ms.unwrap_or(base.timeout_ms),
+            ..base
+        }
+    }
+}
+
+async fn create_dns_monitor(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateDnsMonitor>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    if body.name.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_name",
+            "monitor name must not be empty".to_owned(),
+        );
+    }
+    let config = match validate_dns_check(&body.config()) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    // Bind to the built-in DNS profile (if present) so the default threshold is inherited.
+    let profile = admin
+        .repo
+        .profile_id_for_category(ProfileCategory::DnsCheck.as_str())
+        .await
+        .unwrap_or(None);
+    // Display address only: a DNS monitor is never pinged, so show the resolver we ask (or the
+    // unspecified address when the poller's system resolver is used).
+    let address = config
+        .resolver
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let node_id = match admin
+        .repo
+        .create_node(
+            body.name.trim(),
+            address,
+            body.pool.as_deref(),
+            profile,
+            None,
+            body.parent_id,
+            None,
+            None,
+        )
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, "create dns monitor: create node failed");
+            return internal("failed to create dns monitor");
+        }
+    };
+    if let Err(e) = admin.dns_checks.upsert(node_id, &config).await {
+        // The node exists but the check didn't save — roll it back rather than leave a
+        // DNS-category node that would never get a job.
+        let _ = admin.repo.delete_node(node_id).await;
+        tracing::error!(error = %e, "create dns monitor: save check failed");
+        return internal("failed to create dns monitor");
     }
     (
         StatusCode::CREATED,
@@ -9811,6 +10222,7 @@ mod tests {
             samples: vec![Sample::gauge(metric, value)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         });

@@ -283,6 +283,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 12.5)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         };
@@ -308,6 +309,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 7.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         };

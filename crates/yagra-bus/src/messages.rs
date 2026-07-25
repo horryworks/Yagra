@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    ExpectedStatus, HostSample, HttpMethod, IfIndex, InterfaceField, MerakiTier, MetricKind,
-    NodeId, SeriesKey,
+    DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpMethod, IfIndex, InterfaceField,
+    MerakiTier, MetricKind, NodeId, SeriesKey,
 };
 
 /// Current bus message schema version. Bump on a backward-compatible change; a
@@ -203,6 +203,30 @@ impl PollJob {
         }
     }
 
+    /// A new DNS name-resolution poll job for `node` (ADR-033). The real target is the resolver in
+    /// `check` (or the poller's system resolver when it names none); `target` carries the node's
+    /// display address, which for a DNS monitor is never pinged.
+    #[must_use]
+    pub fn dns(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: DnsCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            schema_version: BUS_SCHEMA_VERSION,
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::Dns(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
     /// A new Meraki org-scoped collector job. Unlike the per-node checks above, one collect job
     /// pages the org-bulk Dashboard endpoints for a whole organization and fans the result out to
     /// many nodes (the poller emits one [`PollResult`] per device). `node_id`/`target` are
@@ -296,8 +320,45 @@ impl JobSpec {
 pub struct NodeJobs {
     /// The node these specs belong to.
     pub node_id: NodeId,
-    /// Every polling spec core wants this poller to run for the node.
+    /// Every polling spec core wants this poller to run for the node. Decoded **per element**
+    /// (see [`de_lenient_specs`]) so one spec this binary can't understand never costs us the
+    /// whole message.
+    #[serde(deserialize_with = "de_lenient_specs")]
     pub specs: Vec<JobSpec>,
+}
+
+/// Deserialize a node's specs, **dropping any element this binary can't decode** instead of
+/// failing the whole message.
+///
+/// This is what makes adding a [`CheckSpec`] variant safe during a rolling upgrade. A [`SyncMsg`]
+/// is decoded whole, so without this a single unknown `check.kind` inside one snapshot chunk
+/// would fail that entire chunk — the poller would then see a `seq` gap, request a resync, receive
+/// the very same chunk again, and loop forever, stalling **all** of its polling rather than just
+/// the one spec it didn't understand. Per-element decoding degrades gracefully instead: the poller
+/// runs everything it understands and simply doesn't poll what it doesn't.
+///
+/// The JSON wire form is unchanged — this is purely deserialization tolerance, so it is N/N-1 safe
+/// on its own and is meant to ship *before* any new `CheckSpec` variant does (ADR-017).
+fn de_lenient_specs<'de, D>(deserializer: D) -> Result<Vec<JobSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let total = raw.len();
+    let specs: Vec<JobSpec> = raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<JobSpec>(v).ok())
+        .collect();
+    if specs.len() < total {
+        // Expected only when a newer core talks to an older poller mid-rollout; the fix is to
+        // finish upgrading the pollers, so say that rather than just reporting a count.
+        tracing::warn!(
+            dropped = total - specs.len(),
+            total,
+            "skipped working-set specs this binary cannot decode — upgrade this poller"
+        );
+    }
+    Ok(specs)
 }
 
 /// How many nodes core packs into one snapshot chunk. Sized so a chunk of representative
@@ -500,6 +561,12 @@ pub enum CheckSpec {
     /// the result out to many nodes. Read-only (GET). Like the variants above, an older poller that
     /// doesn't know this tag simply skips the job (N-1 compatible).
     MerakiCollect(MerakiCollectCheck),
+    /// DNS name-resolution check: resolve a name through one recursive resolver, following the
+    /// CNAME chain so every hop is observable (ADR-033). Like the variants above, an older poller
+    /// that doesn't know this tag simply skips the job (N-1 compatible) — and since
+    /// [`NodeJobs::specs`] decodes per element, an unknown tag inside a working-set chunk costs
+    /// only this spec rather than the whole chunk.
+    Dns(DnsCheck),
 }
 
 /// ICMP echo parameters.
@@ -518,6 +585,41 @@ impl Default for IcmpCheck {
             timeout_ms: 1000,
         }
     }
+}
+
+/// DNS name-resolution check parameters (ADR-033). The real target is `resolver` (or, when that is
+/// `None`, the poller container's system resolver); the enclosing [`PollJob::target`] stays the
+/// node's display address, which a DNS monitor never pings. Every optional field is defaulted so an
+/// N-1 core that omits it still produces a runnable check (ADR-017).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsCheck {
+    /// The name to resolve, normalized by core before dispatch.
+    pub name: String,
+    /// Which record type the chain must reach (default `A`).
+    #[serde(default)]
+    pub record_type: DnsRecordType,
+    /// Recursive resolver to query; `None` ⇒ the poller's system resolver.
+    #[serde(default)]
+    pub resolver: Option<IpAddr>,
+    /// Resolver port (default 53).
+    #[serde(default = "default_dns_port")]
+    pub resolver_port: u16,
+    /// Maximum CNAME hops before giving up (default 8).
+    #[serde(default = "default_dns_max_depth")]
+    pub max_depth: u8,
+    /// **Total** budget for the whole chain walk, in milliseconds (default 3000).
+    #[serde(default = "default_dns_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+const fn default_dns_port() -> u16 {
+    53
+}
+const fn default_dns_max_depth() -> u8 {
+    8
+}
+const fn default_dns_timeout_ms() -> u32 {
+    3000
 }
 
 /// HTTP/HTTPS URL-endpoint check parameters. The `url` is the actual request target (the
@@ -767,6 +869,12 @@ pub struct PollResult {
     /// device text — never a TSDB label. Defaulted so an older poller stays N-1 compatible.
     #[serde(default)]
     pub sys_descr: Option<String>,
+    /// The DNS resolution chain observed on this poll (DNS checks only, ADR-033). Structured
+    /// metadata core persists into PostgreSQL — **never a TSDB label** (ADR-011), the same tier as
+    /// `interfaces` and `sys_descr`. Defaulted so an older poller that doesn't send it stays N-1
+    /// compatible; skipped when absent so every non-DNS result's wire form is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_chain: Option<DnsChain>,
     /// Which poller produced this result (its sanitized id), when the poller stamps one
     /// (ADR-009). Descriptive provenance for the Pollers view / self-observability — never a
     /// TSDB label. Defaulted so an older poller that doesn't stamp it stays N-1 compatible
@@ -1569,6 +1677,74 @@ mod tests {
     }
 
     #[test]
+    fn unknown_check_spec_tag_in_snapshot_chunk_drops_only_that_spec() {
+        // The N-1 guarantee that makes adding a CheckSpec variant safe on the working-set path.
+        // A SyncMsg is decoded whole, so an unknown `check.kind` anywhere inside a chunk used to
+        // fail the entire chunk → seq gap → resync → same chunk → infinite loop, stalling ALL of
+        // that poller's polling. It must now cost exactly the one spec nobody understands.
+        let json = r#"{
+            "type": "snapshot_chunk",
+            "poller_id": "edge-1",
+            "epoch": "00000000-0000-0000-0000-000000000000",
+            "seq": 7,
+            "chunk_index": 0,
+            "chunk_total": 1,
+            "nodes": [{
+                "node_id": "00000000-0000-0000-0000-000000000000",
+                "specs": [
+                    {"node_id":"00000000-0000-0000-0000-000000000000","target":"192.0.2.1",
+                     "check":{"kind":"icmp","count":3,"timeout_ms":1000},"interval_secs":60},
+                    {"node_id":"00000000-0000-0000-0000-000000000000","target":"192.0.2.1",
+                     "check":{"kind":"quantum_tunnel","frobnicate":true},"interval_secs":60}
+                ]
+            }]
+        }"#;
+
+        let msg: SyncMsg = serde_json::from_str(json).expect("chunk must still decode");
+        let SyncMsg::SnapshotChunk(snap) = msg else {
+            panic!("expected a snapshot chunk");
+        };
+        assert_eq!(snap.seq, 7, "the chunk's sequence must survive intact");
+        assert_eq!(snap.nodes.len(), 1);
+        assert_eq!(
+            snap.nodes[0].specs.len(),
+            1,
+            "the known icmp spec is kept and only the unknown one is dropped"
+        );
+        assert!(matches!(snap.nodes[0].specs[0].check, CheckSpec::Icmp(_)));
+    }
+
+    #[test]
+    fn unknown_check_spec_tag_in_delta_upsert_drops_only_that_spec() {
+        // Deltas carry NodeJobs too, so the same tolerance must hold on the incremental path —
+        // otherwise a delta gap forces the resync this whole mechanism exists to avoid.
+        let json = r#"{
+            "type": "delta",
+            "poller_id": "edge-1",
+            "epoch": "00000000-0000-0000-0000-000000000000",
+            "seq": 8,
+            "upserts": [{
+                "node_id": "00000000-0000-0000-0000-000000000000",
+                "specs": [
+                    {"node_id":"00000000-0000-0000-0000-000000000000","target":"192.0.2.1",
+                     "check":{"kind":"from_the_future"},"interval_secs":60}
+                ]
+            }]
+        }"#;
+
+        let msg: SyncMsg = serde_json::from_str(json).expect("delta must still decode");
+        let SyncMsg::Delta(delta) = msg else {
+            panic!("expected a delta");
+        };
+        assert_eq!(delta.seq, 8);
+        assert_eq!(delta.upserts.len(), 1);
+        assert!(
+            delta.upserts[0].specs.is_empty(),
+            "the only spec was undecodable, so the node ends up with no work — not an error"
+        );
+    }
+
+    #[test]
     fn poll_result_without_poller_id_defaults_none() {
         // N-1 (ADR-017): a PollResult from a poller that doesn't stamp provenance has no
         // `poller_id` — new core must default it to None, not fail to deserialize.
@@ -1596,6 +1772,7 @@ mod tests {
             samples: vec![Sample::gauge("icmp_rtt_ms", 5.0)],
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
         };

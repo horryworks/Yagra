@@ -25,6 +25,7 @@ import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
 import type {
   CredentialSummary,
+  DnsRecordType,
   FleetGroupSummary,
   FleetSummary,
   GroupType,
@@ -191,8 +192,8 @@ export function NodesPage() {
   /** Folder the new node lands in (group_id): set from the right-clicked group/node; `null` = top
    *  level. createNode itself takes no group_id, so on success we follow up with setNodeGroup. */
   const [addGroupId, setAddGroupId] = useState<string | null>(null);
-  /** Which kind of monitor to add: an SNMP/ICMP device, or a URL/HTTP(S) endpoint. */
-  const [monType, setMonType] = useState<'device' | 'url'>('device');
+  /** Which kind of monitor to add: an SNMP/ICMP device, a URL/HTTP(S) endpoint, or a DNS name. */
+  const [monType, setMonType] = useState<'device' | 'url' | 'dns'>('device');
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [profileId, setProfileId] = useState('');
@@ -205,6 +206,11 @@ export function NodesPage() {
   const [url, setUrl] = useState('');
   const [urlMethod, setUrlMethod] = useState<'GET' | 'HEAD' | 'POST'>('GET');
   const [verifyTls, setVerifyTls] = useState(true);
+  // DNS-monitor fields (used when monType === 'dns'). A blank resolver means the poller's system
+  // resolver, so it is sent as undefined rather than an empty string.
+  const [dnsName, setDnsName] = useState('');
+  const [dnsRecordType, setDnsRecordType] = useState<DnsRecordType>('A');
+  const [dnsResolver, setDnsResolver] = useState('');
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
@@ -442,7 +448,23 @@ export function NodesPage() {
     setUrl('');
     setUrlMethod('GET');
     setVerifyTls(true);
+    setDnsName('');
+    setDnsRecordType('A');
+    setDnsResolver('');
   };
+
+  /** The error message for whichever monitor kind is being added. */
+  const addErrorKey = () => {
+    if (monType === 'url') return t('err.addUrlMonitor');
+    if (monType === 'dns') return t('err.addDnsMonitor');
+    return t('err.addNode');
+  };
+
+  /** Modal title + primary-button label, per monitor kind. */
+  const addTitle =
+    monType === 'url' ? t('add.urlMonitor') : monType === 'dns' ? t('add.dnsMonitor') : t('add.node');
+  /** Whether the kind-specific target field is filled (the name is checked separately). */
+  const addTargetFilled = monType === 'url' ? !!url : monType === 'dns' ? !!dnsName : !!address;
 
   const submitAdd = () => {
     setAddError(null);
@@ -453,6 +475,15 @@ export function NodesPage() {
             url,
             method: urlMethod,
             verify_tls: verifyTls,
+            parent_id: parentId || undefined,
+          })
+        : monType === 'dns'
+        ? api.createDnsMonitor({
+            name,
+            dns_name: dnsName,
+            record_type: dnsRecordType,
+            // Blank ⇒ the poller's system resolver.
+            resolver: dnsResolver.trim() || undefined,
             parent_id: parentId || undefined,
           })
         : api.createNode({
@@ -474,9 +505,7 @@ export function NodesPage() {
         resetAddForm();
         void reload();
       })
-      .catch((e: unknown) =>
-        setAddError(errMsg(e, monType === 'url' ? t('err.addUrlMonitor') : t('err.addNode'))),
-      );
+      .catch((e: unknown) => setAddError(errMsg(e, addErrorKey())));
   };
 
   // Direct moves (drag-drop): assign immediately and refresh.
@@ -697,17 +726,13 @@ export function NodesPage() {
 
       {adding && (
         <Modal
-          title={monType === 'url' ? t('add.urlMonitor') : t('add.node')}
+          title={addTitle}
           onClose={resetAddForm}
           footer={
             <>
               <Button onClick={resetAddForm}>{t('common:actions.cancel')}</Button>
-              <Button
-                variant="primary"
-                onClick={submitAdd}
-                disabled={!name || (monType === 'url' ? !url : !address)}
-              >
-                {monType === 'url' ? t('add.urlMonitor') : t('add.node')}
+              <Button variant="primary" onClick={submitAdd} disabled={!name || !addTargetFilled}>
+                {addTitle}
               </Button>
             </>
           }
@@ -725,10 +750,11 @@ export function NodesPage() {
               {t('add.monitoringType')}
               <Select
                 value={monType}
-                onChange={(e) => setMonType(e.target.value as 'device' | 'url')}
+                onChange={(e) => setMonType(e.target.value as 'device' | 'url' | 'dns')}
               >
                 <option value="device">{t('add.typeDevice')}</option>
                 <option value="url">{t('add.typeUrl')}</option>
+                <option value="dns">{t('add.typeDns')}</option>
               </Select>
             </label>
             <label className="form-label">
@@ -769,6 +795,42 @@ export function NodesPage() {
                       onChange={(e) => setVerifyTls(e.target.checked)}
                     />
                     <span>{t('add.verifyTls')}</span>
+                  </label>
+                </div>
+              </>
+            ) : monType === 'dns' ? (
+              <>
+                <label className="form-label">
+                  <span>
+                    {t('field.dnsName')} <RequiredMark />
+                  </span>
+                  <TextInput
+                    className="mono"
+                    value={dnsName}
+                    onChange={(e) => setDnsName(e.target.value)}
+                    placeholder={t('add.dnsNamePlaceholder')}
+                  />
+                </label>
+                <div className="form-row">
+                  <label className="form-label">
+                    {t('field.recordType')}
+                    <Select
+                      value={dnsRecordType}
+                      onChange={(e) => setDnsRecordType(e.target.value as DnsRecordType)}
+                    >
+                      <option value="A">A</option>
+                      <option value="AAAA">AAAA</option>
+                      <option value="CNAME">CNAME</option>
+                    </Select>
+                  </label>
+                  <label className="form-label">
+                    {t('add.resolverOptional')}
+                    <TextInput
+                      className="mono"
+                      value={dnsResolver}
+                      onChange={(e) => setDnsResolver(e.target.value)}
+                      placeholder={t('add.resolverPlaceholder')}
+                    />
                   </label>
                 </div>
               </>

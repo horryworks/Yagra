@@ -13,7 +13,9 @@
     "power": "Power (UPS / PDU)",
     "printer": "Printer",
     "generic-snmp": "Generic SNMP",
-    "ping-only": "Ping only"
+    "ping-only": "Ping only",
+    "url-check": "URL / HTTP endpoint",
+    "dns-check": "DNS monitor"
   },
   "enum": {
     "scalar": "scalar",

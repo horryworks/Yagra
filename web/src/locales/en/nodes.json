@@ -12,7 +12,9 @@
     "parentNode": "Parent node",
     "uptime": "Uptime",
     "makerPlaceholder": "e.g. Cisco",
-    "modelPlaceholder": "e.g. C2960"
+    "modelPlaceholder": "e.g. C2960",
+    "dnsName": "DNS name",
+    "recordType": "Record type"
   },
   "groupType": {
     "site": "Site",
@@ -56,7 +58,12 @@
     "snmpCredentialOptional": "SNMP credential (optional — enables SNMP polling)",
     "parentNodeOptional": "Parent node (optional — for dependency suppression)",
     "makerOptional": "Maker (optional)",
-    "modelOptional": "Model (optional)"
+    "modelOptional": "Model (optional)",
+    "dnsMonitor": "Add DNS monitor",
+    "typeDns": "DNS monitor (name resolution)",
+    "dnsNamePlaceholder": "e.g. horryworks.net",
+    "resolverOptional": "Resolver (optional)",
+    "resolverPlaceholder": "blank = system resolver"
   },
   "group": {
     "add": "Add group",
@@ -87,7 +94,8 @@
     "requestPoll": "failed to request poll",
     "deleteNode": "failed to delete node",
     "saveNode": "failed to save node",
-    "setDependency": "failed to set dependency"
+    "setDependency": "failed to set dependency",
+    "addDnsMonitor": "failed to add DNS monitor"
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {
@@ -174,7 +182,31 @@
     "vpnUsers": "VPN users",
     "vpnTunnels": "VPN tunnels",
     "noHistory": "No history yet…",
-    "systemSnmp": "System (SNMP)"
+    "systemSnmp": "System (SNMP)",
+    "dnsMonitor": "DNS monitor",
+    "systemResolver": "system resolver",
+    "resolution": "Resolution",
+    "resolves": "Resolves",
+    "doesNotResolve": "Does not resolve",
+    "resolveTime": "Resolve time",
+    "resolutionChain": "Resolution chain",
+    "resolutionHistory": "Resolution history",
+    "noChainYet": "No resolution recorded yet.",
+    "historyEmpty": "No changes recorded — the resolution has been stable.",
+    "firstObserved": "First observed",
+    "lastConfirmed": "last confirmed",
+    "changedAt": "Changed at",
+    "dnsFailure": {
+      "nx_domain": "NXDOMAIN (no such name)",
+      "no_data": "No record of this type",
+      "serv_fail": "SERVFAIL (resolver error)",
+      "refused": "REFUSED",
+      "other_rcode": "DNS error (RCODE {{rcode}})",
+      "timeout": "Timed out",
+      "loop_detected": "CNAME loop at {{at}}",
+      "depth_exceeded": "Chain longer than {{maxDepth}} hops",
+      "malformed": "Malformed response"
+    }
   },
   "interfaces": {
     "emptyDiscovered": "No interfaces discovered yet. They appear after an SNMP table walk runs — the node needs a bound SNMP credential and a table metric in its collection set.",

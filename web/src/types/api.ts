@@ -633,6 +633,90 @@ export interface UrlCheckConfig {
   credential: string | null;
 }
 
+/** Which record type a DNS monitor resolves to (mirrors yagra_common::DnsRecordType). */
+export type DnsRecordType = 'A' | 'AAAA' | 'CNAME';
+
+/** One record in a resolution answer set (mirrors yagra_common::DnsRecord, a tagged object). */
+export type DnsRecord =
+  | { kind: 'cname'; target: string }
+  | { kind: 'a'; addr: string }
+  | { kind: 'aaaa'; addr: string };
+
+/** One answer plus its TTL. The TTL is display-only — it is not part of the change key. */
+export interface DnsAnswer {
+  record: DnsRecord;
+  ttl: number;
+}
+
+/** One hop of a resolution chain: the name queried and the answers for it (canonical order). */
+export interface DnsHop {
+  name: string;
+  answers: DnsAnswer[];
+}
+
+/** Why a resolution did not reach a terminal record set (mirrors yagra_common::DnsFailure). */
+export type DnsFailure =
+  | { kind: 'nx_domain' }
+  | { kind: 'no_data' }
+  | { kind: 'serv_fail' }
+  | { kind: 'refused' }
+  | { kind: 'other_rcode'; rcode: number }
+  | { kind: 'timeout' }
+  | { kind: 'loop_detected'; at: string }
+  | { kind: 'depth_exceeded'; max_depth: number }
+  | { kind: 'malformed' };
+
+/** One observed resolution chain — the artifact of a DNS check. */
+export interface DnsChain {
+  query: string;
+  record_type: DnsRecordType;
+  /** Where we asked (`10.0.0.53:53`, or `system`). Provenance, not content. */
+  resolver: string;
+  /** Hops in walk order; the order is significant. */
+  hops: DnsHop[];
+  /** `null` ⇒ the chain resolved. */
+  failure: DnsFailure | null;
+  resolve_ms: number;
+}
+
+/** A node's DNS-monitor configuration (1:1 with the node). `name` is the only required field on
+ *  create; the rest default server-side. */
+export interface DnsCheckConfig {
+  name: string;
+  record_type: DnsRecordType;
+  /** `null` ⇒ the poller's system resolver. */
+  resolver: string | null;
+  resolver_port: number;
+  max_depth: number;
+  timeout_ms: number;
+}
+
+/** The current chain plus how long it has held (`GET /api/v1/nodes/:id/dns-chain`). */
+export interface DnsChainCurrent {
+  chain: DnsChain;
+  resolved: boolean;
+  failure_kind: string | null;
+  first_seen: string;
+  last_seen: string;
+}
+
+/** One append-on-change history row (`GET /api/v1/nodes/:id/dns-chain/history`). */
+export interface DnsChainChange {
+  id: number;
+  at: string;
+  chain: DnsChain;
+  resolved: boolean;
+  failure_kind: string | null;
+  /** `null` on the first observation for this node. */
+  prev_chain_key: string | null;
+}
+
+/** A page of DNS chain history with its keyset cursor (`null` ⇒ no more rows). */
+export interface DnsChainHistoryPage {
+  changes: DnsChainChange[];
+  next: { at: string; id: number } | null;
+}
+
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
 export interface NodeDetail {
   id: string;
@@ -648,6 +732,8 @@ export interface NodeDetail {
   group_id: string | null;
   /** URL-monitor config when this node is a URL monitor; `null` otherwise. */
   url_check: UrlCheckConfig | null;
+  /** DNS-monitor config when this node is a DNS monitor; `null` otherwise. */
+  dns_check: DnsCheckConfig | null;
   /** Cisco Meraki binding when this node is a Meraki device; `null` otherwise. */
   meraki_device: MerakiDeviceConfig | null;
 }

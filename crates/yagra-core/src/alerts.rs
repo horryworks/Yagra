@@ -1432,6 +1432,7 @@ mod tests {
             samples: Vec::new(),
             interfaces: Vec::new(),
             sys_descr: None,
+            dns_chain: None,
             poller_id: None,
             trace_context: Default::default(),
         }

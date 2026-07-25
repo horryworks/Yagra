@@ -99,6 +99,10 @@ import type {
   TopEntry,
   TopologyNode,
   UrlCheckConfig,
+  DnsCheckConfig,
+  DnsChainCurrent,
+  DnsChainHistoryPage,
+  DnsRecordType,
   UserSummary,
   OidcProviderSummary,
   OidcProviderInput,
@@ -426,6 +430,69 @@ export const api = {
   /** Remove a node's URL-monitor config (the node itself is untouched). */
   deleteUrlCheck: (id: string): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/url-check`, { method: 'DELETE' }),
+
+  // ── DNS name-resolution monitoring (ADR-033) ──────────────────────────────────────
+  /** Create a DNS monitor in one call: a node bound to the built-in DNS profile plus its
+   *  DNS-check config. Only `name` (node) + `name` (DNS) are required; the rest default. */
+  createDnsMonitor: (body: {
+    /** Display name for the node. */
+    name: string;
+    /** The DNS name to resolve (separate from the node's label). */
+    dns_name: string;
+    parent_id?: string;
+    pool?: string;
+    record_type?: DnsRecordType;
+    resolver?: string;
+    resolver_port?: number;
+    max_depth?: number;
+    timeout_ms?: number;
+  }): Promise<{ id: string }> => request('/dns-monitors', jsonBody('POST', body)),
+
+  /** A node's DNS-monitor config, or `null` if it isn't a DNS monitor (404 → null). */
+  getDnsCheck: async (id: string): Promise<DnsCheckConfig | null> => {
+    try {
+      return await request(`/nodes/${encodeURIComponent(id)}/dns-check`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+
+  /** Create or replace a node's DNS-monitor config (the node must already exist). */
+  setDnsCheck: (id: string, body: DnsCheckConfig): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/dns-check`, jsonBody('PUT', body)),
+
+  /** Remove a node's DNS-monitor config (the node and its recorded chains are untouched). */
+  deleteDnsCheck: (id: string): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/dns-check`, { method: 'DELETE' }),
+
+  /** The node's current resolution chain, or `null` if nothing has been observed yet. */
+  getDnsChain: async (id: string): Promise<DnsChainCurrent | null> => {
+    try {
+      return await request(`/nodes/${encodeURIComponent(id)}/dns-chain`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+
+  /** A keyset page of the node's resolution-change history, newest first. */
+  listDnsChainHistory: (
+    id: string,
+    opts: { limit?: number; beforeAt?: string; beforeId?: number } = {},
+  ): Promise<DnsChainHistoryPage> => {
+    const p = new URLSearchParams();
+    if (opts.limit != null) p.set('limit', String(opts.limit));
+    // Both cursor halves or neither — the server rejects a half-specified cursor.
+    if (opts.beforeAt != null && opts.beforeId != null) {
+      p.set('before_at', opts.beforeAt);
+      p.set('before_id', String(opts.beforeId));
+    }
+    const qs = p.toString();
+    return request(
+      `/nodes/${encodeURIComponent(id)}/dns-chain/history${qs ? `?${qs}` : ''}`,
+    );
+  },
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
   /** List the orgs an API key can access (nothing is persisted). Read-only. */

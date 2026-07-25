@@ -14,15 +14,19 @@ const t = ((key: string): string => {
 }) as unknown as TFunction;
 
 describe('profileCategories', () => {
-  it('covers the 14 ProfileCategory tokens', () => {
-    expect(PROFILE_CATEGORIES).toHaveLength(14);
+  it('covers the 16 ProfileCategory tokens', () => {
+    expect(PROFILE_CATEGORIES).toHaveLength(16);
     expect(PROFILE_CATEGORIES.map((c) => c.token)).toContain('generic-snmp');
     expect(PROFILE_CATEGORIES.map((c) => c.token)).toContain('l3-switch');
+    // The endpoint-monitor kinds: without these the Device profiles page renders a raw token.
+    expect(PROFILE_CATEGORIES.map((c) => c.token)).toContain('url-check');
+    expect(PROFILE_CATEGORIES.map((c) => c.token)).toContain('dns-check');
   });
 
   it('maps a token to its label and falls back to the raw token', () => {
     expect(categoryLabel('firewall', t)).toBe('Firewall');
     expect(categoryLabel('l3-switch', t)).toBe('L3 switch');
+    expect(categoryLabel('dns-check', t)).toBe('DNS monitor');
     expect(categoryLabel('unknown-token', t)).toBe('unknown-token');
   });
 

@@ -13,7 +13,9 @@
     "power": "電源 (UPS / PDU)",
     "printer": "プリンター",
     "generic-snmp": "汎用 SNMP",
-    "ping-only": "Ping のみ"
+    "ping-only": "Ping のみ",
+    "url-check": "URL / HTTPエンドポイント",
+    "dns-check": "DNS監視"
   },
   "enum": {
     "scalar": "スカラー",

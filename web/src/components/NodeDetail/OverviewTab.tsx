@@ -36,6 +36,7 @@ import type {
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
+import { DnsHealth } from './DnsHealth';
 import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 
@@ -106,6 +107,7 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
       )}
 
       {node.url_check && <UrlHealth nodeId={node.id} url={node.url_check.url} />}
+      {node.dns_check && <DnsHealth nodeId={node.id} check={node.dns_check} />}
       {node.meraki_device && (
         <MerakiHealth nodeId={node.id} device={node.meraki_device} />
       )}
