@@ -1,5 +1,5 @@
 {
-  "note": "受信した syslog・SNMP トラップ・フローエクスポートを外部コレクタへ中継します。送出は core が行うので、ファイアウォールで許可する出口は 1 箇所で済みます。",
+  "note": "受信した syslog・SNMP トラップ・フローエクスポートを外部コレクタへ中継、または BigQuery へクエリ可能な行として投入します。送出は core が行うので、ファイアウォールで許可する出口は 1 箇所で済みます。",
   "unavailable": "転送の管理には管理者ロールが必要です。",
   "signInPrompt": "転送先を管理するにはサインインしてください。",
   "empty": "転送先がまだありません。現在、何も中継していません。",
@@ -44,7 +44,8 @@
     "syslog_tcp": "Syslog (TCP)",
     "syslog_tls": "Syslog (TLS / RFC 5425)",
     "snmp_trap_udp": "SNMPv2c トラップ (UDP)",
-    "flow_udp": "フローエクスポート (UDP)"
+    "flow_udp": "フローエクスポート (UDP)",
+    "bigquery": "Google BigQuery へ行として投入"
   },
   "scope": { "allPools": "全プール" },
   "status": {
@@ -53,7 +54,8 @@
   },
   "fidelity": {
     "verbatim": "原本",
-    "rendered": "復元品"
+    "rendered": "復元品",
+    "rows": "構造化行"
   },
 
   "field": {
@@ -64,12 +66,20 @@
     "target": "コレクタ",
     "targetPlaceholder": "siem.example.com:514",
     "targetHint": "host:port 形式。IPv6 リテラルは [アドレス]:ポート と書きます。",
+    "targetTable": "BigQuery テーブル",
+    "targetTablePlaceholder": "my-project.analytics.yagra_events",
+    "targetTableHint": "project.dataset.table 形式。データセットは事前に作成しておいてください — データセットのリージョンは後から変更できないため、Yagra 側では作成しません。テーブルは日単位パーティション付きで自動作成されます。",
     "pool": "ポーラプール",
     "poolPlaceholder": "全プール",
     "fidelity": "忠実度",
     "fidelityHint": "「原本」は受信したデータグラムをそのまま中継します。「復元品」はパース済みフィールドから組み立て直すため、RFC 5424 の構造化データ・非 UTF-8 バイト・4096 文字を超える本文・33 個目以降の varbind が失われます。",
     "fidelityImpossible": "この組み合わせでは原本を運べないため、常に復元品を送信します。",
     "fidelityVerbatimOnly": "フローエクスポートは 1 つのバイナリデータグラムにテンプレートと多数のレコードが入った形式のため、受信したままの中継しかできません。",
+    "fidelityRowsOnly": "BigQuery へは型付き列の正規化された行 — イベント 1 件につき 1 行、フローレコード 1 件につき 1 行 — を投入します。原本のバイト列は意図的に保存しません。生ペイロード列を持つと、ログ行に含まれる機微な情報が外部で恒久的にクエリ可能になってしまうためです。",
+    "serviceAccount": "サービスアカウント鍵",
+    "serviceAccountPlaceholder": "空欄にするとインスタンス自身の ID (Workload Identity) を使います",
+    "serviceAccountKept": "鍵は保存済み — 空欄のままで維持",
+    "serviceAccountHint": "BigQuery データ編集者ロールを持つサービスアカウントの JSON 鍵ファイルを貼り付けてください。暗号化して保存され、以後表示されません。core を Google Cloud 上で Workload Identity 付きで動かしている場合は空欄にしてください — 資格情報を一切保存しない、より安全な方法です。",
     "caCert": "CA 証明書",
     "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
     "caCertHint": "任意。コレクタの証明書に署名した CA がシステムの信頼ストアに無い場合、その PEM 証明書を貼り付けてください。コレクタの証明書検証は常に行われ、無効化する手段はありません。",
@@ -134,7 +144,8 @@
     "remove": "条件を削除",
     "none": "すべて",
     "emptyHint": "条件なし — ストリーム全体を転送します。",
-    "flowAnyRecord": "フローのデータグラムは複数のレコードをまとめて運びます。いずれか 1 つのレコードが条件に一致すれば、データグラム全体を転送します — 一致しなかったレコードも一緒に流れます。エクスポートを別のデータグラムに再エンコードしない限り、レコード単位で取り除くことはできません。",
+    "flowAnyRecord": "フローのデータグラムは複数のレコードをまとめて運びます。いずれか 1 つのレコードが条件に一致すれば、データグラム全体を転送します — 一致しなかったレコードも一緒に流れます。エクスポートを別のデータグラムに再エンコードしない限り、レコード単位で取り除くことはできません。厳密な絞り込みが必要なら、同じストリームを BigQuery へ送ってください。",
+    "flowPerRecord": "フローレコードは 1 件ずつ判定され、一致したものだけが行になります。",
     "count_one": "{{count}} 条件 ({{mode}})",
     "count_other": "{{count}} 条件 ({{mode}})",
     "mode": {
@@ -153,6 +164,7 @@
   "test": {
     "title": "テスト: {{name}}",
     "ok": "テストメッセージをコレクタへ送信しました。受信側に届いているか確認してください。",
+    "okBigQuery": "テスト行を 1 件書き込みました。テーブルをクエリして着信を確認してください。",
     "failed": "送信に失敗しました: {{error}}"
   },
 

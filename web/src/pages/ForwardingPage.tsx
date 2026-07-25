@@ -31,7 +31,10 @@ import {
   reconcileDraft,
   supportsRendered,
   supportsVerbatim,
+  filtersWholeDatagram,
   usesCommunity,
+  usesHostPort,
+  usesServiceAccount,
   usesTls,
 } from './forwardingOptions';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -65,6 +68,7 @@ interface Draft {
   rate_limit: string;
   community: string;
   ca_cert: string;
+  service_account_json: string;
 }
 
 function emptyDraft(): Draft {
@@ -81,6 +85,7 @@ function emptyDraft(): Draft {
     rate_limit: '',
     community: '',
     ca_cert: '',
+    service_account_json: '',
   };
 }
 
@@ -98,6 +103,8 @@ function draftFrom(row: ForwardDestination): Draft {
     rate_limit: row.rate_limit_per_sec == null ? '' : String(row.rate_limit_per_sec),
     community: '',
     ca_cert: row.ca_cert ?? '',
+    // Secrets never come back from the API; a blank box means "keep what is stored".
+    service_account_json: '',
   };
 }
 
@@ -119,6 +126,11 @@ function toInput(d: Draft): ForwardDestinationInput {
     // Omitted rather than blank: core keeps the stored community when the field is absent.
     ...(usesCommunity(d.dest_kind) && d.community.trim()
       ? { community: d.community.trim() }
+      : {}),
+    // Same rule for the Google key — and on a *new* destination, omitting it is meaningful: it
+    // selects Workload Identity rather than storing a credential.
+    ...(usesServiceAccount(d.dest_kind) && d.service_account_json.trim()
+      ? { service_account_json: d.service_account_json.trim() }
       : {}),
   };
 }
@@ -308,6 +320,8 @@ function DestinationModal({
 
   const verbatimPossible = supportsVerbatim(draft.source_kind, draft.dest_kind);
   const renderedPossible = supportsRendered(draft.source_kind, draft.dest_kind);
+  const hostPort = usesHostPort(draft.dest_kind);
+  const rowsOnly = usesServiceAccount(draft.dest_kind);
   const ready = draft.name.trim() !== '' && draft.target.trim() !== '';
 
   const submit = () => {
@@ -384,14 +398,21 @@ function DestinationModal({
       </div>
 
       <div className="fwd-row">
+        {/* Two target shapes, and the difference is not cosmetic: a relay is addressed by
+            `host:port`, BigQuery by `project.dataset.table`. Relabelling rather than sharing one
+            vague placeholder is what stops an admin typing a host into a table field. */}
         <div className="modal-field">
-          <label className="modal-field-label">{t('field.target')}</label>
+          <label className="modal-field-label">
+            {hostPort ? t('field.target') : t('field.targetTable')}
+          </label>
           <TextInput
             value={draft.target}
-            placeholder={t('field.targetPlaceholder')}
+            placeholder={hostPort ? t('field.targetPlaceholder') : t('field.targetTablePlaceholder')}
             onChange={(e) => update({ target: e.target.value })}
           />
-          <span className="modal-hint">{t('field.targetHint')}</span>
+          <span className="modal-hint">
+            {hostPort ? t('field.targetHint') : t('field.targetTableHint')}
+          </span>
         </div>
         <div className="modal-field">
           <label className="modal-field-label">{t('field.pool')}</label>
@@ -406,21 +427,48 @@ function DestinationModal({
       <div className="modal-field">
         <label className="modal-field-label">{t('field.fidelity')}</label>
         <Select
-          value={draft.verbatim ? 'verbatim' : 'rendered'}
-          disabled={!verbatimPossible || !renderedPossible}
+          value={rowsOnly ? 'rows' : draft.verbatim ? 'verbatim' : 'rendered'}
+          disabled={rowsOnly || !verbatimPossible || !renderedPossible}
           onChange={(e) => update({ verbatim: e.target.value === 'verbatim' })}
         >
-          <option value="verbatim">{t('fidelity.verbatim')}</option>
-          <option value="rendered">{t('fidelity.rendered')}</option>
+          {/* BigQuery is neither fidelity: it produces normalized rows. Showing a disabled third
+              value is more honest than leaving "rendered" selected and hoping the hint is read. */}
+          {rowsOnly ? (
+            <option value="rows">{t('fidelity.rows')}</option>
+          ) : (
+            <>
+              <option value="verbatim">{t('fidelity.verbatim')}</option>
+              <option value="rendered">{t('fidelity.rendered')}</option>
+            </>
+          )}
         </Select>
         <span className="modal-hint">
-          {!renderedPossible
-            ? t('field.fidelityVerbatimOnly')
-            : verbatimPossible
-              ? t('field.fidelityHint')
-              : t('field.fidelityImpossible')}
+          {rowsOnly
+            ? t('field.fidelityRowsOnly')
+            : !renderedPossible
+              ? t('field.fidelityVerbatimOnly')
+              : verbatimPossible
+                ? t('field.fidelityHint')
+                : t('field.fidelityImpossible')}
         </span>
       </div>
+
+      {usesServiceAccount(draft.dest_kind) && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.serviceAccount')}</label>
+          <TextArea
+            value={draft.service_account_json}
+            placeholder={
+              existing?.has_secret
+                ? t('field.serviceAccountKept')
+                : t('field.serviceAccountPlaceholder')
+            }
+            spellCheck={false}
+            onChange={(e) => update({ service_account_json: e.target.value })}
+          />
+          <span className="modal-hint">{t('field.serviceAccountHint')}</span>
+        </div>
+      )}
 
       {usesTls(draft.dest_kind) && (
         <div className="modal-field">
@@ -487,8 +535,14 @@ function DestinationModal({
         {/* A flow export is a template + many records, and records cannot be removed from one
             without re-encoding it. Saying so here is the difference between a filter that behaves
             surprisingly and one that behaves as documented. */}
-        {draft.source_kind === 'flow' && draft.conditions.length > 0 && (
-          <span className="modal-hint fwd-warn">{t('filter.flowAnyRecord')}</span>
+        {filtersWholeDatagram(draft.source_kind, draft.dest_kind) &&
+          draft.conditions.length > 0 && (
+            <span className="modal-hint fwd-warn">{t('filter.flowAnyRecord')}</span>
+          )}
+        {/* ...and the converse, because it is the reason to pick BigQuery for a filtered flow
+            feed: rows are independent, so a non-matching record is simply not written. */}
+        {draft.source_kind === 'flow' && rowsOnly && draft.conditions.length > 0 && (
+          <span className="modal-hint">{t('filter.flowPerRecord')}</span>
         )}
         {draft.conditions.length === 0 ? (
           <span className="modal-hint">{t('filter.emptyHint')}</span>
@@ -643,7 +697,11 @@ export function ForwardingPage() {
         .then((r) =>
           setTestResult({
             name: row.name,
-            text: r.delivered ? t('test.ok') : t('test.failed', { error: r.error ?? '' }),
+            // "Handed to the collector" is the honest wording for a fire-and-forget datagram, but a
+            // BigQuery test actually round-trips — say what really happened rather than under-claim.
+            text: r.delivered
+              ? t(row.dest_kind === 'bigquery' ? 'test.okBigQuery' : 'test.ok')
+              : t('test.failed', { error: r.error ?? '' }),
           }),
         )
         .catch((e: unknown) => setTestResult({ name: row.name, text: errMsg(e, t('err.test')) }));

@@ -43,17 +43,30 @@ Yagra is two long-running binaries plus a static WebUI, backed by four stores/bu
 | `5432` / `6379` / `8428` / `9428` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs | internal only |
 
 > **Outbound (forwarding).** Settings ▸ Forwarding relays received syslog / SNMP traps / flow
-> exports on to external collectors. **Core** does the sending — not the pollers — so only core
-> needs egress to the collector's `host:port` (UDP, TCP, or TLS). Nothing is sent until you add a
-> destination. A TLS destination verifies the collector's certificate against the container's system
-> trust store; for a private CA, paste its PEM into the destination — there is no way to disable
-> verification.
+> exports on to external collectors, or streams them into **Google BigQuery** as queryable rows.
+> **Core** does the sending — not the pollers — so only core needs egress: to the collector's
+> `host:port` (UDP, TCP, or TLS), and for a BigQuery destination to **`bigquery.googleapis.com` and
+> `oauth2.googleapis.com` over HTTPS** (plus the GCE metadata server at `169.254.169.254` when using
+> Workload Identity instead of a stored key). Nothing is sent until you add a destination. A TLS
+> destination verifies the collector's certificate against the container's system trust store; for a
+> private CA, paste its PEM into the destination — there is no way to disable verification.
+>
+> **BigQuery destinations** need the dataset to exist already — Yagra creates the *table* (day
+> partitioned, clustered) but never the dataset, because a dataset's region cannot be changed
+> afterwards and choosing your data residency silently would be wrong. Grant the identity the
+> **BigQuery Data Editor** role on the dataset. Rows are normalized and typed; the original bytes are
+> deliberately **not** stored, so pair it with a relay destination if you also need byte-exact
+> archival. Streaming inserts are billed by Google.
 >
 > **Bus bandwidth cost.** So that forwarding can relay what a device actually sent, pollers carry the
 > original bytes to core whether or not any destination exists today: passive events gain a base64
 > `raw` field (**≈1.3× on `yagra.events`** — about +1.4 MB/s at 5000 msg/s), and every received flow
-> datagram is relayed verbatim on `yagra.flows.raw` (**≈370 kbit/s at 1000 flows/s, ≈3.7 Mbit/s at
-> 10 000**, on top of the aggregated `yagra.flows` stream). This is deliberate — a capture toggle
+> datagram is relayed verbatim on `yagra.flows.raw`, on top of the aggregated `yagra.flows` stream.
+> The flow cost depends on how densely your exporter packs its datagrams, and the spread is wide:
+> a densely packed NetFlow v9 export (~1400 B, ~30 records) works out to **≈370 kbit/s at 1000
+> flows/s**, while a device that emits small frequent datagrams — measured on a real UniFi gateway at
+> ~330 B and ~3.6 records — costs about twice that, **≈730 kbit/s**. Budget **0.4–0.8 Mbit/s per 1000
+> flows/s** and scale linearly (≈4–8 Mbit/s at 10 000). This carriage is deliberate — a capture toggle
 > would make forwarding fidelity depend on configuration rather than being a property of the system —
 > but it is real WAN traffic for a **remote-site poller**, so size the site link accordingly. Core
 > itself pays nothing per message when no destination is configured.

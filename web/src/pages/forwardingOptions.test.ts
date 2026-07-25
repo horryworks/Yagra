@@ -10,9 +10,12 @@ import {
   fieldsForSource,
   opsForField,
   reconcileDraft,
+  filtersWholeDatagram,
   supportsRendered,
   supportsVerbatim,
   usesCommunity,
+  usesHostPort,
+  usesServiceAccount,
   usesTls,
 } from './forwardingOptions';
 import type { ForwardFilterField, ForwardSourceKind } from '../types/api';
@@ -64,15 +67,61 @@ describe('forwardingOptions', () => {
   });
 
   it('pairs destination kinds with the streams they can carry', () => {
-    expect(destKindsForSource('syslog')).toEqual(['syslog_udp', 'syslog_tcp', 'syslog_tls']);
+    expect(destKindsForSource('syslog')).toEqual([
+      'syslog_udp',
+      'syslog_tcp',
+      'syslog_tls',
+      'bigquery',
+    ]);
     // A trap may be shipped to a syslog collector; a syslog line has no SNMP PDU form.
     expect(destKindsForSource('trap')).toContain('snmp_trap_udp');
     expect(destKindsForSource('trap')).toContain('syslog_udp');
     expect(destKindsForSource('syslog')).not.toContain('snmp_trap_udp');
-    // Flow is isolated in both directions.
-    expect(destKindsForSource('flow')).toEqual(['flow_udp']);
+    // Flow is isolated among the *relay* kinds, in both directions.
+    expect(destKindsForSource('flow')).toEqual(['flow_udp', 'bigquery']);
     expect(destKindsForSource('syslog')).not.toContain('flow_udp');
     expect(destKindsForSource('trap')).not.toContain('flow_udp');
+    // ...but BigQuery takes every stream, because every stream has a row shape.
+    for (const s of STREAMS) expect(destKindsForSource(s)).toContain('bigquery');
+  });
+
+  it('treats BigQuery as rows-only, addressed by table rather than host:port', () => {
+    for (const s of STREAMS) {
+      // A table row is never "the original bytes" — and it always has a derived form, which is
+      // what lets a *flow* stream reach BigQuery when `flow_udp` is the only other option.
+      expect(supportsVerbatim(s, 'bigquery')).toBe(false);
+      expect(supportsRendered(s, 'bigquery')).toBe(true);
+    }
+    expect(usesHostPort('bigquery')).toBe(false);
+    expect(usesHostPort('flow_udp')).toBe(true);
+    expect(usesServiceAccount('bigquery')).toBe(true);
+    expect(usesServiceAccount('syslog_tls')).toBe(false);
+    // HTTPS, but to a fixed Google endpoint — nothing for an operator to pin.
+    expect(usesTls('bigquery')).toBe(false);
+    expect(usesCommunity('bigquery')).toBe(false);
+  });
+
+  it('warns about datagram-wide filtering only for the flow relay', () => {
+    // The one behavioural difference an operator must be told about: `flow_udp` cannot drop a
+    // record from a bundle, so non-matching records ride along. BigQuery filters exactly.
+    expect(filtersWholeDatagram('flow', 'flow_udp')).toBe(true);
+    expect(filtersWholeDatagram('flow', 'bigquery')).toBe(false);
+    expect(filtersWholeDatagram('syslog', 'syslog_udp')).toBe(false);
+  });
+
+  it('drops a service-account key off a non-BigQuery destination', () => {
+    const bq = reconcileDraft({
+      source_kind: 'syslog',
+      dest_kind: 'bigquery',
+      verbatim: true, // impossible for BigQuery — must be cleared, not sent to a 400
+      ca_cert: '',
+      service_account_json: '{"client_email":"a@b"}',
+      conditions: [],
+    });
+    expect(bq.verbatim).toBe(false);
+    expect(bq.service_account_json).toBe('{"client_email":"a@b"}');
+    const relay = reconcileDraft({ ...bq, dest_kind: 'syslog_udp' });
+    expect(relay.service_account_json).toBe('');
   });
 
   it('allows byte-exact relay only where the wire form matches', () => {
@@ -101,6 +150,7 @@ describe('forwardingOptions', () => {
       dest_kind: 'syslog_udp',
       verbatim: true,
       ca_cert: '',
+      service_account_json: '',
       conditions: [
         { field: 'facility', op: 'lte', value: '4' }, // syslog-only: must be dropped
         { field: 'trap_oid', op: 'prefix', value: '1.3.6' }, // valid on this stream
@@ -119,6 +169,7 @@ describe('forwardingOptions', () => {
       dest_kind: 'snmp_trap_udp', // not offered for syslog
       verbatim: true,
       ca_cert: '',
+      service_account_json: '',
       conditions: [],
     });
     expect(repaired.dest_kind).toBe('syslog_udp');
@@ -132,6 +183,7 @@ describe('forwardingOptions', () => {
       dest_kind: 'syslog_tcp', // impossible for flow
       verbatim: false, // impossible for flow — must be forced back on, not merely left alone
       ca_cert: 'PEM',
+      service_account_json: '',
       conditions: [
         { field: 'severity', op: 'lte', value: '4' },
         { field: 'dst_port', op: 'eq', value: '443' },
@@ -150,6 +202,7 @@ describe('forwardingOptions', () => {
       dest_kind: 'syslog_tls',
       verbatim: true,
       ca_cert: 'PEM',
+      service_account_json: '',
       conditions: [],
     });
     expect(tls.ca_cert).toBe('PEM');
@@ -163,6 +216,7 @@ describe('forwardingOptions', () => {
       dest_kind: 'syslog_udp',
       verbatim: true,
       ca_cert: '',
+      service_account_json: '',
       conditions: [{ field: 'severity', op: 'regex', value: '4' }],
     });
     expect(repaired.conditions[0].op).toBe(opsForField('severity')[0]);

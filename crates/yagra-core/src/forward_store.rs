@@ -30,6 +30,13 @@ pub enum DestSecret {
         /// The community string. Treated as a credential: never logged, never returned.
         community: String,
     },
+    /// A Google service-account key file for a BigQuery destination (ADR-034 Increment 3). Absent
+    /// on a BigQuery destination means "use the GCE/GKE metadata server" (Workload Identity), which
+    /// stores no secret at all and is the better deployment where core runs on Google.
+    GcpServiceAccount {
+        /// The verbatim key JSON. A private key: never logged, never returned, never in a metric.
+        json: String,
+    },
 }
 
 /// A destination as the API exposes it — no secrets, ever.
@@ -352,6 +359,18 @@ mod tests {
             secret,
             "the sealed blob must survive a round trip through the envelope"
         );
+    }
+
+    #[test]
+    fn a_service_account_key_round_trips_and_is_tagged_distinctly() {
+        // The sealed blob is a tagged union, so a BigQuery key and an SNMP community can never be
+        // opened as each other — the forwarder matches on the tag to decide what it holds.
+        let secret = DestSecret::GcpServiceAccount {
+            json: r#"{"client_email":"a@b.iam.gserviceaccount.com"}"#.into(),
+        };
+        let json = serde_json::to_string(&secret).unwrap();
+        assert!(json.contains("\"kind\":\"gcp_service_account\""), "{json}");
+        assert_eq!(serde_json::from_str::<DestSecret>(&json).unwrap(), secret);
     }
 
     #[test]

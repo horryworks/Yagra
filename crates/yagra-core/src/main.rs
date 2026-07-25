@@ -18,6 +18,7 @@ mod apitokens;
 mod audit;
 mod auth;
 mod authcallout;
+mod bigquery;
 mod classification;
 mod collection;
 mod config;

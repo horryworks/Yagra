@@ -107,24 +107,31 @@ export function fieldsForSource(source: ForwardSourceKind): ForwardFilterField[]
 
 /** Destination kinds that can carry `source`. A trap may be shipped to a syslog collector (as a
  *  rendered line); a syslog line has no SNMP PDU form, so the reverse is not offered. Flow is its
- *  own world — a flow export only means anything to a flow collector. */
+ *  own world among the *relay* kinds — a flow export only means anything to a flow collector —
+ *  while BigQuery takes every stream, because every stream has a row shape. */
 export function destKindsForSource(source: ForwardSourceKind): ForwardDestKind[] {
-  if (source === 'flow') return ['flow_udp'];
+  if (source === 'flow') return ['flow_udp', 'bigquery'];
   const syslog: ForwardDestKind[] = ['syslog_udp', 'syslog_tcp', 'syslog_tls'];
-  return source === 'trap' ? ['snmp_trap_udp', ...syslog] : syslog;
+  return source === 'trap'
+    ? ['snmp_trap_udp', ...syslog, 'bigquery']
+    : [...syslog, 'bigquery'];
 }
 
 /** Whether the original datagram can be relayed byte-for-byte for this pairing. When false the
- *  form forces (and explains) rendered output — core rejects `verbatim` on it outright. */
+ *  form forces (and explains) the derived output — core rejects `verbatim` on it outright. */
 export function supportsVerbatim(source: ForwardSourceKind, dest: ForwardDestKind): boolean {
+  // A table row is never "the original bytes", and deliberately has no raw-payload column.
+  if (dest === 'bigquery') return false;
   if (dest === 'flow_udp') return source === 'flow';
   if (dest === 'snmp_trap_udp') return source === 'trap';
   return source === 'syslog';
 }
 
-/** Whether a **rendered** form exists for this pairing. Flow has none — a template-bound binary
- *  export cannot be rebuilt from decoded records — so a flow destination is byte-exact or nothing. */
+/** Whether a **derived** form exists for this pairing. `flow_udp` has none — a template-bound binary
+ *  export cannot be rebuilt from decoded records — so a flow *relay* is byte-exact or nothing.
+ *  BigQuery is the opposite: rows only, for every stream. */
 export function supportsRendered(source: ForwardSourceKind, dest: ForwardDestKind): boolean {
+  if (dest === 'bigquery') return true;
   return source !== 'flow' && dest !== 'flow_udp';
 }
 
@@ -133,17 +140,39 @@ export function usesCommunity(dest: ForwardDestKind): boolean {
   return dest === 'snmp_trap_udp';
 }
 
-/** Whether the destination speaks TLS, and so takes an optional CA certificate. */
+/** Whether the destination speaks TLS, and so takes an optional CA certificate. BigQuery is HTTPS
+ *  but to a fixed Google endpoint, so there is nothing for an operator to pin. */
 export function usesTls(dest: ForwardDestKind): boolean {
   return dest === 'syslog_tls';
+}
+
+/** Whether the destination is addressed as `host:port`. BigQuery names a table instead. */
+export function usesHostPort(dest: ForwardDestKind): boolean {
+  return dest !== 'bigquery';
+}
+
+/** Whether the destination takes a Google service-account key (optional — omitting it selects
+ *  Workload Identity). */
+export function usesServiceAccount(dest: ForwardDestKind): boolean {
+  return dest === 'bigquery';
+}
+
+/** Whether a filter on this destination applies to whole datagrams rather than individual records.
+ *  True only for the flow **relay**: records cannot be removed from a template-bound bundle, so one
+ *  matching record carries the lot. A BigQuery flow destination writes rows and filters exactly. */
+export function filtersWholeDatagram(
+  source: ForwardSourceKind,
+  dest: ForwardDestKind,
+): boolean {
+  return source === 'flow' && dest === 'flow_udp';
 }
 
 /**
  * Repair a draft after the source or destination kind changes, so the form is never left holding a
  * combination the API would reject: an unusable destination kind falls back to the first valid one,
  * `verbatim` is forced where it is the only option and cleared where it is impossible, a CA
- * certificate is dropped off a non-TLS destination, and conditions on fields the new stream never
- * carries are dropped.
+ * certificate is dropped off a non-TLS destination, a service-account key is dropped off a
+ * non-BigQuery one, and conditions on fields the new stream never carries are dropped.
  */
 export function reconcileDraft<
   T extends {
@@ -151,6 +180,7 @@ export function reconcileDraft<
     dest_kind: ForwardDestKind;
     verbatim: boolean;
     ca_cert: string;
+    service_account_json: string;
     conditions: { field: ForwardFilterField; op: ForwardFilterOp; value: string }[];
   },
 >(draft: T): T {
@@ -160,10 +190,11 @@ export function reconcileDraft<
   return {
     ...draft,
     dest_kind,
-    // Not `&&`: when rendering is impossible, verbatim is not merely allowed — it is the only
+    // Not `&&`: when the derived form is impossible, verbatim is not merely allowed — it is the only
     // option, and leaving the draft on "rendered" would post a body core rejects.
     verbatim: canRender ? draft.verbatim && supportsVerbatim(draft.source_kind, dest_kind) : true,
     ca_cert: usesTls(dest_kind) ? draft.ca_cert : '',
+    service_account_json: usesServiceAccount(dest_kind) ? draft.service_account_json : '',
     conditions: draft.conditions
       .filter((c) => fieldAppliesTo(c.field, draft.source_kind))
       .map((c) => (opsForField(c.field).includes(c.op) ? c : { ...c, op: opsForField(c.field)[0] })),

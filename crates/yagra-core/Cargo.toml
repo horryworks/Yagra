@@ -73,6 +73,9 @@ rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-native-certs = { workspace = true }
 rustls-pemfile = { workspace = true }
+# BigQuery forwarding destinations (ADR-034 Increment 3): RS256 signing of the Google
+# service-account assertion. See the workspace entry for why this is `ring` and not `rsa`.
+ring = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

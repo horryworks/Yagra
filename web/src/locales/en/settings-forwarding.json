@@ -1,5 +1,5 @@
 {
-  "note": "Relay received syslog, SNMP traps and flow exports on to external collectors. Core does the sending, so only one egress point has to be allowed through a firewall.",
+  "note": "Relay received syslog, SNMP traps and flow exports on to external collectors, or stream them into BigQuery as queryable rows. Core does the sending, so only one egress point has to be allowed through a firewall.",
   "unavailable": "Managing forwarding requires the admin role.",
   "signInPrompt": "Sign in to manage forwarding destinations.",
   "empty": "No forwarding destinations yet. Nothing is being relayed.",
@@ -44,7 +44,8 @@
     "syslog_tcp": "Syslog over TCP",
     "syslog_tls": "Syslog over TLS (RFC 5425)",
     "snmp_trap_udp": "SNMPv2c trap over UDP",
-    "flow_udp": "Flow export over UDP"
+    "flow_udp": "Flow export over UDP",
+    "bigquery": "Rows into Google BigQuery"
   },
   "scope": { "allPools": "All pools" },
   "status": {
@@ -53,7 +54,8 @@
   },
   "fidelity": {
     "verbatim": "Original",
-    "rendered": "Rebuilt"
+    "rendered": "Rebuilt",
+    "rows": "Structured rows"
   },
 
   "field": {
@@ -64,12 +66,20 @@
     "target": "Collector",
     "targetPlaceholder": "siem.example.com:514",
     "targetHint": "host:port. Use [address]:port for a literal IPv6 address.",
+    "targetTable": "BigQuery table",
+    "targetTablePlaceholder": "my-project.analytics.yagra_events",
+    "targetTableHint": "project.dataset.table. The dataset must already exist — Yagra will not create one, because a dataset's region cannot be changed afterwards. The table is created automatically, partitioned by day.",
     "pool": "Poller pool",
     "poolPlaceholder": "all pools",
     "fidelity": "Fidelity",
     "fidelityHint": "Original relays the datagram exactly as received. Rebuilt regenerates it from the parsed fields, which loses RFC 5424 structured data, non-UTF-8 bytes, text past 4096 characters, and varbinds past the 32nd.",
     "fidelityImpossible": "This pairing cannot carry the original bytes, so the message is always rebuilt.",
     "fidelityVerbatimOnly": "A flow export is a template plus many records in one binary datagram, so it can only be relayed exactly as received.",
+    "fidelityRowsOnly": "BigQuery receives normalized rows — one per event, one per flow record — with typed columns. The original bytes are deliberately not stored: a raw-payload column would make anything sensitive in a log line permanently queryable off-box.",
+    "serviceAccount": "Service-account key",
+    "serviceAccountPlaceholder": "Leave empty to use the instance's own identity (Workload Identity)",
+    "serviceAccountKept": "a key is stored — leave empty to keep it",
+    "serviceAccountHint": "Paste the JSON key file for a service account with the BigQuery Data Editor role. It is encrypted at rest and never shown again. Leave it empty when core runs on Google Cloud with Workload Identity — that stores no credential at all and is the better option.",
     "caCert": "CA certificate",
     "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
     "caCertHint": "Optional. Paste the PEM certificate of the CA that signed the collector, if it is not in the system trust store. The collector's certificate is always verified — there is no way to turn that off.",
@@ -134,7 +144,8 @@
     "remove": "Remove condition",
     "none": "Everything",
     "emptyHint": "No conditions — the whole stream is forwarded.",
-    "flowAnyRecord": "A flow datagram carries many records at once. If any record matches, the whole datagram is forwarded — the records that did not match go with it. Records cannot be removed without re-encoding the export into a different datagram.",
+    "flowAnyRecord": "A flow datagram carries many records at once. If any record matches, the whole datagram is forwarded — the records that did not match go with it. Records cannot be removed without re-encoding the export into a different datagram. Send the same stream to BigQuery instead if you need exact filtering.",
+    "flowPerRecord": "Each flow record is filtered on its own, and only the matching ones become rows.",
     "count_one": "{{count}} condition ({{mode}})",
     "count_other": "{{count}} conditions ({{mode}})",
     "mode": {
@@ -153,6 +164,7 @@
   "test": {
     "title": "Test: {{name}}",
     "ok": "The test message was handed to the collector. Check that it arrived on the other side.",
+    "okBigQuery": "One test row was written. Query the table to confirm it landed.",
     "failed": "Delivery failed: {{error}}"
   },
 

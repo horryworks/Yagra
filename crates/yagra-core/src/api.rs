@@ -4547,6 +4547,11 @@ struct ForwardDestinationBody {
     /// secret, so unlike `community` it round-trips and an empty value clears it.
     #[serde(default)]
     ca_cert: Option<String>,
+    /// Google service-account key JSON for a `bigquery` destination. Sealed at rest; on update,
+    /// omitting it keeps the stored key. Omitting it on create selects Workload Identity (the
+    /// GCE/GKE metadata server), which stores no secret at all.
+    #[serde(default)]
+    service_account_json: Option<String>,
 }
 
 const fn default_true() -> bool {
@@ -4572,13 +4577,26 @@ fn validate_forward_body(
     if name.is_empty() || name.chars().count() > 120 {
         return Err(bad("invalid_name", "name must be 1–120 characters"));
     }
+    // Two target shapes: `host:port` for the socket kinds, `project.dataset.table` for BigQuery.
+    // Validated per kind here so a typo is a 400 with a useful message, rather than a destination
+    // that only reports "404" from Google after an admin enables it.
     let target = body.target.trim().to_owned();
-    let Some((_, port)) = split_host_port(&target) else {
-        return Err(bad(
+    let mut socket_port = None;
+    if body.dest_kind.is_host_port() {
+        let Some((_, port)) = split_host_port(&target) else {
+            return Err(bad(
+                "invalid_target",
+                "target must be host:port (use [addr]:port for a literal IPv6 address)",
+            ));
+        };
+        socket_port = Some(port);
+    } else if let Err(e) = crate::bigquery::BigQueryTarget::parse(&target) {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
             "invalid_target",
-            "target must be host:port (use [addr]:port for a literal IPv6 address)",
-        ));
-    };
+            format!("target must be project.dataset.table — {e}"),
+        )));
+    }
     if !body.dest_kind.accepts(body.source_kind) {
         return Err(bad(
             "incompatible_kinds",
@@ -4646,7 +4664,8 @@ fn validate_forward_body(
     // without bound. Core can only see the *ports* pollers bind (a heartbeat advertises the bind
     // address, not the poller's routable address), so this catches the realistic mistake — aiming a
     // destination at localhost on a listener port — and cannot catch every possible cycle.
-    if let Some(admin) = st.admin.as_ref() {
+    // (BigQuery has no port and cannot address a Yagra listener at all, so it skips this.)
+    if let (Some(admin), Some(port)) = (st.admin.as_ref(), socket_port) {
         let loopback_target = target_is_local(&target);
         if loopback_target
             && admin
@@ -4701,6 +4720,43 @@ fn validate_forward_body(
         }
     }
 
+    let service_account_json = body
+        .service_account_json
+        .map(|j| j.trim().to_owned())
+        .filter(|j| !j.is_empty());
+    if service_account_json.is_some() && body.dest_kind != yagra_forward::DestKind::BigQuery {
+        return Err(bad(
+            "invalid_service_account",
+            "a service-account key only applies to a BigQuery destination",
+        ));
+    }
+    if let Some(json) = service_account_json.as_deref() {
+        if json.len() > MAX_SERVICE_ACCOUNT_BYTES {
+            return Err(bad(
+                "invalid_service_account",
+                "the service-account key is too large (max 16 KiB)",
+            ));
+        }
+        // Parse and reject here so a mistyped key is a 400 rather than a destination whose every
+        // batch fails with an error only visible on the status page. The error text is Google-shaped
+        // and never quotes key material.
+        crate::bigquery::validate_service_account(json).map_err(|e| {
+            Box::new(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_service_account",
+                e,
+            ))
+        })?;
+    }
+
+    // Exactly one secret per destination, and which one is decided by the destination kind — the
+    // two are mutually exclusive above, so this cannot silently discard the other.
+    let secret = match (community, service_account_json) {
+        (Some(community), _) => Some(crate::forward_store::DestSecret::SnmpCommunity { community }),
+        (None, Some(json)) => Some(crate::forward_store::DestSecret::GcpServiceAccount { json }),
+        (None, None) => None,
+    };
+
     Ok(crate::forward_store::ForwardDestinationInput {
         name,
         enabled: body.enabled,
@@ -4712,10 +4768,12 @@ fn validate_forward_body(
         filter: body.filter,
         rate_limit_per_sec: body.rate_limit_per_sec,
         ca_cert,
-        secret: community
-            .map(|community| crate::forward_store::DestSecret::SnmpCommunity { community }),
+        secret,
     })
 }
+
+/// Ceiling on a stored service-account key. A real Google key file is ~2.3 KiB.
+const MAX_SERVICE_ACCOUNT_BYTES: usize = 16 * 1024;
 
 /// Ceiling on a destination's PEM trust bundle. Generous for a chain, small enough that the column
 /// cannot be used as arbitrary storage.

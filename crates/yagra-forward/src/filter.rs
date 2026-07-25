@@ -168,6 +168,17 @@ pub enum DestKind {
     SnmpTrapUdp,
     /// Flow-export datagrams relayed unchanged over UDP to a collector.
     FlowUdp,
+    /// Normalized rows streamed into a Google BigQuery table (ADR-034 Increment 3). The odd one
+    /// out: every other kind reproduces a datagram, this one produces a **structured row per
+    /// event or per flow record**. That is what makes exact per-record flow filtering possible —
+    /// rows are independent, so non-matching records are simply not written, where a relayed
+    /// datagram has to carry its whole bundle.
+    ///
+    /// Renamed explicitly: `snake_case` would derive `big_query`, but Google spells the product as
+    /// one word everywhere (`bigquery.googleapis.com`), and this tag is what the DB `CHECK`, the
+    /// API and the WebUI all agree on.
+    #[serde(rename = "bigquery")]
+    BigQuery,
 }
 
 /// Errors compiling a filter. Surfaced to the API caller as `400 invalid_filter` with this text,
@@ -356,6 +367,7 @@ impl DestKind {
             Self::SyslogTls => "syslog_tls",
             Self::SnmpTrapUdp => "snmp_trap_udp",
             Self::FlowUdp => "flow_udp",
+            Self::BigQuery => "bigquery",
         }
     }
 
@@ -368,14 +380,26 @@ impl DestKind {
             "syslog_tls" => Some(Self::SyslogTls),
             "snmp_trap_udp" => Some(Self::SnmpTrapUdp),
             "flow_udp" => Some(Self::FlowUdp),
+            "bigquery" => Some(Self::BigQuery),
             _ => None,
         }
     }
 
-    /// Whether this destination kind speaks TLS (and therefore takes a CA certificate).
+    /// Whether this destination kind takes an operator-supplied CA certificate.
+    ///
+    /// BigQuery is HTTPS and therefore encrypted, but it answers `false`: it talks to a fixed
+    /// Google endpoint with a public certificate, so the container's trust store is the right (and
+    /// only sensible) answer and there is nothing for an operator to pin.
     #[must_use]
     pub const fn is_tls(self) -> bool {
         matches!(self, Self::SyslogTls)
+    }
+
+    /// Whether the destination is addressed as `host:port`. BigQuery is not — its target names a
+    /// table (`project.dataset.table`) and its endpoint is fixed.
+    #[must_use]
+    pub const fn is_host_port(self) -> bool {
+        !matches!(self, Self::BigQuery)
     }
 
     /// Whether `source` can be delivered to this destination kind. Traps may be shipped to a syslog
@@ -390,6 +414,8 @@ impl DestKind {
             }
             Self::SnmpTrapUdp => matches!(source, SourceKind::Trap),
             Self::FlowUdp => matches!(source, SourceKind::Flow),
+            // A table takes rows, and every stream has a row shape (see `crate::bqrow`).
+            Self::BigQuery => true,
         }
     }
 
@@ -405,13 +431,20 @@ impl DestKind {
             }
             Self::SnmpTrapUdp => matches!(source, SourceKind::Trap),
             Self::FlowUdp => matches!(source, SourceKind::Flow),
+            // A table column cannot hold "the original datagram" in any useful sense, and a
+            // raw-payload column is exactly what a BigQuery destination is designed not to be.
+            Self::BigQuery => false,
         }
     }
 
-    /// Whether a **re-rendered** form exists for `source` on this destination kind. Flow has none:
-    /// a NetFlow/IPFIX export is a template-bound binary bundle, and re-encoding one from decoded
-    /// records would be a different datagram, not a rendering of the same one. So a flow destination
-    /// is byte-exact or nothing, and core rejects `verbatim = false` on it.
+    /// Whether a **derived** form exists for `source` on this destination kind — the `verbatim =
+    /// false` half of the fidelity choice. For the relay kinds that means a re-rendered datagram;
+    /// for BigQuery it means a normalized row, which exists for every stream.
+    ///
+    /// `flow_udp` has neither: a NetFlow/IPFIX export is a template-bound binary bundle, and
+    /// re-encoding one from decoded records would be a different datagram, not a rendering of the
+    /// same one. So a flow *relay* is byte-exact or nothing, and core rejects `verbatim = false` on
+    /// it — while the same flow stream sent to BigQuery is rows-only.
     #[must_use]
     pub const fn supports_rendered(self, source: SourceKind) -> bool {
         match self {
@@ -419,6 +452,7 @@ impl DestKind {
                 !matches!(source, SourceKind::Flow)
             }
             Self::FlowUdp => false,
+            Self::BigQuery => true,
         }
     }
 }
@@ -1331,6 +1365,23 @@ mod tests {
     }
 
     #[test]
+    fn bigquery_takes_every_stream_as_rows_and_never_verbatim() {
+        // The one destination that is not a datagram relay: it accepts all three streams, has no
+        // byte-exact mode at all, and — unlike `flow_udp` — *does* have a derived form for flow,
+        // which is what makes per-record flow filtering possible there.
+        for source in [SourceKind::Syslog, SourceKind::Trap, SourceKind::Flow] {
+            assert!(DestKind::BigQuery.accepts(source));
+            assert!(!DestKind::BigQuery.supports_verbatim(source));
+            assert!(DestKind::BigQuery.supports_rendered(source));
+        }
+        // It is HTTPS, but to a fixed Google endpoint — nothing for an operator to pin, and no
+        // `host:port` to type.
+        assert!(!DestKind::BigQuery.is_tls());
+        assert!(!DestKind::BigQuery.is_host_port());
+        assert!(DestKind::SyslogTls.is_host_port() && DestKind::FlowUdp.is_host_port());
+    }
+
+    #[test]
     fn stream_selection_routes_webhooks_with_syslog() {
         assert!(SourceKind::Syslog.accepts(EventKind::Syslog));
         assert!(SourceKind::Syslog.accepts(EventKind::Webhook));
@@ -1471,6 +1522,7 @@ mod tests {
             DestKind::SyslogTls,
             DestKind::SnmpTrapUdp,
             DestKind::FlowUdp,
+            DestKind::BigQuery,
         ] {
             assert_eq!(DestKind::parse(kind.as_str()), Some(kind));
             assert_eq!(

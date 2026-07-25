@@ -360,7 +360,8 @@ export type ForwardDestKind =
   | 'syslog_tcp'
   | 'syslog_tls'
   | 'snmp_trap_udp'
-  | 'flow_udp';
+  | 'flow_udp'
+  | 'bigquery';
 
 /** A filter condition's subject (core `yagra_forward::FilterField`). For flow, `source_ip` is the
  *  exporting device and `kind` is the wire format (`netflow`/`sflow`); the record's own endpoints
@@ -428,16 +429,19 @@ export interface ForwardDestination {
   rate_limit_per_sec: number | null;
   /** Extra PEM trust anchor for a TLS destination. Not a secret, so it round-trips. */
   ca_cert: string | null;
+  /** Whether a sealed secret is stored — the SNMP community, or the BigQuery service-account key.
+   *  On a BigQuery destination, `false` means Workload Identity (no stored credential). */
   has_secret: boolean;
 }
 
-/** Create/update payload. Omitting `community` on update keeps the stored value; `ca_cert` is not a
- *  secret and is always sent, so clearing it removes the pinned CA. */
+/** Create/update payload. Omitting `community` / `service_account_json` on update keeps the stored
+ *  value; `ca_cert` is not a secret and is always sent, so clearing it removes the pinned CA. */
 export interface ForwardDestinationInput {
   name: string;
   enabled: boolean;
   source_kind: ForwardSourceKind;
   dest_kind: ForwardDestKind;
+  /** `host:port` for the relay kinds, `project.dataset.table` for `bigquery`. */
   target: string;
   pool?: string | null;
   verbatim: boolean;
@@ -445,6 +449,8 @@ export interface ForwardDestinationInput {
   rate_limit_per_sec?: number | null;
   ca_cert?: string | null;
   community?: string;
+  /** Google service-account key JSON for a `bigquery` destination. Omit to use Workload Identity. */
+  service_account_json?: string;
 }
 
 /** One destination's live counters (core `forward::DestStatus`). `rendered` counts messages that

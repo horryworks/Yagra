@@ -107,8 +107,15 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 # System trust anchors for TLS destinations (the container's CA bundle).
 rustls-native-certs = "0.8"
-# PEM → DER for an operator-supplied CA certificate. Pure Rust, no NASM.
+# PEM → DER for an operator-supplied CA certificate, and for a Google service-account private key.
 rustls-pemfile = "2"
+# RS256 signing of the Google service-account assertion for BigQuery forwarding destinations
+# (ADR-034 Increment 3). Deliberately `ring` and not the `rsa` crate: ring is already in this tree as
+# the rustls crypto provider (so this adds no build cost), its RSA signing is constant-time, and it
+# sidesteps RUSTSEC-2023-0071 — the advisory deny.toml ignores precisely because Yagra performs no
+# RSA private-key operations. `jsonwebtoken` is not used either; the assertion is 40 lines of JSON
+# plus one signature, and the crate would add a dependency for it.
+ring = "0.17"
 # Serialization / types
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

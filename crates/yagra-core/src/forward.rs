@@ -28,10 +28,18 @@
 //! flow destination is byte-exact or nothing.
 //!
 //! **Flow filtering is per record, relaying per datagram.** A v9/IPFIX export is a template plus
-//! many records; records cannot be removed without re-encoding into a different datagram. So the
-//! filter is an any-record test and the whole datagram is relayed, non-matching records included.
-//! Decoding needs the exporter's templates, which is why the dispatcher keeps its own
-//! [`FlowTemplates`] cache — the same bounded, FIFO-evicting one the poller uses.
+//! many records; records cannot be removed without re-encoding into a different datagram. So for a
+//! `flow_udp` destination the filter is an any-record test and the whole datagram is relayed,
+//! non-matching records included. Decoding needs the exporter's templates, which is why the
+//! dispatcher keeps its own [`FlowTemplates`] cache — the same bounded, FIFO-evicting one the poller
+//! uses. A **BigQuery** flow destination has no such constraint: rows are independent, so its filter
+//! is exact per record and non-matching records are simply not written.
+//!
+//! **BigQuery is the one destination that is not a datagram relay** (ADR-034 Increment 3). It takes
+//! normalized rows — one per event, one per flow record — batched and streamed via `insertAll`
+//! ([`crate::bigquery`]). It shares everything structural with the relay kinds (the same inlet, the
+//! same bounded per-destination queue, the same rate limiter and circuit breaker) and differs only
+//! in what it puts on the queue and how its sender drains it.
 //!
 //! **Log discipline** (security.md): syslog bodies routinely carry credentials, and forwarding
 //! sends them off-box. Payloads are never logged; errors carry the destination name and the
@@ -44,6 +52,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{lookup_host, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, Notify};
@@ -54,8 +63,9 @@ use yagra_forward::{
     render_syslog_5424, render_trap_v2c, CompiledFilter, DestKind, FilterView, FlowFields,
     SourceKind, DEFAULT_TRAP_COMMUNITY,
 };
-use yagra_ingest::{parse_flow_export, parse_sflow, FlowTemplates};
+use yagra_ingest::{parse_flow_export, parse_sflow, FlowTemplates, RawFlow};
 
+use crate::bigquery::{BigQueryClient, FLUSH_INTERVAL, MAX_INSERT_BYTES, MAX_ROWS_PER_INSERT};
 use crate::forward_store::{DestSecret, ForwardStore, OpenDestination};
 
 /// Queue between the event consumer and the dispatcher. Sized like the persist channels — deep
@@ -266,6 +276,11 @@ struct LiveDest {
     rate_limit_per_sec: Option<u32>,
     ca_cert: Option<String>,
     community: String,
+    /// Fingerprint of the credential the *sender* holds (a BigQuery service-account key), so a
+    /// rotated key rebuilds the sender. The key itself is deliberately not kept here: the sender
+    /// needs it for the life of the task anyway, and a second plaintext copy in the dispatcher would
+    /// buy nothing.
+    secret_fp: u64,
     filter: CompiledFilter,
     tx: mpsc::Sender<Vec<u8>>,
     counters: Arc<DestCounters>,
@@ -280,6 +295,27 @@ impl LiveDest {
             && self.target == open.dest.target
             && self.rate_limit_per_sec == open.dest.rate_limit_per_sec
             && self.ca_cert == open.dest.ca_cert
+            && self.secret_fp == sender_secret_fingerprint(open.secret.as_ref())
+            // The stream decides a BigQuery sender's table schema, so it is transport-level there.
+            && self.source_kind == open.dest.source_kind
+    }
+}
+
+/// Fingerprint of the part of a destination's secret the **sender** owns.
+///
+/// Only the BigQuery key counts: the SNMP community is used by the dispatcher when it re-encodes a
+/// trap, so changing it must *not* tear down a working socket. Hashing rather than comparing keeps
+/// the credential out of the dispatcher's long-lived state.
+fn sender_secret_fingerprint(secret: Option<&DestSecret>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    match secret {
+        Some(DestSecret::GcpServiceAccount { json }) => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            json.hash(&mut hasher);
+            // 0 means "no sender credential", so a key that happens to hash to it must not collide.
+            hasher.finish() | 1
+        }
+        Some(DestSecret::SnmpCommunity { .. }) | None => 0,
     }
 }
 
@@ -389,7 +425,7 @@ async fn reconcile(
         };
         let community = match &entry.secret {
             Some(DestSecret::SnmpCommunity { community }) => community.clone(),
-            None => DEFAULT_TRAP_COMMUNITY.to_owned(),
+            Some(DestSecret::GcpServiceAccount { .. }) | None => DEFAULT_TRAP_COMMUNITY.to_owned(),
         };
 
         match previous.remove(&entry.dest.id) {
@@ -397,7 +433,6 @@ async fn reconcile(
                 // Reuse the sender; only the routing-side config is swapped.
                 dests.push(LiveDest {
                     name: entry.dest.name.clone(),
-                    source_kind: entry.dest.source_kind,
                     pool: entry.dest.pool.clone(),
                     verbatim: entry.dest.verbatim,
                     community,
@@ -454,18 +489,26 @@ fn start_dest(
     let (tx, rx) = mpsc::channel::<Vec<u8>>(DEST_QUEUE_CAP);
     let counters = Arc::new(DestCounters::default());
     let shutdown = parent.child_token();
-    tokio::spawn(run_sender(
-        SenderSpec {
-            kind: entry.dest.dest_kind,
-            target: entry.dest.target.clone(),
-            name: entry.dest.name.clone(),
-            rate_limit_per_sec: entry.dest.rate_limit_per_sec,
-            ca_cert: entry.dest.ca_cert.clone(),
+    let spec = SenderSpec {
+        kind: entry.dest.dest_kind,
+        source_kind: entry.dest.source_kind,
+        target: entry.dest.target.clone(),
+        name: entry.dest.name.clone(),
+        rate_limit_per_sec: entry.dest.rate_limit_per_sec,
+        ca_cert: entry.dest.ca_cert.clone(),
+        service_account: match &entry.secret {
+            Some(DestSecret::GcpServiceAccount { json }) => Some(json.clone()),
+            Some(DestSecret::SnmpCommunity { .. }) | None => None,
         },
-        rx,
-        counters.clone(),
-        shutdown.clone(),
-    ));
+    };
+    // BigQuery accumulates rows into batched HTTP requests; every other kind writes one payload per
+    // message to a socket. Two loops rather than one with a mode flag, because they share nothing
+    // beyond the counters, the rate limiter and the breaker.
+    if entry.dest.dest_kind == DestKind::BigQuery {
+        tokio::spawn(run_bq_sender(spec, rx, counters.clone(), shutdown.clone()));
+    } else {
+        tokio::spawn(run_sender(spec, rx, counters.clone(), shutdown.clone()));
+    }
     LiveDest {
         id: entry.dest.id,
         name: entry.dest.name.clone(),
@@ -477,6 +520,7 @@ fn start_dest(
         rate_limit_per_sec: entry.dest.rate_limit_per_sec,
         ca_cert: entry.dest.ca_cert.clone(),
         community,
+        secret_fp: sender_secret_fingerprint(entry.secret.as_ref()),
         filter,
         tx,
         counters,
@@ -494,6 +538,7 @@ fn dispatch(dests: &[LiveDest], msg: &EventMsg) {
     // Rendered once and shared: several destinations commonly want the same normalized line.
     let mut raw: Option<Option<Vec<u8>>> = None;
     let mut syslog: Option<Vec<u8>> = None;
+    let mut bq_row: Option<Vec<u8>> = None;
 
     for dest in dests {
         if !dest.source_kind.accepts(msg.kind) {
@@ -509,8 +554,14 @@ fn dispatch(dests: &[LiveDest], msg: &EventMsg) {
             continue;
         }
 
-        let raw_bytes = raw.get_or_insert_with(|| msg.raw_bytes()).as_deref();
         let want_verbatim = dest.verbatim && dest.dest_kind.supports_verbatim(dest.source_kind);
+        // Decoding the raw payload is only worth doing for a destination that can use it — a
+        // BigQuery-only installation never touches it.
+        let raw_bytes = if want_verbatim {
+            raw.get_or_insert_with(|| msg.raw_bytes()).as_deref()
+        } else {
+            None
+        };
         let payload = match (want_verbatim, raw_bytes) {
             (true, Some(bytes)) => Some(bytes.to_vec()),
             _ => {
@@ -527,6 +578,11 @@ fn dispatch(dests: &[LiveDest], msg: &EventMsg) {
                             .clone(),
                     ),
                     DestKind::SnmpTrapUdp => render_trap_v2c(msg, &dest.community),
+                    DestKind::BigQuery => Some(
+                        bq_row
+                            .get_or_insert_with(|| encode_row(&yagra_forward::event_row(msg)))
+                            .clone(),
+                    ),
                     // Unreachable: a flow destination's `source_kind` never accepts an `EventKind`,
                     // so it is filtered out above. Dropping is the safe answer if that ever changes.
                     DestKind::FlowUdp => None,
@@ -581,10 +637,42 @@ fn dispatch_flow(templates: &mut FlowTemplates, dests: &[LiveDest], dg: &RawFlow
 
     // Templates must be learned whether or not anyone filters today (see above), so decode runs for
     // every datagram once a flow destination exists. The records are only *used* when some filter
-    // needs them.
+    // needs them (or when a BigQuery destination needs a row per record).
     let records = decode_records(templates, dg, &bytes);
+    let kind = dg.proto.as_str();
+    let pool = dg.pool.as_deref();
 
     for dest in wanted {
+        // BigQuery writes a row per record, so its filter is exact: a non-matching record is simply
+        // not written. This is the one place the two flow destination kinds genuinely differ, and
+        // it is the reason to choose one over the other.
+        if dest.dest_kind == DestKind::BigQuery {
+            let Some(records) = records.as_ref() else {
+                dest.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                metrics::counter!("yagra_forward_dropped_total", "reason" => "unfilterable")
+                    .increment(1);
+                continue;
+            };
+            for (seq, rec) in records.iter().enumerate().take(MAX_FILTERED_RECORDS) {
+                if !dest.filter.is_empty()
+                    && !dest.filter.matches(&FilterView::for_flow(
+                        dg.exporter_ip,
+                        pool,
+                        kind,
+                        &flow_fields(rec),
+                    ))
+                {
+                    dest.counters.filtered.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                enqueue(
+                    dest,
+                    encode_row(&yagra_forward::flow_row(&bq_row(dg, rec, seq))),
+                );
+            }
+            continue;
+        }
+
         if !dest.filter.is_empty() {
             let Some(records) = records.as_ref() else {
                 // Undecodable (or a template we have not seen yet): a filter cannot be evaluated, so
@@ -595,12 +683,14 @@ fn dispatch_flow(templates: &mut FlowTemplates, dests: &[LiveDest], dg: &RawFlow
                     .increment(1);
                 continue;
             };
-            let kind = dg.proto.as_str();
-            let pool = dg.pool.as_deref();
             // Any-record semantics: one matching record carries the whole datagram.
             let hit = records.iter().take(MAX_FILTERED_RECORDS).any(|rec| {
-                dest.filter
-                    .matches(&FilterView::for_flow(dg.exporter_ip, pool, kind, rec))
+                dest.filter.matches(&FilterView::for_flow(
+                    dg.exporter_ip,
+                    pool,
+                    kind,
+                    &flow_fields(rec),
+                ))
             });
             if !hit {
                 dest.counters.filtered.fetch_add(1, Ordering::Relaxed);
@@ -611,41 +701,70 @@ fn dispatch_flow(templates: &mut FlowTemplates, dests: &[LiveDest], dg: &RawFlow
     }
 }
 
-/// Decode a relayed datagram's records with the exporter's templates, mapping them to the filter's
-/// view. `None` when the datagram could not be parsed at all; `Some(vec![])` when it parsed but
-/// carried no data records (a template-only export) — the two are different, and only the first
-/// makes a filter unevaluable.
+/// Decode a relayed datagram's records with the exporter's templates. `None` when the datagram could
+/// not be parsed at all; `Some(vec![])` when it parsed but carried no data records (a template-only
+/// export) — the two are different, and only the first makes a filter unevaluable.
+///
+/// The full parser record is kept rather than the filter's projection of it, because a BigQuery row
+/// carries counters and interface context no filter has an operator for.
 fn decode_records(
     templates: &mut FlowTemplates,
     dg: &RawFlowDatagram,
     bytes: &[u8],
-) -> Option<Vec<FlowFields>> {
+) -> Option<Vec<RawFlow>> {
     let parsed = match dg.proto {
         RawFlowProto::Netflow => parse_flow_export(templates, dg.exporter_ip, bytes),
         RawFlowProto::Sflow => parse_sflow(bytes),
     };
-    let flows = match parsed {
-        Ok(flows) => flows,
+    match parsed {
+        Ok(flows) => Some(flows),
         Err(e) => {
             metrics::counter!("yagra_forward_flow_decode_errors_total").increment(1);
             tracing::debug!(exporter = %dg.exporter_ip, error = %e, "relayed flow datagram did not decode");
-            return None;
+            None
         }
-    };
-    Some(
-        flows
-            .into_iter()
-            .map(|f| FlowFields {
-                src_addr: f.src_ip,
-                dst_addr: f.dst_ip,
-                proto: f.proto,
-                src_port: f.src_port,
-                dst_port: f.dst_port,
-                src_as: f.src_as,
-                dst_as: f.dst_as,
-            })
-            .collect(),
-    )
+    }
+}
+
+/// The filterable projection of a decoded record.
+const fn flow_fields(f: &RawFlow) -> FlowFields {
+    FlowFields {
+        src_addr: f.src_ip,
+        dst_addr: f.dst_ip,
+        proto: f.proto,
+        src_port: f.src_port,
+        dst_port: f.dst_port,
+        src_as: f.src_as,
+        dst_as: f.dst_as,
+    }
+}
+
+/// The BigQuery row view of a decoded record, with its datagram's context.
+fn bq_row<'a>(dg: &'a RawFlowDatagram, f: &RawFlow, seq: usize) -> yagra_forward::FlowRow<'a> {
+    yagra_forward::FlowRow {
+        observed_unix_ms: dg.at_unix_ms,
+        exporter_ip: dg.exporter_ip,
+        pool: dg.pool.as_deref(),
+        export_proto: dg.proto.as_str(),
+        src_addr: f.src_ip,
+        dst_addr: f.dst_ip,
+        src_port: f.src_port,
+        dst_port: f.dst_port,
+        proto: f.proto,
+        tos: f.tos,
+        if_index: f.if_index,
+        src_as: f.src_as,
+        dst_as: f.dst_as,
+        bytes: f.bytes,
+        packets: f.packets,
+        seq,
+    }
+}
+
+/// Serialize a row for the per-destination queue. Infallible in practice — the value comes from
+/// `serde_json`'s own builders — and an empty payload is skipped by the sender if it ever were not.
+fn encode_row(row: &Value) -> Vec<u8> {
+    serde_json::to_vec(row).unwrap_or_default()
 }
 
 /// Hand a rendered payload to a destination's sender without ever awaiting it.
@@ -747,10 +866,15 @@ impl Circuit {
 /// arguments so the transport-shaping config stays one thing.
 struct SenderSpec {
     kind: DestKind,
+    /// Which stream feeds it — only BigQuery cares (it decides the table schema).
+    source_kind: SourceKind,
     target: String,
     name: String,
     rate_limit_per_sec: Option<u32>,
     ca_cert: Option<String>,
+    /// Google service-account key JSON for a BigQuery destination. `None` selects Workload Identity.
+    /// A credential: held only for this task's lifetime, never logged.
+    service_account: Option<String>,
 }
 
 async fn run_sender(
@@ -765,6 +889,7 @@ async fn run_sender(
         name,
         rate_limit_per_sec,
         ca_cert,
+        ..
     } = spec;
     let mut transport = match Transport::new(kind, ca_cert.as_deref()) {
         Ok(t) => t,
@@ -841,6 +966,185 @@ async fn run_sender(
     }
 }
 
+/// The BigQuery sender. Unlike [`run_sender`] it accumulates rows and posts them in batches, because
+/// `insertAll` is an HTTPS round trip — one request per syslog line would be both far slower than
+/// intake and a quota problem.
+///
+/// A batch goes out when it reaches [`MAX_ROWS_PER_INSERT`] rows, [`MAX_INSERT_BYTES`] bytes, or
+/// [`FLUSH_INTERVAL`] elapses — so a quiet destination still lands its rows within seconds rather
+/// than waiting for company that may never arrive.
+async fn run_bq_sender(
+    spec: SenderSpec,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+    counters: Arc<DestCounters>,
+    shutdown: CancellationToken,
+) {
+    let SenderSpec {
+        source_kind,
+        target,
+        name,
+        rate_limit_per_sec,
+        service_account,
+        ..
+    } = spec;
+    let mut client = match BigQueryClient::new(&target, service_account.as_deref()) {
+        Ok(client) => client,
+        Err(e) => {
+            // A key that cannot be parsed, or a malformed table name, will never work. Fail loudly
+            // once and drain, exactly as an unusable TLS trust configuration does — an edit rebuilds
+            // the sender, so fixing it recovers without a restart.
+            counters.record_error(&e);
+            counters.circuit_open.store(true, Ordering::Relaxed);
+            tracing::warn!(destination = %name, error = %e, "BigQuery destination setup failed; not sending");
+            while rx.recv().await.is_some() {
+                counters.dropped.fetch_add(1, Ordering::Relaxed);
+                metrics::counter!("yagra_forward_dropped_total", "reason" => "bq_config")
+                    .increment(1);
+            }
+            return;
+        }
+    };
+
+    let mut limiter = rate_limit_per_sec.map(RateLimit::new);
+    let mut circuit = Circuit::new();
+    let mut batch: Vec<Value> = Vec::with_capacity(MAX_ROWS_PER_INSERT);
+    let mut batch_bytes = 0usize;
+    let mut ticker = tokio::time::interval(FLUSH_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        let payload = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            _ = ticker.tick() => {
+                flush_bq(&mut client, source_kind, &mut batch, &mut batch_bytes,
+                         &counters, &mut circuit, &name).await;
+                continue;
+            }
+            msg = rx.recv() => match msg {
+                Some(payload) => payload,
+                None => break,
+            },
+        };
+        counters
+            .queue_depth
+            .store(rx.len() as u64, Ordering::Relaxed);
+
+        // For a row destination the limiter's unit is the row, which is what an operator setting a
+        // ceiling on a BigQuery table means.
+        if limiter.as_mut().is_some_and(|l| !l.allow()) {
+            counters.dropped.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!("yagra_forward_dropped_total", "reason" => "rate_limit").increment(1);
+            continue;
+        }
+        // Dropping while the breaker is open (rather than accumulating) is the point: a dead
+        // destination must not grow a batch that will be thrown away anyway.
+        if circuit.is_open() {
+            counters.dropped.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!("yagra_forward_dropped_total", "reason" => "circuit_open")
+                .increment(1);
+            continue;
+        }
+        let Ok(row) = serde_json::from_slice::<Value>(&payload) else {
+            counters.dropped.fetch_add(1, Ordering::Relaxed);
+            metrics::counter!("yagra_forward_dropped_total", "reason" => "unrenderable")
+                .increment(1);
+            continue;
+        };
+        batch_bytes += payload.len();
+        batch.push(row);
+        if batch.len() >= MAX_ROWS_PER_INSERT || batch_bytes >= MAX_INSERT_BYTES {
+            flush_bq(
+                &mut client,
+                source_kind,
+                &mut batch,
+                &mut batch_bytes,
+                &counters,
+                &mut circuit,
+                &name,
+            )
+            .await;
+        }
+    }
+    // Land whatever is in hand before the task ends — on a config edit or a graceful shutdown the
+    // rows are already accepted, and dropping them would be a silent loss the counters would not
+    // even show as a drop.
+    flush_bq(
+        &mut client,
+        source_kind,
+        &mut batch,
+        &mut batch_bytes,
+        &counters,
+        &mut circuit,
+        &name,
+    )
+    .await;
+}
+
+/// Post one batch, creating the table first if this is the client's first successful call.
+async fn flush_bq(
+    client: &mut BigQueryClient,
+    source_kind: SourceKind,
+    batch: &mut Vec<Value>,
+    batch_bytes: &mut usize,
+    counters: &DestCounters,
+    circuit: &mut Circuit,
+    name: &str,
+) {
+    if batch.is_empty() {
+        return;
+    }
+    let rows = batch.len() as u64;
+    let bytes = *batch_bytes as u64;
+    let result = match client.ensure_table(source_kind).await {
+        Ok(()) => client.insert_rows(batch).await,
+        Err(e) => Err(e),
+    };
+    batch.clear();
+    *batch_bytes = 0;
+
+    match result {
+        Ok(rejected) => {
+            let accepted = rows - rejected as u64;
+            counters.sent.fetch_add(accepted, Ordering::Relaxed);
+            counters
+                .last_success_unix_ms
+                .store(now_unix_ms(), Ordering::Relaxed);
+            metrics::counter!("yagra_forward_sent_total", "kind" => "bigquery").increment(accepted);
+            metrics::counter!("yagra_forward_bytes_total", "kind" => "bigquery").increment(bytes);
+            metrics::counter!("yagra_bq_rows_inserted_total").increment(accepted);
+            if rejected > 0 {
+                // The request succeeded; these rows were rejected individually (`skipInvalidRows`),
+                // which is a schema problem, not a transport one — so it must not trip the breaker.
+                counters
+                    .dropped
+                    .fetch_add(rejected as u64, Ordering::Relaxed);
+                counters.record_error(&format!("BigQuery rejected {rejected} row(s)"));
+                metrics::counter!("yagra_bq_insert_errors_total").increment(rejected as u64);
+                metrics::counter!("yagra_forward_dropped_total", "reason" => "bq_row_rejected")
+                    .increment(rejected as u64);
+            }
+            if circuit.record(true) {
+                counters.circuit_open.store(false, Ordering::Relaxed);
+                tracing::info!(destination = %name, "forwarding destination recovered");
+            }
+        }
+        Err(e) => {
+            counters.record_error(&e);
+            counters.dropped.fetch_add(rows, Ordering::Relaxed);
+            metrics::counter!("yagra_forward_errors_total", "kind" => "bigquery").increment(1);
+            metrics::counter!("yagra_bq_insert_errors_total").increment(rows);
+            metrics::counter!("yagra_forward_dropped_total", "reason" => "send_error")
+                .increment(rows);
+            if circuit.record(false) {
+                counters.circuit_open.store(true, Ordering::Relaxed);
+                // Never the rows themselves — they can carry a syslog body (security.md).
+                tracing::warn!(destination = %name, error = %e, "forwarding destination failing; pausing sends");
+            }
+        }
+    }
+}
+
 /// The socket/connection a sender owns. Kept across messages so UDP does not re-bind and TCP/TLS do
 /// not re-connect (or re-handshake) per message; [`Transport::reset`] drops it after an error so the
 /// next attempt re-resolves and reconnects.
@@ -874,6 +1178,11 @@ impl Transport {
                 stream: None,
                 connector: tls_connector(ca_cert)?,
             },
+            // BigQuery owns no socket — it batches rows over HTTPS through `BigQueryClient`, and
+            // both `start_dest` and `send_test` route it there before reaching this.
+            DestKind::BigQuery => {
+                return Err("BigQuery destinations do not use a socket transport".to_owned())
+            }
         })
     }
 
@@ -1077,18 +1386,65 @@ fn now_unix_ms() -> i64 {
 /// configuration cannot produce a payload.
 pub async fn send_test(dest: &OpenDestination) -> Result<(), String> {
     let msg = test_event(dest.dest.source_kind);
+    // BigQuery's test is the most useful of the lot: one round trip proves the credential, the IAM
+    // binding, the dataset's existence and the table's schema, all of which are otherwise only
+    // discoverable from the status page after enabling the destination.
+    if dest.dest.dest_kind == DestKind::BigQuery {
+        let key = match &dest.secret {
+            Some(DestSecret::GcpServiceAccount { json }) => Some(json.as_str()),
+            Some(DestSecret::SnmpCommunity { .. }) | None => None,
+        };
+        let mut client = BigQueryClient::new(&dest.dest.target, key)?;
+        client.ensure_table(dest.dest.source_kind).await?;
+        let row = match dest.dest.source_kind {
+            SourceKind::Flow => yagra_forward::flow_row(&test_flow_row()),
+            SourceKind::Syslog | SourceKind::Trap => yagra_forward::event_row(&msg),
+        };
+        let rejected = client.insert_rows(std::slice::from_ref(&row)).await?;
+        return if rejected == 0 {
+            Ok(())
+        } else {
+            Err("BigQuery accepted the request but rejected the test row".to_owned())
+        };
+    }
+
     let community = match &dest.secret {
         Some(DestSecret::SnmpCommunity { community }) => community.as_str(),
-        None => DEFAULT_TRAP_COMMUNITY,
+        Some(DestSecret::GcpServiceAccount { .. }) | None => DEFAULT_TRAP_COMMUNITY,
     };
     let payload = match dest.dest.dest_kind {
         DestKind::SyslogUdp | DestKind::SyslogTcp | DestKind::SyslogTls => render_syslog_5424(&msg),
         DestKind::SnmpTrapUdp => render_trap_v2c(&msg, community)
             .ok_or_else(|| "could not build a test trap".to_owned())?,
         DestKind::FlowUdp => test_flow_datagram(),
+        // Handled above; `Transport::new` would refuse it.
+        DestKind::BigQuery => return Err("unreachable BigQuery transport".to_owned()),
     };
     let mut transport = Transport::new(dest.dest.dest_kind, dest.dest.ca_cert.as_deref())?;
     transport.send(&dest.dest.target, &payload).await
+}
+
+/// The synthetic flow record the Test button writes to a BigQuery flow table. Documentation
+/// addresses (RFC 5737 TEST-NET-1), so the row is obviously a probe in a query.
+fn test_flow_row() -> yagra_forward::FlowRow<'static> {
+    yagra_forward::FlowRow {
+        observed_unix_ms: now_unix_ms(),
+        exporter_ip: std::net::Ipv4Addr::new(192, 0, 2, 1).into(),
+        pool: None,
+        export_proto: "netflow",
+        src_addr: std::net::Ipv4Addr::new(192, 0, 2, 1).into(),
+        dst_addr: std::net::Ipv4Addr::new(192, 0, 2, 2).into(),
+        src_port: 40_000,
+        dst_port: 514,
+        proto: 6,
+        tos: 0,
+        if_index: 0,
+        src_as: 0,
+        dst_as: 0,
+        bytes: 1024,
+        packets: 1,
+        seq: 0,
+    }
 }
 
 /// A syntactically valid NetFlow v9 export (one template + one data record) for the Test button, so
@@ -1178,6 +1534,20 @@ mod tests {
         Arc::new(DestCounters::default())
     }
 
+    /// A socket-transport sender spec. `source_kind` and `service_account` only matter to the
+    /// BigQuery sender, which has its own tests.
+    fn spec(kind: DestKind, target: String, name: &str) -> SenderSpec {
+        SenderSpec {
+            kind,
+            source_kind: SourceKind::Syslog,
+            target,
+            name: name.to_owned(),
+            rate_limit_per_sec: None,
+            ca_cert: None,
+            service_account: None,
+        }
+    }
+
     fn live(
         source_kind: SourceKind,
         dest_kind: DestKind,
@@ -1197,6 +1567,7 @@ mod tests {
             rate_limit_per_sec: None,
             ca_cert: None,
             community: DEFAULT_TRAP_COMMUNITY.to_owned(),
+            secret_fp: 0,
             filter: yagra_forward::compile(&filter).unwrap(),
             tx,
             counters: counters(),
@@ -1338,6 +1709,7 @@ mod tests {
             rate_limit_per_sec: None,
             ca_cert: None,
             community: DEFAULT_TRAP_COMMUNITY.to_owned(),
+            secret_fp: 0,
             filter: CompiledFilter::allow_all(),
             tx,
             counters: counters(),
@@ -1404,13 +1776,7 @@ mod tests {
         let counters = counters();
         let shutdown = CancellationToken::new();
         tokio::spawn(run_sender(
-            SenderSpec {
-                kind: DestKind::SyslogUdp,
-                target: addr.to_string(),
-                name: "collector".to_owned(),
-                rate_limit_per_sec: None,
-                ca_cert: None,
-            },
+            spec(DestKind::SyslogUdp, addr.to_string(), "collector"),
             rx,
             counters.clone(),
             shutdown.clone(),
@@ -1462,13 +1828,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Vec<u8>>(8);
         let shutdown = CancellationToken::new();
         tokio::spawn(run_sender(
-            SenderSpec {
-                kind: DestKind::SyslogTcp,
-                target: addr.to_string(),
-                name: "siem".to_owned(),
-                rate_limit_per_sec: None,
-                ca_cert: None,
-            },
+            spec(DestKind::SyslogTcp, addr.to_string(), "siem"),
             rx,
             counters(),
             shutdown.clone(),
@@ -1493,13 +1853,11 @@ mod tests {
         let counters = counters();
         let shutdown = CancellationToken::new();
         tokio::spawn(run_sender(
-            SenderSpec {
-                kind: DestKind::SyslogUdp,
-                target: "no-such-host.invalid:514".to_owned(),
-                name: "dead".to_owned(),
-                rate_limit_per_sec: None,
-                ca_cert: None,
-            },
+            spec(
+                DestKind::SyslogUdp,
+                "no-such-host.invalid:514".to_owned(),
+                "dead",
+            ),
             rx,
             counters.clone(),
             shutdown.clone(),
@@ -1857,13 +2215,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Vec<u8>>(8);
         let shutdown = CancellationToken::new();
         tokio::spawn(run_sender(
-            SenderSpec {
-                kind: DestKind::FlowUdp,
-                target: addr.to_string(),
-                name: "flowcoll".to_owned(),
-                rate_limit_per_sec: None,
-                ca_cert: None,
-            },
+            spec(DestKind::FlowUdp, addr.to_string(), "flowcoll"),
             rx,
             counters(),
             shutdown.clone(),
@@ -1960,5 +2312,179 @@ mod tests {
             ("2001:db8::1".to_owned(), 6514)
         );
         assert!(split_target("no-port").is_err());
+    }
+
+    // ── BigQuery destinations (ADR-034 Increment 3) ──────────────────────────────────────────
+    //
+    // The HTTP contract (auth, table creation, `insertAll` shape) is covered in `crate::bigquery`
+    // against a fake Google. What is unique to the forwarder is what it *puts on the queue*, and
+    // that is what these cover.
+
+    fn bq_dest(source: SourceKind, filter: FilterExpr) -> (LiveDest, mpsc::Receiver<Vec<u8>>) {
+        live(source, DestKind::BigQuery, false, None, filter)
+    }
+
+    /// The queued payload, parsed back into the row envelope the sender will batch.
+    fn queued_row(rx: &mut mpsc::Receiver<Vec<u8>>) -> Value {
+        serde_json::from_slice(&rx.try_recv().expect("a row should be queued")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_bigquery_event_destination_queues_a_row_and_never_the_raw_payload() {
+        let (dest, mut rx) = bq_dest(SourceKind::Syslog, FilterExpr::default());
+        let ev = syslog_event(None, Some(b"<134>1 - host app - - - secret=hunter2"));
+        dispatch(&[dest], &ev);
+
+        let row = queued_row(&mut rx);
+        assert_eq!(row["insertId"], serde_json::json!(ev.event_id.to_string()));
+        assert_eq!(row["json"]["kind"], serde_json::json!("syslog"));
+        assert_eq!(row["json"]["message"], serde_json::json!(ev.message));
+        // A BigQuery destination is normalized rows *only* — putting the original bytes in a column
+        // would make the credential exposure permanent and queryable off-box.
+        let text = row.to_string();
+        assert!(!text.contains("hunter2"), "raw payload leaked into the row");
+        assert!(!text.contains("\"raw\""), "raw payload leaked into the row");
+    }
+
+    #[tokio::test]
+    async fn a_bigquery_flow_destination_writes_one_row_per_record() {
+        let pkt = nf9_with(&[
+            (([10, 0, 0, 5], [8, 8, 8, 8]), 443, 6, 15169),
+            (([10, 0, 0, 6], [1, 1, 1, 1]), 53, 17, 13335),
+        ]);
+        let (dest, mut rx) = bq_dest(SourceKind::Flow, FilterExpr::default());
+        dispatch_flow(&mut FlowTemplates::new(), &[dest], &raw_flow(pkt, None));
+
+        let first = queued_row(&mut rx);
+        let second = queued_row(&mut rx);
+        assert_eq!(first["json"]["dst_addr"], serde_json::json!("8.8.8.8"));
+        assert_eq!(second["json"]["dst_addr"], serde_json::json!("1.1.1.1"));
+        // Derived ids, so re-sending the datagram de-duplicates rather than doubling the table.
+        assert_ne!(first["insertId"], second["insertId"]);
+        assert!(
+            rx.try_recv().is_err(),
+            "only two records were in the export"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bigquery_flow_filter_is_exact_per_record_unlike_the_relay() {
+        // This is the whole reason to choose BigQuery over `flow_udp` for a filtered flow feed:
+        // rows are independent, so the non-matching record is simply not written — where the relay
+        // has to carry its whole bundle.
+        let pkt = nf9_with(&[
+            (([10, 0, 0, 5], [8, 8, 8, 8]), 443, 6, 15169),
+            (([10, 0, 0, 6], [1, 1, 1, 1]), 53, 17, 13335),
+        ]);
+        let filter = flow_filter(FilterField::DstAddr, FilterOp::Eq, "1.1.1.1");
+        let mut templates = FlowTemplates::new();
+
+        let (bq, mut bq_rx) = bq_dest(SourceKind::Flow, filter.clone());
+        let bq_counters = bq.counters.clone();
+        let (relay, mut relay_rx) = flow_dest(None, filter);
+        dispatch_flow(&mut templates, &[bq, relay], &raw_flow(pkt.clone(), None));
+
+        // BigQuery: exactly the matching record, and the other counted as filtered.
+        let row = queued_row(&mut bq_rx);
+        assert_eq!(row["json"]["dst_addr"], serde_json::json!("1.1.1.1"));
+        assert!(
+            bq_rx.try_recv().is_err(),
+            "the non-matching record must not be written"
+        );
+        assert_eq!(bq_counters.filtered.load(Ordering::Relaxed), 1);
+        // The relay: the whole datagram, non-matching record included.
+        assert_eq!(relay_rx.try_recv().unwrap(), pkt);
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_datagram_is_dropped_for_bigquery_even_without_a_filter() {
+        // A relay can still forward bytes it cannot decode; rows cannot be built from them at all,
+        // so an unfiltered BigQuery destination drops where an unfiltered relay forwards.
+        let junk = vec![0xFFu8; 32];
+        let (bq, mut bq_rx) = bq_dest(SourceKind::Flow, FilterExpr::default());
+        let bq_counters = bq.counters.clone();
+        let (relay, mut relay_rx) = flow_dest(None, FilterExpr::default());
+        dispatch_flow(
+            &mut FlowTemplates::new(),
+            &[bq, relay],
+            &raw_flow(junk.clone(), None),
+        );
+
+        assert!(bq_rx.try_recv().is_err());
+        assert_eq!(bq_counters.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(relay_rx.try_recv().unwrap(), junk);
+    }
+
+    #[test]
+    fn only_a_rotated_service_account_key_rebuilds_the_sender() {
+        // The community is used by the *dispatcher* when it re-encodes a trap, so editing it must
+        // not tear down a working socket. The BigQuery key is held by the *sender*, so rotating it
+        // must. Getting this backwards means either a dropped connection per edit or a sender that
+        // keeps using a revoked key until core restarts.
+        let key = |json: &str| {
+            sender_secret_fingerprint(Some(&DestSecret::GcpServiceAccount {
+                json: json.to_owned(),
+            }))
+        };
+        assert_eq!(key("{\"a\":1}"), key("{\"a\":1}"));
+        assert_ne!(key("{\"a\":1}"), key("{\"a\":2}"));
+        // A community is not a sender credential, so it fingerprints as "none" — same as no secret.
+        assert_eq!(
+            sender_secret_fingerprint(Some(&DestSecret::SnmpCommunity {
+                community: "private".to_owned()
+            })),
+            sender_secret_fingerprint(None)
+        );
+        // ...and a real key never collides with "none".
+        assert_ne!(key("{}"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_bigquery_sender_that_cannot_be_configured_drains_instead_of_blocking_the_dispatcher()
+    {
+        // Same contract as an unusable TLS trust store: a destination that can never work must not
+        // let its queue back up into the dispatcher.
+        let (tx, rx) = mpsc::channel::<Vec<u8>>(4);
+        let counters = counters();
+        let shutdown = CancellationToken::new();
+        tokio::spawn(run_bq_sender(
+            SenderSpec {
+                kind: DestKind::BigQuery,
+                source_kind: SourceKind::Syslog,
+                // Not a `project.dataset.table` — the client refuses to build.
+                target: "nonsense".to_owned(),
+                name: "bq".to_owned(),
+                rate_limit_per_sec: None,
+                ca_cert: None,
+                service_account: None,
+            },
+            rx,
+            counters.clone(),
+            shutdown.clone(),
+        ));
+
+        for _ in 0..8 {
+            // `send` (not `try_send`) is the point: it would hang forever against a stalled sender.
+            tokio::time::timeout(Duration::from_secs(2), tx.send(b"{}".to_vec()))
+                .await
+                .expect("the sender must keep draining")
+                .expect("the sender must stay alive");
+        }
+        // Give the drain loop a moment to account for what it threw away.
+        for _ in 0..50 {
+            if counters.dropped.load(Ordering::Relaxed) >= 8 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(counters.dropped.load(Ordering::Relaxed) >= 8);
+        assert!(counters.circuit_open.load(Ordering::Relaxed));
+        assert!(counters
+            .last_error
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|e| e.contains("project.dataset.table")));
+        shutdown.cancel();
     }
 }

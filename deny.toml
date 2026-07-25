@@ -13,8 +13,14 @@ ignore = [
     # version exists upstream. Pulled transitively by `openidconnect` (RS256 ID-token verification,
     # ADR-010 OIDC login). The attack recovers a key via RSA *private-key* operations
     # (PKCS#1 v1.5 decryption); as an OIDC relying party Yagra only *verifies* ID-token signatures
-    # with the IdP's *public* key and never performs RSA private-key decryption/signing, so this
-    # code path is not reachable. Re-evaluate if `rsa` ships a fix or openidconnect drops it.
+    # with the IdP's *public* key and never performs an RSA private-key operation through `rsa`.
+    #
+    # This stays true after ADR-034 Increment 3, which *does* sign with an RSA private key (the
+    # Google service-account assertion for a BigQuery forwarding destination) — that signing goes
+    # through `ring`, whose RSA implementation is constant-time and is not the affected crate. The
+    # choice was made for exactly this reason; routing it through `rsa` would have invalidated this
+    # entry. Re-evaluate if `rsa` ships a fix, if openidconnect drops it, or if any private-key
+    # operation is ever routed through `rsa`.
     "RUSTSEC-2023-0071",
 ]
 
