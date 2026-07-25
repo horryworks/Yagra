@@ -237,6 +237,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.saturation.scope',
     desc: 'tools.saturation.desc',
     reveal: 'tools.saturation.reveal',
+    reportPath: '/troubleshoot/report/saturation',
   },
   {
     id: 'incident_correlate',

@@ -6,7 +6,7 @@
 // asserts the biconditional "has a descriptor ⟺ has a reportPath", so a half-wired tool can't ship
 // a "View →" button that goes nowhere.
 
-import { formatBytes } from '../../lib/format';
+import { formatBytes, formatUtil } from '../../lib/format';
 import { AnomalyBody } from './bodies/AnomalyBody';
 import { AuthProbeBody } from './bodies/AuthProbeBody';
 import { CapacityBody } from './bodies/CapacityBody';
@@ -17,6 +17,7 @@ import { FlapBody } from './bodies/FlapBody';
 import { FlowScanBody } from './bodies/FlowScanBody';
 import { NewDestinationBody } from './bodies/NewDestinationBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
+import { SaturationBody } from './bodies/SaturationBody';
 import { SeverityShiftBody } from './bodies/SeverityShiftBody';
 import { TalkerShiftBody } from './bodies/TalkerShiftBody';
 import { TrafficAnomalyBody } from './bodies/TrafficAnomalyBody';
@@ -589,6 +590,50 @@ const flowScan: ReportDescriptor = {
   ],
 };
 
+/** Saturation's entity is a CONVERSATION on a node — the share of node traffic is the finding. */
+const saturation: ReportDescriptor = {
+  tool: 'saturation',
+  i18nKey: 'report.saturation',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.saturation.summary.nodes', value: totalLabel },
+    {
+      labelKey: 'report.saturation.summary.worstShare',
+      value: (f) => {
+        const r = maxDetail(f, 'ratio');
+        return r === undefined ? '—' : formatUtil(r * 100);
+      },
+    },
+    {
+      labelKey: 'report.saturation.summary.hoggedBytes',
+      separatorBefore: true,
+      value: (f) => formatBytes(sumDetail(f, 'conversation_bytes')),
+    },
+    {
+      // The TSDB side is best-effort: a node with no interface series has no bps, so this reports
+      // how many findings actually carry capacity context rather than implying all of them do.
+      labelKey: 'report.saturation.summary.withCapacity',
+      value: (f) => String(f.filter((x) => (detailNum(x, 'interface_bps') ?? 0) > 0).length),
+    },
+  ],
+  phaseKeys: ['report.saturation.phases.check', 'report.saturation.phases.rank'],
+  Body: SaturationBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'src', cell: (f) => detailStr(f, 'src') ?? '' },
+    { header: 'dst', cell: (f) => detailStr(f, 'dst') ?? '' },
+    { header: 'conversation_bytes', cell: (f) => String(detailNum(f, 'conversation_bytes') ?? '') },
+    { header: 'node_bytes', cell: (f) => String(detailNum(f, 'node_bytes') ?? '') },
+    { header: 'share', cell: (f) => String(detailNum(f, 'ratio') ?? '') },
+    { header: 'interface_bps', cell: (f) => String(detailNum(f, 'interface_bps') ?? '') },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
@@ -603,4 +648,5 @@ export const REPORTS: ReportRegistry = {
   talker_shift: talkerShift,
   new_destination: newDestination,
   flow_scan: flowScan,
+  saturation,
 };

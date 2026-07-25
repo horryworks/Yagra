@@ -382,3 +382,38 @@
 .tsr-scan-dot.crit {
   fill: var(--status-critical);
 }
+
+/* ── Share meter (saturation) ── */
+
+/* One conversation's share of a node's total traffic. The track IS the node, so the fill reads as
+   "how much of this device is one flow". */
+.tsr-share {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.tsr-share .tsr-meter {
+  flex: 1;
+}
+
+.tsr-share-fill {
+  background: var(--series-6);
+}
+
+.tsr-share-fill.warn {
+  background: var(--status-warning);
+}
+
+.tsr-share-fill.crit {
+  background: var(--status-critical);
+}
+
+.tsr-share-val {
+  flex: 0 0 auto;
+  min-width: 46px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}

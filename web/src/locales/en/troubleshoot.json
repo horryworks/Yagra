@@ -489,6 +489,29 @@
         "scan": "Scanning fan-out…",
         "rank": "Ranking scanning sources…"
       }
+    },
+    "saturation": {
+      "note": "A single conversation dominating a busy node's traffic — a link hog. The meter shows that one src→dst pair against the node's total, and where the analysis could read the interface throughput, the capacity context is shown alongside.",
+      "mostConcentrated": "Most concentrated traffic",
+      "ofNode": "node total {{bytes}}",
+      "filters": {
+        "high": "≥ 80% one flow",
+        "mid": "≥ 50% one flow"
+      },
+      "summary": {
+        "nodes": "nodes",
+        "worstShare": "worst share",
+        "hoggedBytes": "bytes in top flows",
+        "withCapacity": "with capacity data"
+      },
+      "sort": {
+        "byShare": "by share",
+        "byBytes": "by volume"
+      },
+      "phases": {
+        "check": "Checking traffic concentration…",
+        "rank": "Ranking dominant conversations…"
+      }
     }
   },
   "scope": {
