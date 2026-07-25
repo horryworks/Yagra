@@ -6,6 +6,7 @@
 // asserts the biconditional "has a descriptor ⟺ has a reportPath", so a half-wired tool can't ship
 // a "View →" button that goes nowhere.
 
+import { formatBytes } from '../../lib/format';
 import { AnomalyBody } from './bodies/AnomalyBody';
 import { AuthProbeBody } from './bodies/AuthProbeBody';
 import { CapacityBody } from './bodies/CapacityBody';
@@ -15,6 +16,8 @@ import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
 import { RuleGapBody } from './bodies/RuleGapBody';
 import { SeverityShiftBody } from './bodies/SeverityShiftBody';
+import { TalkerShiftBody } from './bodies/TalkerShiftBody';
+import { TrafficAnomalyBody } from './bodies/TrafficAnomalyBody';
 import {
   correlationDirection,
   countDetailValues,
@@ -405,6 +408,89 @@ const eventFlap: ReportDescriptor = {
   ],
 };
 
+const trafficAnomaly: ReportDescriptor = {
+  tool: 'traffic_anomaly',
+  i18nKey: 'report.traffic_anomaly',
+  controls: {
+    controls: ['scope', 'window', 'baseline', 'sensitivity'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    baselines: [BASELINE_PRESETS.d7, BASELINE_PRESETS.d14],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.traffic_anomaly.summary.nodes', value: totalLabel },
+    {
+      labelKey: 'report.traffic_anomaly.summary.peak',
+      value: (f) => {
+        const p = maxDetail(f, 'peak_bytes');
+        return p === undefined ? '—' : formatBytes(p);
+      },
+    },
+    {
+      labelKey: 'report.traffic_anomaly.summary.worstRatio',
+      separatorBefore: true,
+      value: (f) => {
+        const ratios = f
+          .map((x) => {
+            const b = detailNum(x, 'baseline_mean_bytes') ?? 0;
+            return b > 0 ? (detailNum(x, 'peak_bytes') ?? 0) / b : NaN;
+          })
+          .filter((r) => Number.isFinite(r));
+        return ratios.length ? `×${Math.max(...ratios).toFixed(1)}` : '—';
+      },
+    },
+  ],
+  phaseKeys: ['report.traffic_anomaly.phases.read', 'report.traffic_anomaly.phases.score'],
+  Body: TrafficAnomalyBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'peak_bytes', cell: (f) => String(detailNum(f, 'peak_bytes') ?? '') },
+    { header: 'baseline_mean_bytes', cell: (f) => String(detailNum(f, 'baseline_mean_bytes') ?? '') },
+    { header: 'peak_at_unix', cell: (f) => String(detailNum(f, 'peak_at') ?? '') },
+  ],
+};
+
+/** Talker shift counts **addresses** — the node is where the talker appeared, not the entity. */
+const talkerShift: ReportDescriptor = {
+  tool: 'talker_shift',
+  i18nKey: 'report.talker_shift',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    defaults: { windowSecs: 3_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.talker_shift.summary.talkers', value: totalLabel },
+    {
+      labelKey: 'report.talker_shift.summary.bytes',
+      value: (f) => formatBytes(sumDetail(f, 'bytes')),
+    },
+    {
+      labelKey: 'report.talker_shift.summary.bestRank',
+      value: (f) => {
+        // "Best" is the LOWEST rank number — a new #1 is the strongest signal.
+        const ranks = f.map((x) => detailNum(x, 'rank')).filter((r): r is number => r !== undefined);
+        return ranks.length ? `#${Math.min(...ranks)}` : '—';
+      },
+    },
+    {
+      labelKey: 'report.talker_shift.summary.nodes',
+      separatorBefore: true,
+      value: (f) => String(countNodes(f)),
+    },
+  ],
+  phaseKeys: ['report.talker_shift.phases.compare', 'report.talker_shift.phases.rank'],
+  Body: TalkerShiftBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'address', cell: (f) => detailStr(f, 'addr') ?? '' },
+    { header: 'node', cell: (f) => f.node_name },
+    { header: 'bytes', cell: (f) => String(detailNum(f, 'bytes') ?? '') },
+    { header: 'new_rank', cell: (f) => String(detailNum(f, 'rank') ?? '') },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
@@ -415,4 +501,6 @@ export const REPORTS: ReportRegistry = {
   severity_shift: severityShift,
   rule_gap: ruleGap,
   auth_probe: authProbe,
+  traffic_anomaly: trafficAnomaly,
+  talker_shift: talkerShift,
 };

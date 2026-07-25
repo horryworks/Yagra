@@ -374,6 +374,54 @@
         "read": "Reading event churn…",
         "rank": "Ranking flapping rules…"
       }
+    },
+    "traffic_anomaly": {
+      "note": "Nodes whose flow volume surged past their own baseline — DDoS, saturation, a runaway backup, or exfiltration. Ranked by the multiple over baseline, so a busy uplink and a quiet access port are comparable.",
+      "biggestPeaks": "Biggest traffic peaks",
+      "peak": "{{bytes}} peak",
+      "baseline": "baseline {{bytes}}",
+      "filters": {
+        "x10": "≥ 10× baseline",
+        "x3": "≥ 3× baseline",
+        "low": "< 3× baseline"
+      },
+      "summary": {
+        "nodes": "spiking",
+        "peak": "biggest peak",
+        "worstRatio": "worst multiple"
+      },
+      "sort": {
+        "byRatio": "by multiple",
+        "byPeak": "by peak volume"
+      },
+      "phases": {
+        "read": "Reading flow volume…",
+        "score": "Scoring traffic spikes…"
+      }
+    },
+    "talker_shift": {
+      "note": "Addresses that became dominant talkers this window without appearing in the previous one — a new heavy source, a rogue device, or the start of an exfil. The rank it entered at is the signal.",
+      "heaviest": "Heaviest new talkers",
+      "seenOn": "on",
+      "newAtRank": "new at rank",
+      "filters": {
+        "top1": "new #1 only",
+        "top3": "new top 3"
+      },
+      "summary": {
+        "talkers": "new talkers",
+        "bytes": "bytes moved",
+        "bestRank": "highest rank",
+        "nodes": "nodes"
+      },
+      "sort": {
+        "byBytes": "by volume",
+        "byRank": "by rank"
+      },
+      "phases": {
+        "compare": "Comparing talkers against the previous window…",
+        "rank": "Ranking new talkers…"
+      }
     }
   },
   "scope": {

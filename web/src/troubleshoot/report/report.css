@@ -127,6 +127,35 @@
   font-size: var(--font-xs);
 }
 
+/* ── Rank chip (talker_shift) ── */
+
+/* The rank a new talker entered at IS the finding, so it gets type weight rather than a bar. */
+.tsr-rank-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.tsr-rank {
+  font-family: var(--font-family);
+  font-size: var(--font-lg);
+  font-weight: 700;
+  color: var(--series-6);
+}
+
+.tsr-rank.warn {
+  color: var(--status-warning);
+}
+
+.tsr-rank.crit {
+  color: var(--status-critical);
+}
+
+.tsr-rank-cap {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
 /* ── Balance bar (fires vs clears) ── */
 
 /* Two tracks growing outward from a centre axis: fires left, clears right. The asymmetry is the

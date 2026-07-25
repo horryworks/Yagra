@@ -188,6 +188,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.traffic_anomaly.scope',
     desc: 'tools.traffic_anomaly.desc',
     reveal: 'tools.traffic_anomaly.reveal',
+    reportPath: '/troubleshoot/report/traffic_anomaly',
   },
   {
     id: 'talker_shift',
@@ -199,6 +200,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.talker_shift.scope',
     desc: 'tools.talker_shift.desc',
     reveal: 'tools.talker_shift.reveal',
+    reportPath: '/troubleshoot/report/talker_shift',
   },
   {
     id: 'new_destination',
