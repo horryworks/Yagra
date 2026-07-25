@@ -106,7 +106,6 @@
       "finished": "finished {{time}}",
       "notice": "Not available: {{reason}}",
       "noticePlain": "This analysis could not read one of its data tiers.",
-      "capped": "results were capped",
       "summary": {
         "critical": "critical",
         "warning": "warning",

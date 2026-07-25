@@ -24,35 +24,11 @@ import { runningCount, useTroubleshootStore } from '../store';
 import { useTroubleshootStream } from '../useTroubleshootStream';
 import { NoticeRow } from './kit';
 import { sigmaFor, toCsv } from './format';
+import { buildJobInput } from './jobInput';
 import type { ControlState, ReportDescriptor } from './types';
-import type { AnalysisFinding, AnalysisJob, AnalysisJobInput } from '../../types/api';
+import type { AnalysisFinding, AnalysisJob } from '../../types/api';
 import '../troubleshoot.css';
 import './report.css';
-
-/**
- * Compose the launch request. Fields whose control this tool hides are still filled from
- * `controls.defaults` — the POST body is one-size-fits-all and the engines apply `.max()` floors to
- * the window/baseline, so omitting them would silently produce different results than the launch
- * drawer for the same tool. Pure, so `jobInput.test.ts` can pin exactly that.
- */
-export function buildJobInput(
-  descriptor: ReportDescriptor,
-  state: ControlState,
-  windowLabel: string,
-): AnalysisJobInput {
-  return {
-    tool: descriptor.tool,
-    scope_kind: state.scopeKind,
-    scope_id: state.scopeId,
-    scope_label: `${state.scopeLabel} · ${windowLabel}`,
-    window_secs: state.windowSecs,
-    baseline_secs: state.baselineSecs,
-    sensitivity: sigmaFor(state.sensitivity),
-    depth: state.depth,
-    family: 'all',
-    notify: true,
-  };
-}
 
 /** Split the backend's synthetic `kind: 'info'` tier-unavailable rows out of the real findings. */
 function splitNotices(rows: AnalysisFinding[]): {

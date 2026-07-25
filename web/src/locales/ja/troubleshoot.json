@@ -105,7 +105,6 @@
       "finished": "完了 {{time}}",
       "notice": "利用できません: {{reason}}",
       "noticePlain": "この分析はデータ層の一部を読み取れませんでした。",
-      "capped": "結果は上限で切り詰められました",
       "summary": {
         "critical": "重大",
         "warning": "警告",
