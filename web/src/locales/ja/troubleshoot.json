@@ -279,6 +279,58 @@
         "read": "重大度構成を取得中…",
         "compare": "ベースラインと比較中…"
       }
+    },
+    "rule_gap": {
+      "note": "どのルールにもマッチしなかった大量のイベントを、シグネチャ別にクラスタ化したものです。これは診断ではなく作業キューです。受信しているが対処していないトラフィックなので、対応はルールを書くことです。",
+      "mix": "ソース別の未マッチ",
+      "topSignatures": "件数が多いシグネチャ",
+      "fleet": "フリート全体",
+      "writeRule": "ルールを作成 →",
+      "noun": "シグネチャ",
+      "searchPlaceholder": "シグネチャを検索…",
+      "cols": {
+        "source": "ソース",
+        "signature": "シグネチャ",
+        "events": "件数",
+        "scope": "検出元",
+        "action": "操作"
+      },
+      "summary": {
+        "signatures": "シグネチャ",
+        "events": "未マッチ件数",
+        "sources": "ソース種別"
+      },
+      "sort": {
+        "byEvents": "件数順",
+        "bySignature": "シグネチャ順"
+      },
+      "phases": {
+        "cluster": "未マッチイベントをクラスタ化中…",
+        "rank": "カバレッジの欠落をランク付け中…"
+      }
+    },
+    "auth_probe": {
+      "note": "認証を試みている送信元別に認証失敗をクラスタ化したものです。ブルートフォース、あるいは SNMP/SSH を叩き続ける誤設定の NMS が該当します。ここでの主体は送信元で、ノードは対象側です。",
+      "worstSources": "問題のある送信元",
+      "target": "対象",
+      "unknownSource": "不明な送信元",
+      "noun": "送信元",
+      "searchPlaceholder": "送信元アドレスを検索…",
+      "failures_other": "{{count}} 回失敗",
+      "summary": {
+        "sources": "送信元",
+        "failures": "合計失敗数",
+        "worst": "最多の送信元",
+        "targets": "対象ノード"
+      },
+      "sort": {
+        "byFailures": "失敗数順",
+        "bySource": "送信元順"
+      },
+      "phases": {
+        "cluster": "認証失敗をクラスタ化中…",
+        "rank": "送信元をランク付け中…"
+      }
     }
   },
   "scope": {

@@ -42,6 +42,44 @@
   transition: width 0.2s ease;
 }
 
+/* Two summary panels side by side (a mix donut beside a Top-N), collapsing on narrow viewports. */
+.tsr-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 2fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+@media (max-width: 860px) {
+  .tsr-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Mobile card for the DataTable-based reports (rule_gap): the signature is the payload, so it gets
+   its own full-width line rather than being squeezed into a key/value row. */
+.tsr-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.tsr-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.tsr-card-sig {
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+
 /* ── Ratio meter (baseline vs peak) ── */
 
 .tsr-ratio {

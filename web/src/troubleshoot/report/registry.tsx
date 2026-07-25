@@ -7,14 +7,19 @@
 // a "View →" button that goes nowhere.
 
 import { AnomalyBody } from './bodies/AnomalyBody';
+import { AuthProbeBody } from './bodies/AuthProbeBody';
 import { CapacityBody } from './bodies/CapacityBody';
 import { CorrelationBody } from './bodies/CorrelationBody';
 import { EventStormBody } from './bodies/EventStormBody';
 import { FlapBody } from './bodies/FlapBody';
+import { RuleGapBody } from './bodies/RuleGapBody';
 import { SeverityShiftBody } from './bodies/SeverityShiftBody';
 import {
   correlationDirection,
+  countDetailValues,
+  countNodes,
   detailNum,
+  detailStr,
   fmtCount,
   maxDetail,
   nodeSummaryStats,
@@ -285,6 +290,80 @@ const severityShift: ReportDescriptor = {
   ],
 };
 
+/**
+ * Rule gap counts **signatures**, not nodes — findings are cross-node by nature (`node_id` is often
+ * null with `node_name: "fleet"`), so a node stat would under-report.
+ */
+const ruleGap: ReportDescriptor = {
+  tool: 'rule_gap',
+  i18nKey: 'report.rule_gap',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.d1, WINDOW_PRESETS.d7],
+    defaults: { windowSecs: 86_400, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.rule_gap.summary.signatures', value: totalLabel },
+    {
+      labelKey: 'report.rule_gap.summary.events',
+      value: (f) => fmtCount(sumDetail(f, 'count')),
+    },
+    {
+      labelKey: 'report.rule_gap.summary.sources',
+      separatorBefore: true,
+      value: (f) => String(countDetailValues(f, 'kind')),
+    },
+  ],
+  phaseKeys: ['report.rule_gap.phases.cluster', 'report.rule_gap.phases.rank'],
+  Body: RuleGapBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'source_kind', cell: (f) => detailStr(f, 'kind') ?? '' },
+    { header: 'signature', cell: (f) => detailStr(f, 'signature') ?? f.metric },
+    { header: 'events', cell: (f) => String(detailNum(f, 'count') ?? '') },
+    { header: 'sample_node', cell: (f) => f.node_name },
+  ],
+};
+
+/** Auth probe counts **sources** — the node is the target, not the entity. */
+const authProbe: ReportDescriptor = {
+  tool: 'auth_probe',
+  i18nKey: 'report.auth_probe',
+  controls: {
+    controls: ['scope', 'window'],
+    windows: [WINDOW_PRESETS.h1, WINDOW_PRESETS.h6, WINDOW_PRESETS.d1],
+    defaults: { windowSecs: 21_600, baselineSecs: 604_800, sensitivity: 3, depth: 'standard' },
+  },
+  summary: [
+    { labelKey: 'report.auth_probe.summary.sources', value: totalLabel },
+    {
+      labelKey: 'report.auth_probe.summary.failures',
+      value: (f) => fmtCount(sumDetail(f, 'count')),
+    },
+    {
+      labelKey: 'report.auth_probe.summary.worst',
+      value: (f) => {
+        const m = maxDetail(f, 'count');
+        return m === undefined ? '—' : fmtCount(m);
+      },
+    },
+    {
+      labelKey: 'report.auth_probe.summary.targets',
+      separatorBefore: true,
+      value: (f) => String(countNodes(f)),
+    },
+  ],
+  phaseKeys: ['report.auth_probe.phases.cluster', 'report.auth_probe.phases.rank'],
+  Body: AuthProbeBody,
+  csv: [
+    { header: 'score', cell: (f) => String(Math.round(f.score)) },
+    { header: 'source_ip', cell: (f) => detailStr(f, 'source_ip') ?? '' },
+    { header: 'failures', cell: (f) => String(detailNum(f, 'count') ?? '') },
+    { header: 'target_node', cell: (f) => f.node_name },
+    { header: 'severity', cell: (f) => sevOf(f) },
+  ],
+};
+
 export const REPORTS: ReportRegistry = {
   anomaly,
   correlation,
@@ -292,4 +371,6 @@ export const REPORTS: ReportRegistry = {
   flap,
   event_storm: eventStorm,
   severity_shift: severityShift,
+  rule_gap: ruleGap,
+  auth_probe: authProbe,
 };

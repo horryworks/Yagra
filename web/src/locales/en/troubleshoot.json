@@ -287,6 +287,59 @@
         "read": "Reading severity mix…",
         "compare": "Comparing against baseline…"
       }
+    },
+    "rule_gap": {
+      "note": "High-volume events that no rule matched, clustered by signature. This is a work queue rather than a diagnosis — each row is traffic you are receiving but not acting on, so the fix is to write a rule for it.",
+      "mix": "Unmatched by source",
+      "topSignatures": "Highest-volume signatures",
+      "fleet": "fleet-wide",
+      "writeRule": "Write rule →",
+      "noun": "signatures",
+      "searchPlaceholder": "Search signature…",
+      "cols": {
+        "source": "Source",
+        "signature": "Signature",
+        "events": "Events",
+        "scope": "Seen on",
+        "action": "Action"
+      },
+      "summary": {
+        "signatures": "signatures",
+        "events": "unmatched events",
+        "sources": "source kinds"
+      },
+      "sort": {
+        "byEvents": "by events",
+        "bySignature": "by signature"
+      },
+      "phases": {
+        "cluster": "Clustering unmatched events…",
+        "rank": "Ranking coverage gaps…"
+      }
+    },
+    "auth_probe": {
+      "note": "Authentication failures clustered by the source doing the authenticating — brute force, or a misconfigured NMS hammering SNMP/SSH. The source is the subject here; the node is the target.",
+      "worstSources": "Worst sources",
+      "target": "target",
+      "unknownSource": "unknown source",
+      "noun": "sources",
+      "searchPlaceholder": "Search source address…",
+      "failures_one": "{{count}} failure",
+      "failures_other": "{{count}} failures",
+      "summary": {
+        "sources": "sources",
+        "failures": "total failures",
+        "worst": "worst source",
+        "targets": "targets"
+      },
+      "sort": {
+        "byFailures": "by failures",
+        "bySource": "by source"
+      },
+      "phases": {
+        "cluster": "Clustering auth failures…",
+        "rank": "Ranking sources…"
+      }
     }
   },
   "scope": {

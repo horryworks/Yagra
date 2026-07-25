@@ -162,6 +162,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.rule_gap.scope',
     desc: 'tools.rule_gap.desc',
     reveal: 'tools.rule_gap.reveal',
+    reportPath: '/troubleshoot/report/rule_gap',
   },
   {
     id: 'auth_probe',
@@ -173,6 +174,7 @@ export const TOOLS: Tool[] = [
     scope: 'tools.auth_probe.scope',
     desc: 'tools.auth_probe.desc',
     reveal: 'tools.auth_probe.reveal',
+    reportPath: '/troubleshoot/report/auth_probe',
   },
   // ── Flow monitoring (ClickHouse, ADR-031) ──
   {
