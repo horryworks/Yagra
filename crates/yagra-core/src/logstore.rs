@@ -22,7 +22,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 use yagra_common::trap_oid_name;
 
-use crate::events::{EventFilter, EventRow, PersistRecord};
+use crate::events::{
+    EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket, PersistRecord,
+};
 
 /// Format a Unix-millis instant as the canonical LogsQL/`_time` literal (UTC, millisecond
 /// precision, `Z` suffix — no numeric offset, so it interpolates cleanly into a query).
@@ -63,6 +65,24 @@ pub trait LogStore: Send + Sync {
         name_node_ids: &[Uuid],
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>>;
+    /// Categorical summary counts (kind / action / trap / source) honoring the filter, ordered by
+    /// count desc — powers the dashboard passive-event breakdown widgets.
+    async fn stats_grouped(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        group: EventStatGroup,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventStatBucket>>;
+    /// The event-volume time series (counts per `bucket_secs`-wide window, optionally split by
+    /// kind) honoring the filter.
+    async fn stats_series(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        bucket_secs: i64,
+        split_kind: bool,
+    ) -> anyhow::Result<Vec<EventTimeBucket>>;
 }
 
 // ─── VictoriaLogs (live) ──────────────────────────────────────────────────────────────
@@ -81,6 +101,26 @@ impl VlStore {
             http: reqwest::Client::new(),
             base: base.into(),
         }
+    }
+
+    /// Run a LogsQL query and return the NDJSON response body's lines (shared by search + stats).
+    async fn query_lines(&self, query: &str) -> anyhow::Result<Vec<String>> {
+        let url = format!("{}/select/logsql/query", self.base);
+        let resp = self
+            .http
+            .post(&url)
+            .form(&[("query", query)])
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("VictoriaLogs query request failed: {e}"))?;
+        if !resp.status().is_success() {
+            anyhow::bail!("VictoriaLogs query returned {}", resp.status());
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| anyhow::anyhow!("VictoriaLogs query body: {e}"))?;
+        Ok(body.lines().map(str::to_owned).collect())
     }
 }
 
@@ -144,10 +184,11 @@ fn record_to_json(r: &PersistRecord) -> Value {
     Value::Object(obj)
 }
 
-/// Compile an [`EventFilter`] (+ resolved node-name ids) into a LogsQL query, newest first.
-/// Space-separated clauses are ANDed; the free-text term ORs a `_msg` phrase, a `source_ip`
-/// phrase, and the resolved `node_id` set (the current 3-way message/IP/node-name search).
-fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64) -> String {
+/// Compile an [`EventFilter`] (+ resolved node-name ids) into the LogsQL *filter part* (the leading
+/// query before any `|` pipe). Space-separated clauses are ANDed; the free-text term ORs a `_msg`
+/// phrase, a `source_ip` phrase, and the resolved `node_id` set (the current 3-way search). Shared
+/// by search (`| sort … | limit`) and stats (`| stats by … `), so both filter identically.
+fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
     let mut clauses: Vec<String> = Vec::new();
     if let Some(before) = filter.before {
         clauses.push(format!("_time:<{}", fmt_vl_time_dt(before)));
@@ -191,15 +232,148 @@ fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64)
             clauses.push(format!("({})", ors.join(" OR ")));
         }
     }
-    let filter_part = if clauses.is_empty() {
+    if clauses.is_empty() {
         "*".to_owned()
     } else {
         clauses.join(" ")
-    };
+    }
+}
+
+/// Compile an [`EventFilter`] (+ resolved node-name ids) into a LogsQL query, newest first.
+fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64) -> String {
     format!(
-        "{filter_part} | sort by (_time) desc | limit {}",
+        "{} | sort by (_time) desc | limit {}",
+        build_filter_part(filter, name_node_ids),
         limit.clamp(1, 500)
     )
+}
+
+/// The LogsQL `stats by (...)` field(s) for a categorical group — fixed identifiers only (chosen by
+/// the enum, never from the request), plus any extra filter clause the dimension needs.
+fn stats_group_fields(group: EventStatGroup) -> (&'static str, &'static str) {
+    // (extra filter clause, `stats by` fields)
+    match group {
+        EventStatGroup::Kind => ("", "kind"),
+        EventStatGroup::Action => ("", "action"),
+        EventStatGroup::Trap => (" trap_oid:*", "trap_oid"),
+        EventStatGroup::Source => ("", "node_id, source_ip"),
+    }
+}
+
+/// Compile a categorical stats query: `<filter> | stats by (<fields>) count() as n | sort …`.
+fn build_stats_grouped_logsql(
+    filter: &EventFilter,
+    name_node_ids: &[Uuid],
+    group: EventStatGroup,
+    limit: i64,
+) -> String {
+    let (extra, by) = stats_group_fields(group);
+    format!(
+        "{}{extra} | stats by ({by}) count() as n | sort by (n) desc | limit {}",
+        build_filter_part(filter, name_node_ids),
+        limit.clamp(1, 500)
+    )
+}
+
+/// Compile the event-volume time series: `<filter> | stats by (_time:Ns[, kind]) count() as n`.
+fn build_stats_series_logsql(
+    filter: &EventFilter,
+    name_node_ids: &[Uuid],
+    bucket_secs: i64,
+    split_kind: bool,
+) -> String {
+    let b = bucket_secs.clamp(1, 86_400);
+    let by = if split_kind {
+        format!("_time:{b}s, kind")
+    } else {
+        format!("_time:{b}s")
+    };
+    format!(
+        "{} | stats by ({by}) count() as n | sort by (_time) asc",
+        build_filter_part(filter, name_node_ids)
+    )
+}
+
+/// Parse one LogsQL categorical stats result line into an [`EventStatBucket`]. VL returns grouped
+/// field values + the `n` count (numbers as strings).
+fn parse_stat_grouped_row(line: &str, group: EventStatGroup) -> Option<EventStatBucket> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let get = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let count = get("n").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    Some(match group {
+        EventStatGroup::Source => {
+            let node_id = get("node_id").and_then(|s| Uuid::parse_str(&s).ok());
+            let source_ip = get("source_ip").filter(|s| !s.is_empty());
+            let key = node_id
+                .map(|n| n.to_string())
+                .or_else(|| source_ip.clone())
+                .unwrap_or_default();
+            EventStatBucket {
+                key,
+                label: source_ip,
+                node_id,
+                count,
+            }
+        }
+        EventStatGroup::Trap => {
+            let key = get("trap_oid").unwrap_or_default();
+            let label = trap_oid_name(&key).map(str::to_owned);
+            EventStatBucket {
+                key,
+                label,
+                node_id: None,
+                count,
+            }
+        }
+        EventStatGroup::Kind => EventStatBucket {
+            key: get("kind").unwrap_or_default(),
+            label: None,
+            node_id: None,
+            count,
+        },
+        EventStatGroup::Action => EventStatBucket {
+            key: get("action").unwrap_or_default(),
+            label: None,
+            node_id: None,
+            count,
+        },
+    })
+}
+
+/// Parse one LogsQL time-series stats line into `(bucket_ms, kind, count)`.
+fn parse_stat_time_row(line: &str, split_kind: bool) -> Option<(i64, Option<String>, i64)> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let get = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let ts = get("_time")
+        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+        .map(|d| d.with_timezone(&Utc).timestamp_millis())?;
+    let count = get("n").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let kind = if split_kind { get("kind") } else { None };
+    Some((ts, kind, count))
+}
+
+/// Fold parsed `(bucket_ms, kind, count)` rows into ordered [`EventTimeBucket`]s.
+fn fold_time_buckets(
+    rows: impl IntoIterator<Item = (i64, Option<String>, i64)>,
+    split_kind: bool,
+) -> Vec<EventTimeBucket> {
+    use std::collections::BTreeMap;
+    let mut buckets: BTreeMap<i64, (i64, BTreeMap<String, i64>)> = BTreeMap::new();
+    for (ts, kind, n) in rows {
+        let entry = buckets.entry(ts).or_default();
+        entry.0 += n;
+        if let Some(k) = kind {
+            *entry.1.entry(k).or_default() += n;
+        }
+    }
+    buckets
+        .into_iter()
+        .map(|(ts, (count, by))| EventTimeBucket {
+            ts_unix_ms: ts,
+            count,
+            by_kind: split_kind.then_some(by),
+        })
+        .collect()
 }
 
 /// Parse one VictoriaLogs NDJSON result line into an [`EventRow`]. Defensive (like `store.rs`'s
@@ -292,22 +466,38 @@ impl LogStore for VlStore {
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
         let query = build_search_logsql(filter, name_node_ids, limit);
-        let url = format!("{}/select/logsql/query", self.base);
-        let resp = self
-            .http
-            .post(&url)
-            .form(&[("query", query.as_str())])
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("VictoriaLogs query request failed: {e}"))?;
-        if !resp.status().is_success() {
-            anyhow::bail!("VictoriaLogs query returned {}", resp.status());
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| anyhow::anyhow!("VictoriaLogs query body: {e}"))?;
-        Ok(body.lines().filter_map(parse_ndjson_row).collect())
+        let lines = self.query_lines(&query).await?;
+        Ok(lines.iter().filter_map(|l| parse_ndjson_row(l)).collect())
+    }
+
+    async fn stats_grouped(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        group: EventStatGroup,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventStatBucket>> {
+        let query = build_stats_grouped_logsql(filter, name_node_ids, group, limit);
+        let lines = self.query_lines(&query).await?;
+        Ok(lines
+            .iter()
+            .filter_map(|l| parse_stat_grouped_row(l, group))
+            .collect())
+    }
+
+    async fn stats_series(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        bucket_secs: i64,
+        split_kind: bool,
+    ) -> anyhow::Result<Vec<EventTimeBucket>> {
+        let query = build_stats_series_logsql(filter, name_node_ids, bucket_secs, split_kind);
+        let lines = self.query_lines(&query).await?;
+        let parsed = lines
+            .iter()
+            .filter_map(|l| parse_stat_time_row(l, split_kind));
+        Ok(fold_time_buckets(parsed, split_kind))
     }
 }
 
@@ -453,6 +643,76 @@ impl LogStore for InMemoryLogStore {
         rows.truncate(limit.clamp(1, 500) as usize);
         Ok(rows)
     }
+
+    async fn stats_grouped(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        group: EventStatGroup,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventStatBucket>> {
+        use std::collections::HashMap;
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        // Aggregate a count per group identity, carrying the label/node for the DTO (first seen).
+        let mut agg: HashMap<String, (Option<String>, Option<Uuid>, i64)> = HashMap::new();
+        for r in guard
+            .iter()
+            .filter(|r| record_matches(r, filter, name_node_ids))
+        {
+            let m = &r.msg;
+            let (key, label, node): (String, Option<String>, Option<Uuid>) = match group {
+                EventStatGroup::Kind => (m.kind.as_str().to_owned(), None, None),
+                EventStatGroup::Action => (r.action.to_owned(), None, None),
+                EventStatGroup::Trap => match &m.trap_oid {
+                    Some(oid) => (oid.clone(), trap_oid_name(oid).map(str::to_owned), None),
+                    None => continue, // trap grouping drops non-traps (mirrors `trap_oid:*`)
+                },
+                EventStatGroup::Source => {
+                    let ip = m.source_ip.map(|i| i.to_string());
+                    let key = r
+                        .node_id
+                        .map(|n| n.to_string())
+                        .or_else(|| ip.clone())
+                        .unwrap_or_default();
+                    (key, ip, r.node_id)
+                }
+            };
+            let e = agg.entry(key).or_insert((label, node, 0));
+            e.2 += 1;
+        }
+        let mut out: Vec<EventStatBucket> = agg
+            .into_iter()
+            .map(|(key, (label, node_id, count))| EventStatBucket {
+                key,
+                label,
+                node_id,
+                count,
+            })
+            .collect();
+        out.sort_by_key(|b| std::cmp::Reverse(b.count));
+        out.truncate(limit.clamp(1, 500) as usize);
+        Ok(out)
+    }
+
+    async fn stats_series(
+        &self,
+        filter: &EventFilter,
+        name_node_ids: &[Uuid],
+        bucket_secs: i64,
+        split_kind: bool,
+    ) -> anyhow::Result<Vec<EventTimeBucket>> {
+        let b = bucket_secs.clamp(1, 86_400);
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        let rows = guard
+            .iter()
+            .filter(|r| record_matches(r, filter, name_node_ids))
+            .map(|r| {
+                let bucket_ms = (r.msg.at_unix_ms / 1000 / b) * b * 1000;
+                let kind = split_kind.then(|| r.msg.kind.as_str().to_owned());
+                (bucket_ms, kind, 1_i64)
+            });
+        Ok(fold_time_buckets(rows, split_kind))
+    }
 }
 
 #[cfg(test)]
@@ -550,6 +810,92 @@ mod tests {
     fn build_logsql_matches_all_when_no_filters() {
         let q = build_search_logsql(&EventFilter::default(), &[], 50);
         assert_eq!(q, "* | sort by (_time) desc | limit 50");
+    }
+
+    #[test]
+    fn build_stats_grouped_logsql_maps_each_group() {
+        let none = EventFilter::default();
+        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Kind, 10);
+        assert!(q.contains("| stats by (kind) count() as n"), "{q}");
+        assert!(q.ends_with("| sort by (n) desc | limit 10"), "{q}");
+        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Action, 10);
+        assert!(q.contains("| stats by (action) count() as n"), "{q}");
+        // Trap grouping requires the OID present, then groups on it.
+        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Trap, 8);
+        assert!(
+            q.contains("trap_oid:* | stats by (trap_oid) count() as n"),
+            "{q}"
+        );
+        // Source groups by node + source IP together.
+        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Source, 8);
+        assert!(
+            q.contains("| stats by (node_id, source_ip) count() as n"),
+            "{q}"
+        );
+        // The shared filter part still applies (e.g. a kind filter).
+        let filtered = EventFilter {
+            kind: Some("trap".into()),
+            ..EventFilter::default()
+        };
+        let q = build_stats_grouped_logsql(&filtered, &[], EventStatGroup::Trap, 8);
+        assert!(q.contains("kind:=\"trap\""), "{q}");
+    }
+
+    #[test]
+    fn build_stats_series_logsql_buckets_and_splits() {
+        let none = EventFilter::default();
+        let q = build_stats_series_logsql(&none, &[], 3600, false);
+        assert!(q.contains("| stats by (_time:3600s) count() as n"), "{q}");
+        assert!(q.ends_with("| sort by (_time) asc"), "{q}");
+        let q = build_stats_series_logsql(&none, &[], 3600, true);
+        assert!(
+            q.contains("| stats by (_time:3600s, kind) count() as n"),
+            "{q}"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_stats_grouped_and_series() {
+        let store = InMemoryLogStore::default();
+        store
+            .ingest_batch(&[
+                record(Uuid::from_u128(1), "link down", 1_000, "fired"),
+                record(Uuid::from_u128(2), "link up", 2_000, "cleared"),
+                record(Uuid::from_u128(3), "noise", 3_000, "none"),
+            ])
+            .await;
+        // By kind: all three are syslog (the test `msg()` helper).
+        let by_kind = store
+            .stats_grouped(&EventFilter::default(), &[], EventStatGroup::Kind, 10)
+            .await
+            .unwrap();
+        assert_eq!(by_kind.len(), 1);
+        assert_eq!(by_kind[0].key, "syslog");
+        assert_eq!(by_kind[0].count, 3);
+        // By action: three distinct outcomes, one each.
+        let by_action = store
+            .stats_grouped(&EventFilter::default(), &[], EventStatGroup::Action, 10)
+            .await
+            .unwrap();
+        assert_eq!(by_action.len(), 3);
+        assert_eq!(by_action.iter().map(|b| b.count).sum::<i64>(), 3);
+        // Volume series bucketed at 1s: three distinct buckets, no split.
+        let series = store
+            .stats_series(&EventFilter::default(), &[], 1, false)
+            .await
+            .unwrap();
+        assert_eq!(series.len(), 3);
+        assert_eq!(series.iter().map(|b| b.count).sum::<i64>(), 3);
+        assert!(series[0].by_kind.is_none());
+        // Split by kind populates the per-kind map.
+        let split = store
+            .stats_series(&EventFilter::default(), &[], 1, true)
+            .await
+            .unwrap();
+        assert!(split[0]
+            .by_kind
+            .as_ref()
+            .is_some_and(|m| m.contains_key("syslog")));
     }
 
     #[test]

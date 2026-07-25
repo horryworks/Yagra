@@ -1188,7 +1188,7 @@ fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
     let from_s = p.from.unwrap_or(to_s - DEFAULT_WINDOW_SECS);
     let peer: Option<std::net::IpAddr> = p.peer.as_deref().and_then(|s| s.parse().ok());
     FlowQuery {
-        node_id: p.node_id,
+        node_id: Some(p.node_id),
         from_unix_ms: from_s.saturating_mul(1000),
         to_unix_ms: to_s.saturating_mul(1000),
         limit: p.limit.unwrap_or(100),

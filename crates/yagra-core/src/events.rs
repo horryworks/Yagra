@@ -207,6 +207,58 @@ pub struct EventAuthSource {
     pub count: i64,
 }
 
+/// Which categorical dimension a `/events/stats` aggregation groups by. A typed enum (never
+/// interpolated raw) so only a fixed column name reaches SQL / LogsQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventStatGroup {
+    /// By event kind (syslog / trap / webhook).
+    Kind,
+    /// By pipeline outcome (`action`: fired / refreshed / cleared / suppressed / info / none).
+    Action,
+    /// By trap OID (the display `label` carries the well-known MIB name when known).
+    Trap,
+    /// By source: the correlated inventory node when known, else the raw source IP.
+    Source,
+}
+
+impl EventStatGroup {
+    /// Parse the `group_by` query value; `None` for an unknown value (`time` is handled separately).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "kind" => Some(Self::Kind),
+            "action" => Some(Self::Action),
+            "trap" => Some(Self::Trap),
+            "source" => Some(Self::Source),
+            _ => None,
+        }
+    }
+}
+
+/// One categorical `/events/stats` bucket: a stable `key` (for the React key + fallback display), an
+/// optional display `label` resolved server-side (e.g. a trap's MIB name), an optional `node_id`
+/// (set for source grouping when the source maps to an inventory node, so the UI resolves its name
+/// — no raw UUID rule), and the row count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EventStatBucket {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<Uuid>,
+    pub count: i64,
+}
+
+/// One time bucket for the `/events/stats?group_by=time` volume series: a bucket-start timestamp
+/// (Unix ms), the total count, and — when `split=kind` — the per-kind breakdown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EventTimeBucket {
+    pub ts_unix_ms: i64,
+    pub count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_kind: Option<std::collections::BTreeMap<String, i64>>,
+}
+
 /// One received event queued for the async batch persist writer. Carries the raw [`EventMsg`] plus
 /// the correlation/planning outputs the matcher derived, so the writer can fan it out to
 /// PostgreSQL and/or the log store without re-deriving anything.
@@ -295,6 +347,64 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The shared `WHERE` predicate for the event log + summary-stats queries. Binds $1..=$8:
+/// $1 before (paging cursor), $2 since, $3 until, $4 kind, $5 node_id, $6 matched, $7 search,
+/// $8 regex. Kept in one place so `list_events` and `/events/stats` filter identically (the
+/// dashboard summaries must line up with the log). Uses the `e` (events) / `n` (nodes) aliases —
+/// every consumer joins `nodes n` (the name search needs it).
+const EVENT_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR e.recorded_at < $1) \
+     AND ($2::timestamptz IS NULL OR e.recorded_at >= $2) \
+     AND ($3::timestamptz IS NULL OR e.recorded_at <= $3) \
+     AND ($4::text IS NULL OR e.kind = $4) \
+     AND ($5::uuid IS NULL OR e.node_id = $5) \
+     AND ($6::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $6) \
+     AND ($7::text IS NULL \
+          OR ($8::boolean = FALSE AND (e.message ILIKE '%' || $7 || '%' \
+                                       OR host(e.source_ip) ILIKE '%' || $7 || '%' \
+                                       OR n.name ILIKE '%' || $7 || '%')) \
+          OR ($8::boolean = TRUE AND e.message ~* $7))";
+
+/// Build the categorical `/events/stats` SQL for a group dimension. All identifiers are fixed
+/// (chosen by the enum, never from the request); binds are $1..=$8 (filter) + $9 (row cap).
+fn stats_grouped_sql(group: EventStatGroup) -> String {
+    let (select, group_by, extra) = match group {
+        EventStatGroup::Kind => ("e.kind AS key", "e.kind", ""),
+        EventStatGroup::Action => ("e.action AS key", "e.action", ""),
+        EventStatGroup::Trap => (
+            "e.trap_oid AS key",
+            "e.trap_oid",
+            " AND e.trap_oid IS NOT NULL",
+        ),
+        EventStatGroup::Source => (
+            "e.node_id AS node_id, host(e.source_ip) AS source_ip",
+            "e.node_id, host(e.source_ip)",
+            "",
+        ),
+    };
+    format!(
+        "SELECT {select}, count(*) AS n \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE}{extra} \
+         GROUP BY {group_by} ORDER BY n DESC LIMIT $9"
+    )
+}
+
+/// Build the time-series `/events/stats` SQL. Buckets on event time (`at_unix_ms`) into $9-wide
+/// windows; binds are $1..=$8 (filter) + $9 (bucket seconds).
+fn stats_series_sql(split_kind: bool) -> String {
+    let (select_kind, group_kind) = if split_kind {
+        (", e.kind AS kind", ", e.kind")
+    } else {
+        ("", "")
+    };
+    format!(
+        "SELECT (e.at_unix_ms / 1000 / $9) * $9 AS bucket{select_kind}, count(*) AS n \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} \
+         GROUP BY bucket{group_kind} ORDER BY bucket ASC"
+    )
 }
 
 /// PostgreSQL persistence for event sources, rules, and the event log.
@@ -559,24 +669,14 @@ impl EventRepo {
         filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "SELECT e.id, e.kind, e.at_unix_ms, e.recorded_at, host(e.source_ip) AS source_ip, \
                     e.node_id, e.source_id, e.pool, e.facility, e.syslog_severity, e.hostname, \
                     e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
              FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
-             WHERE ($1::timestamptz IS NULL OR e.recorded_at < $1) \
-               AND ($2::timestamptz IS NULL OR e.recorded_at >= $2) \
-               AND ($3::timestamptz IS NULL OR e.recorded_at <= $3) \
-               AND ($4::text IS NULL OR e.kind = $4) \
-               AND ($5::uuid IS NULL OR e.node_id = $5) \
-               AND ($6::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $6) \
-               AND ($7::text IS NULL \
-                    OR ($8::boolean = FALSE AND (e.message ILIKE '%' || $7 || '%' \
-                                                 OR host(e.source_ip) ILIKE '%' || $7 || '%' \
-                                                 OR n.name ILIKE '%' || $7 || '%')) \
-                    OR ($8::boolean = TRUE AND e.message ~* $7)) \
-             ORDER BY e.recorded_at DESC LIMIT $9",
-        )
+             WHERE {EVENT_FILTER_WHERE} \
+             ORDER BY e.recorded_at DESC LIMIT $9"
+        ))
         .bind(filter.before)
         .bind(filter.since)
         .bind(filter.until)
@@ -727,8 +827,11 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventSignatureCount>> {
         let rows = sqlx::query(
+            // NB: PostgreSQL has no min/max aggregate for `uuid`, so pick a representative node via
+            // the text form — the canonical lowercase-hyphenated uuid sorts identically to the binary
+            // ordering, and NULL node_ids are ignored by the aggregate (sample_node stays optional).
             "SELECT kind, COALESCE(trap_oid, app_name) AS sig, count(*) AS n, \
-                    min(node_id) AS sample_node \
+                    min(node_id::text)::uuid AS sample_node \
              FROM events \
              WHERE matched_rule_id IS NULL AND COALESCE(trap_oid, app_name) IS NOT NULL \
                AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
@@ -784,6 +887,122 @@ impl EventRepo {
                 })
             })
             .collect()
+    }
+
+    // ── Dashboard summary aggregates (`/events/stats`) ──
+    // Fleet-wide counts honoring the full `EventFilter` (the same predicate as `list_events`), for
+    // the dashboard passive-event widgets. When VictoriaLogs is enabled these run against the log
+    // store instead (the API picks the path); the PG path is accurate within retention when it isn't.
+
+    /// One categorical count aggregation over the events, honoring the full [`EventFilter`], ordered
+    /// by count desc. `group` picks a fixed column (never interpolated raw). Binds mirror
+    /// `list_events` ($1..=$8) plus the row cap ($9).
+    pub async fn stats_grouped(
+        &self,
+        filter: &EventFilter,
+        group: EventStatGroup,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventStatBucket>> {
+        let sql = stats_grouped_sql(group);
+        let rows = sqlx::query(&sql)
+            .bind(filter.before)
+            .bind(filter.since)
+            .bind(filter.until)
+            .bind(filter.kind.as_deref())
+            .bind(filter.node_id)
+            .bind(filter.matched)
+            .bind(filter.search.as_deref())
+            .bind(filter.regex)
+            .bind(limit.clamp(1, 500))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let count = row.try_get::<i64, _>("n")?;
+                Ok(match group {
+                    EventStatGroup::Source => {
+                        let node_id: Option<Uuid> = row.try_get("node_id")?;
+                        let source_ip: Option<String> = row.try_get("source_ip")?;
+                        // `key` is stable for the React key + the fallback display when the source
+                        // maps to no node; the UI resolves `node_id` to a name when present.
+                        let key = node_id
+                            .map(|n| n.to_string())
+                            .or_else(|| source_ip.clone())
+                            .unwrap_or_default();
+                        EventStatBucket {
+                            key,
+                            label: source_ip,
+                            node_id,
+                            count,
+                        }
+                    }
+                    EventStatGroup::Trap => {
+                        let key: String =
+                            row.try_get::<Option<String>, _>("key")?.unwrap_or_default();
+                        let label = trap_oid_name(&key).map(str::to_owned);
+                        EventStatBucket {
+                            key,
+                            label,
+                            node_id: None,
+                            count,
+                        }
+                    }
+                    _ => EventStatBucket {
+                        key: row.try_get("key")?,
+                        label: None,
+                        node_id: None,
+                        count,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    /// The event-volume time series: counts bucketed into `bucket_secs`-wide windows (on event time
+    /// `at_unix_ms`), honoring the full [`EventFilter`]; `split_kind` adds the per-kind breakdown.
+    pub async fn stats_series(
+        &self,
+        filter: &EventFilter,
+        bucket_secs: i64,
+        split_kind: bool,
+    ) -> anyhow::Result<Vec<EventTimeBucket>> {
+        let b = bucket_secs.clamp(1, 86_400);
+        let sql = stats_series_sql(split_kind);
+        let rows = sqlx::query(&sql)
+            .bind(filter.before)
+            .bind(filter.since)
+            .bind(filter.until)
+            .bind(filter.kind.as_deref())
+            .bind(filter.node_id)
+            .bind(filter.matched)
+            .bind(filter.search.as_deref())
+            .bind(filter.regex)
+            .bind(b)
+            .fetch_all(&self.pool)
+            .await?;
+        // Fold (bucket, kind) rows into one `EventTimeBucket` per bucket (BTreeMap keeps time order).
+        let mut buckets: std::collections::BTreeMap<
+            i64,
+            (i64, std::collections::BTreeMap<String, i64>),
+        > = std::collections::BTreeMap::new();
+        for row in rows {
+            let bucket_s: i64 = row.try_get("bucket")?;
+            let n: i64 = row.try_get("n")?;
+            let entry = buckets.entry(bucket_s).or_default();
+            entry.0 += n;
+            if split_kind {
+                let kind: String = row.try_get("kind")?;
+                *entry.1.entry(kind).or_default() += n;
+            }
+        }
+        Ok(buckets
+            .into_iter()
+            .map(|(bucket_s, (count, by))| EventTimeBucket {
+                ts_unix_ms: bucket_s.saturating_mul(1000),
+                count,
+                by_kind: split_kind.then_some(by),
+            })
+            .collect())
     }
 
     /// Asymmetric retention: matched events keep the alert-history window; unmatched
@@ -1633,6 +1852,64 @@ pub async fn run_event_action_writer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_grouped_sql_uses_shared_filter_and_fixed_columns() {
+        // Every group reuses the shared filter predicate and only fixed identifiers reach SQL.
+        for g in [
+            EventStatGroup::Kind,
+            EventStatGroup::Action,
+            EventStatGroup::Trap,
+            EventStatGroup::Source,
+        ] {
+            let sql = stats_grouped_sql(g);
+            assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
+            assert!(sql.contains("count(*) AS n"), "{sql}");
+            assert!(sql.contains("ORDER BY n DESC LIMIT $9"), "{sql}");
+        }
+        // Trap grouping drops NULL OIDs; source grouping carries node_id + source_ip for the UI.
+        assert!(stats_grouped_sql(EventStatGroup::Trap).contains("e.trap_oid IS NOT NULL"));
+        assert!(
+            stats_grouped_sql(EventStatGroup::Source).contains("host(e.source_ip) AS source_ip")
+        );
+        assert!(stats_grouped_sql(EventStatGroup::Kind).contains("GROUP BY e.kind"));
+    }
+
+    #[test]
+    fn stats_series_sql_buckets_and_optionally_splits_by_kind() {
+        let plain = stats_series_sql(false);
+        assert!(
+            plain.contains("(e.at_unix_ms / 1000 / $9) * $9 AS bucket"),
+            "{plain}"
+        );
+        assert!(plain.contains(EVENT_FILTER_WHERE), "{plain}");
+        assert!(
+            plain.contains("GROUP BY bucket ORDER BY bucket ASC"),
+            "{plain}"
+        );
+        assert!(!plain.contains("e.kind AS kind"), "{plain}");
+        // split=kind adds the per-kind column + group key.
+        let split = stats_series_sql(true);
+        assert!(split.contains("e.kind AS kind"), "{split}");
+        assert!(split.contains("GROUP BY bucket, e.kind"), "{split}");
+    }
+
+    #[test]
+    fn event_stat_group_parses_known_dimensions() {
+        assert_eq!(EventStatGroup::parse("kind"), Some(EventStatGroup::Kind));
+        assert_eq!(
+            EventStatGroup::parse("action"),
+            Some(EventStatGroup::Action)
+        );
+        assert_eq!(EventStatGroup::parse("trap"), Some(EventStatGroup::Trap));
+        assert_eq!(
+            EventStatGroup::parse("source"),
+            Some(EventStatGroup::Source)
+        );
+        // `time` is handled on a separate path; unknown values are rejected.
+        assert_eq!(EventStatGroup::parse("time"), None);
+        assert_eq!(EventStatGroup::parse("bogus"), None);
+    }
 
     fn stored_rule(pattern: &str, severity: &str) -> StoredEventRule {
         StoredEventRule {

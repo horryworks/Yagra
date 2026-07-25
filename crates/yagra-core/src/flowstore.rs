@@ -63,12 +63,13 @@ pub struct FlowRow {
     pub flows: u32,
 }
 
-/// A top-N flow query: one node, a time window, a result cap, and optional drill-down filters.
-/// Filters are strongly typed (never raw strings) so nothing device-supplied is interpolated.
+/// A top-N flow query: an optional node scope, a time window, a result cap, and optional drill-down
+/// filters. Filters are strongly typed (never raw strings) so nothing device-supplied is
+/// interpolated.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowQuery {
-    /// Node whose flows to query.
-    pub node_id: Uuid,
+    /// Node whose flows to query; `None` aggregates across every exporter (fleet-wide).
+    pub node_id: Option<Uuid>,
     /// Window start (Unix ms, inclusive).
     pub from_unix_ms: i64,
     /// Window end (Unix ms, inclusive).
@@ -109,8 +110,8 @@ impl AsDir {
 /// only `proto`, so of the fact-table filters only a protocol filter can apply to the trend.
 #[derive(Debug, Clone, Copy)]
 pub struct FlowSeriesQuery {
-    /// Node whose trend to query.
-    pub node_id: Uuid,
+    /// Node whose trend to query; `None` aggregates across every exporter (fleet-wide).
+    pub node_id: Option<Uuid>,
     /// Window start (Unix ms, inclusive).
     pub from_unix_ms: i64,
     /// Window end (Unix ms, inclusive).
@@ -310,6 +311,16 @@ fn window_secs(from_unix_ms: i64, to_unix_ms: i64) -> (i64, i64) {
     (from_unix_ms.div_euclid(1000), to_unix_ms.div_euclid(1000))
 }
 
+/// The node-scope `WHERE` fragment (with a trailing ` AND ` so it prefixes the time bound). A
+/// `Some(id)` scopes to one exporter's node; `None` is fleet-wide (every exporter) and emits
+/// nothing, so the query aggregates across all nodes. Only a typed [`Uuid`] is interpolated.
+fn node_scope_sql(node_id: Option<Uuid>) -> String {
+    match node_id {
+        Some(id) => format!("node_id = '{id}' AND "),
+        None => String::new(),
+    }
+}
+
 /// Build the optional fact-table filter fragment (`AND …`) for a [`FlowQuery`]. Only typed values
 /// are interpolated: `proto`/`dst_port` are integers and `peer` is a validated [`IpAddr`] rendered
 /// via [`ip_to_ch`] — no device-supplied string ever reaches SQL.
@@ -341,14 +352,14 @@ fn conversations_sql(q: &FlowQuery) -> String {
     let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
     let limit = q.limit.clamp(1, 1000);
     let filters = flow_filters_sql(q);
+    let scope = node_scope_sql(q.node_id);
     // `any(src_as)`/`any(dst_as)` keep one row per (src,dst): grouping by AS too would split a
     // conversation if its stored AS ever varied. AS-per-IP is effectively stable, so `any` is safe.
     format!(
         "SELECT src_ip AS s, dst_ip AS d, any(src_as) AS src_asn, any(dst_as) AS dst_asn, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
          FROM flow_records
-         WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-         GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-        q.node_id
+         WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+         GROUP BY src_ip, dst_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow"
     )
 }
 
@@ -516,12 +527,12 @@ impl FlowStore for ChStore {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
         let filters = flow_filters_sql(q);
+        let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT src_ip AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY src_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY src_ip ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -560,12 +571,12 @@ impl FlowStore for ChStore {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
         let filters = flow_filters_sql(q);
+        let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT dst_port AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY dst_port ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY dst_port ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -584,12 +595,12 @@ impl FlowStore for ChStore {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 256);
         let filters = flow_filters_sql(q);
+        let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT proto AS k, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY proto ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY proto ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -609,12 +620,12 @@ impl FlowStore for ChStore {
         let limit = q.limit.clamp(1, 1000);
         let col = dir.column(); // fixed identifier ("src_as" | "dst_as")
         let filters = flow_filters_sql(q);
+        let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT {col} AS asn, sum(bytes) AS bytes, sum(packets) AS packets, sum(flows) AS flows
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY asn ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY asn ORDER BY bytes DESC LIMIT {limit} FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -637,12 +648,12 @@ impl FlowStore for ChStore {
             .proto
             .map(|p| format!(" AND proto = {p}"))
             .unwrap_or_default();
+        let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT toUnixTimestamp(ts) AS t, proto, sum(bytes) AS bytes, sum(packets) AS packets
              FROM flow_rollup_5m
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){proto_filter}
-             GROUP BY t, proto ORDER BY t ASC FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){proto_filter}
+             GROUP BY t, proto ORDER BY t ASC FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -661,15 +672,15 @@ impl FlowStore for ChStore {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         let limit = q.limit.clamp(1, 1000);
         let filters = flow_filters_sql(q);
+        let scope = node_scope_sql(q.node_id);
         // `uniqExact` is a distinct-count no existing aggregate exposes; ordered by destination
         // fan-out (the horizontal-scan signal). All interpolated values are typed (uuid/ints/IpAddr).
         let sql = format!(
             "SELECT src_ip AS k, uniqExact(dst_ip) AS d, uniqExact(dst_port) AS p, \
                     sum(flows) AS flows, sum(bytes) AS bytes
              FROM flow_records
-             WHERE node_id = '{}' AND ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
-             GROUP BY src_ip ORDER BY d DESC LIMIT {limit} FORMAT JSONEachRow",
-            q.node_id
+             WHERE {scope}ts >= toDateTime({from}) AND ts <= toDateTime({to}){filters}
+             GROUP BY src_ip ORDER BY d DESC LIMIT {limit} FORMAT JSONEachRow"
         );
         Ok(self
             .query_json(&sql)
@@ -715,7 +726,7 @@ impl InMemoryFlowStore {
             .expect("flow fake mutex poisoned")
             .iter()
             .filter(|r| {
-                r.node_id == q.node_id
+                q.node_id.is_none_or(|n| r.node_id == n)
                     && r.ts_unix_ms >= q.from_unix_ms
                     && r.ts_unix_ms <= q.to_unix_ms
                     && q.proto.is_none_or(|p| r.proto == p)
@@ -976,7 +987,7 @@ mod tests {
         // aggregate alias and ClickHouse errors `ILLEGAL_AGGREGATION` (aggregate in WHERE), 500-ing
         // the conversations query so the table AND Sankey silently stop reflecting the AS filter.
         let q = FlowQuery {
-            node_id: Uuid::from_u128(1),
+            node_id: Some(Uuid::from_u128(1)),
             from_unix_ms: 0,
             to_unix_ms: 100_000,
             limit: 10,
@@ -1003,6 +1014,82 @@ mod tests {
             sql.contains("AND (src_as = 15169 OR dst_as = 15169)"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn node_scope_sql_scopes_only_when_node_given() {
+        let id = Uuid::from_u128(1);
+        assert_eq!(node_scope_sql(Some(id)), format!("node_id = '{id}' AND "));
+        assert_eq!(node_scope_sql(None), "");
+    }
+
+    #[test]
+    fn conversations_sql_fleet_omits_node_filter() {
+        // Fleet-wide (node_id: None) must NOT restrict to a node — it aggregates every exporter.
+        let q = FlowQuery {
+            node_id: None,
+            from_unix_ms: 0,
+            to_unix_ms: 100_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+            asn: None,
+        };
+        let sql = conversations_sql(&q);
+        assert!(
+            !sql.contains("node_id ="),
+            "fleet query must not scope to a node: {sql}"
+        );
+        // Still windowed and grouped across all nodes.
+        assert!(sql.contains("WHERE ts >= toDateTime(0)"), "{sql}");
+        assert!(sql.contains("GROUP BY src_ip, dst_ip"), "{sql}");
+    }
+
+    #[tokio::test]
+    async fn in_memory_fleet_query_spans_all_nodes() {
+        let store = InMemoryFlowStore::default();
+        store
+            .insert_batch(&[
+                row(
+                    Uuid::from_u128(1),
+                    "10.0.0.2",
+                    "8.8.8.8",
+                    443,
+                    6,
+                    1000,
+                    1_000,
+                ),
+                row(
+                    Uuid::from_u128(2),
+                    "10.0.0.3",
+                    "8.8.4.4",
+                    443,
+                    6,
+                    500,
+                    1_000,
+                ),
+            ])
+            .await
+            .unwrap();
+        let q = FlowQuery {
+            node_id: None, // fleet-wide
+            from_unix_ms: 0,
+            to_unix_ms: 10_000,
+            limit: 10,
+            proto: None,
+            dst_port: None,
+            peer: None,
+            asn: None,
+        };
+        // Fleet-wide aggregates across both exporters' nodes.
+        assert_eq!(store.top_talkers(&q).await.unwrap().len(), 2);
+        // A node-scoped query still narrows to one.
+        let scoped = FlowQuery {
+            node_id: Some(Uuid::from_u128(1)),
+            ..q
+        };
+        assert_eq!(store.top_talkers(&scoped).await.unwrap().len(), 1);
     }
 
     #[test]
@@ -1038,7 +1125,7 @@ mod tests {
             .unwrap();
 
         let q = FlowQuery {
-            node_id: node,
+            node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
@@ -1076,7 +1163,7 @@ mod tests {
         store.insert_batch(&[r]).await.unwrap();
 
         let q = FlowQuery {
-            node_id: node,
+            node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
@@ -1107,7 +1194,7 @@ mod tests {
             .await
             .unwrap();
         let q = FlowSeriesQuery {
-            node_id: node,
+            node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 1_000_000,
             proto: None,
@@ -1151,7 +1238,7 @@ mod tests {
 
         // Top destination AS: 15169 (1500) then 13335 (300).
         let q = FlowQuery {
-            node_id: node,
+            node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
@@ -1212,7 +1299,7 @@ mod tests {
             .await
             .unwrap();
         let q = FlowQuery {
-            node_id: node,
+            node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,

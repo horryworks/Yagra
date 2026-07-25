@@ -12,12 +12,16 @@ import {
   buildForest,
   calendarMatrix,
   countsTotal,
+  densifyTimeBuckets,
   downCount,
+  flowTrendSeries,
   percentHealthy,
   type StateCounts,
   stateCounts,
   topLevelRollup,
   topLevelRollupFromCounts,
+  trailingIso,
+  trailingSecs,
   worstState,
   worstStateFromCounts,
 } from './util';
@@ -204,5 +208,62 @@ describe('topLevelRollup', () => {
     expect(osaka.pct).toBe(100);
     // Only regions with members are returned (no empty top-level groups).
     expect(stats.every((s) => s.total > 0)).toBe(true);
+  });
+});
+
+describe('flow / event widget helpers', () => {
+  it('trailingSecs returns a window ending at `now` (seconds)', () => {
+    const now = 1_700_000_000_000; // fixed ms
+    const w = trailingSecs(3600, now);
+    expect(w.to).toBe(1_700_000_000);
+    expect(w.from).toBe(1_700_000_000 - 3600);
+  });
+
+  it('trailingIso returns RFC-3339 start/end bracketing the span', () => {
+    const now = 1_700_000_000_000;
+    const w = trailingIso(86_400, now);
+    expect(w.end).toBe(new Date(now).toISOString());
+    expect(w.start).toBe(new Date(now - 86_400_000).toISOString());
+  });
+
+  it('densifyTimeBuckets fills dense trailing bins and drops out-of-range buckets', () => {
+    const now = 10 * 3_600_000; // aligned to an hour boundary
+    const bins = densifyTimeBuckets(
+      [
+        { ts_unix_ms: now, count: 3 }, // current hour → newest (last) bin
+        { ts_unix_ms: now - 3_600_000, count: 5 }, // previous hour
+        { ts_unix_ms: now - 100 * 3_600_000, count: 99 }, // far past — dropped
+      ],
+      24,
+      3_600_000,
+      now,
+    );
+    expect(bins).toHaveLength(24);
+    expect(bins.reduce((n, b) => n + b.count, 0)).toBe(8); // only the two in-range buckets
+    expect(bins[bins.length - 1].count).toBe(3); // newest bin (current hour)
+    expect(bins[bins.length - 2].count).toBe(5); // previous hour
+  });
+
+  it('flowTrendSeries aligns per-protocol series on a shared timestamp axis, top-N by bytes', () => {
+    const nameOf = (p: number) => (p === 6 ? 'TCP' : p === 17 ? 'UDP' : `IP ${p}`);
+    const palette = ['#a', '#b'];
+    const { timestamps, series } = flowTrendSeries(
+      [
+        { ts_unix_ms: 1000, proto: 6, bytes: 100 },
+        { ts_unix_ms: 2000, proto: 6, bytes: 50 },
+        { ts_unix_ms: 1000, proto: 17, bytes: 10 },
+      ],
+      nameOf,
+      palette,
+    );
+    expect(timestamps).toEqual([1, 2]); // seconds, sorted
+    expect(series[0].label).toBe('TCP'); // higher total bytes first
+    expect(series[0].values).toEqual([100, 50]);
+    expect(series[1].label).toBe('UDP');
+    expect(series[1].values).toEqual([10, null]); // gap-filled where absent
+  });
+
+  it('flowTrendSeries is empty for no points', () => {
+    expect(flowTrendSeries([], (p) => String(p), ['#a'])).toEqual({ timestamps: [], series: [] });
   });
 });

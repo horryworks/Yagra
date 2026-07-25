@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import { formatBytes, formatAsn } from '../../lib/format';
+import { PROTO_NAMES, protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
   FlowAsAgg,
@@ -31,36 +32,6 @@ import { buildFlowFilters, toggleFilterValue } from './flowFilters';
 import './FlowTab.css';
 
 const TOP_N = 10;
-
-/** IP protocol number → short name (the common ones); unknown falls back to `IP <n>`. */
-const PROTO_NAMES: Record<number, string> = {
-  1: 'ICMP',
-  2: 'IGMP',
-  6: 'TCP',
-  17: 'UDP',
-  47: 'GRE',
-  50: 'ESP',
-  58: 'ICMPv6',
-  89: 'OSPF',
-  132: 'SCTP',
-};
-const protoName = (p: number): string => PROTO_NAMES[p] ?? `IP ${p}`;
-
-/** Well-known destination ports → service label; others render as the bare number. */
-const PORT_NAMES: Record<number, string> = {
-  22: 'SSH',
-  25: 'SMTP',
-  53: 'DNS',
-  80: 'HTTP',
-  123: 'NTP',
-  161: 'SNMP',
-  179: 'BGP',
-  443: 'HTTPS',
-  514: 'syslog',
-  3389: 'RDP',
-};
-const portLabel = (port: number): string =>
-  PORT_NAMES[port] ? `${port} · ${PORT_NAMES[port]}` : String(port);
 
 /** Group flow points by protocol into aligned chart series (top-N protocols by total bytes). */
 function buildTrend(points: FlowPoint[]): { timestamps: number[]; series: ChartSeries[] } {

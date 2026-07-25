@@ -102,6 +102,80 @@ export function bucketAlertsByHour(
   return buckets;
 }
 
+/** A trailing window `{from,to}` in Unix **seconds** (for the flow widgets). Call inside the
+ *  fetcher so each poll advances the window; `now` is injectable for deterministic tests. */
+export function trailingSecs(spanSecs: number, now: number = Date.now()): { from: number; to: number } {
+  const to = Math.floor(now / 1000);
+  return { from: to - spanSecs, to };
+}
+
+/** A trailing window `{start,end}` as RFC-3339 strings (for the `/events/stats` widgets); `now`
+ *  is injectable for deterministic tests. */
+export function trailingIso(
+  spanSecs: number,
+  now: number = Date.now(),
+): { start: string; end: string } {
+  return { start: new Date(now - spanSecs * 1000).toISOString(), end: new Date(now).toISOString() };
+}
+
+/** Group `FlowPoint`s by protocol into aligned MetricChart series on a shared timestamp axis,
+ *  keeping the top-N protocols by total bytes (N = palette length). Adapted for the fleet
+ *  throughput-trend widget; `nameOf`/`palette` are injected to keep this layer free of chart deps. */
+export function flowTrendSeries(
+  points: { ts_unix_ms: number; proto: number; bytes: number }[],
+  nameOf: (proto: number) => string,
+  palette: string[],
+): { timestamps: number[]; series: { label: string; values: (number | null)[]; color: string }[] } {
+  if (points.length === 0) return { timestamps: [], series: [] };
+  const tsSet = new Set<number>();
+  const byProto = new Map<number, Map<number, number>>();
+  const totals = new Map<number, number>();
+  for (const p of points) {
+    const ts = Math.floor(p.ts_unix_ms / 1000);
+    tsSet.add(ts);
+    let m = byProto.get(p.proto);
+    if (!m) {
+      m = new Map();
+      byProto.set(p.proto, m);
+    }
+    m.set(ts, (m.get(ts) ?? 0) + p.bytes);
+    totals.set(p.proto, (totals.get(p.proto) ?? 0) + p.bytes);
+  }
+  const timestamps = [...tsSet].sort((a, b) => a - b);
+  const topProtos = [...totals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, palette.length)
+    .map(([proto]) => proto);
+  const series = topProtos.map((proto, i) => {
+    const m = byProto.get(proto) ?? new Map<number, number>();
+    return {
+      label: nameOf(proto),
+      values: timestamps.map((ts) => m.get(ts) ?? null),
+      color: palette[i % palette.length],
+    };
+  });
+  return { timestamps, series };
+}
+
+/** Densify a sparse time-bucket series (as returned by `/events/stats?group_by=time`) into `bins`
+ *  trailing bars of width `bucketMs`, oldest first, summing each source bucket into its bin — the
+ *  event-volume histogram's input. `now` is injectable for deterministic tests. */
+export function densifyTimeBuckets(
+  buckets: { ts_unix_ms: number; count: number }[],
+  bins: number,
+  bucketMs: number,
+  now: number = Date.now(),
+): { t: number; count: number }[] {
+  const end = Math.floor(now / bucketMs) * bucketMs + bucketMs;
+  const out = Array.from({ length: bins }, (_, i) => ({ t: end - (bins - i) * bucketMs, count: 0 }));
+  const start = out[0].t;
+  for (const b of buckets) {
+    const idx = Math.floor((b.ts_unix_ms - start) / bucketMs);
+    if (idx >= 0 && idx < bins) out[idx].count += b.count;
+  }
+  return out;
+}
+
 /** A node in the dependency forest (parent → children). */
 export interface TopoTreeNode {
   node: TopologyNode;

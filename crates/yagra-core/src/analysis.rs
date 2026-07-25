@@ -1499,7 +1499,7 @@ impl AnalysisRunner {
             self.progress(id, 15 + (i * 70 / total) as i32, "Reading flow volume…")
                 .await;
             let q = FlowSeriesQuery {
-                node_id: *node,
+                node_id: Some(*node),
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
                 proto: None,
@@ -1581,7 +1581,7 @@ impl AnalysisRunner {
             self.progress(id, 15 + (i * 70 / total) as i32, "Comparing talkers…")
                 .await;
             let recent_q = FlowQuery {
-                node_id: *node,
+                node_id: Some(*node),
                 from_unix_ms: recent_from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 10,
@@ -1659,7 +1659,7 @@ impl AnalysisRunner {
             self.progress(id, 15 + (i * 70 / total) as i32, "Comparing destinations…")
                 .await;
             let recent_q = FlowQuery {
-                node_id: *node,
+                node_id: Some(*node),
                 from_unix_ms: recent_from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 10,
@@ -1772,7 +1772,7 @@ impl AnalysisRunner {
             self.progress(id, 15 + (i * 70 / total) as i32, "Scanning fan-out…")
                 .await;
             let q = FlowQuery {
-                node_id: *node,
+                node_id: Some(*node),
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 50,
@@ -1842,7 +1842,7 @@ impl AnalysisRunner {
             )
             .await;
             let conv_q = FlowQuery {
-                node_id: *node,
+                node_id: Some(*node),
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 5,
@@ -1961,7 +1961,7 @@ impl AnalysisRunner {
             // 3) Dominant flow conversation.
             if let Some(flows) = self.flows.clone() {
                 let q = FlowQuery {
-                    node_id: *node,
+                    node_id: Some(*node),
                     from_unix_ms: from * 1000,
                     to_unix_ms: to * 1000,
                     limit: 1,

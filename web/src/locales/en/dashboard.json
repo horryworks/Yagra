@@ -75,7 +75,9 @@
       "performance": "Performance hotspots",
       "sites": "Sites & topology",
       "capacity": "Capacity & traffic",
-      "monitoring": "Monitoring health"
+      "monitoring": "Monitoring health",
+      "events": "Passive events",
+      "flow": "Traffic flow"
     },
     "widgets": {
       "status-summary": {
@@ -201,6 +203,58 @@
       "audit": {
         "title": "Recent changes",
         "blurb": "Latest config/admin actions (audit log; admin-only)."
+      },
+      "event-feed": {
+        "title": "Recent events",
+        "blurb": "Live syslog / trap / webhook feed."
+      },
+      "event-volume": {
+        "title": "Event volume",
+        "blurb": "Events received per hour over the last 24h."
+      },
+      "event-kind-mix": {
+        "title": "Event kinds",
+        "blurb": "Breakdown by syslog / trap / webhook."
+      },
+      "top-trap-types": {
+        "title": "Top trap types",
+        "blurb": "Most frequent SNMP trap types."
+      },
+      "event-triage-mix": {
+        "title": "Event outcomes",
+        "blurb": "How the pipeline triaged events (fired / cleared / …)."
+      },
+      "noisy-event-sources": {
+        "title": "Noisiest sources",
+        "blurb": "Devices sending the most events."
+      },
+      "event-rule-coverage": {
+        "title": "Rule coverage",
+        "blurb": "Share of events matched by a rule."
+      },
+      "flow-top-talkers": {
+        "title": "Top talkers",
+        "blurb": "Source hosts by traffic (all exporters)."
+      },
+      "flow-top-as": {
+        "title": "Top AS",
+        "blurb": "Autonomous systems by traffic (source / destination)."
+      },
+      "flow-top-ports": {
+        "title": "Top ports",
+        "blurb": "Destination ports / apps by traffic."
+      },
+      "flow-proto-mix": {
+        "title": "Protocol mix",
+        "blurb": "Traffic by IP protocol."
+      },
+      "flow-conversations": {
+        "title": "Conversations",
+        "blurb": "Top src→dst flows as a Sankey."
+      },
+      "flow-trend": {
+        "title": "Throughput trend",
+        "blurb": "Traffic over time by protocol."
       }
     }
   },
@@ -334,6 +388,56 @@
     "dependency": {
       "empty": "No nodes in the inventory.",
       "depthLimit": "… depth limit reached (possible dependency cycle)"
+    },
+    "eventFeed": {
+      "empty": "No events received yet.",
+      "kindAria": "Event kind filter",
+      "allKinds": "All kinds",
+      "syslog": "syslog",
+      "trap": "trap",
+      "webhook": "webhook",
+      "viewAll": "View all"
+    },
+    "eventVolume": {
+      "empty": "No events in the last 24h.",
+      "aria": "events received per hour over the last 24 hours",
+      "count_one": "{{count}} event",
+      "count_other": "{{count}} events"
+    },
+    "eventKind": {
+      "empty": "No events to summarize.",
+      "events": "events"
+    },
+    "eventTriage": {
+      "empty": "No events to summarize.",
+      "action": {
+        "fired": "Fired",
+        "refreshed": "Refreshed",
+        "cleared": "Cleared",
+        "suppressed": "Suppressed",
+        "info": "Info",
+        "none": "Unmatched"
+      }
+    },
+    "topTraps": {
+      "empty": "No traps received."
+    },
+    "noisySources": {
+      "empty": "No event sources yet."
+    },
+    "eventCoverage": {
+      "caption": "{{matched}}/{{total}} matched a rule"
+    },
+    "flow": {
+      "unavailable": "Flow monitoring isn't enabled.",
+      "empty": "No flow data yet.",
+      "asUnknown": "Unknown AS",
+      "bytes": "bytes"
+    },
+    "flowTopAs": {
+      "dirAria": "AS direction",
+      "dst": "Destination",
+      "src": "Source"
     }
   },
   "primitives": {

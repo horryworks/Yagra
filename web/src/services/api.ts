@@ -30,6 +30,8 @@ import type {
   EventRuleInput,
   EventRuleTestResult,
   EventSource,
+  EventStatBucket,
+  EventTimeBucket,
   FleetCoverage,
   FleetGroupSummary,
   FleetSummary,
@@ -227,6 +229,30 @@ function flowParams(
   if (opts.asn != null) params.set('asn', String(opts.asn));
   if (opts.dir) params.set('dir', opts.dir);
   return params.toString();
+}
+
+/** Shared filter for the `/events/stats` summary endpoint — mirrors the event-log filter (no paging
+ *  cursor). Blank fields are dropped; core parses/validates them. */
+export interface EventStatsFilter {
+  start?: string;
+  end?: string;
+  kind?: EventKind;
+  node_id?: string;
+  matched?: boolean;
+  q?: string;
+  regex?: boolean;
+}
+
+function eventStatsParams(f: EventStatsFilter): URLSearchParams {
+  const p = new URLSearchParams();
+  if (f.start) p.set('start', f.start);
+  if (f.end) p.set('end', f.end);
+  if (f.kind) p.set('kind', f.kind);
+  if (f.node_id) p.set('node_id', f.node_id);
+  if (f.matched != null) p.set('matched', String(f.matched));
+  if (f.q) p.set('q', f.q);
+  if (f.regex) p.set('regex', 'true');
+  return p;
 }
 
 /** Public client bootstrap config (no secrets). */
@@ -1111,6 +1137,30 @@ export const api = {
   closeEventAlert: (node: string, check: string): Promise<void> =>
     request('/events/alerts/close', jsonBody('POST', { node, check })),
 
+  /** Categorical passive-event summary counts (kind/action/trap/source), ordered by count desc.
+   *  Backed by the log store when enabled, else PostgreSQL — same filter as the event log. */
+  getEventStats: (
+    groupBy: 'kind' | 'action' | 'trap' | 'source',
+    opts?: EventStatsFilter & { limit?: number },
+  ): Promise<EventStatBucket[]> => {
+    const p = eventStatsParams(opts ?? {});
+    p.set('group_by', groupBy);
+    if (opts?.limit != null) p.set('limit', String(opts.limit));
+    return request(`/events/stats?${p.toString()}`);
+  },
+
+  /** Passive-event volume time series (counts per `bucketSecs` window; `splitKind` adds a per-kind
+   *  breakdown). */
+  getEventVolume: (
+    opts?: EventStatsFilter & { bucketSecs?: number; splitKind?: boolean },
+  ): Promise<EventTimeBucket[]> => {
+    const p = eventStatsParams(opts ?? {});
+    p.set('group_by', 'time');
+    if (opts?.bucketSecs != null) p.set('bucket_secs', String(opts.bucketSecs));
+    if (opts?.splitKind) p.set('split', 'kind');
+    return request(`/events/stats?${p.toString()}`);
+  },
+
   // ── Flow analysis (ADR-031) — served only when a ClickHouse flow store is configured; the
   // endpoints 503 (`flow_unavailable`) otherwise. `from`/`to` are unix seconds. ──
   /** Bytes/packets over time per protocol (trend) for a node/window (proto filter applies). */
@@ -1154,6 +1204,37 @@ export const api = {
     opts: { from: number; to: number; limit?: number; dir?: 'src' | 'dst' } & FlowFilters,
   ): Promise<FlowAsAgg[]> =>
     request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-as?${flowParams(opts)}`),
+
+  // ── Fleet-wide flow (all exporters) — the dashboard Traffic-flow widgets. Same shapes as the
+  // per-node endpoints, no node scope; same 503 (`flow_unavailable`) gate. ──
+  /** Fleet bytes/packets over time per protocol (trend). */
+  getFlowSeries: (opts: { from: number; to: number } & FlowFilters): Promise<FlowPoint[]> =>
+    request(`/flow/series?${flowParams(opts)}`),
+
+  /** Fleet top source hosts by bytes. */
+  getFlowTopTalkers: (
+    opts: { from: number; to: number; limit?: number } & FlowFilters,
+  ): Promise<FlowTalker[]> => request(`/flow/top-talkers?${flowParams(opts)}`),
+
+  /** Fleet top src→dst conversations by bytes. */
+  getFlowConversations: (
+    opts: { from: number; to: number; limit?: number } & FlowFilters,
+  ): Promise<FlowConversation[]> => request(`/flow/conversations?${flowParams(opts)}`),
+
+  /** Fleet top destination ports by bytes. */
+  getFlowTopPorts: (
+    opts: { from: number; to: number; limit?: number } & FlowFilters,
+  ): Promise<FlowPortAgg[]> => request(`/flow/top-ports?${flowParams(opts)}`),
+
+  /** Fleet traffic by IP protocol. */
+  getFlowProtocols: (
+    opts: { from: number; to: number; limit?: number } & FlowFilters,
+  ): Promise<FlowProtoAgg[]> => request(`/flow/protocols?${flowParams(opts)}`),
+
+  /** Fleet top autonomous systems by bytes (`dir` = 'src' | 'dst', default 'dst'). */
+  getFlowTopAs: (
+    opts: { from: number; to: number; limit?: number; dir?: 'src' | 'dst' } & FlowFilters,
+  ): Promise<FlowAsAgg[]> => request(`/flow/top-as?${flowParams(opts)}`),
 
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),

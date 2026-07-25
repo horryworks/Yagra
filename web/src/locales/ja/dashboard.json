@@ -75,7 +75,9 @@
       "performance": "パフォーマンスのホットスポット",
       "sites": "サイトとトポロジ",
       "capacity": "キャパシティとトラフィック",
-      "monitoring": "監視ヘルス"
+      "monitoring": "監視ヘルス",
+      "events": "パッシブ監視",
+      "flow": "フロー監視"
     },
     "widgets": {
       "status-summary": {
@@ -201,6 +203,58 @@
       "audit": {
         "title": "最近の変更",
         "blurb": "直近の設定/管理操作（監査ログ、管理者のみ）。"
+      },
+      "event-feed": {
+        "title": "最新イベント",
+        "blurb": "syslog / トラップ / Webhook のライブフィード。"
+      },
+      "event-volume": {
+        "title": "イベント量",
+        "blurb": "過去24時間の1時間あたり受信イベント数。"
+      },
+      "event-kind-mix": {
+        "title": "イベント種別",
+        "blurb": "syslog / トラップ / Webhook の内訳。"
+      },
+      "top-trap-types": {
+        "title": "トラップ種別 上位",
+        "blurb": "頻度の高い SNMP トラップ種別。"
+      },
+      "event-triage-mix": {
+        "title": "処理結果",
+        "blurb": "イベントのトリアージ結果（発報 / 解消 など）。"
+      },
+      "noisy-event-sources": {
+        "title": "最も騒がしい送信元",
+        "blurb": "最も多くイベントを送る機器。"
+      },
+      "event-rule-coverage": {
+        "title": "ルールカバレッジ",
+        "blurb": "ルールに一致したイベントの割合。"
+      },
+      "flow-top-talkers": {
+        "title": "トップトーカー",
+        "blurb": "トラフィック量の多い送信元ホスト（全エクスポーター）。"
+      },
+      "flow-top-as": {
+        "title": "トップ AS",
+        "blurb": "トラフィック量の多い AS（送信元 / 宛先）。"
+      },
+      "flow-top-ports": {
+        "title": "トップポート",
+        "blurb": "トラフィック量の多い宛先ポート / アプリ。"
+      },
+      "flow-proto-mix": {
+        "title": "プロトコル構成",
+        "blurb": "IP プロトコル別トラフィック。"
+      },
+      "flow-conversations": {
+        "title": "会話",
+        "blurb": "上位の送信元→宛先フローを Sankey で表示。"
+      },
+      "flow-trend": {
+        "title": "スループット推移",
+        "blurb": "プロトコル別のトラフィック推移。"
       }
     }
   },
@@ -331,6 +385,55 @@
     "dependency": {
       "empty": "インベントリにノードがありません。",
       "depthLimit": "… 深さの上限に達しました（依存関係の循環の可能性）"
+    },
+    "eventFeed": {
+      "empty": "受信イベントはまだありません。",
+      "kindAria": "イベント種別フィルタ",
+      "allKinds": "すべての種別",
+      "syslog": "syslog",
+      "trap": "トラップ",
+      "webhook": "Webhook",
+      "viewAll": "すべて表示"
+    },
+    "eventVolume": {
+      "empty": "過去24時間にイベントはありません。",
+      "aria": "過去24時間の1時間あたり受信イベント数",
+      "count_other": "{{count}} 件"
+    },
+    "eventKind": {
+      "empty": "集計するイベントがありません。",
+      "events": "件"
+    },
+    "eventTriage": {
+      "empty": "集計するイベントがありません。",
+      "action": {
+        "fired": "発報",
+        "refreshed": "更新",
+        "cleared": "解消",
+        "suppressed": "抑制",
+        "info": "情報",
+        "none": "未一致"
+      }
+    },
+    "topTraps": {
+      "empty": "受信したトラップはありません。"
+    },
+    "noisySources": {
+      "empty": "イベント送信元はまだありません。"
+    },
+    "eventCoverage": {
+      "caption": "{{matched}}/{{total}} 件がルールに一致"
+    },
+    "flow": {
+      "unavailable": "フロー監視は有効化されていません。",
+      "empty": "フローデータはまだありません。",
+      "asUnknown": "不明な AS",
+      "bytes": "バイト"
+    },
+    "flowTopAs": {
+      "dirAria": "AS の方向",
+      "dst": "宛先",
+      "src": "送信元"
     }
   },
   "primitives": {

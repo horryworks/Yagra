@@ -327,6 +327,14 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/nodes/:node_id/flow/top-as",
             get(get_node_flow_top_as),
         )
+        // Fleet-wide flow (all exporters) — the dashboard Traffic-flow widgets. Same six
+        // aggregations without a node scope.
+        .route("/api/v1/flow/series", get(get_flow_series))
+        .route("/api/v1/flow/top-talkers", get(get_flow_top_talkers))
+        .route("/api/v1/flow/conversations", get(get_flow_conversations))
+        .route("/api/v1/flow/top-ports", get(get_flow_top_ports))
+        .route("/api/v1/flow/protocols", get(get_flow_protocols))
+        .route("/api/v1/flow/top-as", get(get_flow_top_as))
         .route(
             "/api/v1/collection-templates",
             get(list_collection_templates).post(create_collection_template),
@@ -518,6 +526,7 @@ pub fn router(state: ApiState) -> Router {
             put(update_event_rule).delete(delete_event_rule),
         )
         .route("/api/v1/events", get(list_events))
+        .route("/api/v1/events/stats", get(events_stats))
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         .route("/api/v1/audit", get(list_audit))
         .route("/api/v1/dashboard", get(get_dashboard).put(put_dashboard))
@@ -1302,10 +1311,10 @@ fn flow_unavailable() -> Response {
     )
 }
 
-/// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` comes typed from the
-/// path; the window is converted to ms and the limit clamped — no untrusted string ever reaches the
-/// store query.
-fn flow_query_params(node_id: Uuid, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
+/// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
+/// path) for a per-node query or `None` for the fleet-wide (all-exporters) endpoints; the window is
+/// converted to ms and the limit clamped — no untrusted string ever reaches the store query.
+fn flow_query_params(node_id: Option<Uuid>, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
     let to = q.to.unwrap_or_else(now_unix_s);
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
     let limit = q.limit.unwrap_or(20).clamp(1, 1000);
@@ -1339,6 +1348,36 @@ fn flow_query_failed(what: &str, e: &anyhow::Error) -> Response {
     internal("flow query failed")
 }
 
+/// Fill conversation `*_as_name` fields from the hot-swappable IP→ASN table (a reloader may swap it
+/// concurrently, so snapshot once). Names are resolved here, never stored (flowstore.rs leaves them
+/// `None`). Shared by the per-node and fleet conversation endpoints.
+fn resolve_conversation_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowConversation]) {
+    let db = st.ipasn.read().unwrap().clone();
+    if let Some(db) = &db {
+        for r in rows.iter_mut() {
+            if r.src_asn != 0 {
+                r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
+            }
+            if r.dst_asn != 0 {
+                r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
+            }
+        }
+    }
+}
+
+/// Fill AS-aggregate `name` fields from the hot-swappable IP→ASN table. Shared by the per-node and
+/// fleet top-AS endpoints.
+fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
+    let db = st.ipasn.read().unwrap().clone();
+    if let Some(db) = &db {
+        for r in rows.iter_mut() {
+            if r.asn != 0 {
+                r.name = db.name_of(r.asn).map(str::to_owned);
+            }
+        }
+    }
+}
+
 /// `GET /api/v1/nodes/:node_id/flow/series` — bytes/packets over time per protocol (trend).
 async fn get_node_flow_series(
     State(st): State<ApiState>,
@@ -1352,7 +1391,7 @@ async fn get_node_flow_series(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     let sq = crate::flowstore::FlowSeriesQuery {
         node_id: fq.node_id,
         from_unix_ms: fq.from_unix_ms,
@@ -1378,7 +1417,7 @@ async fn get_node_flow_top_talkers(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     match store.top_talkers(&fq).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => flow_query_failed("top-talkers", &e),
@@ -1398,21 +1437,10 @@ async fn get_node_flow_conversations(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     match store.top_conversations(&fq).await {
         Ok(mut rows) => {
-            // Resolve AS org names from the hot-swappable IP→ASN table (same pattern as top-as).
-            let db = st.ipasn.read().unwrap().clone();
-            if let Some(db) = &db {
-                for r in &mut rows {
-                    if r.src_asn != 0 {
-                        r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
-                    }
-                    if r.dst_asn != 0 {
-                        r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
-                    }
-                }
-            }
+            resolve_conversation_as_names(&st, &mut rows);
             Json(rows).into_response()
         }
         Err(e) => flow_query_failed("conversations", &e),
@@ -1432,7 +1460,7 @@ async fn get_node_flow_top_ports(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     match store.top_ports(&fq).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => flow_query_failed("top-ports", &e),
@@ -1452,7 +1480,7 @@ async fn get_node_flow_protocols(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     match store.top_protocols(&fq).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => flow_query_failed("protocols", &e),
@@ -1473,22 +1501,146 @@ async fn get_node_flow_top_as(
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(node_id, &q);
+    let fq = flow_query_params(Some(node_id), &q);
     let dir = flow_as_dir(&q);
     match store.top_as(&fq, dir).await {
         Ok(mut rows) => {
-            // Snapshot the hot-swappable table (a reloader may swap it concurrently).
-            let db = st.ipasn.read().unwrap().clone();
-            if let Some(db) = &db {
-                for r in &mut rows {
-                    if r.asn != 0 {
-                        r.name = db.name_of(r.asn).map(str::to_owned);
-                    }
-                }
-            }
+            resolve_as_names(&st, &mut rows);
             Json(rows).into_response()
         }
         Err(e) => flow_query_failed("top-as", &e),
+    }
+}
+
+// ── Fleet-wide flow (all exporters, ADR-031) ─────────────────────────────────────────
+// The same six aggregations as the per-node endpoints, but across every exporter's node (no node
+// scope — `flow_query_params(None, …)`). Same store methods, same DTOs, same auth + 503 gate; the
+// dashboard's Traffic-flow widgets read these.
+
+/// `GET /api/v1/flow/series` — fleet bytes/packets over time per protocol.
+async fn get_flow_series(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    let sq = crate::flowstore::FlowSeriesQuery {
+        node_id: fq.node_id,
+        from_unix_ms: fq.from_unix_ms,
+        to_unix_ms: fq.to_unix_ms,
+        proto: fq.proto,
+    };
+    match store.series(&sq).await {
+        Ok(points) => Json(points).into_response(),
+        Err(e) => flow_query_failed("fleet series", &e),
+    }
+}
+
+/// `GET /api/v1/flow/top-talkers` — fleet top source hosts by bytes.
+async fn get_flow_top_talkers(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    match store.top_talkers(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("fleet top-talkers", &e),
+    }
+}
+
+/// `GET /api/v1/flow/conversations` — fleet top src→dst conversations by bytes (AS names resolved).
+async fn get_flow_conversations(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    match store.top_conversations(&fq).await {
+        Ok(mut rows) => {
+            resolve_conversation_as_names(&st, &mut rows);
+            Json(rows).into_response()
+        }
+        Err(e) => flow_query_failed("fleet conversations", &e),
+    }
+}
+
+/// `GET /api/v1/flow/top-ports` — fleet top destination ports by bytes.
+async fn get_flow_top_ports(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    match store.top_ports(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("fleet top-ports", &e),
+    }
+}
+
+/// `GET /api/v1/flow/protocols` — fleet traffic by IP protocol.
+async fn get_flow_protocols(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    match store.top_protocols(&fq).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => flow_query_failed("fleet protocols", &e),
+    }
+}
+
+/// `GET /api/v1/flow/top-as` — fleet top autonomous systems by bytes (`dir=src|dst`, default `dst`).
+async fn get_flow_top_as(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<FlowRangeQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(store) = st.flows.clone() else {
+        return flow_unavailable();
+    };
+    let fq = flow_query_params(None, &q);
+    let dir = flow_as_dir(&q);
+    match store.top_as(&fq, dir).await {
+        Ok(mut rows) => {
+            resolve_as_names(&st, &mut rows);
+            Json(rows).into_response()
+        }
+        Err(e) => flow_query_failed("fleet top-as", &e),
     }
 }
 
@@ -8000,6 +8152,95 @@ fn normalize_event_search(q: Option<&str>) -> Option<String> {
         .map(|s| s.chars().take(200).collect())
 }
 
+/// Parse + validate the shared event-filter fields (the same set for the event log and
+/// `/events/stats`), returning the typed [`crate::events::EventFilter`] or a ready 4xx `Response`.
+/// (`Response` is intrinsically large; the error path is rare, so returning it by value is fine.)
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+fn parse_event_filter(
+    before: Option<&str>,
+    start: Option<&str>,
+    end: Option<&str>,
+    kind: Option<String>,
+    node_id: Option<Uuid>,
+    matched: Option<bool>,
+    q: Option<&str>,
+    regex: bool,
+) -> Result<crate::events::EventFilter, Response> {
+    fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    }
+    fn bad_ts(field: &str, code: &str) -> Response {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            code,
+            format!("{field} must be an RFC 3339 timestamp"),
+        )
+    }
+    let before = match before {
+        None => None,
+        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("before", "invalid_cursor"))?),
+    };
+    let since = match start {
+        None => None,
+        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("start", "invalid_filter"))?),
+    };
+    let until = match end {
+        None => None,
+        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("end", "invalid_filter"))?),
+    };
+    if let Some(k) = kind.as_deref() {
+        if !matches!(k, "syslog" | "trap" | "webhook") {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_filter",
+                "kind must be syslog, trap, or webhook".to_owned(),
+            ));
+        }
+    }
+    let search = normalize_event_search(q);
+    // Validate a regex pattern at the edge (size limit / ReDoS guard, shared with rule compilation)
+    // so a malformed or pathological pattern never reaches the store.
+    if regex {
+        if let Some(term) = search.as_deref() {
+            if let Err(e) = crate::events::compile_matcher("regex", term) {
+                return Err(error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_filter",
+                    format!("invalid regular expression: {e}"),
+                ));
+            }
+        }
+    }
+    Ok(crate::events::EventFilter {
+        before,
+        since,
+        until,
+        kind,
+        node_id,
+        matched,
+        search,
+        regex,
+    })
+}
+
+/// Resolve a free-text (non-regex) event search term to matching node ids, for the log-store path's
+/// node-name search (the name never enters the store — ADR-011 query-time join). Empty otherwise.
+async fn event_search_name_node_ids(
+    admin: &AdminState,
+    filter: &crate::events::EventFilter,
+) -> Vec<Uuid> {
+    match (filter.regex, filter.search.as_deref()) {
+        (false, Some(term)) => admin
+            .repo
+            .node_ids_by_name_like(term, 50)
+            .await
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 async fn list_events(
     State(st): State<ApiState>,
     headers: HeaderMap,
@@ -8011,84 +8252,18 @@ async fn list_events(
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
     }
-    fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-        chrono::DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|t| t.with_timezone(&chrono::Utc))
-    }
-    let before = match q.before.as_deref() {
-        None => None,
-        Some(s) => match parse_rfc3339(s) {
-            Some(t) => Some(t),
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "before must be an RFC 3339 timestamp".to_owned(),
-                );
-            }
-        },
-    };
-    // User-facing time-range bounds (inclusive), independent of the `before` paging cursor.
-    let since = match q.start.as_deref() {
-        None => None,
-        Some(s) => match parse_rfc3339(s) {
-            Some(t) => Some(t),
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_filter",
-                    "start must be an RFC 3339 timestamp".to_owned(),
-                );
-            }
-        },
-    };
-    let until = match q.end.as_deref() {
-        None => None,
-        Some(s) => match parse_rfc3339(s) {
-            Some(t) => Some(t),
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_filter",
-                    "end must be an RFC 3339 timestamp".to_owned(),
-                );
-            }
-        },
-    };
-    if let Some(kind) = q.kind.as_deref() {
-        if !matches!(kind, "syslog" | "trap" | "webhook") {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_filter",
-                "kind must be syslog, trap, or webhook".to_owned(),
-            );
-        }
-    }
-    let regex = q.regex.unwrap_or(false);
-    let search = normalize_event_search(q.q.as_deref());
-    // Validate a regex pattern at the edge (size limit / ReDoS guard, shared with rule compilation)
-    // so a malformed or pathological pattern never reaches the store.
-    if regex {
-        if let Some(term) = search.as_deref() {
-            if let Err(e) = crate::events::compile_matcher("regex", term) {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_filter",
-                    format!("invalid regular expression: {e}"),
-                );
-            }
-        }
-    }
-    let filter = crate::events::EventFilter {
-        before,
-        since,
-        until,
-        kind: q.kind,
-        node_id: q.node_id,
-        matched: q.matched,
-        search,
-        regex,
+    let filter = match parse_event_filter(
+        q.before.as_deref(),
+        q.start.as_deref(),
+        q.end.as_deref(),
+        q.kind,
+        q.node_id,
+        q.matched,
+        q.q.as_deref(),
+        q.regex.unwrap_or(false),
+    ) {
+        Ok(f) => f,
+        Err(resp) => return resp,
     };
     let limit = q.limit.unwrap_or(100);
     // When the log store is enabled (ADR-024) it is the search source of record (it holds the full
@@ -8097,14 +8272,7 @@ async fn list_events(
     // log store — ADR-011 query-time join). Regex search is message-only, so it skips name
     // resolution. Without a log store, fall back to the PostgreSQL path.
     let rows = if let Some(logs) = st.logs.as_ref() {
-        let name_node_ids = match (filter.regex, filter.search.as_deref()) {
-            (false, Some(term)) => admin
-                .repo
-                .node_ids_by_name_like(term, 50)
-                .await
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        let name_node_ids = event_search_name_node_ids(admin, &filter).await;
         logs.search(&filter, &name_node_ids, limit).await
     } else {
         admin.events.list_events(&filter, limit).await
@@ -8114,6 +8282,96 @@ async fn list_events(
         Err(e) => {
             tracing::error!(error = %e, "list events failed");
             internal("failed to list events")
+        }
+    }
+}
+
+/// Query params for `/events/stats`: the event-filter set (shared with the log; no paging cursor)
+/// plus the aggregation controls — `group_by` (kind|action|trap|source|time), `limit` (categorical
+/// row cap), and for the `time` series `bucket_secs` + `split=kind`.
+#[derive(Deserialize)]
+struct EventStatsQuery {
+    start: Option<String>,
+    end: Option<String>,
+    kind: Option<String>,
+    node_id: Option<Uuid>,
+    matched: Option<bool>,
+    q: Option<String>,
+    regex: Option<bool>,
+    group_by: Option<String>,
+    limit: Option<i64>,
+    bucket_secs: Option<i64>,
+    split: Option<String>,
+}
+
+/// `GET /api/v1/events/stats` — fleet passive-event summary aggregates for the dashboard widgets.
+/// Categorical (`group_by=kind|action|trap|source`) returns `EventStatBucket[]` ordered by count;
+/// `group_by=time` returns `EventTimeBucket[]` (volume series). Routes to the log store when enabled
+/// (accurate over the full firehose) else PostgreSQL (accurate within retention) — same dual path as
+/// the event log, so the summaries line up with it.
+async fn events_stats(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Query(q): Query<EventStatsQuery>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let filter = match parse_event_filter(
+        None,
+        q.start.as_deref(),
+        q.end.as_deref(),
+        q.kind,
+        q.node_id,
+        q.matched,
+        q.q.as_deref(),
+        q.regex.unwrap_or(false),
+    ) {
+        Ok(f) => f,
+        Err(resp) => return resp,
+    };
+    let group_by = q.group_by.as_deref().unwrap_or("kind");
+    // Time-series path (event-volume histogram).
+    if group_by == "time" {
+        let bucket = q.bucket_secs.unwrap_or(3600);
+        let split_kind = q.split.as_deref() == Some("kind");
+        let res = if let Some(logs) = st.logs.as_ref() {
+            let ids = event_search_name_node_ids(admin, &filter).await;
+            logs.stats_series(&filter, &ids, bucket, split_kind).await
+        } else {
+            admin.events.stats_series(&filter, bucket, split_kind).await
+        };
+        return match res {
+            Ok(buckets) => Json(buckets).into_response(),
+            Err(e) => {
+                tracing::error!(error = %e, "event stats series failed");
+                internal("failed to compute event stats")
+            }
+        };
+    }
+    // Categorical path (breakdown by kind/action/trap/source).
+    let Some(group) = crate::events::EventStatGroup::parse(group_by) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_filter",
+            "group_by must be kind, action, trap, source, or time".to_owned(),
+        );
+    };
+    let limit = q.limit.unwrap_or(12);
+    let res = if let Some(logs) = st.logs.as_ref() {
+        let ids = event_search_name_node_ids(admin, &filter).await;
+        logs.stats_grouped(&filter, &ids, group, limit).await
+    } else {
+        admin.events.stats_grouped(&filter, group, limit).await
+    };
+    match res {
+        Ok(buckets) => Json(buckets).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "event stats grouped failed");
+            internal("failed to compute event stats")
         }
     }
 }

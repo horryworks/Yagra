@@ -1240,3 +1240,25 @@ export interface EventRow {
   matched_rule_id: string | null;
   action: 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
 }
+
+/** The categorical event `action` outcomes (pipeline result). */
+export type EventAction = 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
+
+/** One categorical `/events/stats` bucket (mirrors the Rust `EventStatBucket`). `key` is stable for
+ *  the list key + fallback display; `label` is a server-resolved display hint (e.g. a trap's MIB
+ *  name); `node_id` is set for source grouping when the source maps to an inventory node (resolve
+ *  its name via `useEntityNames`, per the no-raw-UUID rule). */
+export interface EventStatBucket {
+  key: string;
+  label?: string | null;
+  node_id?: string | null;
+  count: number;
+}
+
+/** One time bucket for the `/events/stats?group_by=time` volume series (mirrors the Rust
+ *  `EventTimeBucket`). `by_kind` is present only when `split=kind` was requested. */
+export interface EventTimeBucket {
+  ts_unix_ms: number;
+  count: number;
+  by_kind?: Record<string, number> | null;
+}
