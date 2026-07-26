@@ -36,7 +36,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 rust-version = "1.90"
 license = "AGPL-3.0-only"
@@ -107,8 +107,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 # System trust anchors for TLS destinations (the container's CA bundle).
 rustls-native-certs = "0.8"
-# PEM → DER for an operator-supplied CA certificate, and for a Google service-account private key.
-rustls-pemfile = "2"
+# NB PEM → DER (operator-supplied CA certificate, Google service-account private key) used to go
+# through `rustls-pemfile`, dropped for RUSTSEC-2025-0134 (crate unmaintained, repo archived Aug
+# 2025). Its final release was already a thin wrapper over the same parser that ships inside
+# rustls-pki-types, so the call sites now use `rustls::pki_types::pem::PemObject` directly — same
+# code, one fewer unmaintained hop, and no new dependency (rustls re-exports `pki_types`).
 # RS256 signing of the Google service-account assertion for BigQuery forwarding destinations
 # (ADR-034 Increment 3). Deliberately `ring` and not the `rsa` crate: ring is already in this tree as
 # the rustls crypto provider (so this adds no build cost), its RSA signing is constant-time, and it

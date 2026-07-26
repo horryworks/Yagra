@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { chainSummary, chainToRows, failureLabel, recordTypeLabel, recordValue } from './dnsChain';
 import type { DnsChain, DnsHop } from '../../types/api';

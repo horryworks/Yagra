@@ -245,7 +245,11 @@ services:
     #   - "${YAGRA_NATS_PORT:-4222}:4222"   # bus — expose ONLY with TLS+auth enabled above
 
   victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
+    # Pinned, not `:latest` — this holds the metrics history, and ADR-017 makes "an upgrade must
+    # never lose or corrupt data" a top-tier policy. The deploy job pulls on every push to main, so
+    # a floating tag would silently roll the storage engine on an unrelated code deploy. Bump this
+    # deliberately, with a backup.
+    image: victoriametrics/victoria-metrics:v1.148.0
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
@@ -254,7 +258,8 @@ services:
   # Event log store — VictoriaLogs (ADR-024): full passive-event firehose for full-text search,
   # 30-day retention. The 90-day must-preserve subset is the alert-linked rows in PostgreSQL.
   victorialogs:
-    image: victoriametrics/victoria-logs:latest
+    # Pinned for the same reason as victoriametrics above.
+    image: victoriametrics/victoria-logs:v1.52.0
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
     volumes:
       - vldata:/victoria-logs-data

@@ -1,9 +1,16 @@
-// ESLint flat config (ESLint v9). The project had no v9 `eslint.config.js`, so `npm run lint`
+// ESLint flat config (ESLint v10). The project had no flat `eslint.config.js`, so `npm run lint`
 // previously failed to start; this restores linting for the React + TypeScript WebUI.
 //
 // Scope is intentionally pragmatic: JS + typescript-eslint recommended (no type-aware rules, so
 // no tsconfig project wiring needed) plus the React Hooks rules — the bugs that actually bite a
 // hooks-based SPA. Tighten further over time.
+//
+// NB `eslint-plugin-react-hooks` v7 (required for ESLint 10) folded the whole **React Compiler**
+// rule pack into its `recommended` preset — ~25 extra rules (`set-state-in-effect`,
+// `incompatible-library`, `immutability`, …) that are compiler-optimization advice, not the
+// correctness rules this config was built around. Spreading `recommended` here would turn a clean
+// lint into 37 errors overnight. So the two original rules are enabled **by name** instead, holding
+// the established baseline; adopting the compiler pack is a separate, deliberate decision.
 import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
@@ -26,7 +33,8 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },

@@ -1322,8 +1322,8 @@ fn tls_connector(ca_cert: Option<&str>) -> Result<tokio_rustls::TlsConnector, St
     }
     let mut added = 0usize;
     if let Some(pem) = ca_cert.map(str::trim).filter(|p| !p.is_empty()) {
-        let mut cursor = std::io::Cursor::new(pem.as_bytes());
-        for cert in rustls_pemfile::certs(&mut cursor) {
+        use rustls::pki_types::{pem::PemObject, CertificateDer};
+        for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
             let cert = cert.map_err(|e| format!("CA certificate is not valid PEM: {e}"))?;
             roots
                 .add(cert)

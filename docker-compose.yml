@@ -33,11 +33,15 @@ services:
       # YAGRA_FLOW_RETENTION_DAYS: "30"
       # Optional offline IP→ASN enrichment for flow AS (ADR-031 Increment 3, default-OFF). Non-BGP
       # exporters send AS=0; when this points at an iptoasn.com TSV, core fills those zeros and shows
-      # AS names. Fetch once (no runtime egress; update = replace + restart):
-      #   mkdir -p ./data/ipasn && curl -s https://iptoasn.com/data/ip2asn-combined.tsv.gz \
-      #     | gunzip > ./data/ipasn/ip2asn.tsv
-      # Uncomment together with the ipasn volume mount below.
+      # AS names. The dataset comes from the `ipasn-updater` sidecar below via the named `ipasndata`
+      # volume — core hot-reloads the file every YAGRA_IPASN_RELOAD_SECS, so a refresh needs no
+      # restart. Uncomment both lines here plus the volume mount and the sidecar.
+      #
+      # NB use the named volume, NOT a host bind-mount like `./data/ipasn`. A host path is written
+      # by the container as root, and the deploy job's `git clean -ffdx` then can't remove it —
+      # which fails the checkout outright. The named volume sidesteps that and survives redeploys.
       # YAGRA_IPASN_DB: /data/ipasn/ip2asn.tsv
+      # YAGRA_IPASN_RELOAD_SECS: "21600"
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): filesystems core reports
       # capacity for. `root` = the container rootfs; `metrics` = the VictoriaMetrics data volume
       # (mounted read-only below) so the metrics-storage disk trend is visible. Database growth is
@@ -62,8 +66,9 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend. Read-only: core only measures capacity, never writes here.
       - vmdata:/hostfs/vm:ro
-      # Offline IP→ASN dataset (ADR-031 Increment 3) — mount read-only; uncomment with YAGRA_IPASN_DB.
-      # - ./data/ipasn:/data/ipasn:ro
+      # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only, from the named `ipasndata` volume
+      # the `ipasn-updater` sidecar writes. Uncomment with YAGRA_IPASN_DB above.
+      # - ipasndata:/data/ipasn:ro
     # cap_add: [NET_RAW]  # only if core itself runs ICMP; normally the poller does
     restart: unless-stopped
 
@@ -167,7 +172,11 @@ services:
   # TSDB — VictoriaMetrics (ADR resolved) is the metrics body store.
   # Retention is 12 months (single tier); see requirements §8 "確定したパラメータ".
   victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
+    # Pinned, not `:latest` — this holds the metrics history, and ADR-017 makes "an upgrade must
+    # never lose or corrupt data" a top-tier policy. A floating tag lets an unrelated `docker
+    # compose pull` swap the storage engine underneath it, which is the same class of trap as the
+    # `rust:<x>-slim` GLIBC pin documented in CLAUDE.md. Bump this deliberately, with a backup.
+    image: victoriametrics/victoria-metrics:v1.148.0
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
@@ -178,7 +187,8 @@ services:
   # model). Retention is 30 days (search/forensics window); the 90-day must-preserve subset is
   # the alert-linked rows in PostgreSQL. Internal only (port 9428, no host mapping).
   victorialogs:
-    image: victoriametrics/victoria-logs:latest
+    # Pinned for the same reason as victoriametrics above.
+    image: victoriametrics/victoria-logs:v1.52.0
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
     volumes:
       - vldata:/victoria-logs-data
@@ -199,6 +209,40 @@ services:
     volumes:
       - chdata:/var/lib/clickhouse
     restart: unless-stopped
+
+  # ── IP→ASN dataset updater (ADR-031 Increment 3; optional, off by default) ──
+  # Keeps the offline flow-enrichment table fresh entirely inside Docker — no host cron, no host
+  # path. Fetches the public-domain iptoasn.com TSV into the shared `ipasndata` volume with an
+  # atomic write; core mounts the same volume read-only and hot-reloads it (YAGRA_IPASN_RELOAD_SECS)
+  # with no restart. This container is the ONLY component that reaches the internet for enrichment —
+  # core never does. `docker-compose.deploy.yml` runs it unconditionally; here it is opt-in.
+  #
+  # To enable: uncomment this service, the `ipasndata` volume at the bottom, and the two
+  # YAGRA_IPASN_* env lines plus the `ipasndata:/data/ipasn:ro` mount on core. $$ escapes keep the
+  # shell vars for the container, not compose.
+  # ipasn-updater:
+  #   image: alpine:3.20
+  #   restart: unless-stopped
+  #   environment:
+  #     YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}
+  #     YAGRA_IPASN_URL: ${YAGRA_IPASN_URL:-https://iptoasn.com/data/ip2asn-combined.tsv.gz}
+  #   volumes:
+  #     - ipasndata:/data/ipasn
+  #   command:
+  #     - sh
+  #     - -c
+  #     - |
+  #       apk add --no-cache curl >/dev/null 2>&1 || true
+  #       while true; do
+  #         echo "ipasn-updater: fetching $$YAGRA_IPASN_URL"
+  #         if curl -fsSL "$$YAGRA_IPASN_URL" | gunzip > /data/ipasn/ip2asn.tsv.tmp && [ -s /data/ipasn/ip2asn.tsv.tmp ]; then
+  #           mv /data/ipasn/ip2asn.tsv.tmp /data/ipasn/ip2asn.tsv
+  #           echo "ipasn-updater: wrote $$(wc -l < /data/ipasn/ip2asn.tsv) rows"
+  #         else
+  #           echo "ipasn-updater: fetch failed — keeping previous"; rm -f /data/ipasn/ip2asn.tsv.tmp
+  #         fi
+  #         sleep "$$YAGRA_IPASN_REFRESH_SECS"
+  #       done
 
   # ── OpenTelemetry trace collector (optional; self-observability) ──
   # Off by default: only starts with `docker compose --profile tracing up`. Jaeger all-in-one
@@ -221,3 +265,4 @@ volumes:
   vldata:
   chdata:      # ClickHouse flow store (ADR-031)
   pollerbuf:   # store-and-forward result buffer (Phase 3)
+  # ipasndata: # offline IP→ASN dataset (ADR-031) — uncomment with the ipasn-updater service above

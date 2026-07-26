@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Pure helpers for rendering a DNS resolution chain (ADR-033).
  *
  *  The layout logic lives here rather than in the component so it can be unit-tested without a

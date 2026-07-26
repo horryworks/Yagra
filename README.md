@@ -6,7 +6,7 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.17.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.1.18.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -29,7 +29,10 @@ polling**. Users access it through the WebUI.
 > opt-in MCP tool surface** at `/mcp` — mostly read-only status, metrics, flow, and event queries plus
 > on-demand Troubleshoot analyses, alongside a few audited write actions (acknowledge an alert, open a
 > maintenance window, poll now); it is authenticated by API token and cannot change device
-> configuration. HA stores remain a configuration step away, not a rewrite.
+> configuration. Received passive data can now be **forwarded onward** — a filtered tee that relays
+> syslog, SNMP traps and flow exports to a SIEM or collector byte-for-byte over UDP/TCP/TLS, or streams
+> normalized rows into **BigQuery** — from one egress point instead of a second export target on every
+> device. HA stores remain a configuration step away, not a rewrite.
 
 ## Components
 
@@ -42,6 +45,7 @@ Each backend component is a workspace crate under `crates/`; the WebUI lives und
 | Yagra-discovery | Device discovery & classification | `crates/yagra-discovery` |
 | Yagra-alert | State machine, hysteresis, dependency suppression | `crates/yagra-alert` |
 | Yagra-ingest | Passive-event parsing (syslog / SNMP traps) + rate limiting | `crates/yagra-ingest` |
+| Yagra-forward | Forwarding filters + wire renderers (tee to external collectors) | `crates/yagra-forward` |
 | Yagra-bus | Job distribution, poller fan-out | `crates/yagra-bus` |
 | Yagra-transport | ICMP/SNMP/HTTP abstraction | `crates/yagra-transport` |
 | Yagra-topology | Dependency graph & map | `crates/yagra-topology` |

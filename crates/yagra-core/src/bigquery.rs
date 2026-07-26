@@ -214,10 +214,16 @@ fn parse_service_account(json: &str) -> Result<Credentials, String> {
 
 /// PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`, which is what Google issues) → a `ring` signing key.
 fn signing_key_from_pem(pem: &str) -> Result<ring::signature::RsaKeyPair, String> {
-    let mut cursor = std::io::Cursor::new(pem.as_bytes());
-    let der = rustls_pemfile::private_key(&mut cursor)
-        .map_err(|_| "the key's private_key is not valid PEM".to_owned())?
-        .ok_or_else(|| "the key's private_key contains no PRIVATE KEY block".to_owned())?;
+    use rustls::pki_types::pem::{Error as PemError, PemObject};
+    let der = rustls::pki_types::PrivateKeyDer::from_pem_slice(pem.as_bytes()).map_err(|e| {
+        match e {
+            // `rustls-pemfile` returned `Ok(None)` for "well-formed PEM, no key in it"; the
+            // pki-types reader folds that into a typed error, so keep the two messages distinct.
+            PemError::NoItemsFound => "the key's private_key contains no PRIVATE KEY block",
+            _ => "the key's private_key is not valid PEM",
+        }
+        .to_owned()
+    })?;
     let rustls::pki_types::PrivateKeyDer::Pkcs8(pkcs8) = der else {
         return Err("the key's private_key must be PKCS#8 (BEGIN PRIVATE KEY)".to_owned());
     };

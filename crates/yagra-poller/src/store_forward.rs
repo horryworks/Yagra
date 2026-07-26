@@ -52,6 +52,18 @@ const REPLAY_BATCH: usize = 256;
 /// Rate-limit the "dropping oldest" warning to at most once per this interval (ms).
 const DROP_WARN_EVERY_MS: i64 = 30_000;
 
+/// Bytes to spill between host free-space probes.
+///
+/// The free-space floor used to call `statvfs` once **per spilled result**, on the Tokio runtime
+/// thread (`submit` → `enqueue` → `spill_to_disk` is synchronous). That is a syscall per result at
+/// exactly the moment the poller is least able to afford one — a bus outage with the memory ring
+/// already overflowing. Probing once per this many bytes instead makes it negligible.
+///
+/// Staleness between probes is safe because the cached figure is decremented by everything written
+/// since (see `free_bytes_estimate`): the estimate only ever runs *low*, so the floor can trip early
+/// but never late. Sized well under the 1 GiB default floor so an estimate can't drift past it.
+const FREE_PROBE_EVERY_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Tunables for the store-and-forward buffer. All are env-overridable; defaults are conservative for
 /// a small remote box.
 #[derive(Debug, Clone)]
@@ -153,6 +165,15 @@ struct BufState {
     next_seq: u64,
     /// `true` once a disk write fails (ENOSPC etc.) or the dir is unusable — degrade to memory-only.
     disk_broken: bool,
+    /// Last host free-space reading. `None` once probed means "no answer" (non-unix, or a failed
+    /// `statvfs`) — the floor is then skipped, as it always was. Paired with `free_probed` so a
+    /// permanent `None` doesn't re-probe on every result.
+    free_cached: Option<u64>,
+    /// Whether `free_cached` holds a real probe result yet.
+    free_probed: bool,
+    /// Bytes spilled since `free_cached` was taken; drives both re-probing and the conservative
+    /// estimate. See [`FREE_PROBE_EVERY_BYTES`].
+    since_free_probe: u64,
 }
 
 impl BufState {
@@ -193,6 +214,9 @@ impl StoreForwardSink {
             disk_bytes: 0,
             next_seq: 0,
             disk_broken: false,
+            free_cached: None,
+            free_probed: false,
+            since_free_probe: 0,
         };
         if cfg.enabled && !cfg.dir.as_os_str().is_empty() {
             match Self::prepare_dir(&cfg.dir) {
@@ -280,8 +304,9 @@ impl StoreForwardSink {
             self.count_drop("no_disk", 1);
             return;
         }
-        // Host-disk safety floor: never keep spilling when free space is low.
-        if let Some(avail) = yagra_hoststats::available_bytes(&self.cfg.dir) {
+        // Host-disk safety floor: never keep spilling when free space is low. Uses the cached
+        // estimate rather than a `statvfs` per result — see `free_bytes_estimate`.
+        if let Some(avail) = self.free_bytes_estimate(st) {
             if avail < self.cfg.free_floor_bytes {
                 self.count_drop("disk_full", 1);
                 return;
@@ -305,6 +330,7 @@ impl StoreForwardSink {
             return;
         }
         st.disk_bytes += bytes;
+        st.since_free_probe = st.since_free_probe.saturating_add(bytes);
         if let Some(seg) = st.segments.back_mut() {
             seg.bytes += bytes;
             seg.count += 1;
@@ -313,6 +339,25 @@ impl StoreForwardSink {
         while st.disk_bytes > self.cfg.disk_max_bytes && st.segments.len() > 1 {
             self.drop_oldest_segment(st);
         }
+    }
+
+    /// Host free space for the spill directory, in bytes — cheap enough to consult per spilled
+    /// result. `None` means the platform gave no answer, which (as before) disables the floor.
+    ///
+    /// Re-probes `statvfs` only once per [`FREE_PROBE_EVERY_BYTES`] written; in between it returns
+    /// `last_probe - bytes_written_since`. That biases the answer **low**, never high: everything we
+    /// wrote since the probe is assumed to have consumed space (it did), and anything freed
+    /// elsewhere on the host is simply not credited until the next probe. So the floor may trip
+    /// slightly early under pressure — the safe direction — and can't be fooled into spilling onto a
+    /// disk that filled up since the last look.
+    fn free_bytes_estimate(&self, st: &mut BufState) -> Option<u64> {
+        if !st.free_probed || st.since_free_probe >= FREE_PROBE_EVERY_BYTES {
+            st.free_cached = yagra_hoststats::available_bytes(&self.cfg.dir);
+            st.free_probed = true;
+            st.since_free_probe = 0;
+        }
+        st.free_cached
+            .map(|avail| avail.saturating_sub(st.since_free_probe))
     }
 
     /// Append raw bytes to the current segment, rotating to a new one when it grows past
@@ -814,6 +859,59 @@ mod tests {
                 "floor guard prevented any disk spill"
             );
         }
+    }
+
+    /// The free-space probe is cached (one `statvfs` per [`FREE_PROBE_EVERY_BYTES`], not one per
+    /// spilled result). Asserted against a synthetic `BufState` rather than a real filesystem so it
+    /// runs everywhere — `available_bytes` is unix-only, which is exactly why the floor assertion in
+    /// `free_floor_stops_disk_spill` above is `cfg!(unix)`-gated and can't cover this.
+    #[tokio::test]
+    async fn free_space_probe_is_cached_and_biased_low() {
+        let td = TempDir::new("freecache");
+        let sink = StoreForwardSink::new(TogglableBus::new(false), cfg(td.0.clone(), 1));
+        let mut st = sink.state.lock().unwrap();
+
+        // Seed a known probe result so the assertions don't depend on the host filesystem.
+        st.free_cached = Some(100 * 1024 * 1024);
+        st.free_probed = true;
+        st.since_free_probe = 0;
+        assert_eq!(
+            sink.free_bytes_estimate(&mut st),
+            Some(100 * 1024 * 1024),
+            "a fresh probe is reported as-is"
+        );
+
+        // Between probes the estimate is debited by everything written since — never optimistic.
+        st.since_free_probe = 4 * 1024 * 1024;
+        assert_eq!(
+            sink.free_bytes_estimate(&mut st),
+            Some(96 * 1024 * 1024),
+            "estimate is biased low by bytes written since the probe"
+        );
+        assert_eq!(
+            st.since_free_probe,
+            4 * 1024 * 1024,
+            "still under the interval — no re-probe, so the counter is untouched"
+        );
+
+        // Crossing the interval re-probes: the counter resets (the value itself is whatever the
+        // platform reports, and is `None` off-unix, so only the reset is portable to assert).
+        st.since_free_probe = FREE_PROBE_EVERY_BYTES;
+        let _ = sink.free_bytes_estimate(&mut st);
+        assert_eq!(
+            st.since_free_probe, 0,
+            "crossing the interval triggers a re-probe"
+        );
+
+        // A platform that answers `None` must not re-probe on every call.
+        st.free_cached = None;
+        st.free_probed = true;
+        st.since_free_probe = 1024;
+        assert_eq!(sink.free_bytes_estimate(&mut st), None);
+        assert_eq!(
+            st.since_free_probe, 1024,
+            "an unsupported platform stays cached rather than probing per result"
+        );
     }
 
     #[tokio::test]

@@ -1,5 +1,108 @@
 # Release Notes
 
+## v0.1.18
+
+**Hand your passive data onward, and see it.** Yagra already received syslog, SNMP traps and flow
+exports; this release lets it **forward** them — a filtered tee to a SIEM or collector, byte-for-byte
+or rebuilt, over UDP/TCP/TLS, plus **BigQuery** destinations that stream normalized rows for long-term
+querying. Alongside it: **DNS name-resolution monitoring** as a first-class node kind, **eleven new
+Troubleshoot analyses** over the passive-event and flow stores, a **tailored report screen for every
+one of the 15 analyses**, and **thirteen new dashboard widgets** for passive events and traffic flow.
+
+### New Features
+- **Forwarding ("tee") destinations** — a new **Settings ▸ Forwarding** page defines destinations that
+  say "everything matching this filter also goes there". Core does the sending from one leader-only
+  egress point, so you allow **one** address through the firewall rather than one per poller, and you
+  stop configuring a second export target on every device.
+  - **Syslog and SNMP traps** relay **byte-for-byte**: the original datagram is carried alongside the
+    parsed event, so the collector sees exactly what the device sent. Where no original exists, Yagra
+    rebuilds a faithful RFC 5424 / SNMPv2c message instead.
+  - **Flow exports** (NetFlow v5/v9/IPFIX, sFlow) relay verbatim, template datagrams included — the
+    aggregated flow records can't stand in for them, because bucketing, top-N truncation and 5-tuple
+    folding are irreversible. Flow filters are an **any-record** test: one matching record forwards the
+    whole datagram, since records can't be removed without re-encoding it.
+  - **Syslog over TLS** (RFC 5425) verifies the collector against the system trust store plus an
+    optional per-destination CA certificate.
+  - **BigQuery destinations** stream **normalized, typed rows** — one per event, one per flow record —
+    via `tabledata.insertAll`, for querying months of history rather than mirroring a live stream.
+    Because rows are independent, flow filtering here is **exact per record**. The table is created for
+    you with day partitioning and clustering; the dataset is not, so Yagra never picks your data
+    residency for you.
+  - Each destination has a bounded queue, rate limit and circuit breaker, and **cannot silently
+    degrade**: a destination promised byte-exact output but given none counts it, and any poller that
+    can't supply original bytes is named on the page.
+- **DNS name-resolution monitoring (a node kind)** — monitor a *name* the way you monitor a URL. Bind a
+  node to the built-in **DNS name resolution** profile and Yagra records whether the name resolves and
+  the dig-like recursive **CNAME chain** it resolves through, with a history that appends **only when
+  the chain actually changes** (TTL countdown and round-robin reordering don't count as a change).
+  Numeric summaries (`dns_up`, `dns_resolve_ms`, `dns_chain_length`, `dns_answer_count`) are graphable
+  and alertable, with a default `dns_up` threshold seeded so a new monitor alerts out of the box.
+- **Eleven new Troubleshoot analyses** over the passive-event and flow stores: `event_storm`,
+  `event_flap`, `severity_shift`, `rule_gap`, `auth_probe` (passive); `traffic_anomaly`, `talker_shift`,
+  `new_destination`, `flow_scan` (flow); and `saturation` + `incident_correlate` reading across metrics,
+  events and flow together. As before, an analysis is a **read** — no device I/O — under the same
+  concurrency and rate limits.
+- **A tailored report for every Troubleshoot analysis.** Previously only the anomaly scan had a real
+  report and the other 14 tools showed a "coming soon" toast; now all 15 have their own screen built
+  for their own findings — including an SVG **incident timeline** for `incident_correlate` (the order
+  signals arrived in is what points at a cause), a scan-shape scatter for `flow_scan`, and a share
+  meter with capacity context for `saturation`. Every report supports CSV export and `?job=` deep links.
+- **Passive-events and traffic-flow dashboard widgets** — two new catalog sections adding **13 widgets**:
+  event feed, volume, kind mix, top traps, triage, noisy sources and rule coverage; plus top talkers,
+  top AS, top ports, protocol mix, a conversation Sankey and a traffic trend. The flow widgets read
+  **fleet-wide** (every exporter), not one node at a time.
+- **New MCP tools for flow and events** — `flow_fanout` and `event_stats`, and `top_flows` gains
+  protocol/port/peer/ASN/direction filters with AS-name resolution. `run_analysis` accepts all the new
+  analysis kinds.
+
+### Improvements
+- **Container images for the metrics and log stores are pinned.** `docker-compose.yml` and
+  `docker-compose.deploy.yml` referenced `victoria-metrics:latest` and `victoria-logs:latest`; both now
+  name an explicit version, so an unrelated `docker compose pull` can no longer roll the storage engine
+  underneath your history. Bump them deliberately, with a backup — the same policy as the pinned Rust
+  base images.
+- **Store-and-forward spilling is cheaper under pressure.** A remote poller buffering results during a
+  bus outage no longer issues a filesystem free-space syscall per spilled result on its async runtime;
+  the reading is cached and debited by bytes written, so the safety floor still trips **early** rather
+  than late.
+- **Traffic-flow views read better** — conversation endpoints get a minimum label slot so long
+  addresses stay legible, the conversation Sankey is size-capped instead of growing without bound, and
+  source/destination AS numbers are shown alongside the addresses.
+- **Fleet-wide flow endpoints.** The flow API is no longer node-scoped only; series, top talkers,
+  conversations, top ports, protocols and top-AS all take a fleet scope. A new `/events/stats` endpoint
+  serves categorical and time-series event aggregates over the same filter as the event log, via
+  PostgreSQL or VictoriaLogs, so summaries and the log always agree.
+
+### Bug Fixes
+- **A poller no longer stalls when it meets a check kind it doesn't understand.** Working-set snapshot
+  chunks are now decoded per element, so one unknown check can't fail a whole chunk, gap the sequence
+  and spin that poller in a resync loop — which stalled *all* of its polling, not just the unknown
+  check. This is a permanent fix for every future check type, not just DNS.
+- **DNS checks no longer suppress one another.** The per-target single-flight poll guard would drop
+  every DNS check but one per cycle, because DNS monitors share a resolver target by design; they now
+  take the global guard instead.
+- **The AS drill-down no longer breaks the Conversation flow view.** Filtering by AS returned a 500 for
+  the conversation table and Sankey (the aggregate was aliased to the same name as the column it
+  filtered on), leaving stale data on screen while the other panels updated.
+- **Troubleshoot report deep links resolve correctly.** A `?job=` older than the recent-jobs window
+  rendered as if nothing had been requested, and a `?job=` belonging to a different tool rendered the
+  wrong report over foreign findings; the report shell now fetches the job directly and redirects to
+  the report that can actually read it.
+
+### Security
+- **Forwarding is built so it can't quietly leak.** TLS destinations have **no option to disable
+  certificate verification**. BigQuery destinations deliberately have **no raw-payload column** — a
+  relayed datagram passes once to a collector you chose, but a table persists, and a raw-bytes column
+  would make the credentials that routinely appear in syslog bodies permanently queryable off-box; the
+  API rejects verbatim mode for BigQuery rather than relying on a hint being read. Service-account
+  signing uses a constant-time RSA implementation.
+- **Removed an unmaintained TLS dependency.** `rustls-pemfile` (RUSTSEC-2025-0134, archived upstream)
+  is gone; certificate and key parsing now uses the same code directly from `rustls-pki-types`. The
+  supply-chain policy check passes clean across advisories, bans, licenses and sources.
+- **Resolved a client-side open-redirect advisory** by updating the frontend router, and a
+  path-traversal advisory in the build toolchain. The router fix is user-facing; the toolchain fix is
+  build-time only and never shipped.
+
 ## v0.1.17
 
 **Talk to Yagra from an AI assistant.** Yagra now ships a built-in **MCP (Model Context Protocol)

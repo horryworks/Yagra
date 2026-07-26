@@ -5,7 +5,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 アラートを発出します。Docker で動作し、**数万ノード規模**と**分散ポーリング**を最初から
 見据えたアーキテクチャを採用しています。利用者は WebUI からアクセスします。
 
-> ステータス: **v0.1.17。** ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
+> ステータス: **v0.1.18。** ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、受動イベント監視、探索・分類、アラート、ダッシュボード、レポートを備えたスタックが、
 > PostgreSQL / Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。既定は単一
 > ノードですが、**分散ポーラプール**（拠点に配置したリモートポーラをロケーション親和で割り当て、
@@ -27,8 +27,11 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > ます（オプトイン）。**AI アシスタントが Yagra を組み込みの MCP ツール面**（`/mcp`、オプトイン）から
 > 照会できるようになりました。多くは読み取り専用の状態・メトリクス・フロー・イベント照会とオンデマンドの
 > Troubleshoot 分析で、加えて監査付きの書き込み操作（アラートの確認、メンテナンス枠の開始、即時ポーリング）
-> を行えます。API トークンで認証し、機器の設定は変更できません。HA ストアは書き換えではなく設定で対応する
-> 段階に留まります。
+> を行えます。API トークンで認証し、機器の設定は変更できません。受信した受動データは**そのまま次へ転送**
+> できるようになりました。フィルタ付きのティーで syslog・SNMP トラップ・フローエクスポートを SIEM や
+> コレクタへ UDP／TCP／TLS でバイト単位そのまま中継し、あるいは正規化した行を **BigQuery** に流し込みます。
+> 機器ごとに 2 つ目のエクスポート先を設定するのではなく、送信元 1 か所で完結します。HA ストアは書き換えでは
+> なく設定で対応する段階に留まります。
 
 ## コンポーネント
 
@@ -41,6 +44,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 | Yagra-discovery | デバイス探索・分類 | `crates/yagra-discovery` |
 | Yagra-alert | 状態判定・ヒステリシス・依存抑制 | `crates/yagra-alert` |
 | Yagra-ingest | 受動イベント解析（syslog / SNMPトラップ）+ レート制限 | `crates/yagra-ingest` |
+| Yagra-forward | 転送フィルタ + ワイヤレンダラ（外部コレクタへのティー） | `crates/yagra-forward` |
 | Yagra-bus | ジョブ配信・ポーラ分散 | `crates/yagra-bus` |
 | Yagra-transport | ICMP/SNMP/HTTP の抽象化 | `crates/yagra-transport` |
 | Yagra-topology | 依存関係・マップ | `crates/yagra-topology` |

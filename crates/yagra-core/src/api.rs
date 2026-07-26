@@ -4710,8 +4710,8 @@ fn validate_forward_body(
                 "the CA certificate is too large (max 64 KiB)",
             ));
         }
-        let mut cursor = std::io::Cursor::new(pem.as_bytes());
-        let parsed = rustls_pemfile::certs(&mut cursor).collect::<Result<Vec<_>, _>>();
+        use rustls::pki_types::{pem::PemObject, CertificateDer};
+        let parsed = CertificateDer::pem_slice_iter(pem.as_bytes()).collect::<Result<Vec<_>, _>>();
         if parsed.map(|c| c.is_empty()).unwrap_or(true) {
             return Err(bad(
                 "invalid_ca_cert",

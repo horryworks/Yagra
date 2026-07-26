@@ -1259,3 +1259,319 @@ fn severity_rank(sev: &str) -> u8 {
         _ => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alerts::AlertManager;
+    use crate::auth::{LoginThrottle, SessionStore};
+    use crate::sink::InMemorySink;
+    use crate::store::MetricStore;
+    use std::sync::Arc;
+
+    /// A skeleton-mode state: no `admin`, no flow/log tier. This is deliberately the *degraded*
+    /// shape — it is what exercises every "tier not enabled / requires live mode" branch, which is
+    /// the half of each tool a live-DB test would never reach.
+    fn skeleton_state() -> ApiState {
+        let store: Arc<dyn MetricStore> = Arc::new(InMemorySink::default());
+        ApiState {
+            store,
+            logs: None,
+            flows: None,
+            ipasn: crate::ipasn::empty_handle(),
+            host_sample: Arc::new(std::sync::Mutex::new(None)),
+            nodes: Arc::new(crate::repo::StaticNodeList::demo()),
+            alerts: Arc::new(AlertManager::new()),
+            admin: None,
+            sessions: Arc::new(SessionStore::new()),
+            login_throttle: Arc::new(LoginThrottle::new()),
+            history: None,
+            ack: None,
+            events: None,
+            public_dashboard: false,
+            is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            oidc: None,
+            oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            enable_mcp: true,
+        }
+    }
+
+    fn mcp() -> YagraMcp {
+        YagraMcp::new(skeleton_state())
+    }
+
+    /// The text a tool result carries.
+    fn text_of(r: &CallToolResult) -> String {
+        r.content
+            .iter()
+            .filter_map(|b| b.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn json_of(r: &CallToolResult) -> Value {
+        serde_json::from_str(&text_of(r)).expect("tool result body is JSON")
+    }
+
+    // ── Pure helpers ────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn terminal_states_are_exactly_the_finished_ones() {
+        for s in ["done", "failed", "cancelled"] {
+            assert!(is_terminal(s), "{s} is terminal");
+        }
+        for s in ["running", "queued", "", "DONE"] {
+            assert!(!is_terminal(s), "{s} is not terminal");
+        }
+    }
+
+    #[test]
+    fn severity_parses_case_insensitively_and_rejects_junk() {
+        assert_eq!(parse_severity("info"), Some(Severity::Info));
+        assert_eq!(parse_severity("  WARNING "), Some(Severity::Warning));
+        assert_eq!(parse_severity("Critical"), Some(Severity::Critical));
+        assert_eq!(parse_severity("fatal"), None);
+        assert_eq!(parse_severity(""), None);
+    }
+
+    #[test]
+    fn severity_rank_orders_and_defaults_unknown_lowest() {
+        assert!(severity_rank("critical") > severity_rank("warning"));
+        assert!(severity_rank("warning") > severity_rank("info"));
+        assert_eq!(severity_rank("nonsense"), severity_rank("info"));
+    }
+
+    #[test]
+    fn rfc3339_parsing_normalizes_to_utc_and_rejects_malformed() {
+        let t = parse_rfc3339_ok("2026-07-25T12:00:00+09:00").expect("parses");
+        assert_eq!(
+            t.to_rfc3339(),
+            "2026-07-25T03:00:00+00:00",
+            "offset applied"
+        );
+        assert!(
+            parse_rfc3339_ok("2026-07-25").is_none(),
+            "a bare date is not RFC 3339"
+        );
+        assert!(parse_rfc3339_ok("yesterday").is_none());
+    }
+
+    #[test]
+    fn optional_rfc3339_distinguishes_absent_from_malformed() {
+        assert_eq!(parse_opt_rfc3339(None), Ok(None), "absent is not an error");
+        assert!(parse_opt_rfc3339(Some("2026-07-25T00:00:00Z"))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            parse_opt_rfc3339(Some("nope")),
+            Err(()),
+            "present but malformed is an error"
+        );
+    }
+
+    // ── Flow query construction (the injection-relevant one) ─────────────────────────────────────
+
+    fn flow_params(node_id: Uuid) -> TopFlowsParams {
+        TopFlowsParams {
+            node_id,
+            kind: None,
+            from: None,
+            to: None,
+            limit: None,
+            proto: None,
+            port: None,
+            peer: None,
+            asn: None,
+            dir: None,
+        }
+    }
+
+    #[test]
+    fn flow_query_defaults_to_a_trailing_hour_in_millis() {
+        let id = Uuid::new_v4();
+        let q = flow_query_from(&flow_params(id));
+        assert_eq!(q.node_id, Some(id));
+        assert_eq!(q.limit, 100, "default row cap");
+        assert_eq!(
+            q.to_unix_ms - q.from_unix_ms,
+            DEFAULT_WINDOW_SECS * 1000,
+            "default window is one hour, expressed in ms"
+        );
+    }
+
+    #[test]
+    fn flow_query_carries_explicit_window_and_typed_filters() {
+        let mut p = flow_params(Uuid::new_v4());
+        p.from = Some(1_700_000_000);
+        p.to = Some(1_700_003_600);
+        p.limit = Some(7);
+        p.proto = Some(6);
+        p.port = Some(443);
+        p.asn = Some(15169);
+        let q = flow_query_from(&p);
+        assert_eq!(q.from_unix_ms, 1_700_000_000_000);
+        assert_eq!(q.to_unix_ms, 1_700_003_600_000);
+        assert_eq!(
+            (q.limit, q.proto, q.dst_port, q.asn),
+            (7, Some(6), Some(443), Some(15169))
+        );
+    }
+
+    /// `peer` is the only free-text flow filter, and ClickHouse SQL interpolates it. It must reach
+    /// the query as a typed `IpAddr` or not at all — a string that isn't an address is dropped, so
+    /// nothing an MCP client sends can be interpolated verbatim.
+    #[test]
+    fn flow_query_drops_an_unparseable_peer_rather_than_passing_it_through() {
+        let mut p = flow_params(Uuid::new_v4());
+        p.peer = Some(r#"' OR 1=1 --"#.to_owned());
+        assert_eq!(
+            flow_query_from(&p).peer,
+            None,
+            "junk peer is dropped, never interpolated"
+        );
+
+        p.peer = Some("2001:db8::1".to_owned());
+        assert_eq!(
+            flow_query_from(&p).peer,
+            Some("2001:db8::1".parse::<std::net::IpAddr>().unwrap()),
+            "a valid v6 address survives as a typed value"
+        );
+
+        p.peer = Some("8.8.8.8".to_owned());
+        assert_eq!(flow_query_from(&p).peer, Some("8.8.8.8".parse().unwrap()));
+    }
+
+    // ── Result-shape helpers ────────────────────────────────────────────────────────────────────
+
+    /// "Tier off" is a *successful* result with a machine-readable body, not a protocol error — the
+    /// model needs to tell "off here" apart from "broke".
+    #[test]
+    fn unavailable_is_a_success_result_with_an_availability_body() {
+        let r = tool_unavailable("t", "flow tier not enabled on this core").expect("Ok result");
+        let body = json_of(&r);
+        assert_eq!(body["available"], serde_json::json!(false));
+        assert_eq!(body["reason"], "flow tier not enabled on this core");
+    }
+
+    #[test]
+    fn bad_params_and_forbidden_are_protocol_errors() {
+        assert!(tool_bad_params("t", "`since` must be RFC 3339").is_err());
+        assert!(tool_forbidden("t", "this token lacks ack-alerts permission").is_err());
+    }
+
+    /// Canary for security.md / coding-conventions: an internal error must never be echoed to the
+    /// client. Only the caller-supplied context string may surface.
+    #[test]
+    fn internal_errors_never_leak_the_underlying_message() {
+        let secret = "connection string postgres://user:hunter2@db/yagra";
+        let err = tool_error("t", "load node", &anyhow::anyhow!(secret)).unwrap_err();
+        let rendered = format!("{err:?} {}", err.message);
+        assert!(
+            !rendered.contains("hunter2"),
+            "internal detail leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("postgres://"),
+            "internal detail leaked: {rendered}"
+        );
+        assert!(
+            rendered.contains("load node"),
+            "the safe context is what surfaces"
+        );
+    }
+
+    // ── Tool bodies over a skeleton state ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn fleet_summary_counts_never_observed_nodes_as_unknown() {
+        let r = mcp().get_fleet_summary().await.expect("ok");
+        let body = json_of(&r);
+        assert_eq!(body["total_nodes"], 1, "the demo inventory has one node");
+        assert_eq!(
+            body["states"]["unknown"], 1,
+            "a node the alert engine has never seen reads as unknown, not as missing"
+        );
+        assert_eq!(body["active_alerts"], 0);
+        assert_eq!(body["flow_tier_enabled"], serde_json::json!(false));
+        assert_eq!(body["log_tier_enabled"], serde_json::json!(false));
+    }
+
+    #[tokio::test]
+    async fn list_nodes_returns_sanitized_summaries_and_clamps_the_limit() {
+        let r = mcp()
+            .list_nodes(Parameters(ListNodesParams {
+                search: None,
+                limit: Some(10_000),
+            }))
+            .await
+            .expect("ok");
+        let body = json_of(&r);
+        let arr = body.as_array().expect("an array of nodes");
+        assert_eq!(
+            arr.len(),
+            1,
+            "limit clamps to 100, and the demo list holds one node"
+        );
+        assert_eq!(arr[0]["name"], "demo-localhost");
+        assert!(
+            arr[0].get("credential").is_none(),
+            "the DTO must not carry the credential reference (ADR-018)"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_nodes_search_filters_by_name() {
+        let m = mcp();
+        let hit = m
+            .list_nodes(Parameters(ListNodesParams {
+                search: Some("demo".to_owned()),
+                limit: None,
+            }))
+            .await
+            .expect("ok");
+        assert_eq!(json_of(&hit).as_array().unwrap().len(), 1);
+
+        let miss = m
+            .list_nodes(Parameters(ListNodesParams {
+                search: Some("no-such-node".to_owned()),
+                limit: None,
+            }))
+            .await
+            .expect("ok");
+        assert!(json_of(&miss).as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn active_alerts_is_empty_on_a_quiet_fleet() {
+        let r = mcp()
+            .get_active_alerts(Parameters(ActiveAlertsParams {
+                node_id: None,
+                min_severity: None,
+                limit: None,
+            }))
+            .await
+            .expect("ok");
+        assert!(json_of(&r).as_array().unwrap().is_empty());
+    }
+
+    /// Every tool whose backing tier is absent answers "unavailable" rather than erroring or, worse,
+    /// panicking on an `unwrap` of the missing handle.
+    #[tokio::test]
+    async fn tools_report_unavailable_when_their_tier_is_off() {
+        let m = mcp();
+
+        let flows = m
+            .top_flows(Parameters(flow_params(Uuid::new_v4())))
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&flows)["available"], serde_json::json!(false));
+
+        let status = m
+            .get_node_status(Parameters(NodeIdParams {
+                node_id: Uuid::new_v4(),
+            }))
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&status)["available"], serde_json::json!(false));
+    }
+}
