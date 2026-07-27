@@ -2281,6 +2281,22 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    /// The bypass must not become a filter bypass. Exporters that inline a template set in *every*
+    /// export (the real USG on the test bench does) would defeat filtering entirely if carrying
+    /// templates were enough — the datagram has to be records-free to skip the filter.
+    #[tokio::test]
+    async fn an_inline_template_does_not_exempt_a_datagram_that_carries_records() {
+        let inline = nf9_with(&[(([10, 0, 0, 6], [1, 1, 1, 1]), 53, 17, 13335)]);
+        assert!(
+            yagra_ingest::carries_template_set(&inline),
+            "fixture must inline a template set"
+        );
+        let (dest, mut rx) =
+            flow_dest(None, flow_filter(FilterField::DstPort, FilterOp::Eq, "443"));
+        dispatch_flow(&mut FlowTemplates::new(), &[dest], &raw_flow(inline, None));
+        assert!(rx.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn flow_sender_delivers_the_datagram_over_udp() {
         let collector = UdpSocket::bind("127.0.0.1:0").await.unwrap();
