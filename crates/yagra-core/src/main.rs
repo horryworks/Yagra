@@ -2020,6 +2020,12 @@ impl SweepCache {
 /// folder-level assignment routes its whole subtree. Kept a separate pure function so that
 /// resolution is unit-testable without a scheduler loop.
 ///
+/// The map is also **seeded with every live pool** before the node loop. Without that, a pool whose
+/// last node moved away simply vanishes from the map and is never reconciled again — its poller
+/// keeps polling the stale working set for the life of the core process, double-polling nodes that
+/// have since moved elsewhere. `reconcile_pool` with an empty desired set publishes one empty
+/// snapshot and is idempotent afterwards, so seeding costs nothing in steady state.
+///
 /// Meraki device nodes are dropped: core's org collector owns them, not a pool poller.
 fn group_by_pool(
     resolved: Vec<(yagra_common::Node, u32)>,
@@ -2027,8 +2033,10 @@ fn group_by_pool(
     live: &std::collections::HashSet<String>,
     resolver: &poolres::PoolResolver,
 ) -> HashMap<String, Vec<(yagra_common::Node, u32)>> {
-    let _ = live;
     let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
+    for pool in live {
+        groups.entry(pool.clone()).or_default();
+    }
     for (node, secs) in resolved {
         if meraki_node_ids.contains(&node.id.as_uuid()) {
             continue;
@@ -2692,6 +2700,29 @@ mod tests {
         assert_eq!(groups.get("tokyo").map(Vec::len), Some(1));
         assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
         assert_eq!(groups.get(yagra_bus::DEFAULT_POOL).map(Vec::len), Some(1));
+    }
+
+    fn live_set(pools: &[&str]) -> std::collections::HashSet<String> {
+        pools.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    #[test]
+    fn group_by_pool_seeds_live_pools_that_have_no_nodes() {
+        // Regression: without seeding, a pool whose last node moved away vanishes from the map and
+        // is never reconciled again — its poller keeps polling a stale working set forever, so the
+        // moved node ends up polled by two pollers. Editing pools from the UI makes this routine.
+        let groups = group_by_pool(
+            vec![(test_node(Some("osaka"), None), 30)],
+            &std::collections::HashSet::new(),
+            &live_set(&["tokyo", "osaka"]),
+            &poolres::PoolResolver::empty(),
+        );
+        assert_eq!(
+            groups.get("tokyo").map(Vec::len),
+            Some(0),
+            "an emptied pool must still be reconciled (with an empty desired set)"
+        );
+        assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
     }
 
     #[test]
