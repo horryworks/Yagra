@@ -118,6 +118,9 @@ pub struct AdminState {
     pub forward: Arc<crate::forward_store::ForwardStore>,
     /// Live forwarding status + the poke that makes a destination edit take effect immediately.
     pub forward_handle: crate::forward::ForwardHandle,
+    /// AI-assisted RCA provider configuration (ADR-029): backs Settings ▸ AI. The credential is
+    /// envelope-encrypted and write-only, so this store never hands one back out.
+    pub llm: Arc<crate::rca::store::RcaRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -198,6 +201,11 @@ pub struct ApiState {
     /// MCP tool surface at `/mcp`; when `false` (default) the route is absent (a request 404s). Held
     /// here so `serve()` reads it off the same state it already threads.
     pub enable_mcp: bool,
+    /// AI-assisted root-cause analysis (ADR-029); `None` in skeleton mode. Present on every core —
+    /// generation is an on-demand read plus one outbound call, so there is nothing for a standby to
+    /// double-do. Whether it actually *works* depends on an operator having configured a provider;
+    /// with no config row every RCA endpoint answers 503 and no request leaves the building.
+    pub rca: Option<Arc<crate::rca::orchestrator::RcaOrchestrator>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -419,6 +427,16 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/settings/oidc/:id",
             put(update_oidc_provider).delete(delete_oidc_provider),
         )
+        // AI-assisted RCA (ADR-029). Provider config is admin-only and its credential is
+        // write-only; generation is `AckAlerts` (the people who actually work incidents) plus the
+        // orchestrator's own rate + concurrency caps, and reading a stored report is `View`.
+        .route(
+            "/api/v1/llm/config",
+            get(get_llm_config).put(put_llm_config),
+        )
+        .route("/api/v1/llm/test", post(test_llm_provider))
+        .route("/api/v1/rca", post(create_rca))
+        .route("/api/v1/rca/:id", get(get_rca))
         .route("/api/v1/roles", get(list_roles))
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/alerts/ack", post(ack_alert))
@@ -613,7 +631,7 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
         // A successful config mutation bumps the process-wide config generation so background
         // rebuilders (alert-config reloader, scheduler spec resolution) skip their full-fleet
         // rebuild when nothing changed (S2/S6). Coarse but safe: any config write invalidates.
-        if resp.status().is_success() {
+        if resp.status().is_success() && changes_monitoring_config(&path) {
             crate::config_gen::bump();
         }
         if let Some(admin) = st.admin.as_ref() {
@@ -623,6 +641,24 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
         }
     }
     resp
+}
+
+/// Whether a mutating request can have changed the inputs to the alert-config / poll-spec rebuild.
+///
+/// Almost everything can, so this is a deny-list of the exceptions rather than an allow-list of the
+/// ~22 write handlers — keeping the S6 signal's safe-over-invalidation property (a needed rebuild is
+/// never skipped because someone forgot to add a path).
+///
+/// The exceptions are the endpoints that are **reads wearing POST**: they create a job or a report,
+/// touch no node, profile, threshold, group or credential, and are admission-controlled precisely
+/// because they are expensive to *run*, not because they change anything. Counting them as config
+/// writes would defeat S6 exactly when it matters most — during an incident, when an operator is
+/// launching analyses and asking for explanations, every one of them would force the next 30s tick
+/// to redo a full-fleet rebuild across tens of thousands of nodes.
+///
+/// They stay **audited**; only the dirty signal is suppressed.
+fn changes_monitoring_config(path: &str) -> bool {
+    !(path.starts_with("/api/v1/analysis/") || path == "/api/v1/rca")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
@@ -686,10 +722,18 @@ async fn get_config(State(st): State<ApiState>) -> Response {
         Some(oidc) => oidc.sso_enabled().await.unwrap_or(false),
         None => false,
     };
+    // Whether an LLM provider is configured *and* enabled. The WebUI hides the "Explain this
+    // incident" action when it is false, so an operator is never offered a button that can only
+    // answer 503 — the default state of every installation.
+    let rca_enabled = match st.rca.as_ref() {
+        Some(rca) => rca.available().await,
+        None => false,
+    };
     Json(serde_json::json!({
         "public_dashboard": st.public_dashboard,
         "auth_available": st.admin.is_some(),
         "sso_enabled": sso_enabled,
+        "rca_enabled": rca_enabled,
         "default_poll_interval_secs": default_poll_interval_secs,
     }))
     .into_response()
@@ -4740,7 +4784,7 @@ fn validate_forward_body(
         // Parse and reject here so a mistyped key is a 400 rather than a destination whose every
         // batch fails with an error only visible on the status page. The error text is Google-shaped
         // and never quotes key material.
-        crate::bigquery::validate_service_account(json).map_err(|e| {
+        crate::gcp::validate_service_account(json).map_err(|e| {
             Box::new(error_response(
                 StatusCode::BAD_REQUEST,
                 "invalid_service_account",
@@ -5186,6 +5230,202 @@ async fn delete_oidc_provider(
             tracing::error!(error = %e, "delete OIDC provider failed");
             internal("failed to delete the OIDC provider")
         }
+    }
+}
+
+// ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────────
+//
+// Five endpoints across two audiences. Provider configuration is an admin concern — it picks which
+// cloud the operator's incident data may cross into, and it holds a billable credential — so it is
+// `ManageConfig` and its secret is write-only. Generation is an *operator* concern: the people
+// carrying the pager are exactly who needs the explanation, and gating it behind `ManageConfig`
+// would put the feature out of reach of its users. What bounds abuse there is the orchestrator's
+// rate and concurrency caps, not the role (the conclusion ADR-028 WS-A reached about expensive
+// reads). Reading a report back is `View`, so a viewer can be shown an explanation an operator
+// generated without being able to spend money themselves.
+
+/// The `POST /api/v1/rca` body.
+#[derive(Deserialize)]
+struct RcaBody {
+    /// The alerting node. May be a symptom of an upstream failure — the context builder follows
+    /// `root_cause` to the incident before assembling anything.
+    node: Uuid,
+    check: Uuid,
+    /// Timeline window in seconds; clamped by the orchestrator. Defaults to an hour.
+    #[serde(default)]
+    window_secs: Option<i64>,
+    /// UI language tag (`ja`, `en-GB`, …). The instructions stay English; the answer follows the
+    /// reader. Unknown tags fall back to English rather than failing.
+    #[serde(default)]
+    language: Option<String>,
+    /// Regenerate instead of serving a cached report. Still rate-limited.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Map an orchestrator refusal onto a status. Each is a distinct operator action: fix the
+/// configuration, wait, look at a different alert, or check the vendor.
+fn rca_error_response(e: &crate::rca::orchestrator::RcaError) -> Response {
+    use crate::rca::orchestrator::RcaError;
+    match e {
+        RcaError::NotConfigured => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "rca_not_configured",
+            e.to_string(),
+        ),
+        // Also 503, but a distinct code: the form has been filled in and something in it is wrong,
+        // which is a different next step from "nobody has set this up".
+        RcaError::Misconfigured(msg) => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "rca_misconfigured",
+            msg.clone(),
+        ),
+        // `Retry-After: 60` matches the rate window; a client that honors it comes back exactly
+        // when a slot is guaranteed to have freed.
+        RcaError::TooManyConcurrent(_) | RcaError::RateLimited(_) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            Json(ErrorBody {
+                error: ErrorDetail {
+                    code: "rate_limited".to_owned(),
+                    message: e.to_string(),
+                },
+            }),
+        )
+            .into_response(),
+        RcaError::NoIncident(msg) => not_found("no_incident", msg.clone()),
+        // 502, not 500: the failure is the upstream vendor's, and the text is the typed error —
+        // never a raw body, which can echo the prompt (and therefore device output) back.
+        RcaError::Provider(inner) => error_response(
+            StatusCode::BAD_GATEWAY,
+            match inner {
+                crate::rca::provider::LlmError::Refused(_) => "model_refused",
+                _ => "provider_error",
+            },
+            inner.to_string(),
+        ),
+        RcaError::Internal(err) => {
+            tracing::error!(error = %err, "RCA generation failed");
+            internal("failed to generate the analysis")
+        }
+    }
+}
+
+/// Generate (or serve from cache) an explanation of one incident. `AckAlerts`; audited by the
+/// mutating-request middleware.
+async fn create_rca(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<RcaBody>,
+) -> Response {
+    // Authorization first, availability second — the reverse of the older admin handlers, and
+    // deliberately so here. Whether an operator has wired up an LLM, and which vendor they chose,
+    // is not something an unauthenticated prober should be able to infer from a 503-vs-403; and
+    // checking the permission first means the AckAlerts/ManageConfig split holds regardless of
+    // deployment state rather than only once a provider exists.
+    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
+        return resp;
+    }
+    let Some(rca) = st.rca.as_ref() else {
+        return unavailable();
+    };
+    let req = crate::rca::orchestrator::RcaRequest {
+        node: yagra_common::NodeId::from(body.node),
+        check: yagra_common::CheckId::from(body.check),
+        window_secs: body.window_secs,
+        language: crate::rca::prompt::Language::from_tag(body.language.as_deref().unwrap_or("en")),
+        force: body.force,
+        username: current_username(&st, &headers).unwrap_or_else(|| "(unknown)".to_owned()),
+    };
+    match rca.explain(&req).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => rca_error_response(&e),
+    }
+}
+
+/// Read a stored report. `View` — the explanation is display-only text, so showing it to everyone
+/// who can see the alert costs nothing and keeps the incident channel on one shared account.
+async fn get_rca(State(st): State<ApiState>, headers: HeaderMap, Path(id): Path<Uuid>) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(rca) = st.rca.as_ref() else {
+        return unavailable();
+    };
+    match rca.get(id).await {
+        Ok(Some(report)) => Json(report).into_response(),
+        Ok(None) => not_found("not_found", format!("no analysis {id}")),
+        Err(e) => rca_error_response(&e),
+    }
+}
+
+/// The active LLM provider's configuration. `ManageConfig`. Never includes the credential.
+async fn get_llm_config(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.llm.view().await {
+        // `config: null` rather than 404: "not configured yet" is the normal state, and the form
+        // wants to render its empty self, not an error. `providers` ships the choices with their
+        // placeholders and — importantly — their egress warning, so the UI reads the boundary
+        // classification off the same code the adapters obey instead of restating it.
+        Ok(view) => Json(serde_json::json!({
+            "config": view,
+            "providers": crate::rca::provider_choices(),
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "read LLM config failed");
+            internal("failed to read the AI provider configuration")
+        }
+    }
+}
+
+/// Create or replace the provider configuration. `ManageConfig`; audited by the middleware.
+async fn put_llm_config(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<crate::rca::store::LlmConfigInput>,
+) -> Response {
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    match admin.llm.save(&body).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        // `save` validates first, so a bad field is the caller's — a 400 naming it beats a 500.
+        Err(e) => error_response(StatusCode::BAD_REQUEST, "invalid_llm_config", e.to_string()),
+    }
+}
+
+/// Send one minimal prompt to the configured provider. `ManageConfig`; audited.
+///
+/// Deliberately ignores `enabled` — validating a provider before switching it on is the whole point
+/// of the button (the same reasoning as the forwarding-destination test).
+async fn test_llm_provider(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let Some(rca) = st.rca.as_ref() else {
+        return unavailable();
+    };
+    match rca.test().await {
+        Ok((latency_ms, reply)) => Json(serde_json::json!({
+            "ok": true,
+            "latency_ms": latency_ms,
+            // Bounded: this is model output rendered in a toast, and a model that ignores "reply
+            // with ok" should not be able to paste an essay into the settings page.
+            "reply": reply.chars().take(200).collect::<String>(),
+        }))
+        .into_response(),
+        // Not a 5xx: the provider configuration is the caller's, and the typed error is what tells
+        // them which part of it is wrong.
+        Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })).into_response(),
     }
 }
 
@@ -10670,6 +10910,7 @@ mod tests {
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
+            rca: None,
         }
     }
 
@@ -10701,6 +10942,7 @@ mod tests {
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
+            rca: None,
         };
         (state, token)
     }
@@ -10730,6 +10972,7 @@ mod tests {
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
+            rca: None,
         };
         (state, token)
     }
@@ -12681,5 +12924,262 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
+    }
+
+    #[test]
+    fn expensive_reads_wearing_post_do_not_dirty_the_config_generation() {
+        // S6 caches a full-fleet alert-config rebuild keyed on this generation. Launching an
+        // analysis or asking for an explanation changes no monitoring config, so counting either
+        // as a config write would force a fleet-wide rebuild on the next 30s tick — during an
+        // incident, which is when the fleet is largest and busiest.
+        assert!(!changes_monitoring_config("/api/v1/rca"));
+        assert!(!changes_monitoring_config("/api/v1/analysis/jobs"));
+        assert!(!changes_monitoring_config(
+            "/api/v1/analysis/jobs/abc/cancel"
+        ));
+        // Everything else still invalidates — a deny-list, so a new write handler is dirty by
+        // default rather than silently skipping a rebuild it needed.
+        for path in [
+            "/api/v1/nodes",
+            "/api/v1/nodes/abc/collection",
+            "/api/v1/thresholds",
+            "/api/v1/groups",
+            "/api/v1/llm/config",
+            "/api/v1/some-endpoint-invented-tomorrow",
+        ] {
+            assert!(changes_monitoring_config(path), "{path} must invalidate");
+        }
+    }
+
+    // ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rca_endpoints_are_absent_by_default_rather_than_half_working() {
+        // The most important property of this feature: an installation that has configured no
+        // provider makes no outbound call and exposes no half-enabled surface. With no
+        // orchestrator every RCA route answers 503 — and it *answers*, so the routes are
+        // registered (a 404 here would mean a path typo, which this also catches).
+        let (state, token) = state_with_role_token(yagra_common::Role::Admin);
+        let app = router(state);
+        let node = Uuid::nil();
+        let cases: Vec<(&str, String, Option<String>)> = vec![
+            ("GET", "/api/v1/llm/config".to_owned(), None),
+            (
+                "PUT",
+                "/api/v1/llm/config".to_owned(),
+                Some(r#"{"provider":"claude","model":"m","api_key":"k"}"#.to_owned()),
+            ),
+            ("POST", "/api/v1/llm/test".to_owned(), Some("{}".to_owned())),
+            (
+                "POST",
+                "/api/v1/rca".to_owned(),
+                Some(format!(r#"{{"node":"{node}","check":"{node}"}}"#)),
+            ),
+            ("GET", format!("/api/v1/rca/{node}"), None),
+        ];
+        for (method, uri, body) in cases {
+            let mut req = Request::builder()
+                .method(method)
+                .uri(&uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"));
+            if body.is_some() {
+                req = req.header("content-type", "application/json");
+            }
+            let resp = app
+                .clone()
+                .oneshot(req.body(body.map_or(Body::empty(), Body::from)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{method} {uri} must be unavailable — not enabled, not missing"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_caller_cannot_learn_whether_ai_is_configured() {
+        // Authorization is checked before availability in these handlers, so an unauthenticated
+        // prober gets a flat 401 rather than a 503-vs-200 that would tell them whether this
+        // installation has an LLM wired up and which vendor it is.
+        let (state, _token) = state_with_role_token(yagra_common::Role::Admin);
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/llm/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn generating_an_explanation_needs_more_than_view() {
+        // Generation spends money and sends the incident to a third party, so a Viewer cannot
+        // trigger it. The 403 lands before any store or provider work.
+        let (state, token) = state_with_role_token(yagra_common::Role::Viewer);
+        let node = Uuid::nil();
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/rca")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"node":"{node}","check":"{node}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(body_json(resp).await["error"]["code"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn an_operator_may_generate_but_not_configure() {
+        // The permission split. The people carrying the pager can ask for an explanation
+        // (AckAlerts ⇒ 503: authorized, merely unconfigured), while choosing the vendor and
+        // holding its credential stays with an admin (ManageConfig ⇒ 403 for an operator).
+        let (state, token) = state_with_role_token(yagra_common::Role::Operator);
+        let app = router(state);
+        let node = Uuid::nil();
+        let generate = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/rca")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"node":"{node}","check":"{node}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(generate.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let configure = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/llm/config")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"provider":"claude","model":"m"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(configure.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn reading_a_stored_report_is_open_to_viewers() {
+        // Deliberate: the explanation is display-only text, so anyone who can see the alert can
+        // see the analysis of it. Only *producing* one costs anything.
+        let (state, token) = state_with_role_token(yagra_common::Role::Viewer);
+        let resp = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/rca/{}", Uuid::nil()))
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Authorized (not 403) — unavailable only because nothing is configured.
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn the_bootstrap_config_reports_rca_as_off() {
+        // The WebUI hides the "Explain this incident" action on this flag, so an operator is never
+        // offered a button that can only 503.
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(body_json(resp).await["rca_enabled"], false);
+    }
+
+    #[test]
+    fn every_rca_refusal_maps_to_a_distinct_actionable_status() {
+        // Each of these asks the operator for a different thing — fix the config, wait, look
+        // elsewhere, chase the vendor — so collapsing any two into one status would lose that.
+        use crate::rca::orchestrator::RcaError;
+        use crate::rca::provider::LlmError;
+        let cases = [
+            (RcaError::NotConfigured, StatusCode::SERVICE_UNAVAILABLE),
+            (
+                RcaError::Misconfigured("an API key is required".to_owned()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (RcaError::RateLimited(10), StatusCode::TOO_MANY_REQUESTS),
+            (
+                RcaError::TooManyConcurrent(2),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (
+                RcaError::NoIncident("gone".to_owned()),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                RcaError::Provider(LlmError::Timeout),
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                RcaError::Provider(LlmError::Refused(None)),
+                StatusCode::BAD_GATEWAY,
+            ),
+        ];
+        for (err, want) in cases {
+            let resp = rca_error_response(&err);
+            assert_eq!(resp.status(), want, "{err:?}");
+            // A rate refusal must say when to come back, or a UI retry loop just hammers the
+            // window it is already saturating.
+            if want == StatusCode::TOO_MANY_REQUESTS {
+                assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_model_refusal_never_reads_as_an_outage() {
+        // The model declining is a different outcome from the vendor being broken: nobody should
+        // go page a cloud provider over a safety filter.
+        use crate::rca::orchestrator::RcaError;
+        use crate::rca::provider::LlmError;
+        let resp = rca_error_response(&RcaError::Provider(LlmError::Refused(None)));
+        assert_eq!(body_json(resp).await["error"]["code"], "model_refused");
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_configuration_says_what_is_missing() {
+        // "Not set up" and "set up wrong" are both 503, but they are different jobs for the
+        // operator, so they carry different codes and the second carries the reason.
+        use crate::rca::orchestrator::RcaError;
+        let resp = rca_error_response(&RcaError::Misconfigured(
+            "an Anthropic API key is required".to_owned(),
+        ));
+        let json = body_json(resp).await;
+        assert_eq!(json["error"]["code"], "rca_misconfigured");
+        assert!(json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("API key"));
     }
 }

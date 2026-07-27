@@ -47,6 +47,7 @@
     "pollers": "ポーラー",
     "forwarding": "転送",
     "integrations": "連携",
+    "ai": "AI 分析",
     "credentials": "認証情報とシークレット",
     "users": "ユーザー",
     "roles": "ロールと権限",
@@ -83,7 +84,8 @@
     "settingsCredentials": "SNMP・API 認証情報（暗号化して保存）",
     "settingsPollers": "分散ポーラーの状態",
     "settingsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
-    "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン"
+    "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン",
+    "settingsAi": "障害の説明文を書く言語モデルの設定"
   },
   "shell": {
     "home": "ホーム",

@@ -6,38 +6,26 @@
 //! right tool when the question is analytical ("which devices logged an auth failure last week")
 //! rather than operational ("mirror my syslog to the SIEM").
 //!
-//! **Authentication has two shapes and no third.**
-//!
-//! * A service-account key (the JSON Google hands out), stored envelope-encrypted like any other
-//!   credential (ADR-018). The key never leaves this process: it is turned into a signing key at
-//!   sender start and the JSON is dropped. Each hour a self-signed RS256 assertion is exchanged at
-//!   Google's token endpoint for an access token (the `jwt-bearer` grant).
-//! * No key at all — then the GCE/GKE **metadata server** is asked for the instance's token, which
-//!   is how Workload Identity works. This is the better deployment: nothing to store, nothing to
-//!   rotate, nothing to leak. It only works when core actually runs on Google infrastructure.
-//!
-//! RS256 signing uses **`ring`**, not the `rsa` crate. `ring` is already in this tree (it is the
-//! rustls crypto provider named explicitly by the forwarder's TLS setup), its RSA signing is
-//! constant-time, and it sidesteps RUSTSEC-2023-0071 — the Marvin timing side-channel that
-//! `deny.toml` currently ignores on the grounds that Yagra performs no RSA private-key operations.
-//! Signing here with `rsa` would have quietly invalidated that rationale.
+//! **Authentication lives in [`crate::gcp`]** — a service-account key stored envelope-encrypted
+//! (ADR-018), or the instance's own Workload Identity via the GCE/GKE metadata server. BigQuery
+//! contributes only the scope; the assertion signing, token cache and endpoint pinning are shared
+//! with the other Google caller (Vertex AI, ADR-029).
 //!
 //! **The dataset is never created; the table is.** A dataset carries a region that cannot be
 //! changed afterwards, so silently creating one would pick data residency on the operator's behalf
 //! and be irreversible. A missing dataset is an error that says so. A missing table is created with
 //! DAY partitioning and clustering from [`yagra_forward::bqrow`].
 //!
-//! **Log discipline** (security.md): the private key, the signed assertion and the access token are
-//! never logged at any level, and neither are BigQuery's per-row error `message` strings — those
-//! can echo the offending row, and a forwarded row can contain a syslog body with a credential in
-//! it. Only the machine-readable `reason`/`location` pair is surfaced.
+//! **Log discipline** (security.md): BigQuery's per-row error `message` strings are never logged or
+//! surfaced — those can echo the offending row, and a forwarded row can contain a syslog body with
+//! a credential in it. Only the machine-readable `reason`/`location` pair is (see [`crate::gcp`]).
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde::Deserialize;
 use serde_json::{json, Value};
 use yagra_forward::SourceKind;
+
+use crate::gcp::TokenSource;
 
 /// Most rows put in one `insertAll` request. BigQuery's documented recommendation is 500; its hard
 /// cap is 10 000 rows / 10 MB per request.
@@ -48,24 +36,15 @@ pub const MAX_INSERT_BYTES: usize = 5 * 1024 * 1024;
 /// How long a partly-filled batch waits for company before being sent anyway.
 pub const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Assertion lifetime. Google accepts up to one hour.
-const ASSERTION_TTL_SECS: i64 = 3600;
-/// Refresh a cached access token once this much of its life has elapsed, so a token never expires
-/// mid-request.
-const TOKEN_REFRESH_RATIO: f64 = 0.9;
 /// Bound on every call to Google so a hung endpoint cannot park the sender task.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-/// Longest error text kept from a response body.
-const MAX_ERROR_CHARS: usize = 300;
 
 /// Google's public API host. Not configurable: there is no legitimate reason to point a BigQuery
 /// destination at another host, and making it settable would turn a config field into an
 /// exfiltration channel for rows that may contain credentials.
 const API_BASE: &str = "https://bigquery.googleapis.com/bigquery/v2";
-/// The GCE/GKE metadata server (link-local, only reachable on Google infrastructure).
-const METADATA_BASE: &str = "http://metadata.google.internal";
-/// Scope covering both `tables.insert` (schema creation) and `tabledata.insertAll`.
-const SCOPE: &str = "https://www.googleapis.com/auth/bigquery";
+/// Names this client in operator-facing errors.
+const SERVICE: &str = "BigQuery";
 
 // ── Target ───────────────────────────────────────────────────────────────────────────────────
 
@@ -142,113 +121,15 @@ fn enc(s: &str) -> String {
     s.replace(':', "%3A")
 }
 
-// ── Credentials ──────────────────────────────────────────────────────────────────────────────
-
-/// The service-account fields used for the `jwt-bearer` grant. Everything else in the key file
-/// (project id, key id, cert URLs) is ignored.
-#[derive(Debug, Deserialize)]
-struct ServiceAccountKey {
-    // Defaulted rather than required so a near-miss (an OAuth *client* JSON, say) gets an error
-    // naming the missing field instead of serde's generic "this is not a key".
-    #[serde(default)]
-    client_email: String,
-    #[serde(default)]
-    private_key: String,
-    #[serde(default = "default_token_uri")]
-    token_uri: String,
-}
-
-fn default_token_uri() -> String {
-    "https://oauth2.googleapis.com/token".to_owned()
-}
-
-/// How an access token is obtained.
-enum Credentials {
-    /// A stored service-account key, already turned into a signing key.
-    ServiceAccount {
-        client_email: String,
-        token_uri: String,
-        key: Arc<ring::signature::RsaKeyPair>,
-    },
-    /// The instance's own identity, from the GCE/GKE metadata server (Workload Identity).
-    Metadata,
-}
-
-/// Validate a service-account JSON without keeping any of it — used by the API edge so a mistyped
-/// key is a 400 rather than a destination that fails every send.
-///
-/// # Errors
-/// Returns operator-facing text naming what is wrong with the key.
-pub fn validate_service_account(json: &str) -> Result<(), String> {
-    parse_service_account(json).map(drop)
-}
-
-fn parse_service_account(json: &str) -> Result<Credentials, String> {
-    let key: ServiceAccountKey = serde_json::from_str(json).map_err(|_| {
-        "that is not a Google service-account key (expected its JSON file)".to_owned()
-    })?;
-    if key.client_email.is_empty() {
-        return Err("the service-account key has no client_email".to_owned());
-    }
-    if key.private_key.is_empty() {
-        return Err("the service-account key has no private_key".to_owned());
-    }
-    // A pasted key names its own token endpoint. Pinning it to Google means a hostile key file
-    // cannot redirect the signed assertion — which is a bearer credential for the account — to a
-    // third party. Defence in depth: only a ManageConfig admin can write one in the first place.
-    let host = key
-        .token_uri
-        .strip_prefix("https://")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default();
-    if !(host == "googleapis.com" || host.ends_with(".googleapis.com")) {
-        return Err("the key's token_uri must be a Google endpoint".to_owned());
-    }
-    let signing_key = signing_key_from_pem(&key.private_key)?;
-    Ok(Credentials::ServiceAccount {
-        client_email: key.client_email,
-        token_uri: key.token_uri,
-        key: Arc::new(signing_key),
-    })
-}
-
-/// PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`, which is what Google issues) → a `ring` signing key.
-fn signing_key_from_pem(pem: &str) -> Result<ring::signature::RsaKeyPair, String> {
-    use rustls::pki_types::pem::{Error as PemError, PemObject};
-    let der = rustls::pki_types::PrivateKeyDer::from_pem_slice(pem.as_bytes()).map_err(|e| {
-        match e {
-            // `rustls-pemfile` returned `Ok(None)` for "well-formed PEM, no key in it"; the
-            // pki-types reader folds that into a typed error, so keep the two messages distinct.
-            PemError::NoItemsFound => "the key's private_key contains no PRIVATE KEY block",
-            _ => "the key's private_key is not valid PEM",
-        }
-        .to_owned()
-    })?;
-    let rustls::pki_types::PrivateKeyDer::Pkcs8(pkcs8) = der else {
-        return Err("the key's private_key must be PKCS#8 (BEGIN PRIVATE KEY)".to_owned());
-    };
-    // The error is deliberately not interpolated: `ring`'s `KeyRejected` text is harmless, but this
-    // value is key material and the habit of formatting it into a string is not one worth having.
-    ring::signature::RsaKeyPair::from_pkcs8(pkcs8.secret_pkcs8_der())
-        .map_err(|_| "the key's private_key was rejected (expected a 2048-bit RSA key)".to_owned())
-}
-
 // ── Client ───────────────────────────────────────────────────────────────────────────────────
-
-struct CachedToken {
-    value: String,
-    refresh_at: Instant,
-}
 
 /// One destination's BigQuery client: credentials, token cache, and whether the table has been
 /// checked. Owned by a single sender task, so it needs no locking.
 pub struct BigQueryClient {
     http: reqwest::Client,
     target: BigQueryTarget,
-    creds: Credentials,
+    tokens: TokenSource,
     api_base: String,
-    metadata_base: String,
-    token: Option<CachedToken>,
     table_ready: bool,
 }
 
@@ -259,13 +140,7 @@ impl BigQueryClient {
     /// Returns operator-facing text when the key is unusable or the target is malformed.
     pub fn new(target: &str, service_account_json: Option<&str>) -> Result<Self, String> {
         let target = BigQueryTarget::parse(target)?;
-        let creds = match service_account_json
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(json) => parse_service_account(json)?,
-            None => Credentials::Metadata,
-        };
+        let tokens = TokenSource::new(SERVICE, crate::gcp::SCOPE_BIGQUERY, service_account_json)?;
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
             .build()
@@ -273,10 +148,8 @@ impl BigQueryClient {
         Ok(Self {
             http,
             target,
-            creds,
+            tokens,
             api_base: API_BASE.to_owned(),
-            metadata_base: METADATA_BASE.to_owned(),
-            token: None,
             table_ready: false,
         })
     }
@@ -286,7 +159,7 @@ impl BigQueryClient {
     #[cfg(test)]
     fn with_endpoints(mut self, api_base: String, metadata_base: String) -> Self {
         self.api_base = api_base;
-        self.metadata_base = metadata_base;
+        self.tokens.set_metadata_base(metadata_base);
         self
     }
 
@@ -405,7 +278,7 @@ impl BigQueryClient {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             // Drop the cached token so the next attempt re-mints rather than replaying a token the
             // server has stopped accepting (rotated key, revoked binding, clock skew).
-            self.token = None;
+            self.tokens.invalidate();
             return Err(api_error("inserting rows", res).await);
         }
         if !status.is_success() {
@@ -419,63 +292,7 @@ impl BigQueryClient {
     }
 
     async fn access_token(&mut self) -> Result<String, String> {
-        if let Some(cached) = self.token.as_ref() {
-            if Instant::now() < cached.refresh_at {
-                return Ok(cached.value.clone());
-            }
-        }
-        let (value, ttl) = match &self.creds {
-            Credentials::ServiceAccount {
-                client_email,
-                token_uri,
-                key,
-            } => {
-                let assertion = signed_assertion(client_email, token_uri, key)?;
-                let res = self
-                    .http
-                    .post(token_uri)
-                    .form(&[
-                        ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
-                        ("assertion", &assertion),
-                    ])
-                    .send()
-                    .await
-                    .map_err(|e| format!("Google token endpoint: {e}"))?;
-                if !res.status().is_success() {
-                    return Err(api_error("requesting an access token", res).await);
-                }
-                read_token(res).await?
-            }
-            Credentials::Metadata => {
-                let url = format!(
-                    "{}/computeMetadata/v1/instance/service-accounts/default/token",
-                    self.metadata_base
-                );
-                let res = self
-                    .http
-                    .get(url)
-                    .header("Metadata-Flavor", "Google")
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        format!(
-                            "no service-account key is set and the GCE metadata server is \
-                             unreachable ({e}) — set a key, or run core on Google infrastructure \
-                             with Workload Identity"
-                        )
-                    })?;
-                if !res.status().is_success() {
-                    return Err(api_error("asking the metadata server for a token", res).await);
-                }
-                read_token(res).await?
-            }
-        };
-        let lifetime = Duration::from_secs(ttl).mul_f64(TOKEN_REFRESH_RATIO);
-        self.token = Some(CachedToken {
-            value: value.clone(),
-            refresh_at: Instant::now() + lifetime,
-        });
-        Ok(value)
+        self.tokens.token(&self.http).await
     }
 }
 
@@ -495,63 +312,6 @@ fn table_shape(source: SourceKind) -> (Value, &'static str, Vec<&'static str>) {
     }
 }
 
-#[derive(Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[serde(default = "default_expiry")]
-    expires_in: u64,
-}
-
-const fn default_expiry() -> u64 {
-    3600
-}
-
-async fn read_token(res: reqwest::Response) -> Result<(String, u64), String> {
-    let token: TokenResponse = res
-        .json()
-        .await
-        .map_err(|_| "the token response was not readable JSON".to_owned())?;
-    if token.access_token.is_empty() {
-        return Err("the token response carried no access_token".to_owned());
-    }
-    Ok((token.access_token, token.expires_in.max(60)))
-}
-
-/// Build and sign the RS256 assertion Google exchanges for an access token.
-fn signed_assertion(
-    client_email: &str,
-    token_uri: &str,
-    key: &ring::signature::RsaKeyPair,
-) -> Result<String, String> {
-    let now = chrono::Utc::now().timestamp();
-    let header = json!({ "alg": "RS256", "typ": "JWT" });
-    let claims = json!({
-        "iss": client_email,
-        "scope": SCOPE,
-        "aud": token_uri,
-        "iat": now,
-        "exp": now + ASSERTION_TTL_SECS,
-    });
-    let signing_input = format!("{}.{}", b64(&header)?, b64(&claims)?);
-    let mut signature = vec![0u8; key.public().modulus_len()];
-    key.sign(
-        &ring::signature::RSA_PKCS1_SHA256,
-        &ring::rand::SystemRandom::new(),
-        signing_input.as_bytes(),
-        &mut signature,
-    )
-    .map_err(|_| "signing the Google assertion failed".to_owned())?;
-    Ok(format!(
-        "{signing_input}.{}",
-        data_encoding::BASE64URL_NOPAD.encode(&signature)
-    ))
-}
-
-fn b64(value: &Value) -> Result<String, String> {
-    let bytes = serde_json::to_vec(value).map_err(|e| format!("encoding the assertion: {e}"))?;
-    Ok(data_encoding::BASE64URL_NOPAD.encode(&bytes))
-}
-
 /// How many rows an `insertAll` response reports as rejected.
 fn count_insert_errors(payload: &Value) -> usize {
     payload
@@ -560,43 +320,17 @@ fn count_insert_errors(payload: &Value) -> usize {
         .map_or(0, Vec::len)
 }
 
-/// Turn a failed response into operator-facing text.
-///
-/// Google's error bodies are echoed back **selectively**: the `reason`/`location` pair describes the
-/// schema, but a per-row `message` can quote the offending value — and a forwarded row can hold a
-/// syslog body with a credential in it. So the message strings are dropped rather than surfaced or
-/// logged (security.md).
+/// Turn a failed response into operator-facing text, naming this service. The selective echoing of
+/// Google's error body (never the free-text `message`) lives in [`crate::gcp::api_error`].
 async fn api_error(what: &str, res: reqwest::Response) -> String {
-    let status = res.status();
-    let detail = res
-        .json::<Value>()
-        .await
-        .ok()
-        .and_then(|body| safe_reason(&body));
-    match detail {
-        Some(reason) => format!("BigQuery rejected {what}: {status} ({reason})"),
-        None => format!("BigQuery rejected {what}: {status}"),
-    }
-}
-
-/// The machine-readable half of a Google error — `reason` (and `location` when present), never the
-/// free-text `message`.
-fn safe_reason(body: &Value) -> Option<String> {
-    let err = body.get("error")?;
-    let first = err.get("errors").and_then(Value::as_array)?.first()?;
-    let reason = first.get("reason").and_then(Value::as_str)?;
-    let text = match first.get("location").and_then(Value::as_str) {
-        Some(loc) if !loc.is_empty() => format!("{reason} at {loc}"),
-        _ => reason.to_owned(),
-    };
-    Some(text.chars().take(MAX_ERROR_CHARS).collect())
+    crate::gcp::api_error(SERVICE, what, res).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::SocketAddr;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
     // ── Target parsing ───────────────────────────────────────────────────────────────────────
@@ -657,80 +391,9 @@ mod tests {
         .to_string()
     }
 
-    #[test]
-    fn a_well_formed_service_account_key_is_accepted() {
-        validate_service_account(&sa_json("https://oauth2.googleapis.com/token")).unwrap();
-    }
-
-    #[test]
-    fn a_key_whose_token_uri_is_not_google_is_refused() {
-        // The assertion is a bearer credential for the account. A pasted key must not be able to
-        // redirect it to a collector of someone else's choosing.
-        let err = validate_service_account(&sa_json("https://evil.example.com/token"))
-            .expect_err("a non-Google token_uri must be refused");
-        assert!(err.contains("Google endpoint"), "{err}");
-        // ...and neither may a plaintext one.
-        assert!(validate_service_account(&sa_json("http://oauth2.googleapis.com/token")).is_err());
-    }
-
-    #[test]
-    fn a_broken_key_is_refused_without_echoing_key_material() {
-        let cases = [
-            ("{}", "client_email"),
-            (
-                r#"{"client_email":"a@b.com","private_key":"not a pem"}"#,
-                "PRIVATE KEY",
-            ),
-            (r#"{"private_key":"x"}"#, "client_email"),
-            ("this is not json", "service-account key"),
-        ];
-        for (json, expect) in cases {
-            let err = validate_service_account(json).expect_err("should be refused");
-            assert!(err.contains(expect), "{err} (from {json})");
-            assert!(
-                !err.contains("BEGIN") && !err.contains("MII"),
-                "the error must not quote key material: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_assertion_is_three_base64url_parts_with_the_expected_claims() {
-        let Credentials::ServiceAccount {
-            client_email,
-            token_uri,
-            key,
-        } = parse_service_account(&sa_json("https://oauth2.googleapis.com/token")).unwrap()
-        else {
-            panic!("expected a service-account credential");
-        };
-        let jwt = signed_assertion(&client_email, &token_uri, &key).unwrap();
-        let parts: Vec<&str> = jwt.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        // base64url, unpadded — a '+', '/' or '=' would be rejected by Google.
-        assert!(!jwt.contains('+') && !jwt.contains('/') && !jwt.contains('='));
-        let claims: Value = serde_json::from_slice(
-            &data_encoding::BASE64URL_NOPAD
-                .decode(parts[1].as_bytes())
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(claims["iss"], json!(client_email));
-        assert_eq!(claims["aud"], json!(token_uri));
-        assert_eq!(claims["scope"], json!(SCOPE));
-        assert_eq!(
-            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
-            ASSERTION_TTL_SECS
-        );
-        // The signature is 256 bytes for a 2048-bit key.
-        assert_eq!(
-            data_encoding::BASE64URL_NOPAD
-                .decode(parts[2].as_bytes())
-                .unwrap()
-                .len(),
-            256
-        );
-    }
+    // Key parsing, assertion signing and the Google error-body discipline are tested in
+    // `crate::gcp`, which owns them. What remains here is BigQuery's own request shaping — and the
+    // token tests below, which still exercise the shared source end to end through this client.
 
     // ── A fake Google, for the request-shaping tests ─────────────────────────────────────────
 
@@ -860,16 +523,8 @@ mod tests {
         )
         .unwrap()
         .with_endpoints(format!("{base}/bigquery/v2"), base.clone());
-        let Credentials::ServiceAccount { key, .. } = &client.creds else {
-            panic!("expected a service-account credential");
-        };
-        let key = key.clone();
         // Redirect the exchange at the fake by rewriting the credential's endpoint.
-        client.creds = Credentials::ServiceAccount {
-            client_email: "yagra@test-project.iam.gserviceaccount.com".to_owned(),
-            token_uri: format!("{base}/token"),
-            key,
-        };
+        client.tokens.set_token_uri(format!("{base}/token"));
         client.ensure_table(SourceKind::Syslog).await.unwrap();
         let reqs = fake.requests();
         assert_eq!(reqs[0].0, "POST");
@@ -1017,28 +672,6 @@ mod tests {
                 .count(),
             2
         );
-    }
-
-    #[test]
-    fn api_errors_surface_the_reason_but_never_googles_message_text() {
-        // A per-row `message` can quote the offending value, and a forwarded row can hold a syslog
-        // body with a credential in it.
-        let body = json!({
-            "error": {
-                "code": 400,
-                "message": "Invalid value for field message: password=hunter2",
-                "errors": [{
-                    "reason": "invalid",
-                    "location": "message",
-                    "message": "Invalid value: password=hunter2",
-                }]
-            }
-        });
-        let reason = safe_reason(&body).unwrap();
-        assert_eq!(reason, "invalid at message");
-        assert!(!reason.contains("hunter2"));
-        // A body with no structured error yields nothing rather than the free text.
-        assert!(safe_reason(&json!({ "error": { "message": "boom" } })).is_none());
     }
 
     #[test]

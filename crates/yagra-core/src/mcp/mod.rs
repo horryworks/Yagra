@@ -241,6 +241,7 @@ mod tests {
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: true,
+            rca: None,
         }
     }
 

@@ -30,6 +30,7 @@ mod events;
 mod flowstore;
 mod forward;
 mod forward_store;
+mod gcp;
 mod groups;
 mod history;
 mod ipasn;
@@ -45,6 +46,8 @@ mod oidc;
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
 mod pollers;
+mod ratelimit;
+mod rca;
 mod repo;
 mod reports;
 mod ring;
@@ -796,6 +799,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         }
     };
 
+    // AI-assisted RCA (ADR-029). The store backs Settings ▸ AI; the orchestrator serves the
+    // on-demand endpoint. Present on every core, leader or not: generating an explanation is a read
+    // plus one outbound call, so there is nothing for a standby to double-do. With no config row
+    // (the default) the orchestrator answers 503 and nothing leaves the building.
+    let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
+    let llm_repo = Arc::new(rca::store::RcaRepo::from_env(repo.pool()));
+    let rca = Some(Arc::new(rca::orchestrator::RcaOrchestrator::new(
+        llm_repo.clone(),
+        repo.clone(),
+        alerts.clone(),
+        analysis.clone(),
+        audit_repo.clone(),
+    )));
+
     let admin = Some(Arc::new(AdminState {
         repo: repo.clone(),
         creds,
@@ -809,7 +826,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classification,
         classifier,
         groups: group_repo,
-        audit: Arc::new(AuditRepo::new(repo.pool())),
+        audit: audit_repo,
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
@@ -826,6 +843,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         api_tokens: Arc::new(apitokens::ApiTokenStore::new(repo.pool().clone())),
         forward: forward_store,
         forward_handle,
+        llm: llm_repo,
     }));
     // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
     // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
@@ -914,6 +932,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         oidc,
         oidc_flight,
         enable_mcp: cfg.enable_mcp,
+        rca,
     };
 
     if cfg.enable_ha {
@@ -998,6 +1017,8 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // Skeleton has no API-token store (admin is None), so MCP has no PAT auth backend — leave it
         // off regardless of the flag. MCP is a live-mode feature (its tools read the live seams).
         enable_mcp: false,
+        // No metadata store ⇒ nowhere to keep a provider config or a report; the RCA endpoints 503.
+        rca: None,
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }

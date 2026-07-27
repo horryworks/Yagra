@@ -1,0 +1,67 @@
+{
+  "action": "説明",
+  "actionHint": "設定済みの言語モデルにこの障害を説明させます",
+  "title": "この障害を説明",
+
+  "disclaimer": "AI が生成した推測であり、誤ることがあります。行動に移す前に、下の根拠と突き合わせて確認してください。",
+
+  "loading": "根拠を読み、説明を作成しています…",
+
+  "section": {
+    "rootCause": "推定根本原因",
+    "dependents": "従属アラート",
+    "nextSteps": "次に確認すること",
+    "evidence": "モデルに与えた根拠",
+    "raw": "モデルの回答"
+  },
+
+  "rawNote": "モデルが想定した構造で回答しなかったため、回答をそのまま表示しています。",
+
+  "confidence": {
+    "label": "確信度",
+    "high": "確信度 高",
+    "medium": "確信度 中",
+    "low": "確信度 低",
+    "unknown": "確信度の申告なし"
+  },
+
+  "meta": {
+    "cached": "キャッシュ",
+    "cachedHint": "生成時から根拠が変わっていないため、プロバイダを再度呼ばずに保存済みの結果を返しました。",
+    "generated": "{{at}} に {{by}} が生成",
+    "model": "{{provider}} · {{model}}"
+  },
+
+  "evidence": {
+    "node": "ノード",
+    "hopped": "クリックしたのは {{symptom}} ですが、その上流の原因を説明しています。",
+    "alert": "アラート",
+    "alertLine": "{{severity}} / {{metric}}（{{at}}）",
+    "alertLineLiveness": "{{severity}} — ノード到達不能（{{at}}）",
+    "flapping": "フラッピング",
+    "breach": "実測 {{value}}、閾値 {{threshold}}（{{direction}}）",
+    "dependents": "従属アラート",
+    "dependentsMore": "ほか {{count}} 件",
+    "upstream": "上流チェーン",
+    "timeline": "タイムライン（直近 {{window}}）",
+    "timelineEmpty": "この期間にメトリクス異常・イベント・フロー信号はありません。",
+    "changes": "直近の構成変更",
+    "changesEmpty": "この期間にこのノードへ触れた監査済みの変更はありません。",
+    "noneRecorded": "このレポートには根拠が記録されていません。"
+  },
+
+  "actions": {
+    "regenerate": "再生成",
+    "regenerateHint": "保存済みの回答を使わず、プロバイダを再度呼び出します"
+  },
+
+  "err": {
+    "notConfigured": "AI プロバイダが未設定です。設定 ▸ AI 分析 で設定してください。",
+    "misconfigured": "AI プロバイダは設定済みですが利用できません: {{message}}",
+    "rateLimited": "同時実行が多すぎます。1 分ほど置いて再試行してください。",
+    "forbidden": "説明の生成には operator ロールが必要です。",
+    "noIncident": "{{message}}",
+    "provider": "プロバイダが応答できませんでした: {{message}}",
+    "generic": "説明を生成できませんでした。"
+  }
+}

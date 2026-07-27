@@ -1485,3 +1485,155 @@ export interface EventTimeBucket {
   count: number;
   by_kind?: Record<string, number> | null;
 }
+
+// ── AI-assisted RCA (ADR-029: Settings ▸ AI, and "Explain this incident") ──────────────────────
+
+/** One selectable LLM vendor (`GET /api/v1/llm/config` → `providers`).
+ *
+ *  Served by the backend rather than hardcoded here so the egress warning the form shows reads the
+ *  same value the adapters obey — a copy in the WebUI would drift the day a provider changed. */
+export interface LlmProviderChoice {
+  key: 'vertex' | 'gemini' | 'claude';
+  /** Placeholder model id. A hint, not an allowlist — model ids turn over faster than releases. */
+  suggested_model: string;
+  /** Placeholder region; only Vertex has one to choose. */
+  suggested_location: string | null;
+  /** True when picking this sends hostnames, addresses, topology and syslog outside the operator's
+   *  own cloud. Drives the warning banner. */
+  leaves_operator_boundary: boolean;
+  /** Whether this provider needs a GCP project + region rather than just an API key. */
+  needs_project: boolean;
+  /** Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead). */
+  credential_optional: boolean;
+}
+
+/** The stored provider configuration. Never carries the credential — only `has_api_key`. */
+export interface LlmConfigView {
+  provider: string;
+  model: string;
+  project: string;
+  location: string;
+  enabled: boolean;
+  max_output_tokens: number;
+  has_api_key: boolean;
+  leaves_operator_boundary: boolean;
+  updated_at: string;
+}
+
+/** `GET /api/v1/llm/config`. `config` is null until something has been configured — the normal
+ *  state of a fresh install, not an error. */
+export interface LlmConfigResponse {
+  config: LlmConfigView | null;
+  providers: LlmProviderChoice[];
+}
+
+/** `PUT /api/v1/llm/config`. */
+export interface LlmConfigInput {
+  provider: string;
+  model: string;
+  project?: string;
+  location?: string;
+  enabled: boolean;
+  max_output_tokens?: number;
+  /** Write-only, three-valued: omit to keep the stored credential, `''` to clear it (which is how
+   *  Vertex moves onto Workload Identity), a value to replace it. */
+  api_key?: string;
+}
+
+/** `POST /api/v1/llm/test`. A provider failure comes back as `{ ok: false, error }` on HTTP 200 —
+ *  the configuration is the caller's, not a server fault. */
+export interface LlmTestResult {
+  ok: boolean;
+  latency_ms?: number;
+  reply?: string;
+  error?: string;
+}
+
+/** The model's parsed explanation. Every field is plain text and MUST be rendered as text — never
+ *  as HTML or markdown (the model was itself reading untrusted device output). */
+export interface RcaAnswer {
+  summary: string;
+  root_cause: string;
+  dependents: string;
+  next_steps: string[];
+  /** `high` | `medium` | `low` | `unknown` — a closed set the badge styles. */
+  confidence: string;
+  /** Set when the reply was not parseable JSON: the model's text verbatim. Its presence is what
+   *  tells the UI to render one prose block instead of empty sections. */
+  raw?: string | null;
+}
+
+/** One node's facts as the model saw them. */
+export interface RcaNodeFacts {
+  name: string;
+  address: string;
+  vendor: string | null;
+  model: string | null;
+  pool: string | null;
+  tags: Array<[string, string]>;
+}
+
+/** One dated signal on the evidence timeline. */
+export interface RcaSignal {
+  at_s: number;
+  severity: number;
+  kind: string;
+  label: string;
+}
+
+/** The evidence the answer was grounded in — stored beside it so a reader can check the
+ *  explanation rather than trust it (ADR-029's display rule). */
+export interface RcaEvidence {
+  generated_at_s: number;
+  window_secs: number;
+  root_node_id: string;
+  node: RcaNodeFacts;
+  alert: {
+    severity: string;
+    state: string;
+    metric: string;
+    at_unix_ms: number;
+    flapping: boolean;
+    breach: { value: number; threshold: number | null; direction: string } | null;
+    /** Set when the operator clicked a symptom and the context hopped to its cause. */
+    asked_about: string | null;
+  };
+  dependents: { named: string[]; total: number };
+  upstream: RcaNodeFacts[];
+  timeline: RcaSignal[];
+  recent_changes: Array<{ at: string; username: string; action: string; status: number }>;
+}
+
+/** The `body` column of a stored report. */
+export interface RcaReportBody {
+  answer: RcaAnswer;
+  evidence: RcaEvidence;
+  language: string;
+}
+
+/** A generated (or cached) report (`POST /api/v1/rca`, `GET /api/v1/rca/:id`). */
+export interface RcaReport {
+  id: string;
+  /** The node the report is filed under — the root cause, after any roll-up hop. */
+  node_id: string;
+  check_id: string;
+  provider: string;
+  model: string;
+  summary: string;
+  body: RcaReportBody;
+  generated_at: string;
+  created_by: string;
+  /** Whether this delivery came from the cache rather than a fresh (billed) call. */
+  cached: boolean;
+}
+
+/** `POST /api/v1/rca`. */
+export interface RcaRequestInput {
+  node: string;
+  check: string;
+  window_secs?: number;
+  /** UI language tag; the instructions stay English, only the answer follows the reader. */
+  language?: string;
+  /** Regenerate instead of serving the cached report. Still rate-limited. */
+  force?: boolean;
+}

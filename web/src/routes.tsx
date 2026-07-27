@@ -39,6 +39,7 @@ import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { AuthSettingsPage } from './pages/AuthSettingsPage';
+import { AiSettingsPage } from './pages/AiSettingsPage';
 import { ApiTokensPage } from './pages/ApiTokensPage';
 import { ForwardingPage } from './pages/ForwardingPage';
 import { TopologyMapPage } from './pages/TopologyMapPage';
@@ -120,6 +121,7 @@ export function AppRoutes() {
         <Route path="settings/forwarding" element={<ForwardingPage />} />
         <Route path="settings/integrations" element={<IntegrationsCatalogPage />} />
         <Route path="settings/integrations/meraki" element={<MerakiIntegrationPage />} />
+        <Route path="settings/ai" element={<AiSettingsPage />} />
         <Route path="settings/credentials" element={<CredentialsPage />} />
         <Route path="settings/users" element={<UsersPage />} />
         <Route path="settings/roles" element={<RolesPage />} />

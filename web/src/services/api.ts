@@ -113,6 +113,11 @@ import type {
   ForwardDestinationInput,
   ForwardStatus,
   ForwardTestResult,
+  LlmConfigInput,
+  LlmConfigResponse,
+  LlmTestResult,
+  RcaReport,
+  RcaRequestInput,
 } from '../types/api';
 
 /** Request body to create a collection item (scalar or table). */
@@ -271,6 +276,10 @@ export interface ClientConfig {
   sso_enabled: boolean;
   /** Global default polling interval (seconds); per-profile overrides take precedence. */
   default_poll_interval_secs: number;
+  /** Whether an LLM provider is configured and enabled (ADR-029) — gates the "Explain this
+   *  incident" affordance so it is never offered on an installation that would 503. Optional so an
+   *  older core (which omits the field) reads as off rather than as `undefined`. */
+  rca_enabled?: boolean;
 }
 
 export const api = {
@@ -1495,4 +1504,21 @@ export const api = {
 
   /** Live forwarding counters + any online poller that cannot supply original bytes. */
   forwardingStatus: (): Promise<ForwardStatus> => request('/forwarding/status'),
+
+  // ── AI-assisted RCA (ADR-029) — provider config is ManageConfig, generation is AckAlerts ──
+  /** The active provider's configuration plus the selectable vendors. Never the credential. */
+  getLlmConfig: (): Promise<LlmConfigResponse> => request('/llm/config'),
+
+  /** Create or replace the provider configuration. Omit `api_key` to keep the stored one. */
+  saveLlmConfig: (body: LlmConfigInput): Promise<void> => request('/llm/config', jsonBody('PUT', body)),
+
+  /** Send one minimal prompt to the **saved** configuration. Ignores `enabled`, so a provider can
+   *  be validated before it is switched on. A provider failure is `{ ok: false, error }` on 200. */
+  testLlmProvider: (): Promise<LlmTestResult> => request('/llm/test', { method: 'POST' }),
+
+  /** Explain one incident. Serves the cached report for identical evidence unless `force`. */
+  createRca: (body: RcaRequestInput): Promise<RcaReport> => request('/rca', jsonBody('POST', body)),
+
+  /** Read a stored report back by id (`View` — display-only text). */
+  getRca: (id: string): Promise<RcaReport> => request(`/rca/${encodeURIComponent(id)}`),
 };

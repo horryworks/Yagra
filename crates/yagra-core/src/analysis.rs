@@ -51,14 +51,10 @@ const DEFAULT_RATE_PER_MIN: usize = 30;
 /// The sliding window the per-minute creation rate limit is measured over.
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 
-/// Read a positive-`usize` cap from an env var, falling back to `default` when unset/invalid/zero.
-fn env_cap(var: &str, default: usize) -> usize {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(default)
-}
+// Admission control (the concurrency cap's companion) lives in [`crate::ratelimit`], shared with the
+// AI-assisted RCA endpoint (ADR-029) so there is one definition of "an expensive read is bounded by
+// a cap, not by a role".
+use crate::ratelimit::{charge_window, env_cap};
 
 /// Why [`AnalysisRunner::create`] declined to launch a job. The two rate outcomes map to HTTP 429 at
 /// the REST edge (and a "try again shortly" note over MCP); [`CreateError::Internal`] maps to 500.
@@ -73,24 +69,6 @@ pub enum CreateError {
     /// An internal failure (e.g. the job-row insert failed).
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
-}
-
-/// Charge one creation against a sliding window: prune entries older than `window`, then admit iff
-/// fewer than `max` remain (pushing `now` on admission). Pure so the rate limiter is unit-testable
-/// without a full runner (which needs a live `PgPool`).
-fn charge_window(q: &mut VecDeque<Instant>, now: Instant, window: Duration, max: usize) -> bool {
-    while let Some(&front) = q.front() {
-        if now.duration_since(front) >= window {
-            q.pop_front();
-        } else {
-            break;
-        }
-    }
-    if q.len() >= max {
-        return false;
-    }
-    q.push_back(now);
-    true
 }
 
 // ── Tool / state / scope enums ──────────────────────────────────────────────────────
@@ -1915,71 +1893,15 @@ impl AnalysisRunner {
                 "Assembling incident timeline…",
             )
             .await;
-            let mut signals: Vec<IncidentSignal> = Vec::new();
-            // 1) Reachability metric anomaly.
-            let step = read_step(from, to);
-            let rtt = self.gauge_range(*node, "icmp_rtt_ms", from, to, step).await;
-            if rtt.len() >= MIN_POINTS {
-                if let Some(a) = score_anomaly(
-                    &rtt,
-                    to - params.window_secs.max(600),
+            let mut signals = self
+                .incident_signals(
+                    *node,
+                    from,
+                    to,
+                    params.window_secs.max(600),
                     params.sensitivity.max(2.0),
-                ) {
-                    signals.push(IncidentSignal {
-                        at_s: a.when_s,
-                        severity: a.score,
-                        kind: "metric",
-                        label: format!("icmp_rtt_ms {}", a.kind),
-                    });
-                }
-            }
-            // 2) Passive events on the node.
-            let filter = EventFilter {
-                since: DateTime::from_timestamp(from, 0),
-                node_id: Some(*node),
-                ..Default::default()
-            };
-            let events = self
-                .events
-                .list_events(&filter, 20)
-                .await
-                .unwrap_or_default();
-            for e in events.iter().take(8) {
-                signals.push(IncidentSignal {
-                    at_s: e.at_unix_ms / 1000,
-                    severity: event_signal_severity(&e.action, e.syslog_severity),
-                    kind: "event",
-                    label: incident_event_label(e),
-                });
-            }
-            // 3) Dominant flow conversation.
-            if let Some(flows) = self.flows.clone() {
-                let q = FlowQuery {
-                    node_id: Some(*node),
-                    from_unix_ms: from * 1000,
-                    to_unix_ms: to * 1000,
-                    limit: 1,
-                    proto: None,
-                    dst_port: None,
-                    peer: None,
-                    asn: None,
-                };
-                if let Ok(cs) = flows.top_conversations(&q).await {
-                    if let Some(c) = cs.first() {
-                        signals.push(IncidentSignal {
-                            at_s: to,
-                            severity: 40.0,
-                            kind: "flow",
-                            label: format!(
-                                "top flow {} → {} ({})",
-                                c.src,
-                                c.dst,
-                                human_bytes(c.bytes as f64)
-                            ),
-                        });
-                    }
-                }
-            }
+                )
+                .await;
             // Cross-signal evidence required: ≥2 signals across ≥2 kinds.
             let kinds: HashSet<&str> = signals.iter().map(|s| s.kind).collect();
             if signals.len() < 2 || kinds.len() < 2 {
@@ -2011,6 +1933,91 @@ impl AnalysisRunner {
         finalize(&mut findings);
         let summary = format!("{} correlated incidents", findings.len());
         Ok(Some((findings, summary)))
+    }
+
+    /// Assemble one node's cross-signal timeline over `[from_s, to_s]`: a reachability metric
+    /// anomaly (TSDB), its recent passive events (event store), and the dominant flow conversation
+    /// (ClickHouse, when the flow tier is on). Signals are unordered and unfiltered — the caller
+    /// decides how much evidence is enough.
+    ///
+    /// Shared by the `incident_correlate` analysis and the LLM RCA context builder (ADR-029) so
+    /// there is exactly one definition of "what this node's incident looked like". A second
+    /// implementation would drift, and the two would then disagree about the same outage.
+    ///
+    /// `recent_window_s` is how far back still counts as "recent" for the anomaly scorer, and
+    /// `sigma` its sensitivity.
+    pub(crate) async fn incident_signals(
+        &self,
+        node: Uuid,
+        from_s: i64,
+        to_s: i64,
+        recent_window_s: i64,
+        sigma: f64,
+    ) -> Vec<IncidentSignal> {
+        let mut signals: Vec<IncidentSignal> = Vec::new();
+        // 1) Reachability metric anomaly.
+        let step = read_step(from_s, to_s);
+        let rtt = self
+            .gauge_range(node, "icmp_rtt_ms", from_s, to_s, step)
+            .await;
+        if rtt.len() >= MIN_POINTS {
+            if let Some(a) = score_anomaly(&rtt, to_s - recent_window_s, sigma) {
+                signals.push(IncidentSignal {
+                    at_s: a.when_s,
+                    severity: a.score,
+                    kind: "metric",
+                    label: format!("icmp_rtt_ms {}", a.kind),
+                });
+            }
+        }
+        // 2) Passive events on the node.
+        let filter = EventFilter {
+            since: DateTime::from_timestamp(from_s, 0),
+            node_id: Some(node),
+            ..Default::default()
+        };
+        let events = self
+            .events
+            .list_events(&filter, 20)
+            .await
+            .unwrap_or_default();
+        for e in events.iter().take(INCIDENT_EVENT_CAP) {
+            signals.push(IncidentSignal {
+                at_s: e.at_unix_ms / 1000,
+                severity: event_signal_severity(&e.action, e.syslog_severity),
+                kind: "event",
+                label: incident_event_label(e),
+            });
+        }
+        // 3) Dominant flow conversation.
+        if let Some(flows) = self.flows.clone() {
+            let q = FlowQuery {
+                node_id: Some(node),
+                from_unix_ms: from_s * 1000,
+                to_unix_ms: to_s * 1000,
+                limit: 1,
+                proto: None,
+                dst_port: None,
+                peer: None,
+                asn: None,
+            };
+            if let Ok(cs) = flows.top_conversations(&q).await {
+                if let Some(c) = cs.first() {
+                    signals.push(IncidentSignal {
+                        at_s: to_s,
+                        severity: 40.0,
+                        kind: "flow",
+                        label: format!(
+                            "top flow {} → {} ({})",
+                            c.src,
+                            c.dst,
+                            human_bytes(c.bytes as f64)
+                        ),
+                    });
+                }
+            }
+        }
+        signals
     }
 
     /// Resolve an AS number to its organization name via the hot-swappable IP→ASN table (`None`
@@ -2398,12 +2405,22 @@ fn traffic_detail(peak_bytes: f64, baseline_mean_bytes: f64, peak_at: i64) -> se
 }
 
 /// One dated signal on an incident timeline (`incident_correlate`).
-struct IncidentSignal {
-    at_s: i64,
-    severity: f64,
-    kind: &'static str,
-    label: String,
+///
+/// `Serialize` because an RCA report stores the timeline it was grounded in alongside the answer:
+/// the UI shows the two together so a reader can check the explanation against its evidence rather
+/// than taking it on faith (ADR-029).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct IncidentSignal {
+    pub(crate) at_s: i64,
+    pub(crate) severity: f64,
+    pub(crate) kind: &'static str,
+    pub(crate) label: String,
 }
+
+/// Most passive events carried into one node's timeline. A noisy device can log hundreds in the
+/// window; past a handful they stop adding evidence and start crowding out the other signal kinds
+/// (and, for the RCA context, the prompt budget).
+const INCIDENT_EVENT_CAP: usize = 8;
 
 /// The flow-tier-off result: a single info finding + summary (mirrors `top_flows`' availability note).
 fn flow_tier_off() -> (Vec<NewFinding>, String) {
@@ -2887,35 +2904,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn charge_window_admits_under_cap_and_rejects_at_cap() {
-        let mut q = VecDeque::new();
-        let win = Duration::from_secs(60);
-        let t0 = Instant::now();
-        assert!(charge_window(&mut q, t0, win, 2), "1st admitted");
-        assert!(charge_window(&mut q, t0, win, 2), "2nd admitted");
-        assert!(!charge_window(&mut q, t0, win, 2), "3rd at cap rejected");
-        assert_eq!(q.len(), 2);
-    }
-
-    #[test]
-    fn charge_window_prunes_expired_then_readmits() {
-        let mut q = VecDeque::new();
-        let win = Duration::from_secs(60);
-        let t0 = Instant::now();
-        assert!(charge_window(&mut q, t0, win, 1));
-        assert!(
-            !charge_window(&mut q, t0, win, 1),
-            "still within window ⇒ full"
-        );
-        // Advance past the window: the old entry is pruned and a new one is admitted.
-        let t1 = t0 + Duration::from_secs(61);
-        assert!(
-            charge_window(&mut q, t1, win, 1),
-            "expired entry pruned ⇒ readmit"
-        );
-        assert_eq!(q.len(), 1);
-    }
+    // The sliding-window rule itself is tested in [`crate::ratelimit`]; what belongs here is that
+    // this runner's caps are wired to it (below) and that the concurrency permit behaves.
 
     #[test]
     fn concurrency_permit_caps_and_frees() {
@@ -2933,12 +2923,6 @@ mod tests {
             Arc::clone(&sem).try_acquire_owned().is_ok(),
             "freed slot ⇒ admitted"
         );
-    }
-
-    #[test]
-    fn env_cap_falls_back_when_unset() {
-        // An unset var yields the default; a zero/invalid value would too (filtered out).
-        assert_eq!(env_cap("YAGRA_ANALYSIS_CAP_DEFINITELY_UNSET_XYZ", 4), 4);
     }
 
     #[test]

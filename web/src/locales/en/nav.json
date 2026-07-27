@@ -47,6 +47,7 @@
     "pollers": "Pollers",
     "forwarding": "Forwarding",
     "integrations": "Integrations",
+    "ai": "AI analysis",
     "credentials": "Credentials & secrets",
     "users": "Users",
     "roles": "Roles & privileges",
@@ -83,7 +84,8 @@
     "settingsCredentials": "SNMP and API credentials, encrypted at rest",
     "settingsPollers": "Distributed poller fleet status",
     "settingsForwarding": "Relay received syslog and traps to external collectors",
-    "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients"
+    "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients",
+    "settingsAi": "The language model that writes incident explanations"
   },
   "shell": {
     "home": "Home",

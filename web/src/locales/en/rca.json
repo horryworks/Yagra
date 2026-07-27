@@ -1,0 +1,67 @@
+{
+  "action": "Explain",
+  "actionHint": "Ask the configured language model to explain this incident",
+  "title": "Explain this incident",
+
+  "disclaimer": "AI-generated and sometimes wrong. Read it against the evidence below before acting on it.",
+
+  "loading": "Reading the evidence and writing an explanation…",
+
+  "section": {
+    "rootCause": "Likely root cause",
+    "dependents": "Dependent alerts",
+    "nextSteps": "What to check next",
+    "evidence": "Evidence it was given",
+    "raw": "Model reply"
+  },
+
+  "rawNote": "The model did not answer in the expected structure, so its reply is shown as written.",
+
+  "confidence": {
+    "label": "Confidence",
+    "high": "High confidence",
+    "medium": "Medium confidence",
+    "low": "Low confidence",
+    "unknown": "Confidence not stated"
+  },
+
+  "meta": {
+    "cached": "Cached",
+    "cachedHint": "The evidence has not changed since this was generated, so it was served from storage without calling the provider again.",
+    "generated": "Generated {{at}} by {{by}}",
+    "model": "{{provider}} · {{model}}"
+  },
+
+  "evidence": {
+    "node": "Node",
+    "hopped": "You clicked {{symptom}}; this explains its upstream cause instead.",
+    "alert": "Alert",
+    "alertLine": "{{severity}} on {{metric}}, {{at}}",
+    "alertLineLiveness": "{{severity}} — node unreachable, {{at}}",
+    "flapping": "flapping",
+    "breach": "measured {{value}}, threshold {{threshold}} ({{direction}})",
+    "dependents": "Dependent alerts",
+    "dependentsMore": "and {{count}} more",
+    "upstream": "Upstream chain",
+    "timeline": "Timeline (last {{window}})",
+    "timelineEmpty": "No metric anomalies, events or flow signals in the window.",
+    "changes": "Recent configuration changes",
+    "changesEmpty": "No audited changes touched this node in the window.",
+    "noneRecorded": "No evidence was recorded with this report."
+  },
+
+  "actions": {
+    "regenerate": "Regenerate",
+    "regenerateHint": "Call the provider again instead of reusing the stored answer"
+  },
+
+  "err": {
+    "notConfigured": "No AI provider is configured. Set one up in Settings ▸ AI analysis.",
+    "misconfigured": "The AI provider is configured but unusable: {{message}}",
+    "rateLimited": "Too many analyses at once. Try again in a minute.",
+    "forbidden": "Generating an explanation needs the operator role.",
+    "noIncident": "{{message}}",
+    "provider": "The provider could not answer: {{message}}",
+    "generic": "The explanation could not be generated."
+  }
+}

@@ -251,6 +251,13 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'In',
           },
+          {
+            labelKey: 'settings.ai',
+            descKey: 'descriptions.settingsAi',
+            path: '/settings/ai',
+            implemented: true,
+            mono: 'Ai',
+          },
           { labelKey: 'settings.system', path: '/settings/system', implemented: true, mono: 'Sy' },
         ],
       },

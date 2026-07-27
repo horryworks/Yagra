@@ -1,0 +1,66 @@
+{
+  "note": "Let a language model read an incident's evidence and write the explanation (ADR-029). Nothing runs until a provider is configured here: with no provider there is no client, no credential and no outbound traffic.",
+  "unavailable": "Configuring the AI provider requires the admin role.",
+  "signInHint": "Sign in to configure an AI provider.",
+  "loadFailed": "Could not read the current configuration.",
+
+  "card": {
+    "provider": "Provider",
+    "limits": "Limits"
+  },
+
+  "provider": {
+    "label": "Provider",
+    "hint": "One provider is active at a time. There is deliberately no failover to a second vendor — where an incident's details are sent is a decision, not something to retry elsewhere.",
+    "vertex": "Vertex AI — Gemini in your own GCP project",
+    "gemini": "Gemini API",
+    "claude": "Claude API"
+  },
+
+  "egress": {
+    "stays": "Incident context stays inside your own GCP project, in the region you name. Recommended.",
+    "leaves": "Node names, IP addresses, topology and syslog lines are sent to the vendor, outside your boundary. Device credentials are never included."
+  },
+
+  "field": {
+    "model": "Model",
+    "modelHint": "Model ids change faster than Yagra releases, so nothing here checks against a list. The placeholder is a working suggestion.",
+    "project": "GCP project",
+    "location": "Region",
+    "locationHint": "Where the request is processed. \"global\" is accepted, but naming a region is the point of choosing Vertex.",
+    "apiKey": "API key",
+    "serviceAccount": "Service account JSON",
+    "serviceAccountHint": "Paste the whole key file. Leave it empty on GKE/GCE to use the instance's own identity (Workload Identity) and store no key at all.",
+    "keyStored": "A credential is stored. It is never shown again — leave this alone to keep it.",
+    "keyMissing": "No credential stored yet.",
+    "replaceKey": "Replace the stored credential",
+    "clearHint": "Saving with the field empty removes the stored credential.",
+    "maxTokens": "Output limit",
+    "maxTokensHint": "Tokens per answer, {{min}}–{{max}}. On current models the model's own reasoning is drawn from this same budget, so a limit trimmed to the visible answer truncates the reply on exactly the hard incidents.",
+    "enabled": "Enable AI-assisted analysis",
+    "enabledHint": "Off means the \"Explain this incident\" button does not appear and nothing is ever sent."
+  },
+
+  "state": {
+    "unconfigured": "No provider configured. AI-assisted analysis is off.",
+    "updated": "Last saved {{at}}",
+    "saved": "Saved."
+  },
+
+  "test": {
+    "button": "Test",
+    "hint": "Sends one minimal prompt to the saved configuration. Save first — the test reads what is stored, not what is on screen.",
+    "running": "Testing…",
+    "ok": "Reached {{provider}} in {{ms}} ms.",
+    "failed": "Failed: {{error}}"
+  },
+
+  "err": {
+    "save": "Could not save the configuration.",
+    "test": "The test could not be run.",
+    "modelRequired": "A model id is required.",
+    "projectRequired": "Vertex AI needs a GCP project and a region.",
+    "keyRequired": "This provider needs an API key.",
+    "tokensRange": "The output limit must be between {{min}} and {{max}}."
+  }
+}

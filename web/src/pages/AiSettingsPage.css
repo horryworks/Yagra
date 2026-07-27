@@ -1,0 +1,72 @@
+/* Settings ▸ AI analysis — a single provider form (ADR-029). */
+
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  max-width: 640px;
+}
+
+.ai-label {
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+
+.ai-tokens {
+  width: 120px;
+  text-align: right;
+}
+
+/* Where the incident context goes. Never decoration: the operator should be choosing their egress
+   boundary deliberately, so the leaving case is styled with the warning color, not a muted note. */
+.ai-egress {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+  max-width: 640px;
+}
+.ai-egress.stays {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+.ai-egress.leaves {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.ai-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.ai-state {
+  font-size: var(--font-sm);
+}
+
+.ai-saved {
+  margin-top: var(--space-3);
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+}
+
+/* Touch targets: the checkboxes are the only in-row controls here, so give them the secondary
+   floor rather than the full 44px (ui-conventions "Responsive / mobile"). */
+@media (hover: none) {
+  .ai-check {
+    min-height: 40px;
+  }
+}

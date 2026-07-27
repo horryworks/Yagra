@@ -41,6 +41,16 @@ import enAccess from './locales/en/access.json';
 import jaAccess from './locales/ja/access.json';
 import enSystem from './locales/en/system.json';
 import jaSystem from './locales/ja/system.json';
+import enSettingsAuth from './locales/en/settings-auth.json';
+import jaSettingsAuth from './locales/ja/settings-auth.json';
+import enSettingsTokens from './locales/en/settings-tokens.json';
+import jaSettingsTokens from './locales/ja/settings-tokens.json';
+import enSettingsForwarding from './locales/en/settings-forwarding.json';
+import jaSettingsForwarding from './locales/ja/settings-forwarding.json';
+import enSettingsAi from './locales/en/settings-ai.json';
+import jaSettingsAi from './locales/ja/settings-ai.json';
+import enRca from './locales/en/rca.json';
+import jaRca from './locales/ja/rca.json';
 
 type Json = Record<string, unknown>;
 
@@ -70,6 +80,14 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   troubleshoot: { en: enTroubleshoot, ja: jaTroubleshoot },
   access: { en: enAccess, ja: jaAccess },
   system: { en: enSystem, ja: jaSystem },
+  // The `settings-*` namespaces were missing from this map, so CI (which runs `npm run test`,
+  // not `npm run i18n:check`) was not actually gating their translations despite the claim at the
+  // top of this file. Listed now so the gate matches the CLI's directory scan.
+  'settings-auth': { en: enSettingsAuth, ja: jaSettingsAuth },
+  'settings-tokens': { en: enSettingsTokens, ja: jaSettingsTokens },
+  'settings-forwarding': { en: enSettingsForwarding, ja: jaSettingsForwarding },
+  'settings-ai': { en: enSettingsAi, ja: jaSettingsAi },
+  rca: { en: enRca, ja: jaRca },
 };
 
 describe('i18n mechanism', () => {

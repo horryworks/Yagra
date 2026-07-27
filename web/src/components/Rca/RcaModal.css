@@ -1,0 +1,193 @@
+/* "Explain this incident" (ADR-029). The caveat sits above the answer, and the evidence below it,
+   so the reader meets the claim and the way to check it in the same scroll. */
+
+.rca-disclaimer {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--status-warning);
+  color: var(--status-warning);
+  font-size: var(--font-sm);
+}
+
+.rca-loading {
+  margin: var(--space-4) 0;
+  font-size: var(--font-sm);
+}
+
+.rca-summary {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-lg);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.rca-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  font-size: var(--font-sm);
+}
+
+/* Confidence is a closed set (high/medium/low/unknown) — never colour alone, the badge carries the
+   word too (ui-conventions: colour-blind safe). */
+.rca-conf {
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: var(--border-width) solid var(--border-color);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-tertiary);
+}
+.rca-conf.high {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+.rca-conf.medium {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+.rca-conf.low {
+  color: var(--status-unknown);
+  border-color: var(--status-unknown);
+}
+
+.rca-cached {
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: var(--border-width) solid var(--border-color);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.rca-section {
+  margin-bottom: var(--space-4);
+}
+
+.rca-h {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  text-transform: none;
+}
+
+.rca-text {
+  margin: 0;
+  color: var(--text-primary);
+  white-space: pre-wrap; /* keep the model's paragraphing without interpreting it as markup */
+}
+
+.rca-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+}
+
+/* Verbatim model text when the reply was not structured. `pre` preserves it exactly; React escapes
+   the content, and nothing here interprets it as HTML or markdown. */
+.rca-raw {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.rca-steps {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text-primary);
+}
+.rca-steps li {
+  margin-bottom: var(--space-1);
+}
+
+/* ---- evidence ---- */
+
+.rca-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.rca-ev-label {
+  font-size: var(--font-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+}
+
+.rca-ev-value {
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  word-break: break-word;
+}
+
+.rca-ev-note {
+  margin-top: 2px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.rca-flap {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: 8px;
+  border: var(--border-width) solid var(--status-warning);
+  color: var(--status-warning);
+  font-size: var(--font-xs);
+}
+
+.rca-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.rca-timeline li {
+  display: grid;
+  grid-template-columns: 120px 90px 1fr;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--font-sm);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+.rca-timeline li:last-child {
+  border-bottom: none;
+}
+
+.rca-tl-time {
+  color: var(--text-secondary);
+}
+
+.rca-tl-kind {
+  color: var(--text-tertiary);
+}
+
+.rca-tl-label {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Mobile: the three-column timeline row wraps rather than squeezing the label to nothing. */
+html[data-viewport='mobile'] .rca-timeline li {
+  grid-template-columns: 1fr;
+  gap: 0;
+  padding: var(--space-1) 0;
+}

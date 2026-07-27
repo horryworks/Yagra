@@ -1432,4 +1432,92 @@ describe('api client', () => {
     expect(url).toBe('/api/v1/api-tokens/tok%2F1');
     expect(init.method).toBe('DELETE');
   });
+
+  // ── AI-assisted RCA (ADR-029) ──
+
+  it('reads the LLM config with its provider choices, and never a credential', async () => {
+    mockFetch(200, {
+      config: {
+        provider: 'vertex',
+        model: 'gemini-2.5-pro',
+        project: 'p',
+        location: 'asia-northeast1',
+        enabled: true,
+        max_output_tokens: 8192,
+        has_api_key: false,
+        leaves_operator_boundary: false,
+        updated_at: '2026-07-27T00:00:00Z',
+      },
+      providers: [{ key: 'vertex', needs_project: true, credential_optional: true }],
+    });
+    const res = await api.getLlmConfig();
+    expect(res.config?.has_api_key).toBe(false);
+    // The egress classification is the server's, so the warning cannot drift from the adapters.
+    expect(res.config?.leaves_operator_boundary).toBe(false);
+    expect(res.providers[0].key).toBe('vertex');
+  });
+
+  it('omits api_key on save when the stored credential is being kept', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
+    globalThis.fetch = spy;
+    await api.saveLlmConfig({ provider: 'claude', model: 'm', enabled: true });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/llm/config');
+    expect(init.method).toBe('PUT');
+    // Absent, not null: the backend's three-valued field reads a present-but-empty key as "clear".
+    expect('api_key' in JSON.parse(init.body)).toBe(false);
+  });
+
+  it('reports a provider test failure as a body, not a thrown error', async () => {
+    // The configuration is the caller's, so core answers 200 with `ok: false` and the reason.
+    mockFetch(200, { ok: false, error: 'invalid api key' });
+    await expect(api.testLlmProvider()).resolves.toEqual({ ok: false, error: 'invalid api key' });
+  });
+
+  it('posts an RCA request and surfaces whether the answer was cached', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 'r1',
+        node_id: 'n1',
+        summary: 'the uplink died',
+        cached: true,
+        body: { answer: { summary: 'the uplink died' }, evidence: {}, language: 'en' },
+      }),
+    } as Response);
+    globalThis.fetch = spy;
+    const res = await api.createRca({ node: 'n1', check: 'c1', language: 'ja', force: true });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/rca');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      node: 'n1',
+      check: 'c1',
+      language: 'ja',
+      force: true,
+    });
+    expect(res.cached).toBe(true);
+  });
+
+  it('surfaces an unconfigured provider as a typed 503 the modal can branch on', async () => {
+    mockFetch(503, {
+      error: { code: 'rca_not_configured', message: 'no AI provider is configured' },
+    });
+    await expect(api.createRca({ node: 'n1', check: 'c1' })).rejects.toMatchObject({
+      code: 'rca_not_configured',
+      status: 503,
+    });
+  });
+
+  it('url-encodes the report id on read-back', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'r/1' }) } as Response);
+    globalThis.fetch = spy;
+    await api.getRca('r/1');
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/rca/r%2F1');
+  });
 });

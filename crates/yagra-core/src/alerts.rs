@@ -46,8 +46,10 @@ use yagra_topology::Topology;
 use crate::notifications::{ChannelConfig, OpenChannel, RoutingRule};
 use crate::thresholds::StoredThreshold;
 
-/// Liveness check name (distinct from any metric name).
-const LIVENESS: &str = "__liveness__";
+/// Liveness check name (distinct from any metric name). `pub(crate)` so anything that has to
+/// recognise the sentinel — the RCA prompt renders it as "liveness" rather than showing an operator
+/// an internal token — tests against this rather than re-spelling the literal.
+pub(crate) const LIVENESS: &str = "__liveness__";
 /// Consecutive samples a state must hold before it commits (anti-flap) for liveness.
 const DWELL_SAMPLES: u32 = 3;
 /// Flapping detection window and threshold.

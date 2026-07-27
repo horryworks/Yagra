@@ -33,6 +33,8 @@ import enSystem from './locales/en/system.json';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
+import enSettingsAi from './locales/en/settings-ai.json';
+import enRca from './locales/en/rca.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
 export const NAMESPACES = [
@@ -55,6 +57,8 @@ export const NAMESPACES = [
   'settings-auth',
   'settings-tokens',
   'settings-forwarding',
+  'settings-ai',
+  'rca',
 ] as const;
 
 void i18n
@@ -95,6 +99,8 @@ void i18n
         'settings-auth': enSettingsAuth,
         'settings-tokens': enSettingsTokens,
         'settings-forwarding': enSettingsForwarding,
+        'settings-ai': enSettingsAi,
+        rca: enRca,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages
