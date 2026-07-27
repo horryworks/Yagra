@@ -26,8 +26,10 @@ import {
   stateLabel,
 } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
+import { poolFactLabel, polledByIsWarning, polledByLabel } from '../../lib/pool';
 import type {
   MetricPoint,
+  NodeAssignment,
   NodeDetail,
   NodeGroup,
   NodeState,
@@ -77,7 +79,9 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
         {facts.map((f) => (
           <div key={f.label}>
             <div className="nd-fact-k">{f.label}</div>
-            <div className={`nd-fact-v${f.mono ? ' mono' : ''}`}>{f.value}</div>
+            <div className={`nd-fact-v${f.mono ? ' mono' : ''}${f.warn ? ' warn' : ''}`}>
+              {f.value}
+            </div>
           </div>
         ))}
       </div>
@@ -328,10 +332,12 @@ interface Fact {
   label: string;
   value: string;
   mono?: boolean;
+  /** Render the value as a warning (paired with text, never colour alone). */
+  warn?: boolean;
 }
 
-/** Resolve the facts-grid rows for a node: group breadcrumb, address, maker/model, the
- *  profile/credential names (looked up by id), the parent-node name, and uptime. */
+/** Resolve the facts-grid rows for a node: group breadcrumb, poll-pool + current poller, address,
+ *  maker/model, the profile/credential names (looked up by id), the parent-node name, and uptime. */
 function useFacts(
   node: NodeDetail,
   groups: NodeGroup[],
@@ -343,6 +349,7 @@ function useFacts(
   const [credentialName, setCredentialName] = useState<string | null>(null);
   const [parentName, setParentName] = useState<string | null>(null);
   const [uptime, setUptime] = useState<string | null>(null);
+  const [assignment, setAssignment] = useState<NodeAssignment | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -400,9 +407,33 @@ function useFacts(
     };
   }, [node.id]);
 
+  // Effective pool + current poller (ADR-009/020). Live coordinator state, so it is its own read
+  // rather than part of the node row; an older core without the endpoint just leaves it undefined
+  // and both facts render an em dash.
+  useEffect(() => {
+    let cancelled = false;
+    setAssignment(undefined);
+    api
+      .getNodeAssignment(node.id)
+      .then((a) => !cancelled && setAssignment(a))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [node.id]);
+
   const path = groupPath(groups, node.group_id);
+  const groupName = (id: string) => groups.find((g) => g.id === id)?.name;
   return [
     { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
+    // Placement facts sit together: which folder, which pool, which poller.
+    { label: t('field.pool'), value: poolFactLabel(assignment, groupName, t), mono: true },
+    {
+      label: t('field.polledBy'),
+      value: polledByLabel(assignment?.polled_by, t),
+      mono: assignment?.polled_by.state === 'assigned',
+      warn: polledByIsWarning(assignment?.polled_by),
+    },
     { label: t('field.ipAddress'), value: node.address, mono: true },
     { label: t('field.maker'), value: node.vendor || '—' },
     { label: t('field.model'), value: node.model || '—', mono: true },

@@ -43,6 +43,7 @@ import {
 } from '../lib/nodeTree';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
+import { inheritedGroupPool, isValidPoolName } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -202,6 +203,8 @@ export function NodesPage() {
   const [parentName, setParentName] = useState('');
   const [vendor, setVendor] = useState('');
   const [model, setModel] = useState('');
+  /** Poll-pool for the new node ('' ⇒ inherit from its folder, else the default pool). */
+  const [addPool, setAddPool] = useState('');
   // URL-monitor fields (used when monType === 'url').
   const [url, setUrl] = useState('');
   const [urlMethod, setUrlMethod] = useState<'GET' | 'HEAD' | 'POST'>('GET');
@@ -445,6 +448,7 @@ export function NodesPage() {
     setParentName('');
     setVendor('');
     setModel('');
+    setAddPool('');
     setUrl('');
     setUrlMethod('GET');
     setVerifyTls(true);
@@ -468,6 +472,8 @@ export function NodesPage() {
 
   const submitAdd = () => {
     setAddError(null);
+    // Blank ⇒ omitted, so the node inherits from the folder it lands in (or the default pool).
+    const pool = addPool.trim() || undefined;
     const created =
       monType === 'url'
         ? api.createUrlMonitor({
@@ -476,6 +482,7 @@ export function NodesPage() {
             method: urlMethod,
             verify_tls: verifyTls,
             parent_id: parentId || undefined,
+            pool,
           })
         : monType === 'dns'
         ? api.createDnsMonitor({
@@ -485,6 +492,7 @@ export function NodesPage() {
             // Blank ⇒ the poller's system resolver.
             resolver: dnsResolver.trim() || undefined,
             parent_id: parentId || undefined,
+            pool,
           })
         : api.createNode({
             name,
@@ -494,6 +502,7 @@ export function NodesPage() {
             parent_id: parentId || undefined,
             vendor: vendor.trim() || undefined,
             model: model.trim() || undefined,
+            pool,
           });
     // createNode/createUrlMonitor take no group_id, so a node lands Ungrouped; if the add was
     // launched from a folder's right-click, place it there with the canonical setNodeGroup op
@@ -906,6 +915,18 @@ export function NodesPage() {
                 </label>
               </div>
             )}
+            <label className="form-label">
+              {t('add.poolOptional')}
+              <TextInput
+                className="mono"
+                value={addPool}
+                onChange={(e) => setAddPool(e.target.value)}
+                placeholder={t('add.poolPlaceholder')}
+              />
+              <span className={`form-hint${isValidPoolName(addPool) ? '' : ' form-hint-error'}`}>
+                {isValidPoolName(addPool) ? t('add.poolHint') : t('field.poolInvalid')}
+              </span>
+            </label>
             {addError && <p className="form-error">{addError}</p>}
           </div>
         </Modal>
@@ -1046,8 +1067,14 @@ function GroupModal({
   const [parent, setParent] = useState<string>(
     (editing ? state.group?.parent_id : state.parentId) ?? '',
   );
+  /** The folder's own pool ('' ⇒ inherit from an ancestor, else the default pool). */
+  const [pool, setPool] = useState(state.group?.pool ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const poolInvalid = !isValidPoolName(pool);
+  // What this folder would inherit if its own pool is cleared. Preview only — the authority on what
+  // actually polls a node is the server (`getNodeAssignment`), never this walk.
+  const inherited = inheritedGroupPool(groups, parent || null);
 
   // For an edit, a group cannot be parented under itself or any of its descendants.
   const parentChoices = groupOptions(groups).filter(
@@ -1057,7 +1084,14 @@ function GroupModal({
   const save = () => {
     setBusy(true);
     setError(null);
-    const body = { name: name.trim(), group_type: type, parent_id: parent || null };
+    // `pool` is always sent: '' clears it back to inherited (a JSON-absent field would mean
+    // "unchanged" server-side and silently drop the edit).
+    const body = {
+      name: name.trim(),
+      group_type: type,
+      parent_id: parent || null,
+      pool: pool.trim(),
+    };
     const call = editing
       ? api.updateNodeGroup(state.group!.id, body)
       : api.createNodeGroup(body).then(() => undefined);
@@ -1078,7 +1112,7 @@ function GroupModal({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} disabled={!name.trim() || busy}>
+          <Button variant="primary" onClick={save} disabled={!name.trim() || busy || poolInvalid}>
             {t('common:actions.save')}
           </Button>
         </>
@@ -1111,6 +1145,18 @@ function GroupModal({
               </option>
             ))}
           </Select>
+        </label>
+        <label className="form-label">
+          {t('group.pool')}
+          <TextInput
+            className="mono"
+            value={pool}
+            onChange={(e) => setPool(e.target.value)}
+            placeholder={inherited ? t('field.poolInheritPlaceholder', { pool: inherited }) : ''}
+          />
+          <span className={`form-hint${poolInvalid ? ' form-hint-error' : ''}`}>
+            {poolInvalid ? t('field.poolInvalid') : t('group.poolHint')}
+          </span>
         </label>
         {error && <p className="form-error">{error}</p>}
       </div>

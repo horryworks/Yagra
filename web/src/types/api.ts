@@ -213,6 +213,9 @@ export interface NodeGroup {
   /** Optional geo coordinates for the dashboard map (both set ⇒ plotted). */
   latitude: number | null;
   longitude: number | null;
+  /** Poll-pool this folder assigns to its nodes (ADR-009/020); `null` ⇒ inherit from the nearest
+   *  ancestor that sets one, else the default pool. A node's own `pool` still wins. */
+  pool: string | null;
 }
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
@@ -867,6 +870,10 @@ export interface NodeDetail {
   model: string | null;
   /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
   group_id: string | null;
+  /** The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
+   *  Deliberately the raw stored value so the edit form can tell explicit from inherited — for the
+   *  *effective* pool and the current poller use `getNodeAssignment`. */
+  pool: string | null;
   /** URL-monitor config when this node is a URL monitor; `null` otherwise. */
   url_check: UrlCheckConfig | null;
   /** DNS-monitor config when this node is a DNS monitor; `null` otherwise. */
@@ -1044,6 +1051,54 @@ export interface PoolSummary {
 export interface PollersResponse {
   pollers: PollerInfo[];
   pools: PoolSummary[];
+}
+
+/** Where a node's effective pool came from (yagra-core `PoolSource`). */
+export type PoolSource = 'node' | 'group' | 'default';
+
+/** Which poller currently polls a node.
+ *  - `assigned` — it is in that poller's published working set (`poller_id` set).
+ *  - `pending` — the pool has a live poller but this node isn't in anyone's set yet (added since
+ *    the last sweep, or it builds no checks at all).
+ *  - `legacy_fanout` — the pool has NO live poller, so jobs go to `yagra.jobs.{pool}` with nothing
+ *    subscribed: no owner, and probably unmonitored.
+ *  - `meraki` — core's org collector polls it, not a pool poller.
+ *  - `unknown` — this core is an HA standby and runs no coordinator. */
+export interface PolledBy {
+  state: 'assigned' | 'legacy_fanout' | 'pending' | 'meraki' | 'unknown';
+  /** The owning poller; set only in the `assigned` state. */
+  poller_id: string | null;
+}
+
+/** `GET /api/v1/nodes/:id/assignment` — effective pool, its provenance, and the current poller. */
+export interface NodeAssignment {
+  /** Effective pool: the node's own, else the nearest ancestor folder's, else `default`. */
+  pool: string;
+  pool_source: PoolSource;
+  /** The folder that supplied the pool, when `pool_source === 'group'`. */
+  pool_source_group_id: string | null;
+  polled_by: PolledBy;
+}
+
+/** One node in the poller drill-down. */
+export interface PollerNodeRef {
+  id: string;
+  name: string;
+}
+
+/** `GET /api/v1/pollers/:id/nodes` — the nodes a poller currently holds. Read from the coordinator's
+ *  published working set, so it is the same data the node detail's "Polled by" reports. */
+export interface PollerNodesResponse {
+  poller_id: string;
+  /** The pool it serves; `null` unless it is live. */
+  pool: string | null;
+  /** `assigned` (live), `offline` (unknown / not beating), `unknown` (this core is a standby). */
+  state: 'assigned' | 'offline' | 'unknown';
+  /** Nodes in its working set, before the page cap. */
+  total: number;
+  /** Whether `nodes` is a capped page of `total`. */
+  truncated: boolean;
+  nodes: PollerNodeRef[];
 }
 
 /** One core↔poller visibility outage (`GET /api/v1/monitoring-gaps`, Phase 3 store-and-forward): a

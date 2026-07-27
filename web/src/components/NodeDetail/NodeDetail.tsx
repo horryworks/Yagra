@@ -11,6 +11,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
+import { isValidPoolName } from '../../lib/pool';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
   CredentialSummary,
@@ -421,8 +422,13 @@ function BindingsModal({
   const [credentialId, setCredentialId] = useState('');
   const [vendor, setVendor] = useState('');
   const [model, setModel] = useState('');
+  // The node's OWN pool ('' ⇒ inherited), plus what it would inherit if cleared — used as the
+  // field placeholder so blanking it is a visible choice rather than a mystery.
+  const [pool, setPool] = useState('');
+  const [inheritedPool, setInheritedPool] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const poolInvalid = !isValidPoolName(pool);
 
   useEffect(() => {
     api
@@ -432,7 +438,14 @@ function BindingsModal({
         setCredentialId(n.credential_id ?? '');
         setVendor(n.vendor ?? '');
         setModel(n.model ?? '');
+        setPool(n.pool ?? '');
       })
+      .catch(() => undefined);
+    // The effective pool doubles as the "what you'd inherit" hint. Asking the server keeps the
+    // folder walk in one place (yagra-core's resolver) instead of duplicating it here.
+    api
+      .getNodeAssignment(nodeId)
+      .then((a) => setInheritedPool(a.pool_source === 'node' ? null : a.pool))
       .catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
     api
@@ -450,6 +463,9 @@ function BindingsModal({
         credential_id: credentialId || null,
         vendor: vendor.trim() || null,
         model: model.trim() || null,
+        // Always sent (never null): '' clears the assignment back to inherited. A JSON null would
+        // read server-side as "leave unchanged" and silently drop the edit.
+        pool: pool.trim(),
       })
       .then(onDone)
       .catch((e: unknown) => {
@@ -467,7 +483,7 @@ function BindingsModal({
           <Button variant="outline" onClick={onClose}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
+          <Button variant="primary" onClick={save} disabled={busy || poolInvalid}>
             {t('common:actions.save')}
           </Button>
         </>
@@ -515,6 +531,20 @@ function BindingsModal({
             />
           </label>
         </div>
+        <label className="form-label">
+          {t('field.pool')}
+          <TextInput
+            className="mono"
+            value={pool}
+            onChange={(e) => setPool(e.target.value)}
+            placeholder={
+              inheritedPool ? t('field.poolInheritPlaceholder', { pool: inheritedPool }) : ''
+            }
+          />
+          <span className={`form-hint${poolInvalid ? ' form-hint-error' : ''}`}>
+            {poolInvalid ? t('field.poolInvalid') : t('field.poolHint')}
+          </span>
+        </label>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

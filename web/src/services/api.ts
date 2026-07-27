@@ -71,8 +71,10 @@ import type {
   NodeStatus,
   NodeSummary,
   MonitoringGap,
+  NodeAssignment,
   NotificationChannel,
   PollerHealth,
+  PollerNodesResponse,
   PollersResponse,
   SystemHealth,
   SystemHostsResponse,
@@ -614,7 +616,12 @@ export const api = {
     request(`/nodes/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
 
   /** Set or clear a node's device-profile + bound credential and its maker/model. The node-edit
-   *  UI loads the current values and resends them, so an unchanged field is preserved. */
+   *  UI loads the current values and resends them, so an unchanged field is preserved.
+   *
+   *  `pool` is deliberately `string | undefined`, NOT `string | null`: server-side it is
+   *  three-state — **omitted** leaves the pool unchanged, `''` clears it (inherit from the folder,
+   *  else the default pool), any other value moves the node. A JSON `null` deserializes to
+   *  "unchanged" and would silently do nothing, so it is not offered here. */
   setNodeBindings: (
     id: string,
     body: {
@@ -622,9 +629,15 @@ export const api = {
       credential_id?: string | null;
       vendor?: string | null;
       model?: string | null;
+      pool?: string;
     },
   ): Promise<void> =>
     request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
+
+  /** Which pool a node effectively belongs to (own > folder > default) and which poller currently
+   *  polls it. Separate from `getNode` because it reads the live coordinator, not the inventory. */
+  getNodeAssignment: (id: string): Promise<NodeAssignment> =>
+    request(`/nodes/${encodeURIComponent(id)}/assignment`),
 
   /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by the
    *  "Move to…" picker and a drop directly onto a group. */
@@ -749,17 +762,20 @@ export const api = {
   deleteReportSchedule: (id: string): Promise<void> =>
     request(`/reports/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  /** Create a node group. `parent_id` nests it under another group. */
+  /** Create a node group. `parent_id` nests it under another group; `pool` assigns a poll-pool that
+   *  its nodes inherit (omit or `''` ⇒ inherit from an ancestor, else the default pool). */
   createNodeGroup: (body: {
     name: string;
     group_type: GroupType;
     parent_id?: string | null;
+    pool?: string;
   }): Promise<{ id: string }> => request('/node-groups', jsonBody('POST', body)),
 
-  /** Rename / re-type / re-parent (move) a node group. */
+  /** Rename / re-type / re-parent (move) a node group, and optionally move its poll-pool. `pool`
+   *  has the same three-state contract as `setNodeBindings`: omitted = unchanged, `''` = inherit. */
   updateNodeGroup: (
     id: string,
-    body: { name: string; group_type: GroupType; parent_id?: string | null },
+    body: { name: string; group_type: GroupType; parent_id?: string | null; pool?: string },
   ): Promise<void> =>
     request(`/node-groups/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
 
@@ -884,6 +900,14 @@ export const api = {
   /** The registered distributed-poller fleet + per-pool summary (ADR-009/020). View-gated;
    *  returns the standard 503 (`admin_unavailable`) in skeleton mode. */
   listPollers: (): Promise<PollersResponse> => request('/pollers'),
+
+  /** The nodes a poller currently holds in its published working set — the Pollers-page drill-down
+   *  ("if this poller dies, what stops being monitored?"). Capped server-side; the response says
+   *  whether it was truncated. */
+  listPollerNodes: (id: string, limit?: number): Promise<PollerNodesResponse> =>
+    request(
+      `/pollers/${encodeURIComponent(id)}/nodes${limit != null ? `?limit=${limit}` : ''}`,
+    ),
 
   /** Remove a decommissioned poller from the durable inventory. Rejects with a typed `ApiError`:
    *  409 `poller_online` if it is currently online (stop it first), 404 `poller_not_found` if it is

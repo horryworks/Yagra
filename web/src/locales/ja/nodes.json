@@ -14,7 +14,18 @@
     "makerPlaceholder": "例: Cisco",
     "modelPlaceholder": "例: C2960",
     "dnsName": "DNS名",
-    "recordType": "レコード種別"
+    "recordType": "レコード種別",
+    "pool": "ポーラープール",
+    "poolDefault": "{{pool}} (既定)",
+    "poolInheritedFrom": "{{pool}} ({{group}} から継承)",
+    "poolHint": "このノードをポーリングするポーラープール。空欄にするとグループから継承し、なければ既定プールになります。次のポーリング周期から反映されます。",
+    "poolInvalid": "英数字・'_'・'-' のみ (最大63文字) が使えます。",
+    "poolInheritPlaceholder": "{{pool}} を継承",
+    "polledBy": "担当ポーラー",
+    "polledByLegacy": "稼働中のポーラーなし",
+    "polledByPending": "未割り当て",
+    "polledByMeraki": "Meraki コレクター",
+    "polledByUnknown": "不明"
   },
   "groupType": {
     "site": "サイト",
@@ -63,7 +74,10 @@
     "typeDns": "DNS監視 (名前解決)",
     "dnsNamePlaceholder": "例: horryworks.net",
     "resolverOptional": "リゾルバ (任意)",
-    "resolverPlaceholder": "空欄でシステムリゾルバ"
+    "resolverPlaceholder": "空欄でシステムリゾルバ",
+    "poolOptional": "ポーラープール (任意)",
+    "poolPlaceholder": "空欄でグループから継承",
+    "poolHint": "このノードをポーリングするポーラープール。空欄にすると配置先グループから継承します。"
   },
   "group": {
     "add": "グループを追加",
@@ -72,7 +86,9 @@
     "addSubgroup": "サブグループを追加",
     "type": "タイプ",
     "parentGroup": "親グループ",
-    "topLevelOption": "— トップレベル —"
+    "topLevelOption": "— トップレベル —",
+    "pool": "ポーラープール (任意)",
+    "poolHint": "このグループ (とサブグループ) のノードは、ノード側で個別指定がない限りこのプールがポーリングします。空欄なら継承します。"
   },
   "deleteGroup": {
     "confirm": "グループ <b>{{name}}</b> を削除しますか？ {{impact}} — <b>ノードは削除されません</b>。",

@@ -55,6 +55,16 @@
       "durMins": "{{count}}m",
       "durHours": "{{hours}}h {{mins}}m"
     },
+    "nodes": {
+      "title": "Nodes polled by {{id}}",
+      "note": "The working set core has published to this poller — what stops being monitored if it goes away.",
+      "colName": "Node",
+      "empty": "This poller holds no nodes right now.",
+      "offline": "This poller is offline, so it holds no working set.",
+      "unknown": "This core is a standby, so it does not track poller assignments.",
+      "truncated": "Showing the first {{shown}} of {{total}} nodes.",
+      "close": "Close"
+    },
     "remove": {
       "title": "Remove poller",
       "confirmText": "Remove poller <code>{{id}}</code> from the inventory? If it reconnects it will re-register automatically."

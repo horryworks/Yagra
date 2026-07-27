@@ -27,6 +27,7 @@ use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::{ChannelConfig, NotificationRepo};
 use crate::pollers::{PollerRepo, PollerRow};
+use crate::poolres::{PoolResolver, PoolSource};
 use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{self, ReportRunner, ScheduleInput};
 use crate::scheduler::PollDispatcher;
@@ -224,6 +225,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
+        // Which pool the node effectively belongs to, and which poller currently holds it.
+        .route("/api/v1/nodes/:node_id/assignment", get(node_assignment))
         .route(
             "/api/v1/nodes/:node_id/url-check",
             get(get_url_check)
@@ -454,6 +457,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/poller-health", get(poller_health))
         // Distributed poller pool (ADR-009/020): the fleet of registered pollers + per-pool summary.
         .route("/api/v1/pollers", get(list_pollers))
+        // Static `/pollers/:id/nodes` drill-down alongside the `:id` param route.
+        .route("/api/v1/pollers/:id/nodes", get(poller_nodes))
         .route("/api/v1/pollers/:id", delete(delete_poller))
         // Store-and-forward (Phase 3): recent core↔poller visibility outages (monitoring gaps).
         .route("/api/v1/monitoring-gaps", get(list_monitoring_gaps))
@@ -1203,6 +1208,11 @@ struct NodeDetail {
     model: Option<String>,
     /// The group this node belongs to; `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
+    /// The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
+    /// default pool. Deliberately the raw stored value, not the effective one, so the edit form can
+    /// tell an explicit assignment from an inherited one — the *effective* pool (and which poller
+    /// currently holds the node) comes from `GET /nodes/:id/assignment`.
+    pool: Option<String>,
     /// URL-monitor config when this node is a URL monitor; `null` otherwise.
     url_check: Option<UrlCheckConfig>,
     /// DNS-monitor config when this node is a DNS monitor; `null` otherwise.
@@ -1238,6 +1248,7 @@ async fn get_node(
                 vendor: node.vendor,
                 model: node.model,
                 group_id: node.group.map(|g| g.as_uuid()),
+                pool: node.pool,
                 url_check,
                 dns_check,
                 meraki_device,
@@ -2645,6 +2656,10 @@ async fn list_pollers(State(st): State<ApiState>, headers: HeaderMap) -> Respons
     // Node counts per pool. Meraki-managed nodes are excluded — the org collector owns them, not a
     // pool poller (mirrors the scheduler). Degrade to an empty summary on a read error.
     let meraki_ids = admin.meraki_devices.node_ids().await.unwrap_or_default();
+    // Effective pool, so a node inheriting from its folder is counted under the pool that actually
+    // polls it. A folder-read error degrades to "no inheritance" for the *summary only* — it never
+    // reaches the scheduler, so a wrong count here can't misroute polling.
+    let resolver = pool_resolver(admin).await;
     let mut node_pools: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     match admin.repo.list_nodes().await {
         Ok(nodes) => {
@@ -2652,13 +2667,256 @@ async fn list_pollers(State(st): State<ApiState>, headers: HeaderMap) -> Respons
                 if meraki_ids.contains(&n.id.as_uuid()) {
                     continue;
                 }
-                let pool = n.pool.unwrap_or_else(|| yagra_bus::DEFAULT_POOL.to_owned());
-                *node_pools.entry(pool).or_insert(0) += 1;
+                *node_pools
+                    .entry(resolver.resolve_pool(&n).to_owned())
+                    .or_insert(0) += 1;
             }
         }
         Err(e) => tracing::error!(error = %e, "list nodes for pool summary failed"),
     }
     Json(build_pollers_response(inventory, live, node_pools)).into_response()
+}
+
+/// Build a [`PoolResolver`] from the folder tree. A read error degrades to "no folder inheritance"
+/// with a warning: every caller is a read-only view, where missing inheritance is a display
+/// inaccuracy and never a polling decision (the scheduler builds its own resolver and holds the
+/// last-known one instead of degrading).
+pub(crate) async fn pool_resolver(admin: &AdminState) -> PoolResolver {
+    match admin.groups.pool_rows().await {
+        Ok(rows) => PoolResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "loading folder pools failed; resolving without inheritance");
+            PoolResolver::empty()
+        }
+    }
+}
+
+/// Which poller currently polls a node — the node detail's "Polled by" fact.
+#[derive(Debug, Serialize, PartialEq)]
+struct PolledBy {
+    /// One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`.
+    state: &'static str,
+    /// The owning poller; set only in the `assigned` state.
+    poller_id: Option<String>,
+}
+
+/// `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
+/// which poller currently holds it.
+#[derive(Debug, Serialize, PartialEq)]
+struct NodeAssignment {
+    /// Effective pool: the node's own, else the nearest ancestor folder's, else the default.
+    pool: String,
+    pool_source: PoolSource,
+    /// The folder that supplied the pool, when `pool_source` is `group`.
+    pool_source_group_id: Option<Uuid>,
+    polled_by: PolledBy,
+}
+
+/// The five distinct answers to "who polls this node". Pure, so every branch is testable without a
+/// coordinator or a database.
+///
+/// The order matters. Leadership is checked first because an HA standby runs no coordinator
+/// (`run_heartbeat_consumer` is leader-only), so its empty registry would otherwise report the
+/// plausible-looking but wrong `legacy_fanout` for the entire fleet. Meraki devices come next:
+/// core's own org collector polls them, so no pool poller ever will. Only then does the published
+/// owner — and failing that, the pool's dispatch mode — decide.
+fn resolve_polled_by(
+    is_leader: bool,
+    is_meraki: bool,
+    owner: Option<String>,
+    pool_has_live_poller: bool,
+) -> PolledBy {
+    if !is_leader {
+        return PolledBy {
+            state: "unknown",
+            poller_id: None,
+        };
+    }
+    if is_meraki {
+        return PolledBy {
+            state: "meraki",
+            poller_id: None,
+        };
+    }
+    if let Some(id) = owner {
+        return PolledBy {
+            state: "assigned",
+            poller_id: Some(id),
+        };
+    }
+    if pool_has_live_poller {
+        // Working-set mode, but this node is in nobody's set: added since the last sweep, or it
+        // resolves to no specs at all (so it is never published to anyone).
+        PolledBy {
+            state: "pending",
+            poller_id: None,
+        }
+    } else {
+        // No live poller in the pool ⇒ the scheduler falls back to legacy per-job publish on
+        // `yagra.jobs.{pool}`, which has no single owner. With nothing subscribed those jobs are
+        // silently discarded, so this means "possibly unmonitored" — not a healthy alternative mode.
+        PolledBy {
+            state: "legacy_fanout",
+            poller_id: None,
+        }
+    }
+}
+
+/// `GET /api/v1/nodes/:node_id/assignment` — which pool a node effectively belongs to and which
+/// poller is currently polling it. `View`-gated like the rest of the node detail; carries no
+/// credentials.
+async fn node_assignment(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(node_id): Path<Uuid>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let node = match admin.repo.get_node(node_id).await {
+        Ok(Some(n)) => n,
+        Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "node assignment: load node failed");
+            return internal("failed to load node");
+        }
+    };
+    let resolved = pool_resolver(admin).await.resolve(&node);
+    let now = Instant::now();
+    // Best-effort, like the node detail's own Meraki lookup: a read failure just means we don't
+    // special-case it below.
+    let is_meraki = admin
+        .meraki_devices
+        .get(node_id)
+        .await
+        .unwrap_or(None)
+        .is_some();
+    let polled_by = resolve_polled_by(
+        st.is_leader.load(std::sync::atomic::Ordering::Acquire),
+        is_meraki,
+        admin.coordinator.owner_of(node.id, now),
+        admin.coordinator.live_pools(now).contains(&resolved.pool),
+    );
+    Json(NodeAssignment {
+        pool: resolved.pool,
+        pool_source: resolved.source,
+        pool_source_group_id: resolved.group,
+        polled_by,
+    })
+    .into_response()
+}
+
+/// Largest node page the poller drill-down returns. A poller in a big pool can hold tens of
+/// thousands of nodes, so the page is capped — and the response says it was, rather than looking
+/// like a complete list.
+const POLLER_NODES_MAX: usize = 500;
+
+#[derive(Deserialize)]
+struct PollerNodesQuery {
+    limit: Option<usize>,
+}
+
+/// One node in the poller drill-down.
+#[derive(Debug, Serialize, PartialEq)]
+struct PollerNodeRef {
+    id: Uuid,
+    name: String,
+}
+
+/// `GET /api/v1/pollers/:id/nodes` body.
+#[derive(Debug, Serialize, PartialEq)]
+struct PollerNodesResponse {
+    poller_id: String,
+    /// The pool it serves; `null` unless it is live.
+    pool: Option<String>,
+    /// `assigned` (live, working set known), `offline` (unknown or not beating), or `unknown`
+    /// (this core is an HA standby and runs no coordinator).
+    state: &'static str,
+    /// Nodes in its working set, before the page cap.
+    total: usize,
+    /// Whether `nodes` is a capped page of `total`.
+    truncated: bool,
+    nodes: Vec<PollerNodeRef>,
+}
+
+/// `GET /api/v1/pollers/:id/nodes` — the nodes a poller currently holds, for the Pollers-page
+/// drill-down ("if this poller dies, what stops being monitored?").
+///
+/// Served from the coordinator's published working set rather than from a database query, so it is
+/// the same data the node detail's "Polled by" reads and the two can never disagree.
+async fn poller_nodes(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<PollerNodesQuery>,
+) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    let empty = |poller_id: String, state: &'static str| {
+        Json(PollerNodesResponse {
+            poller_id,
+            pool: None,
+            state,
+            total: 0,
+            truncated: false,
+            nodes: Vec::new(),
+        })
+        .into_response()
+    };
+    if !st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
+        return empty(id, "unknown");
+    }
+    let now = Instant::now();
+    let Some(owned) = admin.coordinator.published_nodes(&id, now) else {
+        return empty(id, "offline");
+    };
+    let limit = q
+        .limit
+        .unwrap_or(POLLER_NODES_MAX)
+        .clamp(1, POLLER_NODES_MAX);
+    let total = owned.len();
+    let truncated = total > limit;
+    if truncated {
+        tracing::info!(
+            poller = %id,
+            total,
+            limit,
+            "poller node drill-down capped to the page limit"
+        );
+    }
+    let page: Vec<Uuid> = owned.iter().take(limit).map(NodeId::as_uuid).collect();
+    // Names are context, not the answer — an id with no name still tells the operator which node
+    // moved, so a lookup failure degrades to bare ids rather than failing the drill-down.
+    let names = admin.repo.node_names(&page).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "poller node drill-down: name lookup failed");
+        std::collections::HashMap::new()
+    });
+    let mut nodes: Vec<PollerNodeRef> = page
+        .into_iter()
+        .map(|id| PollerNodeRef {
+            name: names.get(&id).cloned().unwrap_or_else(|| id.to_string()),
+            id,
+        })
+        .collect();
+    // Paged by uuid (stable), presented by name (useful).
+    nodes.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    let pool = admin.coordinator.pool_of(&id, now);
+    Json(PollerNodesResponse {
+        poller_id: id,
+        pool,
+        state: "assigned",
+        total,
+        truncated,
+        nodes,
+    })
+    .into_response()
 }
 
 /// `GET /api/v1/monitoring-gaps` — recent core↔poller visibility outages (Phase 3, store-and-forward).
@@ -5521,12 +5779,16 @@ async fn create_node(
             format!("address {:?} is not a valid IP address", body.address),
         );
     };
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     match admin
         .repo
         .create_node(
             body.name.trim(),
             address,
-            body.pool.as_deref(),
+            pool.as_deref(),
             body.profile_id,
             body.credential_id,
             body.parent_id,
@@ -5603,6 +5865,18 @@ fn validate_pool_update(pool: Option<String>) -> Result<Option<Option<String>>, 
         ));
     }
     Ok(Some(Some(trimmed.to_owned())))
+}
+
+/// [`validate_pool_update`] for a **create** path, where there is no prior value to leave alone:
+/// absent and empty both mean "no pool" (inherit from the folder, else the default pool).
+///
+/// Every path that writes a pool must go through one of these two. The pool name becomes the
+/// `yagra.jobs.<pool>` subject verbatim (`subjects::jobs_for_pool` does not sanitize), so an
+/// unvalidated value like `tokyo.1` would publish to a subject no poller subscribes to and the
+/// node's jobs would be silently discarded.
+#[allow(clippy::result_large_err)]
+fn validate_pool_create(pool: Option<String>) -> Result<Option<String>, Response> {
+    Ok(validate_pool_update(pool)?.flatten())
 }
 
 async fn set_node_bindings(
@@ -5827,6 +6101,10 @@ async fn create_url_monitor(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     // Bind to the built-in URL/HTTP profile (if present) so default thresholds are inherited.
     let profile = admin
         .repo
@@ -5839,7 +6117,7 @@ async fn create_url_monitor(
         .create_node(
             body.name.trim(),
             address,
-            body.pool.as_deref(),
+            pool.as_deref(),
             profile,
             None,
             body.parent_id,
@@ -6215,6 +6493,10 @@ async fn create_dns_monitor(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     // Bind to the built-in DNS profile (if present) so the default threshold is inherited.
     let profile = admin
         .repo
@@ -6231,7 +6513,7 @@ async fn create_dns_monitor(
         .create_node(
             body.name.trim(),
             address,
-            body.pool.as_deref(),
+            pool.as_deref(),
             profile,
             None,
             body.parent_id,
@@ -6984,8 +7266,11 @@ async fn poll_node_now(
             return internal("failed to load node");
         }
     };
-    let dispatched = admin.poll.poll_now(&node).await;
-    tracing::info!(node = %node_id, dispatched, "manual poll dispatched");
+    // Route to the node's *effective* pool so a manual poll lands on the same pollers the sweep
+    // would use — otherwise a folder-inherited node would be poked on the default pool's subject.
+    let pool = pool_resolver(admin).await.resolve(&node).pool;
+    let dispatched = admin.poll.poll_now(&node, &pool).await;
+    tracing::info!(node = %node_id, dispatched, pool = %pool, "manual poll dispatched");
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({ "dispatched": dispatched })),
@@ -7168,6 +7453,12 @@ struct GroupBody {
     group_type: String,
     #[serde(default)]
     parent_id: Option<Uuid>,
+    /// Poll-pool this folder assigns to its nodes (ADR-009/020). Same three-state contract as
+    /// [`NodeBindings::pool`]: **absent** leaves it unchanged, `""` clears it (inherit from the
+    /// nearest ancestor, else the default pool), otherwise it moves the folder's nodes to that
+    /// pool. See [`validate_pool_update`].
+    #[serde(default)]
+    pool: Option<String>,
 }
 
 /// Validate the request: non-empty name + a known group type. Returns the parsed type, or a
@@ -7195,9 +7486,18 @@ async fn create_node_group(
         Ok(t) => t,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
     };
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     match admin
         .groups
-        .create(body.name.trim(), group_type, body.parent_id)
+        .create(
+            body.name.trim(),
+            group_type,
+            body.parent_id,
+            pool.as_deref(),
+        )
         .await
     {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
@@ -7224,6 +7524,10 @@ async fn update_node_group(
         Ok(t) => t,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
     };
+    let pool_update = match validate_pool_update(body.pool) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
     // Reject a re-parent that would create a cycle (a group can't be its own ancestor).
     if body.parent_id.is_some() {
         match admin.groups.edges().await {
@@ -7244,7 +7548,13 @@ async fn update_node_group(
     }
     match admin
         .groups
-        .update(id, body.name.trim(), group_type, body.parent_id)
+        .update(
+            id,
+            body.name.trim(),
+            group_type,
+            body.parent_id,
+            pool_update.as_ref().map(|inner| inner.as_deref()),
+        )
         .await
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -12603,6 +12913,59 @@ mod tests {
         // Rejected: over the length bound; the bound itself is accepted.
         assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN + 1))).is_err());
         assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN))).is_ok());
+    }
+
+    #[test]
+    fn pool_name_validation_on_create_collapses_absent_and_empty() {
+        // A create has no prior value to leave alone, so "absent" and "cleared" are the same answer.
+        assert_eq!(validate_pool_create(None).ok(), Some(None));
+        assert_eq!(validate_pool_create(Some(String::new())).ok(), Some(None));
+        assert_eq!(
+            validate_pool_create(Some(" tokyo ".to_owned())).ok(),
+            Some(Some("tokyo".to_owned()))
+        );
+        // The create paths used to skip validation entirely: `tokyo.1` reached the DB and its jobs
+        // were published to `yagra.jobs.tokyo.1`, a subject no poller subscribes to, and silently
+        // discarded (plain NATS, not JetStream).
+        assert!(validate_pool_create(Some("tokyo.1".to_owned())).is_err());
+        assert!(validate_pool_create(Some("east dc".to_owned())).is_err());
+    }
+
+    #[test]
+    fn polled_by_states_cover_every_answer() {
+        let assigned = || Some("edge-1".to_owned());
+
+        // A standby core runs no coordinator, so its empty registry must read as "unknown" rather
+        // than as the plausible-but-wrong "legacy_fanout" it would otherwise produce fleet-wide.
+        for (meraki, owner, live) in [
+            (false, None, false),
+            (true, assigned(), true),
+            (false, assigned(), true),
+        ] {
+            assert_eq!(
+                resolve_polled_by(false, meraki, owner, live).state,
+                "unknown"
+            );
+        }
+        // Meraki devices are polled by core's org collector — outranks any ring answer.
+        assert_eq!(
+            resolve_polled_by(true, true, assigned(), true).state,
+            "meraki"
+        );
+        // The normal case: the node is in a live poller's published working set.
+        let owned = resolve_polled_by(true, false, assigned(), true);
+        assert_eq!(owned.state, "assigned");
+        assert_eq!(owned.poller_id.as_deref(), Some("edge-1"));
+        // In a working-set pool but not (yet) in anyone's set: added since the last sweep, or it
+        // builds no specs at all.
+        let pending = resolve_polled_by(true, false, None, true);
+        assert_eq!(pending.state, "pending");
+        assert_eq!(pending.poller_id, None);
+        // No live poller in the pool: the scheduler falls back to legacy per-job publish, whose
+        // subject has no subscriber — i.e. possibly unmonitored, and definitely no single owner.
+        let legacy = resolve_polled_by(true, false, None, false);
+        assert_eq!(legacy.state, "legacy_fanout");
+        assert_eq!(legacy.poller_id, None);
     }
 
     #[test]

@@ -14,7 +14,18 @@
     "makerPlaceholder": "e.g. Cisco",
     "modelPlaceholder": "e.g. C2960",
     "dnsName": "DNS name",
-    "recordType": "Record type"
+    "recordType": "Record type",
+    "pool": "Poller pool",
+    "poolDefault": "{{pool}} (default)",
+    "poolInheritedFrom": "{{pool}} (from {{group}})",
+    "poolHint": "Which poller pool polls this node. Leave blank to inherit from its group, or fall back to the default pool. Takes effect on the next poll round.",
+    "poolInvalid": "Use only letters, digits, '_' or '-' (max 63 characters).",
+    "poolInheritPlaceholder": "Inherits {{pool}}",
+    "polledBy": "Polled by",
+    "polledByLegacy": "No live poller",
+    "polledByPending": "Not yet assigned",
+    "polledByMeraki": "Meraki collector",
+    "polledByUnknown": "Unknown"
   },
   "groupType": {
     "site": "Site",
@@ -63,7 +74,10 @@
     "typeDns": "DNS monitor (name resolution)",
     "dnsNamePlaceholder": "e.g. horryworks.net",
     "resolverOptional": "Resolver (optional)",
-    "resolverPlaceholder": "blank = system resolver"
+    "resolverPlaceholder": "blank = system resolver",
+    "poolOptional": "Poller pool (optional)",
+    "poolPlaceholder": "blank = inherit from group",
+    "poolHint": "Which poller pool polls this node. Leave blank to inherit from the group it lands in."
   },
   "group": {
     "add": "Add group",
@@ -72,7 +86,9 @@
     "addSubgroup": "Add subgroup",
     "type": "Type",
     "parentGroup": "Parent group",
-    "topLevelOption": "— top level —"
+    "topLevelOption": "— top level —",
+    "pool": "Poller pool (optional)",
+    "poolHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit."
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",

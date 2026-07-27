@@ -25,6 +25,7 @@ const group = (
   sort_order,
   latitude: null,
   longitude: null,
+  pool: null,
 });
 
 const node = (

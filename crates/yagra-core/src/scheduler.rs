@@ -16,7 +16,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
     DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn,
-    SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus, DEFAULT_POOL,
+    SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
     builtin_interface_meta_columns, CollectionItem, CollectionKind, DnsCheckConfig, Node, NodeId,
@@ -508,11 +508,12 @@ impl PollDispatcher {
     }
 
     /// Build and immediately publish every poll job for a node (no jitter) — the operator's
-    /// "poll now" action. Routes to the node's pool subject (default [`DEFAULT_POOL`]). Returns how
-    /// many jobs were published. Stamps the dispatcher's default interval (the poller ignores the
-    /// value; cadence is owned by the periodic scheduler).
-    pub async fn poll_now(&self, node: &Node) -> usize {
-        let pool = node.pool.as_deref().unwrap_or(DEFAULT_POOL);
+    /// "poll now" action. Returns how many jobs were published. Stamps the dispatcher's default
+    /// interval (the poller ignores the value; cadence is owned by the periodic scheduler).
+    ///
+    /// `pool` is the node's **effective** pool, resolved by the caller (which has the folder tree
+    /// for inheritance) — the dispatcher deliberately doesn't own a group repo just for this.
+    pub async fn poll_now(&self, node: &Node, pool: &str) -> usize {
         let jobs = self.build_node_jobs(node, self.interval_secs).await;
         let mut published = 0u64;
         for (job, kind) in jobs {

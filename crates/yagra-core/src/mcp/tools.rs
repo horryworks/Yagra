@@ -895,7 +895,9 @@ impl YagraMcp {
             Ok(None) => return tool_unavailable("poll_now", "no node with that id"),
             Err(e) => return tool_error("poll_now", "load node", &e),
         };
-        let dispatched = admin.poll.poll_now(&node).await;
+        // Effective pool (node's own > folder > default), same as the REST poll-now.
+        let pool = crate::api::pool_resolver(admin).await.resolve(&node).pool;
+        let dispatched = admin.poll.poll_now(&node, &pool).await;
         record_audit(
             &self.state,
             &identity,

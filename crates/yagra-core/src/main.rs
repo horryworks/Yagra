@@ -46,6 +46,8 @@ mod oidc;
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
 mod pollers;
+/// Effective poll-pool resolution (node > ancestor folder > default).
+mod poolres;
 mod ratelimit;
 mod rca;
 mod repo;
@@ -719,6 +721,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 &shutdown,
                 run_scheduler(
                     repo.clone(),
+                    group_repo.clone(),
                     dispatcher.clone(),
                     scheduler_stats.clone(),
                     meraki_devices.clone(),
@@ -2011,8 +2014,34 @@ impl SweepCache {
     }
 }
 
+/// Group the round's nodes by the pool that should poll them.
+///
+/// The pool is the node's **effective** one (own > ancestor folder > default, [`poolres`]), so a
+/// folder-level assignment routes its whole subtree. Kept a separate pure function so that
+/// resolution is unit-testable without a scheduler loop.
+///
+/// Meraki device nodes are dropped: core's org collector owns them, not a pool poller.
+fn group_by_pool(
+    resolved: Vec<(yagra_common::Node, u32)>,
+    meraki_node_ids: &std::collections::HashSet<Uuid>,
+    live: &std::collections::HashSet<String>,
+    resolver: &poolres::PoolResolver,
+) -> HashMap<String, Vec<(yagra_common::Node, u32)>> {
+    let _ = live;
+    let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
+    for (node, secs) in resolved {
+        if meraki_node_ids.contains(&node.id.as_uuid()) {
+            continue;
+        }
+        let pool = resolver.resolve_pool(&node).to_owned();
+        groups.entry(pool).or_default().push((node, secs));
+    }
+    groups
+}
+
 async fn run_scheduler(
     repo: Arc<NodeRepo>,
+    groups_repo: Arc<groups::GroupRepo>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
@@ -2022,6 +2051,10 @@ async fn run_scheduler(
     use std::time::Instant;
     let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
     let mut cache: Option<SweepCache> = None;
+    // Last successfully-built folder-pool resolver. A transient DB error must NOT degrade to "no
+    // inheritance": that would silently move every folder-assigned node to the default pool for one
+    // round, churning both pools' working sets. Reusing the last-known map is the safe failure.
+    let mut resolver: Option<poolres::PoolResolver> = None;
     loop {
         // Read the config generation before any work so a change racing the rebuild is caught next
         // round (the cache is tagged with the pre-work value).
@@ -2060,6 +2093,26 @@ async fn run_scheduler(
             .await
             .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
         let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
+        // Folder-pool inheritance (ADR-009/020). One small query per rebuild — never on the cached
+        // fast path above, which is already generation-keyed.
+        match groups_repo.pool_rows().await {
+            Ok(rows) => resolver = Some(poolres::PoolResolver::build(rows)),
+            Err(e) => {
+                let Some(_) = resolver.as_ref() else {
+                    tracing::error!(
+                        error = %e,
+                        "scheduler: loading folder pools failed and none is cached — skipping the round \
+                         rather than routing the fleet to the wrong pool"
+                    );
+                    tokio::time::sleep(Duration::from_secs(u64::from(default_secs))).await;
+                    continue;
+                };
+                tracing::warn!(error = %e, "scheduler: loading folder pools failed; reusing the last-known map");
+            }
+        }
+        let pool_resolver = resolver
+            .clone()
+            .unwrap_or_else(poolres::PoolResolver::empty);
         let mut min_interval = default_secs;
 
         match repo.list_nodes().await {
@@ -2080,19 +2133,10 @@ async fn run_scheduler(
                 let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
                 let node_count = resolved.len();
 
-                // Group the non-Meraki nodes by pool (default `DEFAULT_POOL`) so each pool's mode is
-                // decided once. Meraki device nodes are dropped here (the org collector owns them).
-                let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
-                for (node, secs) in resolved {
-                    if meraki_node_ids.contains(&node.id.as_uuid()) {
-                        continue;
-                    }
-                    let pool = node
-                        .pool
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_POOL.to_string());
-                    groups.entry(pool).or_default().push((node, secs));
-                }
+                // Group the non-Meraki nodes by their effective pool so each pool's mode is decided
+                // once — and seed every live pool so one that has lost all its nodes still gets
+                // reconciled (see `group_by_pool`).
+                let groups = group_by_pool(resolved, &meraki_node_ids, &live, &pool_resolver);
 
                 tracing::debug!(
                     count = node_count,
@@ -2618,6 +2662,52 @@ mod tests {
     use store::MetricPoint;
     use yagra_bus::{CheckOutcome, Sample};
     use yagra_common::{NodeId, SeriesKey};
+
+    // ── Sweep pool grouping (effective pool + live-pool seeding) ──────────────
+
+    fn test_node(pool: Option<&str>, group: Option<Uuid>) -> yagra_common::Node {
+        use std::net::{IpAddr, Ipv4Addr};
+        let mut n =
+            yagra_common::Node::new(NodeId::new(), "n", IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+        n.pool = pool.map(str::to_owned);
+        n.group = group.map(yagra_common::GroupId::from);
+        n
+    }
+
+    #[test]
+    fn group_by_pool_uses_the_effective_pool() {
+        let folder = Uuid::from_u128(1);
+        let resolver = poolres::PoolResolver::build(vec![(folder, None, Some("tokyo".to_owned()))]);
+        let nodes = vec![
+            (test_node(None, Some(folder)), 30),          // inherits tokyo
+            (test_node(Some("osaka"), Some(folder)), 30), // own pool wins
+            (test_node(None, None), 30),                  // default
+        ];
+        let groups = group_by_pool(
+            nodes,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &resolver,
+        );
+        assert_eq!(groups.get("tokyo").map(Vec::len), Some(1));
+        assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
+        assert_eq!(groups.get(yagra_bus::DEFAULT_POOL).map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn group_by_pool_drops_meraki_nodes() {
+        // Core's org collector polls Meraki devices; no pool poller ever should.
+        let meraki = test_node(Some("tokyo"), None);
+        let meraki_ids: std::collections::HashSet<Uuid> =
+            [meraki.id.as_uuid()].into_iter().collect();
+        let groups = group_by_pool(
+            vec![(meraki, 30), (test_node(Some("tokyo"), None), 30)],
+            &meraki_ids,
+            &std::collections::HashSet::new(),
+            &poolres::PoolResolver::empty(),
+        );
+        assert_eq!(groups.get("tokyo").map(Vec::len), Some(1));
+    }
 
     #[tokio::test]
     async fn backfill_consumer_persists_metrics_and_meta_only() {

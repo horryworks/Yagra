@@ -648,6 +648,57 @@ impl<B: SyncBus> Coordinator<B> {
         views
     }
 
+    /// The live poller that currently holds `node` in its published working set, if any.
+    ///
+    /// Reads the **published baseline** — the literal record of what core last sent — rather than
+    /// re-deriving the ring from [`live_members`]. A re-derivation would *lie* about the nodes the
+    /// sweep drops before publishing (an empty spec set, and Meraki devices, which core's own org
+    /// collector owns), naming an owner that was never told about them. Reading `published` also
+    /// makes this and [`Self::published_nodes`] the same data, so the node fact and the poller
+    /// drill-down can never disagree.
+    ///
+    /// Filtered to pollers still inside [`OFFLINE_AFTER`]: `published` is never reaped, so a dead
+    /// poller keeps its last working set for the life of the core process and would otherwise
+    /// answer as the current owner.
+    #[must_use]
+    pub fn owner_of(&self, node: NodeId, now: Instant) -> Option<String> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        st.published
+            .iter()
+            .find(|(id, set)| set.contains_key(&node) && is_live(&st, id, now))
+            .map(|(id, _)| (*id).clone())
+    }
+
+    /// The node ids in `poller_id`'s published working set, sorted by uuid so paging is
+    /// deterministic. `None` when the poller is unknown or offline — see [`Self::owner_of`] for why
+    /// a stale `published` bucket must not be served as current. A live poller core has not yet
+    /// published to (registered mid-sweep) correctly yields an empty `Vec`, not `None`.
+    #[must_use]
+    pub fn published_nodes(&self, poller_id: &str, now: Instant) -> Option<Vec<NodeId>> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        if !is_live(&st, poller_id, now) {
+            return None;
+        }
+        let mut ids: Vec<NodeId> = st
+            .published
+            .get(poller_id)
+            .map(|set| set.keys().copied().collect())
+            .unwrap_or_default();
+        ids.sort_unstable();
+        Some(ids)
+    }
+
+    /// The pool a live poller serves, from the registry (not the durable inventory row, which
+    /// outlives liveness). `None` when the poller is unknown or offline.
+    #[must_use]
+    pub fn pool_of(&self, poller_id: &str, now: Instant) -> Option<String> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        st.pollers
+            .get(poller_id)
+            .filter(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
+            .map(|e| e.pool.clone())
+    }
+
     /// Ports that currently-online pollers have bound as passive-event listeners. Backs the
     /// forwarding loop guard (ADR-034): sending Yagra's own output back into one of its own
     /// listeners would amplify without bound.
@@ -684,6 +735,15 @@ impl<B: SyncBus> Coordinator<B> {
         let mut st = self.state.lock().expect("coordinator state poisoned");
         *st.results_seen.entry(poller_id.to_owned()).or_insert(0) += 1;
     }
+}
+
+/// Whether `poller_id` is a registered poller whose last heartbeat is within [`OFFLINE_AFTER`] of
+/// `now`. The liveness gate for every read that keys off a poller id — in particular the
+/// never-reaped [`CoordState::published`] buckets.
+fn is_live(st: &CoordState, poller_id: &str, now: Instant) -> bool {
+    st.pollers
+        .get(poller_id)
+        .is_some_and(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
 }
 
 /// The sorted ids of the pool's live members (heartbeat within [`OFFLINE_AFTER`] of `now`). Sorted
@@ -1068,6 +1128,66 @@ mod tests {
                 "p2's node {n} must reassign to the survivor"
             );
         }
+    }
+
+    // ── Assignment lookups (node detail "Polled by" + Pollers drill-down) ─────
+
+    #[tokio::test]
+    async fn owner_of_reports_the_poller_a_node_was_published_to() {
+        let (coord, _bus, _stats) = coordinator();
+        let now = t0();
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
+            .await;
+        let published = node(1);
+        coord
+            .reconcile_pool("default", desired(&[(published, 30)]), now)
+            .await;
+
+        assert_eq!(coord.owner_of(published, now).as_deref(), Some("p1"));
+        // A node that never entered a working set has no owner. This is exactly why the lookup
+        // reads `published` instead of re-deriving the ring: the ring would happily name p1 for a
+        // node the sweep dropped (empty spec set, or a Meraki device core polls itself).
+        assert_eq!(coord.owner_of(node(2), now), None);
+        assert_eq!(coord.published_nodes("p1", now), Some(vec![published]));
+        assert_eq!(coord.pool_of("p1", now).as_deref(), Some("default"));
+    }
+
+    #[tokio::test]
+    async fn a_dead_pollers_stale_working_set_never_answers_as_current() {
+        // Regression: `CoordState::published` is insert-only — nothing reaps a bucket when a poller
+        // dies or is deleted, so it keeps its last working set for the life of the core process.
+        // Without the liveness gate the node detail would keep naming a poller that stopped
+        // polling long ago, which is worse than saying nothing.
+        let (coord, _bus, _stats) = coordinator();
+        let now = t0();
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
+            .await;
+        let n = node(1);
+        coord
+            .reconcile_pool("default", desired(&[(n, 30)]), now)
+            .await;
+        assert_eq!(coord.owner_of(n, now).as_deref(), Some("p1"));
+
+        // p1 stops beating; its published bucket is untouched but it is no longer an answer.
+        let later = now + OFFLINE_AFTER + Duration::from_secs(1);
+        assert_eq!(coord.owner_of(n, later), None);
+        assert_eq!(coord.published_nodes("p1", later), None);
+        assert_eq!(coord.pool_of("p1", later), None);
+    }
+
+    #[tokio::test]
+    async fn published_nodes_distinguishes_unknown_from_empty() {
+        let (coord, _bus, _stats) = coordinator();
+        let now = t0();
+        // Never seen → unknown (the drill-down renders "offline", not "owns nothing").
+        assert_eq!(coord.published_nodes("nobody", now), None);
+        // Registered but not yet reconciled → live with an empty set, which is a real answer.
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
+            .await;
+        assert_eq!(coord.published_nodes("p1", now), Some(Vec::new()));
     }
 
     #[tokio::test]

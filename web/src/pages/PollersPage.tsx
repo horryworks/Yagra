@@ -11,9 +11,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { MonitoringGap, PollerInfo, PoolSummary } from '../types/api';
+import type {
+  MonitoringGap,
+  PollerInfo,
+  PollerNodesResponse,
+  PoolSummary,
+} from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -287,6 +293,70 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
   );
 }
 
+const NODE_COLS = '1fr 320px';
+
+/** The nodes one poller currently holds — "if this poller goes away, what stops being monitored?".
+ *  Inline (not a modal): read-only contextual detail, which ui-conventions keeps out of modals.
+ *  Fed by the coordinator's published working set, so it agrees with the node detail's "Polled by"
+ *  by construction. */
+function PollerNodesSection({
+  data,
+  onClose,
+}: {
+  data: PollerNodesResponse;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const note =
+    data.state === 'offline'
+      ? t('pollers.nodes.offline')
+      : data.state === 'unknown'
+        ? t('pollers.nodes.unknown')
+        : data.nodes.length === 0
+          ? t('pollers.nodes.empty')
+          : t('pollers.nodes.note');
+
+  return (
+    <div className="poller-gaps">
+      <div className="poller-nodes-head">
+        <h2 className="poller-gaps-title">
+          {t('pollers.nodes.title', { id: data.poller_id })}
+        </h2>
+        <Button variant="outline" onClick={onClose}>
+          {t('pollers.nodes.close')}
+        </Button>
+      </div>
+      <p className="muted poller-gaps-note">{note}</p>
+      {data.truncated && (
+        <p className="muted poller-gaps-note">
+          {t('pollers.nodes.truncated', { shown: data.nodes.length, total: data.total })}
+        </p>
+      )}
+      {data.nodes.length > 0 && (
+        <div className="ytable">
+          <div className="ytable-scroll">
+            <div className="ytable-head" style={{ gridTemplateColumns: NODE_COLS }}>
+              <div className="ytable-h">{t('pollers.nodes.colName')}</div>
+              <div className="ytable-h">{t('pollers.cols.pool')}</div>
+            </div>
+            {data.nodes.map((n) => (
+              <div className="ytable-row" style={{ gridTemplateColumns: NODE_COLS }} key={n.id}>
+                {/* Human name is the primary; the uuid stays on hover (no raw UUIDs in tables). */}
+                <div className="ytable-cell" title={n.id}>
+                  <Link to={`/nodes?sel=${encodeURIComponent(`node:${n.id}`)}`}>{n.name}</Link>
+                </div>
+                <div className="ytable-cell">
+                  <Badge tone="neutral">{data.pool ?? '—'}</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PollersPage() {
   const { t } = useTranslation('system');
   const authed = useAuthStore((s) => s.authed);
@@ -297,6 +367,9 @@ export function PollersPage() {
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
+  /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
+  const [drillId, setDrillId] = useState<string | null>(null);
+  const [drill, setDrill] = useState<PollerNodesResponse | null>(null);
 
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
@@ -325,6 +398,28 @@ export function PollersPage() {
     const id = setInterval(load, REFRESH_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
+  // without the operator reopening it. A read error just leaves the last page on screen.
+  useEffect(() => {
+    if (!drillId) {
+      setDrill(null);
+      return;
+    }
+    let cancelled = false;
+    const fetch = () => {
+      api
+        .listPollerNodes(drillId)
+        .then((d) => !cancelled && setDrill(d))
+        .catch(() => undefined);
+    };
+    fetch();
+    const id = setInterval(fetch, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [drillId]);
 
   return (
     <div>
@@ -397,7 +492,17 @@ export function PollersPage() {
                   const online = p.status === 'online';
                   return (
                     <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={p.id}>
-                      <div className="ytable-cell mono">{p.id}</div>
+                      <div className="ytable-cell">
+                        {/* A button, not a clickable row: `.ytable-row` has no clickable variant,
+                            and a button is keyboard-reachable by construction. */}
+                        <button
+                          type="button"
+                          className="poller-drill mono"
+                          onClick={() => setDrillId(drillId === p.id ? null : p.id)}
+                        >
+                          {p.id}
+                        </button>
+                      </div>
                       <div className="ytable-cell">
                         <Badge tone="neutral">{p.pool}</Badge>
                       </div>
@@ -435,6 +540,8 @@ export function PollersPage() {
               )}
             </div>
           </div>
+
+          {drill && <PollerNodesSection data={drill} onClose={() => setDrillId(null)} />}
 
           <MonitoringGapsSection gaps={gaps} />
         </>

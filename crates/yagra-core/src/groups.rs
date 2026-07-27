@@ -71,6 +71,10 @@ pub struct GroupSummary {
     /// Optional geo coordinates for the dashboard map (both set ⇒ plotted as a pin).
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    /// Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit
+    /// from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
+    /// wins — see [`crate::poolres`].
+    pub pool: Option<String>,
 }
 
 /// A fractional sort_order that places an item between `prev` and `next` — the order values of
@@ -164,7 +168,7 @@ impl GroupRepo {
     /// within each parent scope, then name — the same order the tree renders.
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude \
+            "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool \
              FROM node_groups ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
@@ -179,6 +183,7 @@ impl GroupRepo {
                     sort_order: row.try_get("sort_order")?,
                     latitude: row.try_get("latitude")?,
                     longitude: row.try_get("longitude")?,
+                    pool: row.try_get("pool")?,
                 })
             })
             .collect()
@@ -239,47 +244,76 @@ impl GroupRepo {
             .collect()
     }
 
-    /// Create a group; returns its id.
+    /// The `(id, parent_id, pool)` rows, for building a [`crate::poolres::PoolResolver`]. Read
+    /// whole (the table is small) so effective-pool resolution costs one query, not one per node.
+    pub async fn pool_rows(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
+        let rows = sqlx::query("SELECT id, parent_id, pool FROM node_groups")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("id")?,
+                    row.try_get("parent_id")?,
+                    row.try_get("pool")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Create a group; returns its id. `pool` is the folder's poll-pool assignment (`None` ⇒
+    /// inherit), already validated by the caller.
     pub async fn create(
         &self,
         name: &str,
         group_type: GroupType,
         parent: Option<Uuid>,
+        pool: Option<&str>,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         // Append to the end of the parent scope (max sort_order + 1) so a new group lands at the
         // bottom of its siblings rather than jumping to the top (the DEFAULT 0).
         sqlx::query(
-            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) VALUES \
+            "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order, pool) VALUES \
              ($1, $2, $3, $4, \
               (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM node_groups \
-               WHERE parent_id IS NOT DISTINCT FROM $4::uuid))",
+               WHERE parent_id IS NOT DISTINCT FROM $4::uuid), $5)",
         )
         .bind(id)
         .bind(name)
         .bind(group_type.key())
         .bind(parent)
+        .bind(pool)
         .execute(&self.pool)
         .await?;
         Ok(id)
     }
 
-    /// Rename / re-type / re-parent a group. Returns whether the group exists. The caller must
-    /// have already rejected a cycle-inducing `parent` (see [`would_create_cycle`]).
+    /// Rename / re-type / re-parent a group, and optionally move its poll-pool. Returns whether
+    /// the group exists. The caller must have already rejected a cycle-inducing `parent` (see
+    /// [`would_create_cycle`]).
+    ///
+    /// `pool` is three-state, matching `Repo::set_node_bindings`: outer `None` leaves the column
+    /// alone, `Some(None)` clears it to NULL (inherit), `Some(Some(p))` sets it.
     pub async fn update(
         &self,
         id: Uuid,
         name: &str,
         group_type: GroupType,
         parent: Option<Uuid>,
+        pool: Option<Option<&str>>,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE node_groups SET name = $2, group_type = $3, parent_id = $4 WHERE id = $1",
+            "UPDATE node_groups SET name = $2, group_type = $3, parent_id = $4, \
+                    pool = CASE WHEN $5 THEN $6 ELSE pool END \
+             WHERE id = $1",
         )
         .bind(id)
         .bind(name)
         .bind(group_type.key())
         .bind(parent)
+        .bind(pool.is_some())
+        .bind(pool.flatten())
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)

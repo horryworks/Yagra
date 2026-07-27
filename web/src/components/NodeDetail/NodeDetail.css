@@ -282,6 +282,12 @@
   color: var(--text-primary);
 }
 
+/* A fact whose value is an operational problem (e.g. a pool with no live poller). The value text
+   itself already spells out the condition, so colour is reinforcement, never the only signal. */
+.nd-fact-v.warn {
+  color: var(--status-warning);
+}
+
 .nd-alerts {
   display: flex;
   flex-direction: column;

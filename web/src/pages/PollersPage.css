@@ -151,3 +151,31 @@
   margin: 0 0 10px;
   font-size: var(--font-sm);
 }
+
+/* Node drill-down: title row with its Close action, and the poller-id trigger in the fleet table. */
+.poller-nodes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.poller-drill {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent-color);
+  cursor: pointer;
+  text-align: left;
+}
+
+.poller-drill:hover {
+  color: var(--accent-hover);
+}
+
+.poller-drill:focus-visible {
+  outline: none;
+  border-bottom: 1px solid var(--accent-color);
+}
