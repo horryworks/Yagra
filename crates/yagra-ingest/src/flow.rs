@@ -367,6 +367,51 @@ fn decode_v5_record(rec: &[u8], scale: u64) -> Option<RawFlow> {
     })
 }
 
+/// Whether a datagram carries template (or options-template) definitions.
+///
+/// The forwarder needs this to decide what a *filtered* flow destination must receive (ADR-034): a
+/// datagram holding templates but no flow records carries nothing a filter could exclude, while a
+/// collector that never receives it can never decode the datagrams that do pass the filter. Cheap
+/// by construction — it walks FlowSet headers and decodes nothing. `false` for NetFlow v5 and
+/// sFlow, which have no templates, and for anything malformed.
+#[must_use]
+pub fn carries_template_set(datagram: &[u8]) -> bool {
+    if datagram.len() < 2 {
+        return false;
+    }
+    match u16::from_be_bytes([datagram[0], datagram[1]]) {
+        // v9: header is 20 bytes; FlowSet id 0 = template, 1 = options template.
+        9 if datagram.len() >= 20 => has_set_id(&datagram[20..], 0, 1),
+        // IPFIX: header is 16 bytes and declares the message length; set id 2 = template,
+        // 3 = options template. Trust the declared length only up to what actually arrived.
+        10 if datagram.len() >= 16 => {
+            let msg_len = u16::from_be_bytes([datagram[2], datagram[3]]) as usize;
+            let end = msg_len.clamp(16, datagram.len());
+            has_set_id(&datagram[16..end], 2, 3)
+        }
+        _ => false,
+    }
+}
+
+/// Scan FlowSet/Set headers for either template id. Stops on the first malformed length rather
+/// than guessing, so a truncated trailer can never loop or over-read.
+fn has_set_id(body: &[u8], template: u16, options_template: u16) -> bool {
+    let mut r = Reader::new(body);
+    while r.remaining() >= 4 {
+        let (Some(set_id), Some(length)) = (r.u16(), r.u16()) else {
+            return false;
+        };
+        if set_id == template || set_id == options_template {
+            return true;
+        }
+        let length = length as usize;
+        if length < 4 || r.take(length - 4).is_none() {
+            return false;
+        }
+    }
+    false
+}
+
 fn parse_netflow_v9(
     templates: &mut FlowTemplates,
     exporter: IpAddr,
@@ -1509,7 +1554,82 @@ mod tests {
         for c in cases {
             // Must return (Ok or Err) without panicking.
             let _ = parse_flow_export(&mut t, exporter, &c);
+            // The forwarder's template probe walks the same hostile bytes.
+            let _ = carries_template_set(&c);
         }
+    }
+
+    /// A NetFlow v9 packet carrying only a template FlowSet — the shape an exporter that refreshes
+    /// templates on a timer emits, and the one a filtered forwarding destination must still receive.
+    fn nf9_template_only(template_id: u16) -> Vec<u8> {
+        let fields: [(u16, u16); 3] = [(IE_SRC_IPV4, 4), (IE_DST_IPV4, 4), (IE_OCTET_DELTA, 4)];
+        let mut tmpl = Vec::new();
+        tmpl.extend_from_slice(&template_id.to_be_bytes());
+        tmpl.extend_from_slice(&(fields.len() as u16).to_be_bytes());
+        for (ie, len) in fields {
+            tmpl.extend_from_slice(&ie.to_be_bytes());
+            tmpl.extend_from_slice(&len.to_be_bytes());
+        }
+        let mut set = Vec::new();
+        set.extend_from_slice(&0u16.to_be_bytes()); // FlowSet id 0 = template
+        set.extend_from_slice(&((4 + tmpl.len()) as u16).to_be_bytes());
+        set.extend_from_slice(&tmpl);
+
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&9u16.to_be_bytes());
+        pkt.extend_from_slice(&1u16.to_be_bytes());
+        pkt.extend_from_slice(&[0u8; 12]); // uptime/secs/seq
+        pkt.extend_from_slice(&7u32.to_be_bytes()); // domain
+        pkt.extend_from_slice(&set);
+        pkt
+    }
+
+    #[test]
+    fn carries_template_set_sees_templates_and_only_templates() {
+        // Template-only: the datagram a filtered destination would otherwise never be sent.
+        assert!(carries_template_set(&nf9_template_only(256)));
+        // Template + data in one datagram (the shape an inline-template exporter emits).
+        assert!(carries_template_set(&nf9_packet(
+            256,
+            &[(
+                Ipv4Addr::new(10, 0, 0, 5),
+                Ipv4Addr::new(8, 8, 8, 8),
+                1,
+                2,
+                6,
+                10,
+                1
+            )],
+        )));
+        // Data only — nothing to teach a collector, so the filter still decides.
+        assert!(!carries_template_set(&nf9_orphan_data(256)));
+        // v5 and sFlow have no templates at all.
+        assert!(!carries_template_set(&nf5_packet(&[], 0)));
+        assert!(!carries_template_set(&[0, 0, 0, 5, 0, 0, 0, 1]));
+    }
+
+    #[test]
+    fn carries_template_set_handles_ipfix_and_options_templates() {
+        // IPFIX set id 2 = template, 3 = options template; header is 16 bytes and declares length.
+        let body: [u8; 8] = [0, 2, 0, 8, 1, 2, 3, 4]; // one template set, 8 bytes
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&10u16.to_be_bytes());
+        pkt.extend_from_slice(&((16 + body.len()) as u16).to_be_bytes());
+        pkt.extend_from_slice(&[0u8; 12]); // export time + seq + domain
+        pkt.extend_from_slice(&body);
+        assert!(carries_template_set(&pkt));
+
+        // Same packet with the set id changed to a data set: no templates.
+        let mut data = pkt.clone();
+        data[16] = 1;
+        data[17] = 0; // set id 256
+        assert!(!carries_template_set(&data));
+
+        // A v9 options template (FlowSet id 1) also counts — it is still not flow data.
+        let mut opts = nf9_template_only(256);
+        opts[20] = 0;
+        opts[21] = 1;
+        assert!(carries_template_set(&opts));
     }
 
     #[test]

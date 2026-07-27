@@ -63,7 +63,7 @@ use yagra_forward::{
     render_syslog_5424, render_trap_v2c, CompiledFilter, DestKind, FilterView, FlowFields,
     SourceKind, DEFAULT_TRAP_COMMUNITY,
 };
-use yagra_ingest::{parse_flow_export, parse_sflow, FlowTemplates, RawFlow};
+use yagra_ingest::{carries_template_set, parse_flow_export, parse_sflow, FlowTemplates, RawFlow};
 
 use crate::bigquery::{BigQueryClient, FLUSH_INTERVAL, MAX_INSERT_BYTES, MAX_ROWS_PER_INSERT};
 use crate::forward_store::{DestSecret, ForwardStore, OpenDestination};
@@ -639,6 +639,14 @@ fn dispatch_flow(templates: &mut FlowTemplates, dests: &[LiveDest], dg: &RawFlow
     // every datagram once a flow destination exists. The records are only *used* when some filter
     // needs them (or when a BigQuery destination needs a row per record).
     let records = decode_records(templates, dg, &bytes);
+    // A datagram with template definitions and no flow records is *only* templates. Filtering it is
+    // both meaningless (there is no flow data in it to exclude) and harmful: an exporter that
+    // refreshes templates in their own record-free datagrams — the usual NetFlow v9 behaviour —
+    // would leave a filtered collector holding data sets it can never decode, silently and forever.
+    // So it bypasses the filter. Exporters that inline templates in every export instead are already
+    // covered, because the datagrams that *do* match carry the template with them.
+    let templates_only =
+        records.as_ref().is_some_and(Vec::is_empty) && carries_template_set(&bytes);
     let kind = dg.proto.as_str();
     let pool = dg.pool.as_deref();
 
@@ -673,7 +681,7 @@ fn dispatch_flow(templates: &mut FlowTemplates, dests: &[LiveDest], dg: &RawFlow
             continue;
         }
 
-        if !dest.filter.is_empty() {
+        if !dest.filter.is_empty() && !templates_only {
             let Some(records) = records.as_ref() else {
                 // Undecodable (or a template we have not seen yet): a filter cannot be evaluated, so
                 // the honest answer is to drop rather than forward an unfiltered datagram to a
@@ -2198,14 +2206,79 @@ mod tests {
         dispatch_flow(&mut templates, &[dest], &raw_flow(data_only.clone(), None));
         assert!(rx.try_recv().is_err());
 
-        // Feed the template datagram (which itself has no records, so nothing matches the filter)...
-        let (dest, _rx) = flow_dest(None, filter.clone());
-        dispatch_flow(&mut templates, &[dest], &raw_flow(template_only, None));
+        // Feed the template datagram. It carries no records, so no filter can match it — and it is
+        // relayed anyway, because the collector needs it to decode anything that follows.
+        let (dest, mut rx) = flow_dest(None, filter.clone());
+        dispatch_flow(
+            &mut templates,
+            &[dest],
+            &raw_flow(template_only.clone(), None),
+        );
+        assert_eq!(rx.try_recv().unwrap(), template_only);
 
         // ...and the same data datagram now decodes and matches.
         let (dest, mut rx) = flow_dest(None, filter);
         dispatch_flow(&mut templates, &[dest], &raw_flow(data_only.clone(), None));
         assert_eq!(rx.try_recv().unwrap(), data_only);
+    }
+
+    /// A filter must not be able to starve a collector of the templates it needs to decode what the
+    /// filter *does* let through — but it must still exclude the flow data the operator excluded.
+    #[tokio::test]
+    async fn filtered_flow_destination_gets_templates_but_not_unmatched_records() {
+        let template_only = nf9_packet(&[&nf9_template_set()]);
+        let matching = nf9_packet(&[&nf9_data_set(&[(
+            ([10, 0, 0, 5], [8, 8, 8, 8]),
+            443,
+            6,
+            15169,
+        )])]);
+        let unmatched = nf9_packet(&[&nf9_data_set(&[(
+            ([10, 0, 0, 6], [1, 1, 1, 1]),
+            53,
+            17,
+            13335,
+        )])]);
+        let mut templates = FlowTemplates::new();
+        let (dest, mut rx) =
+            flow_dest(None, flow_filter(FilterField::DstPort, FilterOp::Eq, "443"));
+
+        let dests = [dest];
+        for pkt in [&template_only, &matching, &unmatched] {
+            dispatch_flow(&mut templates, &dests, &raw_flow(pkt.clone(), None));
+        }
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            template_only,
+            "templates bypass the filter"
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            matching,
+            "a matching record still carries its datagram"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a datagram with no matching record must still be filtered out"
+        );
+    }
+
+    /// The escape hatch is templates, not emptiness: a datagram that decodes to no records because
+    /// its template is unknown teaches a collector nothing, so the filter still decides.
+    #[tokio::test]
+    async fn filtered_flow_destination_still_drops_recordless_data_without_templates() {
+        let orphan = nf9_packet(&[&nf9_data_set(&[(
+            ([10, 0, 0, 5], [8, 8, 8, 8]),
+            443,
+            6,
+            15169,
+        )])]);
+        let (dest, mut rx) =
+            flow_dest(None, flow_filter(FilterField::DstPort, FilterOp::Eq, "443"));
+        // Fresh cache: the data set references a template this dispatcher has never seen.
+        dispatch_flow(&mut FlowTemplates::new(), &[dest], &raw_flow(orphan, None));
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
