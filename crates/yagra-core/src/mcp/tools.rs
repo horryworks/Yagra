@@ -764,20 +764,25 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("open_maintenance", "maintenance requires live mode");
         };
+        // Explicit bounds go through the same parse + ordering check as the REST edge; a window
+        // that ends before it starts is stored happily and suppresses nothing, so the operator
+        // believes they are covered and gets paged through the change anyway.
         let (starts, ends) = match (p.starts_at.as_deref(), p.ends_at.as_deref()) {
-            (Some(s), Some(e)) => {
-                let (Some(s), Some(e)) = (parse_rfc3339_ok(s), parse_rfc3339_ok(e)) else {
-                    return tool_bad_params(
-                        "open_maintenance",
-                        "`starts_at`/`ends_at` must be RFC 3339 timestamps",
-                    );
-                };
-                (s, e)
-            }
+            (Some(s), Some(e)) => match crate::api::maintenance::window_bounds(s, e) {
+                Ok(pair) => pair,
+                Err(err) => return tool_api_error("open_maintenance", &err),
+            },
+            // This surface's own convenience: "mute it for an hour" without composing timestamps.
+            // The duration is clamped, so the ordering check below can only pass — it runs anyway
+            // because the invariant belongs to the window, not to how the bounds were obtained.
             (None, None) => {
                 let mins = p.duration_mins.unwrap_or(60).clamp(1, 7 * 24 * 60);
                 let now = Utc::now();
-                (now, now + chrono::Duration::minutes(mins))
+                let pair = (now, now + chrono::Duration::minutes(mins));
+                if let Err(err) = crate::api::maintenance::check_order(pair.0, pair.1) {
+                    return tool_api_error("open_maintenance", &err);
+                }
+                pair
             }
             _ => {
                 return tool_bad_params(
@@ -786,9 +791,6 @@ impl YagraMcp {
                 )
             }
         };
-        if ends <= starts {
-            return tool_bad_params("open_maintenance", "the window must end after it starts");
-        }
         let node = match admin.repo.get_node(p.node_id).await {
             Ok(Some(n)) => n,
             Ok(None) => return tool_unavailable("open_maintenance", "no node with that id"),

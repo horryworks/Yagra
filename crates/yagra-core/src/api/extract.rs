@@ -124,10 +124,18 @@ impl RequiredPermission for ManageConfigPerm {
     const PERMISSION: Permission = Permission::ManageConfig;
 }
 
-// `Permission::AckAlerts` has no marker yet: the alerts domain still lives in `mod.rs` behind the
-// old `authorize(&st, &headers, …)` prologue. Add the marker + alias in the commit that moves it —
-// a marker with no user is dead code, and hand-rolling a permission check at a call site would
-// defeat the point of keeping the vocabulary in a single file.
+/// Acknowledge, mute, or snooze alerts — an operational reaction to something happening now,
+/// rather than a configuration change.
+pub struct AckAlertsPerm;
+impl RequiredPermission for AckAlertsPerm {
+    const PERMISSION: Permission = Permission::AckAlerts;
+}
+
+/// Open or close maintenance windows — planned suppression.
+pub struct ManageMaintenancePerm;
+impl RequiredPermission for ManageMaintenancePerm {
+    const PERMISSION: Permission = Permission::ManageMaintenance;
+}
 
 /// A handler argument that proves the caller holds `P`. Rejects with `401` when there is no valid
 /// session and `403` when the session's role lacks the permission.
@@ -139,6 +147,10 @@ pub type RequireView = Require<ViewPerm>;
 pub type RequireManageUsers = Require<ManageUsersPerm>;
 /// Write-gated on monitoring configuration.
 pub type RequireManageConfig = Require<ManageConfigPerm>;
+/// Gated on alert acknowledgement / muting.
+pub type RequireAckAlerts = Require<AckAlertsPerm>;
+/// Gated on maintenance-window management.
+pub type RequireManageMaintenance = Require<ManageMaintenancePerm>;
 
 #[async_trait]
 impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
