@@ -635,71 +635,47 @@ impl YagraMcp {
         let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
             return tool_forbidden("ack_alert", "this token lacks ack-alerts permission");
         };
-        let Some(ack) = self.state.ack.as_ref() else {
-            return tool_unavailable("ack_alert", "ack requires live mode");
-        };
         let Some(severity) = parse_severity(&p.severity) else {
             return tool_bad_params("ack_alert", "`severity` must be info, warning, or critical");
         };
-        if p.acked.unwrap_or(true) {
-            let view = AckView {
-                at_unix_ms: Utc::now().timestamp_millis(),
-                by: identity.actor.clone(),
-                source: "mcp".to_owned(),
-                note: p.note.clone(),
-            };
-            if let Err(e) = ack
-                .set(p.node_id, p.check_id, severity.as_str(), &view)
-                .await
-            {
-                return tool_error("ack_alert", "record ack", &e);
-            }
-            self.state.alerts.broadcast_acked(
+        let acked = p.acked.unwrap_or(true);
+        // `apply_ack` persists *and* broadcasts. Both surfaces used to do the two steps
+        // separately, and dropping the broadcast is a silent failure: the write succeeds, the
+        // caller sees success, and every open dashboard keeps showing the alert unacknowledged
+        // until someone reloads. `source` is what distinguishes this surface's acks in the audit
+        // trail and in the pill the operator sees.
+        let view = acked.then(|| AckView {
+            at_unix_ms: Utc::now().timestamp_millis(),
+            by: identity.actor.clone(),
+            source: "mcp".to_owned(),
+            note: p.note.clone(),
+        });
+        if let Err(e) =
+            crate::api::alerts::apply_ack(&self.state, p.node_id, p.check_id, severity, view).await
+        {
+            return tool_api_error("ack_alert", &e);
+        }
+        let verb = if acked {
+            "ack_alert"
+        } else {
+            "ack_alert(clear)"
+        };
+        record_audit(
+            &self.state,
+            &identity,
+            &format!(
+                "mcp.{verb} node={} check={} sev={}",
                 p.node_id,
                 p.check_id,
-                severity,
-                serde_json::to_value(&view).ok(),
-            );
-            record_audit(
-                &self.state,
-                &identity,
-                &format!(
-                    "mcp.ack_alert node={} check={} sev={}",
-                    p.node_id,
-                    p.check_id,
-                    severity.as_str()
-                ),
-                200,
-            )
-            .await;
-            ok_json_value(
-                "ack_alert",
-                serde_json::json!({ "acked": true, "node_id": p.node_id, "check_id": p.check_id }),
-            )
-        } else {
-            if let Err(e) = ack.clear(p.node_id, p.check_id, severity.as_str()).await {
-                return tool_error("ack_alert", "clear ack", &e);
-            }
-            self.state
-                .alerts
-                .broadcast_acked(p.node_id, p.check_id, severity, None);
-            record_audit(
-                &self.state,
-                &identity,
-                &format!(
-                    "mcp.ack_alert(clear) node={} check={} sev={}",
-                    p.node_id,
-                    p.check_id,
-                    severity.as_str()
-                ),
-                200,
-            )
-            .await;
-            ok_json_value(
-                "ack_alert",
-                serde_json::json!({ "acked": false, "node_id": p.node_id, "check_id": p.check_id }),
-            )
-        }
+                severity.as_str()
+            ),
+            200,
+        )
+        .await;
+        ok_json_value(
+            "ack_alert",
+            serde_json::json!({ "acked": acked, "node_id": p.node_id, "check_id": p.check_id }),
+        )
     }
 
     #[tool(

@@ -9,7 +9,18 @@
 //! Keep this module for things with no better home. Anything that is really about errors belongs in
 //! [`super::error`], anything about request identity or guards in [`super::extract`].
 
+use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// `?limit=` on its own — the query shape for endpoints that cap a list but do not page it.
+///
+/// Several of these used to borrow the alert-history query struct, which also carries a `before`
+/// cursor they never read. Sharing a shape you only half-use makes it look, at the call site, like
+/// the endpoint supports paging when it does not.
+#[derive(Deserialize)]
+pub(crate) struct ListQuery {
+    pub limit: Option<i64>,
+}
 
 /// Parse an RFC 3339 timestamp from the API edge into UTC.
 ///

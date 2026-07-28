@@ -14,7 +14,8 @@
 //! security boundary.
 
 use super::extract::{Admin, RequireManageConfig, RequireView};
-use super::{ApiError, ApiResult, ApiState, HistoryQuery};
+use super::util::ListQuery;
+use super::{ApiError, ApiResult, ApiState};
 use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
 use axum::{
     extract::{Path, Query, State},
@@ -213,7 +214,7 @@ pub(crate) async fn report(
 async fn list_analysis_jobs(
     _perm: RequireView,
     State(st): State<ApiState>,
-    Query(q): Query<HistoryQuery>,
+    Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<AnalysisJob>>> {
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));

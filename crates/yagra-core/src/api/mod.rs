@@ -27,6 +27,7 @@
 //! Handlers not yet moved still return a bare `Response` and use the `error_response`/`internal`
 //! helpers; both styles are supported during the migration. New endpoints should use the new one.
 
+pub(crate) mod alerts;
 pub(crate) mod analysis;
 mod error;
 pub(crate) mod eventlog;
@@ -49,7 +50,7 @@ pub use error::{ApiError, ApiResult};
 pub(crate) use extract::{authorize, bearer, current_username, require_leader, require_view};
 pub(crate) use util::{now_unix_s, parse_rfc3339};
 
-use crate::ack::{AckKey, AckRepo, AckView};
+use crate::ack::AckRepo;
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
 use crate::audit::AuditRepo;
@@ -60,7 +61,7 @@ use crate::coordinator::{Coordinator, PollerView};
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
-use crate::history::{AlertHistoryRow, AlertHistoryStore};
+use crate::history::AlertHistoryStore;
 use crate::logstore::LogStore;
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
@@ -91,7 +92,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_alert::Alert;
 use yagra_common::{
     is_ssrf_blocked, resolve_collection_set, DiskUsage, DnsCheckConfig, HostSample, Node, NodeId,
     NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
@@ -436,12 +436,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/rca", post(create_rca))
         .route("/api/v1/rca/:id", get(get_rca))
         .route("/api/v1/roles", get(list_roles))
-        .route("/api/v1/alerts", get(list_alerts))
-        .route("/api/v1/alerts/ack", post(ack_alert))
-        .route("/api/v1/alerts/history", get(list_alert_history))
-        .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
-        .route("/api/v1/alerts/calendar", get(alert_calendar))
-        .route("/api/v1/alerts/transitions", get(alert_transitions))
+        // Alerts: active list, history + aggregations, inbound ack, and the two SSE streams,
+        // in `api/alerts.rs`.
+        .merge(alerts::routes())
         // The dependency graph, in `api/topology.rs`.
         .merge(topology::routes())
         // Fleet-wide rollups (summary / per-group / coverage / timeline), in `api/fleet.rs`.
@@ -463,8 +460,6 @@ pub fn router(state: ApiState) -> Router {
             get(host_metric_range),
         )
         .route("/api/v1/version", get(version))
-        .route("/api/v1/stream/alerts", get(stream_alerts))
-        .route("/api/v1/stream/node-states", get(stream_node_states))
         .route(
             "/api/v1/notification-channels",
             get(list_notification_channels).post(create_notification_channel),
@@ -2101,412 +2096,6 @@ async fn host_metric_range(
     .into_response()
 }
 
-/// Currently active alerts (from the in-memory alert engine).
-/// An active alert plus its inbound (read-only) ack state, for the API. Yagra holds no ack
-/// action — `acked` is mirrored from the external tool (ADR-015), shown for triage only.
-#[derive(Serialize)]
-struct ActiveAlertView {
-    #[serde(flatten)]
-    alert: Alert,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    acked: Option<AckView>,
-}
-
-/// An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all
-/// transitions of one incident share it).
-#[derive(Serialize)]
-struct AlertHistoryView {
-    #[serde(flatten)]
-    row: AlertHistoryRow,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    acked: Option<AckView>,
-}
-
-/// Join the ack map into the active-alert list (pure; unit-tested without a DB).
-fn decorate_alerts(
-    alerts: Vec<Alert>,
-    acks: &std::collections::HashMap<AckKey, AckView>,
-) -> Vec<ActiveAlertView> {
-    alerts
-        .into_iter()
-        .map(|alert| {
-            let key: AckKey = (
-                alert.node.as_uuid(),
-                alert.check.as_uuid(),
-                alert.severity.as_str().to_owned(),
-            );
-            let acked = acks.get(&key).cloned();
-            ActiveAlertView { alert, acked }
-        })
-        .collect()
-}
-
-/// Join the ack map into a history page (pure; unit-tested without a DB).
-fn decorate_history(
-    rows: Vec<AlertHistoryRow>,
-    acks: &std::collections::HashMap<AckKey, AckView>,
-) -> Vec<AlertHistoryView> {
-    rows.into_iter()
-        .map(|row| {
-            let key: AckKey = (row.node, row.check, row.severity.clone());
-            let acked = acks.get(&key).cloned();
-            AlertHistoryView { row, acked }
-        })
-        .collect()
-}
-
-/// Load the current ack map, or an empty map when ack is unavailable (skeleton) or the query
-/// errors — ack state is decorative, so a failure here must not blank the alert list.
-async fn ack_map(st: &ApiState) -> std::collections::HashMap<AckKey, AckView> {
-    match st.ack.as_ref() {
-        Some(repo) => repo.all().await.unwrap_or_else(|e| {
-            tracing::error!(error = %e, "load ack map failed; serving alerts without ack state");
-            std::collections::HashMap::new()
-        }),
-        None => std::collections::HashMap::new(),
-    }
-}
-
-async fn list_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let acks = ack_map(&st).await;
-    Json(decorate_alerts(st.alerts.active_alerts(), &acks)).into_response()
-}
-
-/// Recent alert-history rows. Query: `?limit=` (default 100) + optional `before` keyset cursor
-/// (an RFC 3339 timestamp — pass the last row's `recorded_at` to page back). Empty in skeleton mode.
-#[derive(Deserialize)]
-struct HistoryQuery {
-    limit: Option<i64>,
-    before: Option<String>,
-}
-
-async fn list_alert_history(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<HistoryQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(history) = st.history.as_ref() else {
-        return Json(Vec::<AlertHistoryView>::new()).into_response();
-    };
-    let before = match q.before.as_deref() {
-        Some(s) => match parse_rfc3339(s) {
-            Some(t) => Some(t),
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "before must be an RFC 3339 timestamp".to_owned(),
-                )
-            }
-        },
-        None => None,
-    };
-    match history.recent(q.limit.unwrap_or(100), before).await {
-        Ok(rows) => {
-            let acks = ack_map(&st).await;
-            Json(decorate_history(rows, &acks)).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "list alert history failed");
-            internal("failed to list alert history")
-        }
-    }
-}
-
-/// Default for `AckRequest::acked` when the field is omitted (a bare body means "ack").
-fn default_acked() -> bool {
-    true
-}
-
-/// Inbound ack reflection (ADR-015, A1). An external incident tool (PagerDuty / JSM) mirrors ack
-/// state into Yagra by the alert dedup identity `(node, check, severity)`; `acked:false` clears
-/// it. Yagra never writes ack back out (one-way inbound). `AckAlerts`-gated; the mutating-request
-/// middleware records the audit entry.
-#[derive(Deserialize)]
-struct AckRequest {
-    node: Uuid,
-    check: Uuid,
-    severity: Severity,
-    /// `true` = acked (upsert), `false` = cleared (delete). Defaults to `true`.
-    #[serde(default = "default_acked")]
-    acked: bool,
-    /// External actor reference (id / handle) — never a secret.
-    #[serde(default)]
-    by: Option<String>,
-    /// Originating tool: `pagerduty` | `jsm` | `manual` | …
-    #[serde(default)]
-    source: Option<String>,
-    /// Optional free-text note from the external tool.
-    #[serde(default)]
-    note: Option<String>,
-    /// When the external tool recorded the ack (Unix ms, UTC); defaults to now.
-    #[serde(default)]
-    at_unix_ms: Option<i64>,
-}
-
-async fn ack_alert(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<AckRequest>,
-) -> Response {
-    let Some(repo) = st.ack.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
-        return resp;
-    }
-    let severity = body.severity.as_str();
-    if body.acked {
-        let view = AckView {
-            at_unix_ms: body.at_unix_ms.unwrap_or_else(|| now_unix_s() * 1000),
-            by: body.by.unwrap_or_else(|| "external".to_owned()),
-            source: body.source.unwrap_or_else(|| "external".to_owned()),
-            note: body.note,
-        };
-        if let Err(e) = repo.set(body.node, body.check, severity, &view).await {
-            tracing::error!(error = %e, "record inbound ack failed");
-            return internal("failed to record acknowledgement");
-        }
-        // Live-update any matching active alert so the read-only acked pill appears without a
-        // refetch (the event carries the alert shape + `acked`, no `resolved` ⇒ an upsert).
-        let acked_value = serde_json::to_value(&view).ok();
-        st.alerts
-            .broadcast_acked(body.node, body.check, body.severity, acked_value);
-        Json(serde_json::json!({ "acked": true, "ack": view })).into_response()
-    } else {
-        if let Err(e) = repo.clear(body.node, body.check, severity).await {
-            tracing::error!(error = %e, "clear inbound ack failed");
-            return internal("failed to clear acknowledgement");
-        }
-        st.alerts
-            .broadcast_acked(body.node, body.check, body.severity, None);
-        Json(serde_json::json!({ "acked": false })).into_response()
-    }
-}
-
-/// Query for the alert top-nodes aggregation: `?window=<secs>` (default 24h) + `?limit=`.
-#[derive(Deserialize)]
-struct AlertTopQuery {
-    window: Option<i64>,
-    limit: Option<i64>,
-}
-
-/// One chronic-offender row.
-#[derive(Serialize)]
-struct AlertNodeCount {
-    node_id: Uuid,
-    name: String,
-    count: i64,
-}
-
-/// Nodes generating the most alert fires over a trailing window (chronic offenders). Empty in
-/// skeleton mode (no history store).
-async fn alert_top_nodes(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<AlertTopQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(history) = st.history.as_ref() else {
-        return Json(Vec::<AlertNodeCount>::new()).into_response();
-    };
-    let window = q.window.unwrap_or(86_400).clamp(60, 30 * 86_400);
-    let since_ms = (now_unix_s() - window) * 1000;
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let counts = match history.top_nodes_by_fires(since_ms, limit).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "alert top-nodes failed");
-            return internal("failed to aggregate alerting nodes");
-        }
-    };
-    let ids: Vec<Uuid> = counts.iter().map(|(n, _)| *n).collect();
-    let names = match st.admin.as_ref() {
-        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
-        None => std::collections::HashMap::new(),
-    };
-    let out: Vec<AlertNodeCount> = counts
-        .into_iter()
-        .map(|(node_id, count)| AlertNodeCount {
-            node_id,
-            name: names
-                .get(&node_id)
-                .cloned()
-                .unwrap_or_else(|| node_id.to_string()),
-            count,
-        })
-        .collect();
-    Json(out).into_response()
-}
-
-/// Query for the alert calendar heatmap: `?days=<n>` (default 7) of history.
-#[derive(Deserialize)]
-struct AlertCalendarQuery {
-    days: Option<i64>,
-}
-
-/// One weekday×hour heatmap cell.
-#[derive(Serialize)]
-struct CalendarBucket {
-    /// 0 = Sunday … 6 = Saturday (UTC).
-    dow: i32,
-    /// Hour of day 0–23 (UTC).
-    hour: i32,
-    count: i64,
-}
-
-/// Alert fires bucketed weekday×hour over the last `days` (for the calendar heatmap). Empty in
-/// skeleton mode.
-async fn alert_calendar(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<AlertCalendarQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(history) = st.history.as_ref() else {
-        return Json(Vec::<CalendarBucket>::new()).into_response();
-    };
-    let days = q.days.unwrap_or(7).clamp(1, 90);
-    let since_ms = (now_unix_s() - days * 86_400) * 1000;
-    match history.fires_by_weekday_hour(since_ms).await {
-        Ok(buckets) => {
-            let out: Vec<CalendarBucket> = buckets
-                .into_iter()
-                .map(|(dow, hour, count)| CalendarBucket { dow, hour, count })
-                .collect();
-            Json(out).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "alert calendar failed");
-            internal("failed to build the alert calendar")
-        }
-    }
-}
-
-/// One recent state-change row (a fire = into an alert state; a resolve = recovery to ok).
-#[derive(Serialize)]
-struct AlertTransition {
-    node_id: Uuid,
-    name: String,
-    state: String,
-    severity: String,
-    /// true = recovery (→ ok); false = went into the alert state.
-    resolved: bool,
-    at_unix_ms: i64,
-}
-
-/// Recent up/down transitions (latest fires and resolutions), node names joined. Empty in
-/// skeleton mode.
-async fn alert_transitions(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<HistoryQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(history) = st.history.as_ref() else {
-        return Json(Vec::<AlertTransition>::new()).into_response();
-    };
-    let rows = match history.recent(q.limit.unwrap_or(12), None).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "alert transitions failed");
-            return internal("failed to list alert transitions");
-        }
-    };
-    let ids: Vec<Uuid> = rows.iter().map(|r| r.node).collect();
-    let names = match st.admin.as_ref() {
-        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
-        None => std::collections::HashMap::new(),
-    };
-    let out: Vec<AlertTransition> = rows
-        .into_iter()
-        .map(|r| AlertTransition {
-            node_id: r.node,
-            name: names
-                .get(&r.node)
-                .cloned()
-                .unwrap_or_else(|| r.node.to_string()),
-            state: r.state,
-            severity: r.severity,
-            resolved: r.resolved,
-            at_unix_ms: r.at_unix_ms,
-        })
-        .collect();
-    Json(out).into_response()
-}
-
-/// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's
-/// `data` is the alert JSON with a `resolved` flag. Keep-alive holds the connection open
-/// when idle.
-async fn stream_alerts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe()).filter_map(
-        |r| async move {
-            match r {
-                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
-                // The subscriber fell behind the buffer and missed `n` events (only this slow
-                // receiver is affected — other clients keep their own cursor). Log it and emit a
-                // named `resync` event so the client can re-fetch the active-alert list and close
-                // the gap. Browsers ignore named events they don't listen for, so this is
-                // backward-compatible with clients that only read the default message stream.
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        missed = n,
-                        "SSE alert subscriber lagged; emitting resync hint"
-                    );
-                    Some(Ok(Event::default().event("resync").data(n.to_string())))
-                }
-            }
-        },
-    );
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
-
-/// Live node-state stream (SSE, ADR-019 / S14): rolled-up display-state changes as they happen.
-/// Each event's `data` is `{node_id, state, at_unix_ms}`. The inventory/topology views seed from
-/// REST once, then patch individual nodes off this stream instead of re-fetching the whole fleet
-/// every 15s. A lagged subscriber gets a named `resync` event and re-seeds. View-gated; works in
-/// skeleton mode (the alert engine is always present).
-async fn stream_node_states(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let stream = tokio_stream::wrappers::BroadcastStream::new(st.alerts.subscribe_node_states())
-        .filter_map(|r| async move {
-            match r {
-                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
-                // Slow subscriber missed `n` events — emit a `resync` hint so the client re-seeds
-                // node state from REST and closes the gap (same contract as `stream_alerts`).
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        missed = n,
-                        "SSE node-state subscriber lagged; emitting resync hint"
-                    );
-                    Some(Ok(Event::default().event("resync").data(n.to_string())))
-                }
-            }
-        });
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
-
 // ── Reports (Dashboard → Reports) ────────────────────────────────────────────
 //
 // Shared resource: everyone reads, only admins (ManageConfig) write — same model as the Shared
@@ -2743,7 +2332,7 @@ async fn run_report_definition(
 async fn list_report_runs(
     State(st): State<ApiState>,
     headers: HeaderMap,
-    Query(q): Query<HistoryQuery>,
+    Query(q): Query<util::ListQuery>,
 ) -> Response {
     if let Some(resp) = require_view(&st, &headers) {
         return resp;
@@ -10102,146 +9691,6 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    // ── Inbound ack reflection (ADR-015, A1) ────────────────────────────────
-
-    #[test]
-    fn decorate_alerts_attaches_inbound_ack_by_dedup_key() {
-        use std::collections::HashMap;
-        let node = NodeId::from(Uuid::from_u128(1));
-        let check = yagra_common::CheckId::from(Uuid::from_u128(2));
-        let acked_alert = Alert {
-            node,
-            check,
-            severity: Severity::Critical,
-            state: NodeState::Critical,
-            at_unix_ms: 100,
-            root_cause: None,
-            flapping: false,
-            metric: "__liveness__".to_string(),
-            breach: None,
-        };
-        let other = Alert {
-            node: NodeId::from(Uuid::from_u128(9)),
-            check: yagra_common::CheckId::from(Uuid::from_u128(8)),
-            severity: Severity::Warning,
-            state: NodeState::Warning,
-            at_unix_ms: 50,
-            root_cause: None,
-            flapping: false,
-            metric: "__liveness__".to_string(),
-            breach: None,
-        };
-        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
-        acks.insert(
-            (node.as_uuid(), check.as_uuid(), "critical".to_owned()),
-            AckView {
-                at_unix_ms: 123,
-                by: "pd-user".to_owned(),
-                source: "pagerduty".to_owned(),
-                note: Some("acked".to_owned()),
-            },
-        );
-
-        let out = decorate_alerts(vec![acked_alert, other], &acks);
-        assert_eq!(
-            out[0].acked.as_ref().map(|a| a.source.as_str()),
-            Some("pagerduty")
-        );
-        assert!(out[1].acked.is_none(), "unrelated alert must not be acked");
-
-        // Serialized shape flattens the alert fields and includes the ack view.
-        let json = serde_json::to_value(&out[0]).unwrap();
-        assert_eq!(json["severity"], "critical");
-        assert_eq!(json["acked"]["by"], "pd-user");
-        // A non-acked alert omits the field entirely (skip_serializing_if).
-        let json2 = serde_json::to_value(&out[1]).unwrap();
-        assert!(json2.get("acked").is_none());
-    }
-
-    #[test]
-    fn decorate_history_shares_ack_across_an_incidents_transitions() {
-        use std::collections::HashMap;
-        let node = Uuid::from_u128(1);
-        let check = Uuid::from_u128(2);
-        let fire = AlertHistoryRow {
-            node,
-            check,
-            severity: "critical".to_owned(),
-            state: "critical".to_owned(),
-            at_unix_ms: 10,
-            resolved: false,
-            metric: Some("icmp_rtt_ms".to_owned()),
-            observed_value: Some(150.0),
-            threshold_value: Some(100.0),
-            direction: Some("above".to_owned()),
-            recorded_at: "1970-01-01T00:00:10Z".to_owned(),
-        };
-        let clear = AlertHistoryRow {
-            node,
-            check,
-            severity: "critical".to_owned(),
-            state: "ok".to_owned(),
-            at_unix_ms: 20,
-            resolved: true,
-            metric: Some("icmp_rtt_ms".to_owned()),
-            observed_value: None,
-            threshold_value: None,
-            direction: None,
-            recorded_at: "1970-01-01T00:00:20Z".to_owned(),
-        };
-        let unrelated = AlertHistoryRow {
-            node: Uuid::from_u128(7),
-            check,
-            severity: "warning".to_owned(),
-            state: "warning".to_owned(),
-            at_unix_ms: 5,
-            resolved: false,
-            metric: None,
-            observed_value: None,
-            threshold_value: None,
-            direction: None,
-            recorded_at: "1970-01-01T00:00:05Z".to_owned(),
-        };
-        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
-        acks.insert(
-            (node, check, "critical".to_owned()),
-            AckView {
-                at_unix_ms: 11,
-                by: "x".to_owned(),
-                source: "jsm".to_owned(),
-                note: None,
-            },
-        );
-
-        let out = decorate_history(vec![fire, clear, unrelated], &acks);
-        assert!(out[0].acked.is_some(), "fire of acked incident is acked");
-        assert!(
-            out[1].acked.is_some(),
-            "clear of same incident shares the ack"
-        );
-        assert!(out[2].acked.is_none(), "unrelated transition is not acked");
-    }
-
-    #[tokio::test]
-    async fn ack_endpoint_unavailable_without_ack_store() {
-        // Skeleton/public state has no ack store ⇒ the inbound ack endpoint is unavailable.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/alerts/ack")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"node":"00000000-0000-0000-0000-000000000001","check":"00000000-0000-0000-0000-000000000002","severity":"critical","acked":true}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
