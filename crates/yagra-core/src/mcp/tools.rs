@@ -15,7 +15,7 @@
 //! heavier writes (`run_probe`/`trigger_discovery`) remain future work. The plain-`async fn` shape
 //! (params in, DTO out) is what lets the ADR-029 RCA agent reuse these bodies in-process later.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 // The module (not just the trait) — the `JsonSchema` derive expands to `schemars::…` paths, so the
@@ -33,7 +33,6 @@ use yagra_common::{NodeId, Permission, SeriesKey, Severity};
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
 use crate::api::{ApiError, ApiState};
-use crate::events::EventFilter;
 use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
 use crate::mcp::dto::{
     AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
@@ -507,71 +506,30 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("search_events", "event search requires live mode");
         };
-        let since = match parse_opt_rfc3339(p.since.as_deref()) {
-            Ok(v) => v,
-            Err(()) => {
-                return tool_bad_params("search_events", "`since` must be an RFC 3339 timestamp")
-            }
-        };
-        let until = match parse_opt_rfc3339(p.until.as_deref()) {
-            Ok(v) => v,
-            Err(()) => {
-                return tool_bad_params("search_events", "`until` must be an RFC 3339 timestamp")
-            }
-        };
-        if let Some(kind) = p.kind.as_deref() {
-            if !matches!(kind, "syslog" | "trap" | "webhook") {
-                return tool_bad_params("search_events", "`kind` must be syslog, trap, or webhook");
-            }
-        }
-        let regex = p.regex.unwrap_or(false);
-        let search = p
-            .search
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        // Validate a regex at the edge (size / ReDoS guard, shared with rule compilation).
-        if regex {
-            if let Some(term) = search.as_deref() {
-                if let Err(e) = crate::events::compile_matcher("regex", term) {
-                    return tool_bad_params(
-                        "search_events",
-                        &format!("invalid regular expression: {e}"),
-                    );
-                }
-            }
-        }
-        let filter = EventFilter {
-            before: None,
-            since,
-            until,
-            kind: p.kind.clone(),
-            node_id: p.node_id,
-            matched: p.matched,
-            search,
-            regex,
-        };
-        let limit = p.limit.unwrap_or(100).clamp(1, 500);
-        // Mirrors the REST events reader: the log store is the search source of record when enabled
-        // (free-text node-name search resolves to ids here so the name never enters the store), else
-        // fall back to the PostgreSQL alert-linked rows.
-        let rows = if let Some(logs) = self.state.logs.as_ref() {
-            let name_node_ids = match (filter.regex, filter.search.as_deref()) {
-                (false, Some(term)) => admin
-                    .repo
-                    .node_ids_by_name_like(term, 50)
-                    .await
-                    .unwrap_or_default(),
-                _ => Vec::new(),
+        // Same validation edge as `GET /api/v1/events`. This was a second copy, and the copies had
+        // drifted on the term-length cap: the REST edge capped it and this one did not, so the
+        // surface with no human in the loop was the one that could send an unbounded term to the
+        // store. `since`/`until` are this surface's names for `start`/`end`.
+        let filter =
+            match crate::api::eventlog::parse_event_filter(crate::api::eventlog::EventFilterInput {
+                before: None,
+                start: p.since.as_deref(),
+                end: p.until.as_deref(),
+                kind: p.kind.clone(),
+                node_id: p.node_id,
+                matched: p.matched,
+                q: p.search.as_deref(),
+                regex: p.regex.unwrap_or(false),
+            }) {
+                Ok(f) => f,
+                Err(e) => return tool_api_error("search_events", &e),
             };
-            logs.search(&filter, &name_node_ids, limit).await
-        } else {
-            admin.events.list_events(&filter, limit).await
-        };
-        let rows = match rows {
+        let limit = p.limit.unwrap_or(100).clamp(1, 500);
+        // Same store routing too, including resolving a node-name term to ids so the name never
+        // enters the log store (ADR-011).
+        let rows = match crate::api::eventlog::search(&self.state, admin, &filter, limit).await {
             Ok(r) => r,
-            Err(e) => return tool_error("search_events", "search events", &e),
+            Err(e) => return tool_api_error("search_events", &e),
         };
         let names = self
             .resolve_names(rows.iter().filter_map(|r| r.node_id))
@@ -1223,20 +1181,10 @@ fn parse_severity(s: &str) -> Option<Severity> {
     }
 }
 
-/// Parse an RFC 3339 timestamp to UTC. `None` if malformed.
-fn parse_rfc3339_ok(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|t| t.with_timezone(&Utc))
-}
-
-/// Parse an optional RFC 3339 timestamp: `Ok(None)` when absent, `Err(())` when present but malformed.
-fn parse_opt_rfc3339(s: Option<&str>) -> Result<Option<DateTime<Utc>>, ()> {
-    match s {
-        None => Ok(None),
-        Some(v) => parse_rfc3339_ok(v).map(Some).ok_or(()),
-    }
-}
+// This surface no longer parses timestamps of its own: `parse_rfc3339_ok`/`parse_opt_rfc3339`
+// lived here and were the MCP copies of the REST edge's parsing. Both callers (`open_maintenance`,
+// `search_events`) now go through the shared validators in `api::maintenance` / `api::eventlog`,
+// which is what makes a bound rejected on one surface rejected on both.
 
 /// A permission-denied tool result (records `forbidden`). Maps to a JSON-RPC invalid-request error.
 fn tool_forbidden(tool: &str, reason: &str) -> Result<CallToolResult, McpError> {
@@ -1335,33 +1283,10 @@ mod tests {
         assert_eq!(severity_rank("nonsense"), severity_rank("info"));
     }
 
-    #[test]
-    fn rfc3339_parsing_normalizes_to_utc_and_rejects_malformed() {
-        let t = parse_rfc3339_ok("2026-07-25T12:00:00+09:00").expect("parses");
-        assert_eq!(
-            t.to_rfc3339(),
-            "2026-07-25T03:00:00+00:00",
-            "offset applied"
-        );
-        assert!(
-            parse_rfc3339_ok("2026-07-25").is_none(),
-            "a bare date is not RFC 3339"
-        );
-        assert!(parse_rfc3339_ok("yesterday").is_none());
-    }
-
-    #[test]
-    fn optional_rfc3339_distinguishes_absent_from_malformed() {
-        assert_eq!(parse_opt_rfc3339(None), Ok(None), "absent is not an error");
-        assert!(parse_opt_rfc3339(Some("2026-07-25T00:00:00Z"))
-            .unwrap()
-            .is_some());
-        assert_eq!(
-            parse_opt_rfc3339(Some("nope")),
-            Err(()),
-            "present but malformed is an error"
-        );
-    }
+    // The two RFC 3339 parsing tests that were here moved with the code they covered:
+    // offset-applied-and-malformed-rejected is `api::util::parse_rfc3339`'s test, and
+    // absent-vs-malformed is pinned by `api::eventlog`'s filter tests. Keeping copies here would
+    // have tested this surface's *former* parser rather than the one it now calls.
 
     // ── Flow query construction (the injection-relevant one) ─────────────────────────────────────
 

@@ -29,6 +29,7 @@
 
 pub(crate) mod analysis;
 mod error;
+pub(crate) mod eventlog;
 pub(crate) mod extract;
 pub(crate) mod fleet;
 mod flow;
@@ -558,8 +559,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/event-rules/:id",
             put(update_event_rule).delete(delete_event_rule),
         )
-        .route("/api/v1/events", get(list_events))
-        .route("/api/v1/events/stats", get(events_stats))
+        // The event-log read surface (list + stats), in `api/eventlog.rs`.
+        .merge(eventlog::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         .route("/api/v1/audit", get(list_audit))
         .route("/api/v1/dashboard", get(get_dashboard).put(put_dashboard))
@@ -8255,257 +8256,6 @@ async fn test_event_rule(
     .into_response()
 }
 
-/// Query params for the event log (keyset paging on `recorded_at`, like alert history).
-#[derive(Deserialize)]
-struct EventsQuery {
-    before: Option<String>,
-    /// Time-range lower bound (inclusive, RFC 3339). Distinct from `before` (the paging cursor).
-    start: Option<String>,
-    /// Time-range upper bound (inclusive, RFC 3339).
-    end: Option<String>,
-    limit: Option<i64>,
-    kind: Option<String>,
-    node_id: Option<Uuid>,
-    matched: Option<bool>,
-    /// Free-text substring matched against source (node name / IP) or message. With `regex`,
-    /// it is instead a regular expression matched against the message only.
-    q: Option<String>,
-    /// Interpret `q` as a regular expression (message-only) rather than a substring.
-    regex: Option<bool>,
-}
-
-/// Normalize the free-text event filter at the API edge (input-validation rule):
-/// trim, drop-if-empty, and cap length so a pathological input can't bloat the query.
-fn normalize_event_search(q: Option<&str>) -> Option<String> {
-    q.map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.chars().take(200).collect())
-}
-
-/// Parse + validate the shared event-filter fields (the same set for the event log and
-/// `/events/stats`), returning the typed [`crate::events::EventFilter`] or a ready 4xx `Response`.
-/// (`Response` is intrinsically large; the error path is rare, so returning it by value is fine.)
-#[allow(clippy::too_many_arguments, clippy::result_large_err)]
-fn parse_event_filter(
-    before: Option<&str>,
-    start: Option<&str>,
-    end: Option<&str>,
-    kind: Option<String>,
-    node_id: Option<Uuid>,
-    matched: Option<bool>,
-    q: Option<&str>,
-    regex: bool,
-) -> Result<crate::events::EventFilter, Response> {
-    fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-        chrono::DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|t| t.with_timezone(&chrono::Utc))
-    }
-    fn bad_ts(field: &str, code: &str) -> Response {
-        error_response(
-            StatusCode::BAD_REQUEST,
-            code,
-            format!("{field} must be an RFC 3339 timestamp"),
-        )
-    }
-    let before = match before {
-        None => None,
-        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("before", "invalid_cursor"))?),
-    };
-    let since = match start {
-        None => None,
-        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("start", "invalid_filter"))?),
-    };
-    let until = match end {
-        None => None,
-        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| bad_ts("end", "invalid_filter"))?),
-    };
-    if let Some(k) = kind.as_deref() {
-        if !matches!(k, "syslog" | "trap" | "webhook") {
-            return Err(error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_filter",
-                "kind must be syslog, trap, or webhook".to_owned(),
-            ));
-        }
-    }
-    let search = normalize_event_search(q);
-    // Validate a regex pattern at the edge (size limit / ReDoS guard, shared with rule compilation)
-    // so a malformed or pathological pattern never reaches the store.
-    if regex {
-        if let Some(term) = search.as_deref() {
-            if let Err(e) = crate::events::compile_matcher("regex", term) {
-                return Err(error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_filter",
-                    format!("invalid regular expression: {e}"),
-                ));
-            }
-        }
-    }
-    Ok(crate::events::EventFilter {
-        before,
-        since,
-        until,
-        kind,
-        node_id,
-        matched,
-        search,
-        regex,
-    })
-}
-
-/// Resolve a free-text (non-regex) event search term to matching node ids, for the log-store path's
-/// node-name search (the name never enters the store — ADR-011 query-time join). Empty otherwise.
-async fn event_search_name_node_ids(
-    admin: &AdminState,
-    filter: &crate::events::EventFilter,
-) -> Vec<Uuid> {
-    match (filter.regex, filter.search.as_deref()) {
-        (false, Some(term)) => admin
-            .repo
-            .node_ids_by_name_like(term, 50)
-            .await
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
-async fn list_events(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<EventsQuery>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let filter = match parse_event_filter(
-        q.before.as_deref(),
-        q.start.as_deref(),
-        q.end.as_deref(),
-        q.kind,
-        q.node_id,
-        q.matched,
-        q.q.as_deref(),
-        q.regex.unwrap_or(false),
-    ) {
-        Ok(f) => f,
-        Err(resp) => return resp,
-    };
-    let limit = q.limit.unwrap_or(100);
-    // When the log store is enabled (ADR-024) it is the search source of record (it holds the full
-    // firehose); PostgreSQL keeps only alert-linked rows. Free-text node-name search still works by
-    // resolving the term to node ids here and passing them as a filter (the name never enters the
-    // log store — ADR-011 query-time join). Regex search is message-only, so it skips name
-    // resolution. Without a log store, fall back to the PostgreSQL path.
-    let rows = if let Some(logs) = st.logs.as_ref() {
-        let name_node_ids = event_search_name_node_ids(admin, &filter).await;
-        logs.search(&filter, &name_node_ids, limit).await
-    } else {
-        admin.events.list_events(&filter, limit).await
-    };
-    match rows {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list events failed");
-            internal("failed to list events")
-        }
-    }
-}
-
-/// Query params for `/events/stats`: the event-filter set (shared with the log; no paging cursor)
-/// plus the aggregation controls — `group_by` (kind|action|trap|source|time), `limit` (categorical
-/// row cap), and for the `time` series `bucket_secs` + `split=kind`.
-#[derive(Deserialize)]
-struct EventStatsQuery {
-    start: Option<String>,
-    end: Option<String>,
-    kind: Option<String>,
-    node_id: Option<Uuid>,
-    matched: Option<bool>,
-    q: Option<String>,
-    regex: Option<bool>,
-    group_by: Option<String>,
-    limit: Option<i64>,
-    bucket_secs: Option<i64>,
-    split: Option<String>,
-}
-
-/// `GET /api/v1/events/stats` — fleet passive-event summary aggregates for the dashboard widgets.
-/// Categorical (`group_by=kind|action|trap|source`) returns `EventStatBucket[]` ordered by count;
-/// `group_by=time` returns `EventTimeBucket[]` (volume series). Routes to the log store when enabled
-/// (accurate over the full firehose) else PostgreSQL (accurate within retention) — same dual path as
-/// the event log, so the summaries line up with it.
-async fn events_stats(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<EventStatsQuery>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let filter = match parse_event_filter(
-        None,
-        q.start.as_deref(),
-        q.end.as_deref(),
-        q.kind,
-        q.node_id,
-        q.matched,
-        q.q.as_deref(),
-        q.regex.unwrap_or(false),
-    ) {
-        Ok(f) => f,
-        Err(resp) => return resp,
-    };
-    let group_by = q.group_by.as_deref().unwrap_or("kind");
-    // Time-series path (event-volume histogram).
-    if group_by == "time" {
-        let bucket = q.bucket_secs.unwrap_or(3600);
-        let split_kind = q.split.as_deref() == Some("kind");
-        let res = if let Some(logs) = st.logs.as_ref() {
-            let ids = event_search_name_node_ids(admin, &filter).await;
-            logs.stats_series(&filter, &ids, bucket, split_kind).await
-        } else {
-            admin.events.stats_series(&filter, bucket, split_kind).await
-        };
-        return match res {
-            Ok(buckets) => Json(buckets).into_response(),
-            Err(e) => {
-                tracing::error!(error = %e, "event stats series failed");
-                internal("failed to compute event stats")
-            }
-        };
-    }
-    // Categorical path (breakdown by kind/action/trap/source).
-    let Some(group) = crate::events::EventStatGroup::parse(group_by) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_filter",
-            "group_by must be kind, action, trap, source, or time".to_owned(),
-        );
-    };
-    let limit = q.limit.unwrap_or(12);
-    let res = if let Some(logs) = st.logs.as_ref() {
-        let ids = event_search_name_node_ids(admin, &filter).await;
-        logs.stats_grouped(&filter, &ids, group, limit).await
-    } else {
-        admin.events.stats_grouped(&filter, group, limit).await
-    };
-    match res {
-        Ok(buckets) => Json(buckets).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "event stats grouped failed");
-            internal("failed to compute event stats")
-        }
-    }
-}
-
 /// Body for the manual event-alert close (identity mirrors the alert wire shape).
 #[derive(Deserialize)]
 struct CloseEventAlert {
@@ -10606,22 +10356,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[test]
-    fn event_search_normalization() {
-        // Absent / empty / whitespace-only ⇒ no filter (a blank box is a no-op).
-        assert_eq!(normalize_event_search(None), None);
-        assert_eq!(normalize_event_search(Some("")), None);
-        assert_eq!(normalize_event_search(Some("   ")), None);
-        // Surrounding whitespace is trimmed.
-        assert_eq!(
-            normalize_event_search(Some("  link down  ")).as_deref(),
-            Some("link down")
-        );
-        // Length is capped (chars, not bytes) so a pathological input can't bloat the query.
-        let capped = normalize_event_search(Some(&"あ".repeat(500))).unwrap();
-        assert_eq!(capped.chars().count(), 200);
     }
 
     #[test]
