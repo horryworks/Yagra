@@ -194,6 +194,12 @@ export function formatBytes(bytes: number | null): string {
   return `${v.toFixed(digits)} ${units[u]}`;
 }
 
+/** The built-in memory sources. Declared here, next to the arithmetic that switches on it, and
+ *  imported by the card registry that lists each source's inputs — it was written out twice, once
+ *  as this function's parameter type and once as the registry's, which is two places to add a
+ *  source and only one of them makes the arithmetic handle it. */
+export type MemId = 'huawei' | 'cisco' | 'ucd';
+
 /** Per-source memory math: normalize a node's raw metric values (keyed by metric name) to used
  *  and total **bytes**, plus the derived utilization %. Each built-in source exposes a different
  *  pair of inputs, all reducible to used+total:
@@ -203,7 +209,7 @@ export function formatBytes(bytes: number | null): string {
  *  `unitToBytes` scales the inputs to bytes (1 for byte OIDs, 1024 for KB). Fields are null when
  *  the inputs needed for them are missing/non-finite; `pct` needs both used and a positive total. */
 export function deriveMem(
-  id: 'huawei' | 'cisco' | 'ucd',
+  id: MemId,
   vals: Record<string, number | null | undefined>,
   unitToBytes = 1,
 ): { usedBytes: number | null; totalBytes: number | null; pct: number | null } {
@@ -262,8 +268,12 @@ export function formatUptimeTicks(ticks: number): string {
 }
 
 /** Metric names that have a friendly display label under `format:scalar.*`. Kept as a registry
- *  (the labels themselves are localized) — an unknown metric falls back to its raw name. */
-const KNOWN_SCALARS = new Set<string>([
+ *  (the labels themselves are localized) — an unknown metric falls back to its raw name.
+ *
+ *  Exported so `i18nEnumKeys.test.ts` can pin it to the locale files: listing a name here without
+ *  adding its strings does not fall back, it shows the operator the literal key
+ *  `format:scalar.<name>` — worse than the raw metric name the fallback would have given. */
+export const KNOWN_SCALARS = new Set<string>([
   'snmp_sys_uptime_ticks',
   // Cisco Meraki (Dashboard API) metrics.
   'meraki_device_up',

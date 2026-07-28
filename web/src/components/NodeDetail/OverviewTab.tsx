@@ -37,6 +37,16 @@ import type {
   NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
+import {
+  hasAnyHealth,
+  METRIC_CARDS,
+  resolveHealth,
+  type CollectionItem,
+  type MetricCardSpec,
+  type ResolvedHealth,
+  type ResolvedMem,
+  type ResolvedMetric,
+} from './metricCards';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
 import { useRangeStore } from '../../store';
@@ -473,140 +483,35 @@ const PCT_RANGE: [number, number] = [0, 100];
  *  the total isn't trustworthy we show the % only rather than a wrong size like "90 B". */
 const MIN_MEM_TOTAL_BYTES = 1024 * 1024;
 
-/** CPU% candidates (vendor/host gauges that read 0–100); the first one the node collects wins. */
-const CPU_METRICS = ['huawei_cpu_usage', 'cisco_cpu_5min', 'hr_processor_load'];
-
-/** Firewall session-count gauges (current concurrent sessions); the first one the node collects
- *  wins. Mixed sources: Huawei USG / Cisco ASA are walked as per-entity tables (collapsed node-wide
- *  via query-time max(), like CPU); Fortinet is a scalar. */
-const SESSION_TOTAL_METRICS = [
-  'huawei_usg_total_sessions',
-  'fortinet_sessions',
-  'asa_current_connections',
-  'panos_sessions_active',
-];
-
-/** New-session setup-rate gauges (sessions/sec). Separate card from the total because the scale is
- *  utterly different (a count vs a per-second rate), so overlaying one axis would flatten the other. */
-const SESSION_RATE_METRICS = ['huawei_usg_session_setup_rate'];
-
-/** VPN remote-access user/session gauges (AnyConnect / SSL-VPN logged-in users) on firewalls used
- *  as VPN heads; first match the node collects wins. Cisco RA is a scalar, Fortinet SSL-VPN users a
- *  per-VDOM table (collapsed node-wide via max). */
-const VPN_USER_METRICS = ['cisco_ra_sessions', 'fortinet_sslvpn_users'];
-
-/** VPN tunnel-count gauges — site-to-site IPsec/IKE tunnels or GlobalProtect tunnels; first match
- *  wins. All scalar sources here. */
-const VPN_TUNNEL_METRICS = [
-  'cisco_ipsec_active_tunnels',
-  'cisco_ike_active_tunnels',
-  'fortinet_vpn_tunnels_up',
-  'panos_gp_active_tunnels',
-];
-
-/** A session metric resolved against a node's collection set: its name and (for table sources) the
- *  node-level aggregation to apply. */
-interface ResolvedSession {
-  metric: string;
-  /** `max` for table sources (per-entity rows → node value); absent for scalar sources. */
-  agg?: 'max';
-}
-
-/** Resolve the first candidate session metric the node actually collects, tagging table sources so
- *  the reads aggregate node-wide (`max`) — mirrors the CPU/mem table handling. */
-function resolveSession(
-  items: { metric_name: string; kind: string }[],
-  candidates: string[],
-): ResolvedSession | null {
-  for (const metric of candidates) {
-    const it = items.find((i) => i.metric_name === metric);
-    if (it) return { metric, agg: it.kind === 'table' ? 'max' : undefined };
-  }
-  return null;
-}
-
-type MemId = 'huawei' | 'cisco' | 'ucd';
-
-/** Memory sources, in priority order — the first whose two `metrics` are both collected wins.
- *  Each source's pair reduces to used+total bytes (the per-`id` math lives in `deriveMem`,
- *  lib/format), from which the card shows used/total absolute (e.g. "2.6 GB / 3.4 GB") and a
- *  usage-% trend. Table metrics are collapsed node-wide via `max` (consistent with the CPU
- *  gauge); for multi-pool Cisco this approximates the dominant (Processor) pool. */
-interface MemSpec {
-  id: MemId;
-  /** The two raw metrics (both required) that derive used+total; also the chart's inputs. */
-  metrics: [string, string];
-  /** Scale of the metrics to bytes (1 for byte OIDs, 1024 for KB). */
-  unitToBytes: number;
-}
-const MEM_SPECS: MemSpec[] = [
-  { id: 'huawei', metrics: ['huawei_mem_total', 'huawei_mem_free'], unitToBytes: 1 },
-  { id: 'cisco', metrics: ['cisco_mem_used', 'cisco_mem_free'], unitToBytes: 1 },
-  { id: 'ucd', metrics: ['ucd_mem_total_kb', 'ucd_mem_avail_kb'], unitToBytes: 1024 },
-];
-
-/** A memory source resolved against a node's collection set: its two input metrics and unit. */
-interface ResolvedMem {
-  id: MemId;
-  metrics: [string, string];
-  unitToBytes: number;
-}
-
-/** Device CPU/Memory health: node-level percentages (query-time `max()` across the per-entity
- *  table) with a 0–100% trend chart. Resolves which CPU metric and memory source the node
- *  actually has from its effective collection set, and hides entirely when it has neither. */
+/** Device health: every gauge in [`METRIC_CARDS`] the node actually collects, plus its memory
+ *  source, over the shared range control. Resolution happens once, in `resolveHealth`, so the two
+ *  render guards below are derived from the card list rather than repeating it — forgetting a card
+ *  in either guard used to hide the *whole* section, silently, for every node. */
 function DeviceHealth({ nodeId }: { nodeId: string }) {
   const { t } = useTranslation('nodes');
-  // `undefined` = still resolving; `null` = resolved, none present.
-  const [cpuMetric, setCpuMetric] = useState<string | null | undefined>(undefined);
-  const [mem, setMem] = useState<ResolvedMem | null | undefined>(undefined);
-  const [sessTotal, setSessTotal] = useState<ResolvedSession | null | undefined>(undefined);
-  const [sessRate, setSessRate] = useState<ResolvedSession | null | undefined>(undefined);
-  const [vpnUsers, setVpnUsers] = useState<ResolvedSession | null | undefined>(undefined);
-  const [vpnTunnels, setVpnTunnels] = useState<ResolvedSession | null | undefined>(undefined);
+  // `null` = still resolving. Once set, every card's presence is known at once.
+  const [health, setHealth] = useState<ResolvedHealth | null>(null);
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let items: { metric_name: string; kind: string }[] = [];
+      let items: CollectionItem[] = [];
       try {
         items = await api.listNodeCollection(nodeId, true);
       } catch {
         // admin-only endpoint not permitted → no health card
       }
-      const names = new Set(items.map((i) => i.metric_name));
-      const cpu = CPU_METRICS.find((m) => names.has(m)) ?? null;
-      const spec = MEM_SPECS.find((s) => s.metrics.every((m) => names.has(m)));
-      const resolvedMem: ResolvedMem | null = spec
-        ? { id: spec.id, metrics: spec.metrics, unitToBytes: spec.unitToBytes }
-        : null;
-      if (!cancelled) {
-        setCpuMetric(cpu);
-        setMem(resolvedMem);
-        setSessTotal(resolveSession(items, SESSION_TOTAL_METRICS));
-        setSessRate(resolveSession(items, SESSION_RATE_METRICS));
-        setVpnUsers(resolveSession(items, VPN_USER_METRICS));
-        setVpnTunnels(resolveSession(items, VPN_TUNNEL_METRICS));
-      }
+      if (!cancelled) setHealth(resolveHealth(items));
     })();
     return () => {
       cancelled = true;
     };
   }, [nodeId]);
 
-  // Still resolving any of the cards.
-  if (
-    cpuMetric === undefined ||
-    mem === undefined ||
-    sessTotal === undefined ||
-    sessRate === undefined ||
-    vpnUsers === undefined ||
-    vpnTunnels === undefined
-  )
-    return null;
-  if (!cpuMetric && !mem && !sessTotal && !sessRate && !vpnUsers && !vpnTunnels) return null; // nothing to show
+  if (!health) return null; // still resolving
+  if (!hasAnyHealth(health)) return null; // nothing to show
 
   return (
     <section>
@@ -615,62 +520,37 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
         <RangeControl value={range} onChange={setRange} />
       </div>
       <div className="nd-health-metrics">
-        {cpuMetric && <CpuHealth nodeId={nodeId} metric={cpuMetric} range={range} />}
-        {mem && <MemHealth nodeId={nodeId} mem={mem} range={range} />}
-        {sessTotal && (
-          <SessionHealth
-            nodeId={nodeId}
-            label={t('overview.sessions')}
-            session={sessTotal}
-            range={range}
-          />
-        )}
-        {sessRate && (
-          <SessionHealth
-            nodeId={nodeId}
-            label={t('overview.setupRate')}
-            unit="/s"
-            session={sessRate}
-            range={range}
-          />
-        )}
-        {vpnUsers && (
-          <SessionHealth
-            nodeId={nodeId}
-            label={t('overview.vpnUsers')}
-            session={vpnUsers}
-            range={range}
-          />
-        )}
-        {vpnTunnels && (
-          <SessionHealth
-            nodeId={nodeId}
-            label={t('overview.vpnTunnels')}
-            session={vpnTunnels}
-            range={range}
-          />
-        )}
+        {METRIC_CARDS.map((spec) => {
+          const resolved = health.cards[spec.id];
+          return (
+            resolved && (
+              <MetricCard key={spec.id} nodeId={nodeId} spec={spec} resolved={resolved} range={range} />
+            )
+          );
+        })}
+        {health.mem && <MemHealth nodeId={nodeId} mem={health.mem} range={range} />}
       </div>
     </section>
   );
 }
 
-/** A firewall session gauge (current sessions or setup rate): current value + a trend chart over
- *  the selected window. Reads aggregate node-wide (`max`) for table sources. Unlike CPU/mem the Y
- *  axis is unbounded (counts vary wildly per device), so the chart auto-fits; the axis uses compact
- *  SI suffixes ("12.8k") while the headline + hover show the full count ("12,840"). */
-function SessionHealth({
+/** One Device-health gauge: current value + a trend chart over the selected window, reading
+ *  node-wide (`max`) for table sources.
+ *
+ *  The two scales were two components that differed only in how a number is rendered. A `percent`
+ *  card pins the Y axis to 0–100 so a CPU hovering at 40% doesn't fill the chart; a `count` card
+ *  auto-fits, since session counts vary by orders of magnitude per device, and its axis uses compact
+ *  SI suffixes ("12.8k") while the headline and hover show the full count ("12,840"). */
+function MetricCard({
   nodeId,
-  label,
-  session,
+  spec,
+  resolved,
   range,
-  unit = '',
 }: {
   nodeId: string;
-  label: string;
-  session: ResolvedSession;
+  spec: MetricCardSpec;
+  resolved: ResolvedMetric;
   range: Range;
-  unit?: string;
 }) {
   const { t } = useTranslation('nodes');
   const [value, setValue] = useState<number | null>(null);
@@ -680,18 +560,15 @@ function SessionHealth({
   });
   const [win, setWin] = useState<[number, number] | null>(null);
   const tick = useRefreshTick();
+  const { metric, agg } = resolved;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       const { from, to } = resolveRange(range);
       void Promise.allSettled([
-        api.getNodeMetric(nodeId, session.metric, session.agg ? { agg: session.agg } : undefined),
-        api.getNodeMetricRange(nodeId, session.metric, {
-          from,
-          to,
-          ...(session.agg ? { agg: session.agg } : {}),
-        }),
+        api.getNodeMetric(nodeId, metric, agg ? { agg } : undefined),
+        api.getNodeMetricRange(nodeId, metric, { from, to, ...(agg ? { agg } : {}) }),
       ]).then(([v, r]) => {
         if (cancelled) return;
         setValue(v.status === 'fulfilled' ? v.value.value : null);
@@ -705,13 +582,14 @@ function SessionHealth({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, session.metric, session.agg, range, tick]);
+  }, [nodeId, metric, agg, range, tick]);
 
-  const fmt = (v: number) => `${formatCount(v)}${unit}`;
+  const pct = spec.scale === 'percent';
+  const fmt = (v: number) => (pct ? formatUtil(v) : `${formatCount(v)}${spec.unit ?? ''}`);
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">{label}</span>
+        <span className="nd-health-metric-label">{t(spec.labelKey)}</span>
         <span className="nd-health-metric-value">{value == null ? '—' : fmt(value)}</span>
       </div>
       {series.timestamps.length > 0 ? (
@@ -719,71 +597,9 @@ function SessionHealth({
           title=""
           timestamps={series.timestamps}
           values={series.values}
-          yFormat={formatSi}
-          legendFormat={fmt}
-          xRange={win ?? undefined}
-        />
-      ) : (
-        <p className="nd-muted">{t('overview.noHistory')}</p>
-      )}
-    </div>
-  );
-}
-
-/** CPU health: current % (max aggregate) + a 0–100% trend chart over the selected window. */
-function CpuHealth({
-  nodeId,
-  metric,
-  range,
-}: {
-  nodeId: string;
-  metric: string;
-  range: Range;
-}) {
-  const { t } = useTranslation('nodes');
-  const [value, setValue] = useState<number | null>(null);
-  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
-    timestamps: [],
-    values: [],
-  });
-  const [win, setWin] = useState<[number, number] | null>(null);
-  const tick = useRefreshTick();
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      const { from, to } = resolveRange(range);
-      void Promise.allSettled([
-        api.getNodeMetric(nodeId, metric, { agg: 'max' }),
-        api.getNodeMetricRange(nodeId, metric, { from, to, agg: 'max' }),
-      ]).then(([v, r]) => {
-        if (cancelled) return;
-        setValue(v.status === 'fulfilled' ? v.value.value : null);
-        setSeries(
-          r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
-        );
-        setWin([from, to]);
-      });
-    };
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [nodeId, metric, range, tick]);
-
-  return (
-    <div className="nd-health-metric">
-      <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">{t('overview.cpu')}</span>
-        <span className="nd-health-metric-value">{formatUtil(value)}</span>
-      </div>
-      {series.timestamps.length > 0 ? (
-        <MetricChart
-          title=""
-          timestamps={series.timestamps}
-          values={series.values}
-          yFormat={formatUtil}
-          yRange={PCT_RANGE}
+          yFormat={pct ? formatUtil : formatSi}
+          yRange={pct ? PCT_RANGE : undefined}
+          legendFormat={pct ? undefined : fmt}
           xRange={win ?? undefined}
         />
       ) : (

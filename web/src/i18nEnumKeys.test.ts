@@ -22,7 +22,9 @@ import {
   SEVERITIES,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
+import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
+import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -100,5 +102,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // PROFILE_CATEGORIES stores fully-qualified `monitoring:categories.x` keys; strip the namespace.
     const tokens = PROFILE_CATEGORIES.map((c) => c.labelKey.replace(/^monitoring:categories\./, ''));
     expectKeys('profile category', { en: enMonitoring, ja: jaMonitoring }, 'categories.', tokens);
+  });
+
+  it('every known scalar has a label (format:scalar.*)', () => {
+    // `scalarDisplay` only falls back to the raw metric name for names NOT in this set. A name in
+    // the set with no strings renders the literal key to the operator instead.
+    expectKeys('scalar', { en: enFormat, ja: jaFormat }, 'scalar.', [...KNOWN_SCALARS]);
+  });
+
+  it('every Device-health metric card has a label (nodes:overview.*)', () => {
+    // The card's label is now `t(spec.labelKey)` — a key read from the registry, so a card added
+    // without its strings renders the raw key ("overview.gpuLoad") in both languages.
+    const keys = METRIC_CARDS.map((c) => c.labelKey);
+    expectKeys('metric card', { en: enNodes, ja: jaNodes }, '', keys);
   });
 });
