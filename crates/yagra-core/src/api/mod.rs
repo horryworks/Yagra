@@ -49,6 +49,9 @@ mod util;
 pub(crate) use error::{error_response, internal, not_found, unavailable};
 pub use error::{ApiError, ApiResult};
 pub(crate) use extract::{authorize, bearer, current_username, require_leader, require_view};
+// Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
+// import paths still here, must go through these (a name becomes a NATS subject verbatim).
+use nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
 pub(crate) use util::{now_unix_s, parse_rfc3339};
 
 use crate::ack::AckRepo;
@@ -94,8 +97,8 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, DiskUsage, DnsCheckConfig, HostSample, Node, NodeId,
-    NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
+    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, NodeId, Permission,
+    ProfileCategory, Role, Severity,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -252,18 +255,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/api/v1/config", get(get_config).put(update_config))
-        .route("/api/v1/nodes", get(list_nodes).post(create_node))
-        // Static `/nodes/search` + `/nodes/by-group` before the `/nodes/:node_id` param route
-        // (matchit prioritizes the static segment, but keep them adjacent for clarity).
-        .route("/api/v1/nodes/search", get(search_nodes))
-        .route("/api/v1/nodes/by-group", get(list_group_nodes))
-        .route("/api/v1/node-names", post(node_names_batch))
-        .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
-        .route("/api/v1/nodes/:node_id/status", get(get_node_status))
-        // The manual "poll now" action, in `api/nodes.rs` (the rest of the node domain follows).
+        // The inventory itself: listing, detail, and the folder/dependency-tree writes.
         .merge(nodes::routes())
-        .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
-        // Which pool the node effectively belongs to, and which poller currently holds it.
+        // Which pool the node effectively belongs to, and which poller currently holds it. Stays
+        // with the Pollers view below, whose resolution helpers it shares.
         .route("/api/v1/nodes/:node_id/assignment", get(node_assignment))
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.
         .merge(checks::routes())
@@ -295,13 +290,6 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/meraki/polling",
             get(get_meraki_polling).put(set_meraki_polling),
         )
-        .route("/api/v1/nodes/:node_id/group", put(set_node_group))
-        // Poll-pool assignment from the inventory tree (ADR-009/020). Single-field writes, so a
-        // pool move can't clobber the node's profile/credential/vendor/model.
-        .route("/api/v1/nodes/:node_id/pool", put(set_node_pool))
-        .route("/api/v1/pools", get(list_pools))
-        .route("/api/v1/nodes/:node_id/parent", put(set_node_parent))
-        .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
             "/api/v1/node-groups",
             get(list_node_groups).post(create_node_group),
@@ -722,31 +710,6 @@ async fn update_config(
     }
 }
 
-// ── Response shapes ──────────────────────────────────────────────────────────
-
-/// One inventory row (mirrors the WebUI `NodeSummary`).
-#[derive(Serialize)]
-struct NodeSummary {
-    id: NodeId,
-    name: String,
-    address: String,
-    state: NodeState,
-    /// Descriptive maker/model for the "name (addr) (vendor) (model)" display.
-    vendor: Option<String>,
-    model: Option<String>,
-    /// The group this node belongs to (for the inventory tree); `null` ⇒ ungrouped.
-    group_id: Option<Uuid>,
-    /// Manual order within the group (the tree sorts members by this, then by name).
-    sort_order: f64,
-    /// The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
-    /// The tree's pool picker edits exactly this value, so it is what marks the active choice —
-    /// the *effective* pool (and the poller holding the node) comes from `/nodes/:id/assignment`.
-    pool: Option<String>,
-    /// How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
-    /// otherwise `"device"`. (URL monitors can reuse this later.)
-    source: &'static str,
-}
-
 /// A Prometheus-style metric name: `[a-zA-Z_:][a-zA-Z0-9_:]*`. Validating at the edge
 /// keeps the (untrusted) path segment from being interpolated into the PromQL selector
 /// sent to the TSDB (security.md: parse into strong, bounded types at the API edge).
@@ -757,421 +720,6 @@ pub(crate) fn is_valid_metric_name(metric: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-}
-
-// ── Handlers ─────────────────────────────────────────────────────────────────
-
-/// Keyset pagination query for the node list. An optional `search` substring switches the endpoint
-/// into server-side name/address search mode (capped, single page, no cursor) — so the Nodes tree's
-/// filter never full-loads the fleet into the browser (ui-conventions: search is server-side at
-/// scale). Both modes return full `NodeSummary` rows so the tree can nest + color them.
-#[derive(Deserialize)]
-struct NodePageQuery {
-    cursor: Option<Uuid>,
-    limit: Option<i64>,
-    search: Option<String>,
-}
-
-/// Cap on one batch name-resolution request so a client can't force an unbounded `IN (…)` query.
-const NODE_NAMES_BATCH_MAX: usize = 1000;
-
-/// Request body for `POST /api/v1/node-names`: the node ids whose display names to resolve.
-#[derive(Deserialize)]
-struct NodeNamesReq {
-    ids: Vec<Uuid>,
-}
-
-/// One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id).
-#[derive(Serialize)]
-struct NodeNameEntry {
-    id: Uuid,
-    name: String,
-}
-
-/// Resolve a batch of node ids to their display names (S12). The shared `useEntityNames` resolver
-/// and any table that renders a node reference by id use this so names resolve across the **whole**
-/// fleet: the old path resolved against the first page of `list_nodes` (default 100), so a
-/// reference to the 101st+ node silently degraded to a raw UUID. View-gated, read-only, bounded.
-async fn node_names_batch(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(req): Json<NodeNamesReq>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let mut ids = req.ids;
-    ids.truncate(NODE_NAMES_BATCH_MAX);
-    let names = match st.admin.as_ref() {
-        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
-        None => std::collections::HashMap::new(),
-    };
-    let out: Vec<NodeNameEntry> = ids
-        .iter()
-        .filter_map(|id| {
-            names.get(id).map(|name| NodeNameEntry {
-                id: *id,
-                name: name.clone(),
-            })
-        })
-        .collect();
-    Json(out).into_response()
-}
-
-/// Query for the node-picker typeahead: `?q=<substr>&limit=<n>`. Empty/absent `q` returns the
-/// first page ordered by name.
-#[derive(Deserialize)]
-struct NodeSearchQuery {
-    q: Option<String>,
-    limit: Option<i64>,
-}
-
-/// One node-picker result: id + display name + address. Deliberately excludes credentials/bindings
-/// (security.md — the picker only needs to show and select a node).
-#[derive(Serialize)]
-struct NodeSearchResult {
-    id: Uuid,
-    name: String,
-    address: String,
-}
-
-/// Server-side node search for the node-picker typeahead (A-2): match the name or address by
-/// case-insensitive substring, capped, so a picker never loads the whole inventory into the browser
-/// (ui-conventions: search is server-side at fleet scale). Now also backs the Nodes tree name filter
-/// and the Troubleshoot scope picker, which previously full-loaded the fleet client-side.
-/// View-gated, read-only; routes through the shared `NodeListing` so it also works in skeleton mode.
-/// Only id/name/address leave the server.
-async fn search_nodes(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<NodeSearchQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let term = q.q.unwrap_or_default();
-    let limit = q.limit.unwrap_or(50);
-    match st.nodes.search(term.trim(), limit).await {
-        Ok(nodes) => {
-            let out: Vec<NodeSearchResult> = nodes
-                .into_iter()
-                .map(|n| NodeSearchResult {
-                    id: n.id.as_uuid(),
-                    name: n.name,
-                    address: n.address.to_string(),
-                })
-                .collect();
-            Json(out).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "node search failed");
-            internal("failed to search nodes")
-        }
-    }
-}
-
-async fn list_nodes(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<NodePageQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    // Search mode: a non-empty `search` filters by name/address server-side and returns a single
-    // capped page (no keyset cursor) — the tree's filter searches the fleet without loading it.
-    if let Some(term) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return match st.nodes.search(term, limit).await {
-            Ok(nodes) => {
-                let out = build_node_summaries(&st, nodes).await;
-                Json(serde_json::json!({ "nodes": out, "next_cursor": serde_json::Value::Null }))
-                    .into_response()
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to search nodes for list");
-                internal("failed to list nodes")
-            }
-        };
-    }
-    // Fetch one extra row to tell "exactly a full page" from "a full page with more after it",
-    // so the client never makes a trailing request that returns an empty page at the boundary.
-    match st.nodes.list_page(q.cursor, limit + 1).await {
-        Ok(mut nodes) => {
-            let has_more = nodes.len() as i64 > limit;
-            if has_more {
-                nodes.truncate(limit as usize);
-            }
-            let next_cursor = if has_more {
-                nodes.last().map(|n| n.id.to_string())
-            } else {
-                None
-            };
-            let out = build_node_summaries(&st, nodes).await;
-            Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to list nodes");
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "failed to list nodes".to_owned(),
-            )
-        }
-    }
-}
-
-/// Enrich a batch of raw `Node` rows into UI `NodeSummary` rows: attach the live rolled-up display
-/// state (the alert engine's opinion, else a coarse fresh-RTT fallback for a not-yet-observed node),
-/// the per-node tree sort order, and the Meraki-source badge. Shared by the paged fleet list and the
-/// per-group lazy tree load (A-3) so both paths produce identical rows. One batched TSDB probe for
-/// the unobserved subset (no per-node round-trip); steady state adds no query.
-async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummary> {
-    let states = st.alerts.node_states();
-    // Per-node tree order + Meraki badge (admin/live only; skeleton mode → 0 order, no badge).
-    let (orders, meraki_ids) = match st.admin.as_ref() {
-        Some(admin) => {
-            let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
-            (
-                admin.repo.node_sort_orders(&ids).await.unwrap_or_default(),
-                admin
-                    .meraki_devices
-                    .filter_meraki(&ids)
-                    .await
-                    .unwrap_or_default(),
-            )
-        }
-        None => (
-            std::collections::HashMap::new(),
-            std::collections::HashSet::new(),
-        ),
-    };
-    let unobserved: Vec<NodeId> = nodes
-        .iter()
-        .filter(|n| !states.contains_key(&n.id))
-        .map(|n| n.id)
-        .collect();
-    let fresh_fallback = fresh_fallback_ids(st, &unobserved).await;
-    nodes
-        .into_iter()
-        .map(|n| {
-            let state = match states.get(&n.id) {
-                Some(s) => *s,
-                None if fresh_fallback.contains(&n.id.as_uuid()) => NodeState::Ok,
-                None => NodeState::Unknown,
-            };
-            let sort_order = orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0);
-            let source = if meraki_ids.contains(&n.id.as_uuid()) {
-                "meraki"
-            } else {
-                "device"
-            };
-            NodeSummary {
-                id: n.id,
-                name: n.name,
-                address: n.address.to_string(),
-                state,
-                vendor: n.vendor,
-                model: n.model,
-                group_id: n.group.map(|g| g.as_uuid()),
-                sort_order,
-                pool: n.pool,
-                source,
-            }
-        })
-        .collect()
-}
-
-/// Query for the per-group lazy tree load (A-3): `?group=<uuid>` returns that group's direct
-/// members; an absent/empty `group` returns the ungrouped nodes (`group_id IS NULL`).
-#[derive(Deserialize)]
-struct GroupNodesQuery {
-    group: Option<Uuid>,
-}
-
-/// Backstop cap on one group's direct-member load. The inventory tree lazy-loads a group's members
-/// only when it is expanded (A-3), so this bounds a single pathologically-large group; the client
-/// flags a truncated group. Normal groups are far below this.
-const GROUP_NODES_CAP: i64 = 2000;
-
-/// A group's direct members for the lazy inventory tree (A-3): the nodes whose `group_id` is exactly
-/// `group` (or the ungrouped bucket), ordered by the tree's sort order, capped. Loaded on demand
-/// when a group is expanded, so the initial page never pulls the whole fleet — it fetches the group
-/// skeleton + per-group counts (`/fleet/group-summary`) and streams members per open group.
-async fn list_group_nodes(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<GroupNodesQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        // Skeleton mode has no group membership; the demo node is ungrouped. Return it for the
-        // ungrouped bucket, nothing for a specific group.
-        let nodes = if q.group.is_none() {
-            st.nodes
-                .search("", GROUP_NODES_CAP)
-                .await
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let out = build_node_summaries(&st, nodes).await;
-        return Json(serde_json::json!({ "nodes": out, "truncated": false })).into_response();
-    };
-    match admin
-        .repo
-        .list_nodes_in_group(q.group, GROUP_NODES_CAP + 1)
-        .await
-    {
-        Ok(mut nodes) => {
-            let truncated = nodes.len() as i64 > GROUP_NODES_CAP;
-            if truncated {
-                nodes.truncate(GROUP_NODES_CAP as usize);
-            }
-            let out = build_node_summaries(&st, nodes).await;
-            Json(serde_json::json!({ "nodes": out, "truncated": truncated })).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to list group nodes");
-            internal("failed to load group nodes")
-        }
-    }
-}
-
-/// Coarse fallback state for a node the alert engine has not observed yet: a recent ICMP
-/// RTT reading ⇒ `ok`, otherwise `unknown`. Used only when the engine has no opinion (e.g.
-/// just-added node, or skeleton mode where nothing polls). Single-node path (`get_node`); list
-/// and topology use the batched [`fresh_fallback_ids`] to avoid a per-node TSDB round-trip.
-async fn derive_fallback_state(st: &ApiState, node: NodeId) -> NodeState {
-    if st
-        .store
-        .latest(&SeriesKey::node(node, "icmp_rtt_ms"))
-        .await
-        .is_some()
-    {
-        NodeState::Ok
-    } else {
-        NodeState::Unknown
-    }
-}
-
-/// Freshness window for the coarse fallback probe: a node with an ICMP RTT sample within this
-/// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
-const FALLBACK_FRESH_SECS: u64 = 600;
-
-/// Batched fallback probe for a page/graph of nodes. The alert engine already holds a state for
-/// most; the `unobserved` remainder (just-added, or skeleton mode) would otherwise each cost a
-/// `latest()` round-trip to the TSDB — N sequential HTTP queries, and right after a core restart
-/// `states` is empty so *every* node hits this. Instead do a single `fresh_node_ids` query and
-/// membership-test, exactly as `fleet_coverage` does. Skips the query entirely when nothing is
-/// unobserved, so the steady-state path (engine knows every node) adds no TSDB call. Returns the
-/// set of node ids with a recent RTT sample (⇒ `ok`; absent ⇒ `unknown`).
-async fn fresh_fallback_ids(
-    st: &ApiState,
-    unobserved: &[NodeId],
-) -> std::collections::HashSet<Uuid> {
-    if unobserved.is_empty() {
-        return std::collections::HashSet::new();
-    }
-    // Scope the freshness query to just this page's unobserved nodes (S20) — don't pull the whole
-    // fleet's series back from the TSDB to answer about ≤ a page of nodes.
-    let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
-    st.store
-        .fresh_node_ids_scoped("icmp_rtt_ms", FALLBACK_FRESH_SECS, &scope)
-        .await
-        .into_iter()
-        .collect()
-}
-
-/// One node's configuration detail, including its bindings (profile/credential/parent) so
-/// the node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
-#[derive(Serialize)]
-struct NodeDetail {
-    id: NodeId,
-    name: String,
-    address: String,
-    profile_id: Option<Uuid>,
-    credential_id: Option<Uuid>,
-    parent_id: Option<Uuid>,
-    /// Descriptive maker/model, editable from the node detail.
-    vendor: Option<String>,
-    model: Option<String>,
-    /// The group this node belongs to; `null` ⇒ ungrouped.
-    group_id: Option<Uuid>,
-    /// The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
-    /// default pool. Deliberately the raw stored value, not the effective one, so the edit form can
-    /// tell an explicit assignment from an inherited one — the *effective* pool (and which poller
-    /// currently holds the node) comes from `GET /nodes/:id/assignment`.
-    pool: Option<String>,
-    /// URL-monitor config when this node is a URL monitor; `null` otherwise.
-    url_check: Option<UrlCheckConfig>,
-    /// DNS-monitor config when this node is a DNS monitor; `null` otherwise.
-    dns_check: Option<DnsCheckConfig>,
-    /// Cisco Meraki binding when this node is a Meraki device; `null` otherwise.
-    meraki_device: Option<yagra_common::MerakiDeviceConfig>,
-}
-
-async fn get_node(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return not_found("node_not_found", format!("no node {node_id}"));
-    };
-    match admin.repo.get_node(node_id).await {
-        Ok(Some(node)) => {
-            // Best-effort: a URL/DNS-check or Meraki load failure shouldn't fail the node detail.
-            let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
-            let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
-            let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
-            Json(NodeDetail {
-                id: node.id,
-                name: node.name,
-                address: node.address.to_string(),
-                profile_id: node.profile.map(|p| p.0),
-                credential_id: node.credential.map(|c| c.as_uuid()),
-                parent_id: node.parent.map(|p| p.as_uuid()),
-                vendor: node.vendor,
-                model: node.model,
-                group_id: node.group.map(|g| g.as_uuid()),
-                pool: node.pool,
-                url_check,
-                dns_check,
-                meraki_device,
-            })
-            .into_response()
-        }
-        Ok(None) => not_found("node_not_found", format!("no node {node_id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "get node failed");
-            internal("failed to load node")
-        }
-    }
-}
-
-/// One node's live status: its rolled-up display state plus the alerts currently attributed
-/// to it (so node detail can show *why* it's down without re-deriving from the list).
-async fn get_node_status(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let node = NodeId::from(node_id);
-    let state = match st.alerts.node_state(node) {
-        Some(s) => s,
-        None => derive_fallback_state(&st, node).await,
-    };
-    let alerts = st.alerts.alerts_for(node);
-    Json(serde_json::json!({ "node_id": node, "state": state, "alerts": alerts })).into_response()
 }
 
 /// Query for the standing discovery-candidates view.
@@ -3819,185 +3367,6 @@ async fn list_roles(State(st): State<ApiState>, headers: HeaderMap) -> Response 
     Json(serde_json::json!({ "permissions": permissions, "roles": roles })).into_response()
 }
 
-/// Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.
-#[derive(Deserialize)]
-struct CreateNode {
-    name: String,
-    address: String,
-    pool: Option<String>,
-    profile_id: Option<Uuid>,
-    credential_id: Option<Uuid>,
-    parent_id: Option<Uuid>,
-    #[serde(default)]
-    vendor: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-}
-
-async fn create_node(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateNode>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_name",
-            "node name must not be empty".to_owned(),
-        );
-    }
-    let Ok(address) = body.address.parse::<IpAddr>() else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_address",
-            format!("address {:?} is not a valid IP address", body.address),
-        );
-    };
-    let pool = match validate_pool_create(body.pool) {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-    match admin
-        .repo
-        .create_node(
-            body.name.trim(),
-            address,
-            pool.as_deref(),
-            body.profile_id,
-            body.credential_id,
-            body.parent_id,
-            body.vendor
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-            body.model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-        )
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create node failed");
-            internal("failed to create node")
-        }
-    }
-}
-
-/// Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally
-/// move it to a different poll-pool. The node-edit UI loads the current values and resends them, so
-/// an unchanged field is preserved.
-#[derive(Deserialize)]
-struct NodeBindings {
-    profile_id: Option<Uuid>,
-    credential_id: Option<Uuid>,
-    #[serde(default)]
-    vendor: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    /// Poll-pool assignment (ADR-009). **Absent** = leave the pool unchanged; `""` (or whitespace)
-    /// = clear it to the `default` pool; otherwise move the node to that pool (validated as a
-    /// NATS-subject-safe token). See [`validate_pool_update`].
-    #[serde(default)]
-    pool: Option<String>,
-}
-
-/// Longest accepted pool name (a single NATS subject token — keep it short and human-manageable).
-const MAX_POOL_LEN: usize = 63;
-
-/// Validate an operator-supplied pool name for [`set_node_bindings`], returning the DB update
-/// instruction: outer `None` = the field was absent, leave the node's pool unchanged; inner `None`
-/// = clear it to NULL (the node falls back to the `default` pool); inner `Some` = set it.
-///
-/// A pool name becomes the `yagra.jobs.<pool>` / assignment subject, so it must already be a legal
-/// single NATS token (`[A-Za-z0-9_-]`). We **reject** anything that would sanitize to a different
-/// string (dots, spaces, slashes, …) rather than silently rewriting it, so operator intent stays
-/// explicit. Surrounding whitespace is trimmed first (matching the sibling vendor/model fields), and
-/// a value that trims to empty clears the pool.
-fn validate_pool_update(pool: Option<String>) -> Result<Option<Option<String>>, ApiError> {
-    let Some(raw) = pool else {
-        return Ok(None); // field absent → leave the pool as-is
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(Some(None)); // explicit clear → NULL (default pool)
-    }
-    if trimmed.chars().count() > MAX_POOL_LEN {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            format!("pool name must be at most {MAX_POOL_LEN} characters"),
-        ));
-    }
-    if yagra_bus::subjects::sanitize_token(trimmed) != trimmed {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "pool name may contain only letters, digits, '_' or '-'",
-        ));
-    }
-    Ok(Some(Some(trimmed.to_owned())))
-}
-
-/// [`validate_pool_update`] for a **create** path, where there is no prior value to leave alone:
-/// absent and empty both mean "no pool" (inherit from the folder, else the default pool).
-///
-/// Every path that writes a pool must go through one of these two. The pool name becomes the
-/// `yagra.jobs.<pool>` subject verbatim (`subjects::jobs_for_pool` does not sanitize), so an
-/// unvalidated value like `tokyo.1` would publish to a subject no poller subscribes to and the
-/// node's jobs would be silently discarded.
-pub(crate) fn validate_pool_create(pool: Option<String>) -> Result<Option<String>, ApiError> {
-    Ok(validate_pool_update(pool)?.flatten())
-}
-
-async fn set_node_bindings(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodeBindings>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let pool_update = match validate_pool_update(body.pool) {
-        Ok(u) => u,
-        Err(e) => return e.into_response(),
-    };
-    match admin
-        .repo
-        .set_node_bindings(
-            id,
-            body.profile_id,
-            body.credential_id,
-            body.vendor
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-            body.model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-            pool_update.as_ref().map(|inner| inner.as_deref()),
-        )
-        .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set node bindings failed");
-            internal("failed to update node")
-        }
-    }
-}
-
 // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────────────
 
 /// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
@@ -4698,74 +4067,6 @@ async fn set_meraki_polling(
     }
 }
 
-/// Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).
-#[derive(Deserialize)]
-struct NodeGroupAssignment {
-    group_id: Option<Uuid>,
-}
-
-async fn set_node_group(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodeGroupAssignment>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.repo.set_node_group(id, body.group_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set node group failed");
-            internal("failed to move node")
-        }
-    }
-}
-
-/// Move a node to a poll-pool, or clear it back to inherited. Used by the inventory tree's
-/// context menu. Absent or `""` ⇒ NULL (inherit from the folder, else the default pool).
-#[derive(Deserialize)]
-struct PoolAssignment {
-    #[serde(default)]
-    pool: Option<String>,
-}
-
-/// `PUT /api/v1/nodes/:node_id/pool` — set just the node's own pool.
-///
-/// Deliberately **not** folded into `set_node_bindings`: that handler overwrites
-/// profile/credential/vendor/model unconditionally (only its `pool` is three-state-gated), so a
-/// pool-only caller going through it would silently blank all four.
-async fn set_node_pool(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<PoolAssignment>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    // A single-field endpoint has no "leave unchanged" case, so absent and empty both mean clear.
-    let pool = match validate_pool_create(body.pool) {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-    match admin.repo.set_node_pool(id, pool.as_deref()).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set node pool failed");
-            internal("failed to set node pool")
-        }
-    }
-}
-
 /// `PUT /api/v1/node-groups/:id/pool` — set just the folder's pool. Every node beneath it that
 /// has no pool of its own follows on the next sweep (see `poolres`).
 async fn set_node_group_pool(
@@ -4790,198 +4091,6 @@ async fn set_node_group_pool(
         Err(e) => {
             tracing::error!(error = %e, "set group pool failed");
             internal("failed to set group pool")
-        }
-    }
-}
-
-/// One pool offered by the pool picker.
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-struct PoolOption {
-    /// Pool name.
-    name: String,
-    /// Whether a live poller currently serves it. A pool with none takes the legacy per-job path
-    /// onto a subject nothing subscribes to, so its jobs are silently discarded — the picker has to
-    /// say so rather than present it as an equivalent choice.
-    live: bool,
-}
-
-/// Merge the pools nodes use, the pools folders assign, and the pools with a live poller into the
-/// picker's option list. Pure so the union, the default-first ordering, and the `live` flag are
-/// unit-testable without a database or a coordinator.
-///
-/// [`yagra_bus::DEFAULT_POOL`] is always offered (it is where an unassigned node lands, whether or
-/// not anything references it explicitly); the rest follow alphabetically.
-fn build_pool_options(
-    node_pools: Vec<String>,
-    group_pools: Vec<String>,
-    live: &std::collections::HashSet<String>,
-) -> Vec<PoolOption> {
-    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for p in node_pools.into_iter().chain(group_pools) {
-        let trimmed = p.trim();
-        if !trimmed.is_empty() {
-            names.insert(trimmed.to_owned());
-        }
-    }
-    names.extend(live.iter().cloned());
-    names.remove(yagra_bus::DEFAULT_POOL);
-
-    let option = |name: String| PoolOption {
-        live: live.contains(&name),
-        name,
-    };
-    std::iter::once(option(yagra_bus::DEFAULT_POOL.to_owned()))
-        .chain(names.into_iter().map(option))
-        .collect()
-}
-
-/// `GET /api/v1/pools` — the pools that exist, for the assignment picker. `View`-gated; names
-/// only, no telemetry.
-///
-/// Deliberately separate from `GET /pollers`, which scans the whole node table to build its
-/// per-pool counts; this is two indexed `DISTINCT`s and is loaded by an ordinary page.
-async fn list_pools(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    // A read error degrades to "fewer suggestions", never to a failed picker — the operator can
-    // still type any pool via Custom.
-    let node_pools = admin.repo.distinct_pools().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "listing node pools failed");
-        Vec::new()
-    });
-    let group_pools = admin.groups.distinct_pools().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "listing folder pools failed");
-        Vec::new()
-    });
-    let live = admin.coordinator.live_pools(Instant::now());
-    Json(serde_json::json!({
-        "pools": build_pool_options(node_pools, group_pools, &live)
-    }))
-    .into_response()
-}
-
-/// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
-/// dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
-/// distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
-#[derive(Deserialize)]
-struct NodeParentAssignment {
-    parent_id: Option<Uuid>,
-}
-
-async fn set_node_parent(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodeParentAssignment>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    // Validate the requested edge before persisting: no self-dependency, the parent must exist,
-    // and the new edge must not close a cycle (the dependency graph is a single-parent forest).
-    if let Some(parent) = body.parent_id {
-        if parent == id {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_dependency",
-                "a node cannot depend on itself".to_owned(),
-            );
-        }
-        let nodes = match admin.repo.list_nodes().await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!(error = %e, "load nodes for dependency check failed");
-                return internal("failed to set dependency");
-            }
-        };
-        if !nodes.iter().any(|n| n.id.as_uuid() == parent) {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "parent_not_found",
-                format!("no node {parent}"),
-            );
-        }
-        // Reuse the folder-tree cycle guard: the dependency edges have the same (id, parent) shape.
-        let edges: Vec<(Uuid, Option<Uuid>)> = nodes
-            .iter()
-            .map(|n| (n.id.as_uuid(), n.parent.map(|p| p.as_uuid())))
-            .collect();
-        if would_create_cycle(&edges, id, Some(parent)) {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_dependency",
-                "that dependency would create a cycle".to_owned(),
-            );
-        }
-    }
-    match admin.repo.set_node_parent(id, body.parent_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set node parent failed");
-            internal("failed to set dependency")
-        }
-    }
-}
-
-/// Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.
-/// `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling
-/// to land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
-#[derive(Deserialize)]
-struct NodePlacement {
-    #[serde(default)]
-    group_id: Option<Uuid>,
-    #[serde(default)]
-    before: Option<Uuid>,
-    #[serde(default)]
-    after: Option<Uuid>,
-}
-
-async fn place_node(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodePlacement>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.before.is_some() && body.after.is_some() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_placement",
-            "specify at most one of before/after".to_owned(),
-        );
-    }
-    // Order among the destination group's current members, excluding the moving node so it
-    // doesn't anchor against itself, then interpolate a fractional order next to the target.
-    let siblings = match admin.repo.ordered_nodes_in_group(body.group_id).await {
-        Ok(s) => s
-            .into_iter()
-            .filter(|(sid, _)| *sid != id)
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            tracing::error!(error = %e, "load node siblings failed");
-            return internal("failed to move node");
-        }
-    };
-    let order = placement_order(&siblings, body.before, body.after);
-    match admin.repo.place_node(id, body.group_id, order).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "place node failed");
-            internal("failed to move node")
         }
     }
 }
@@ -5438,27 +4547,6 @@ async fn delete_profile(
         Err(e) => {
             tracing::error!(error = %e, "delete profile failed");
             internal("failed to delete profile")
-        }
-    }
-}
-
-async fn delete_node(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.repo.delete_node(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("node_not_found", format!("no node {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete node failed");
-            internal("failed to delete node")
         }
     }
 }
@@ -8547,25 +7635,10 @@ mod tests {
         assert!(json["points"].is_array());
     }
 
-    #[tokio::test]
-    async fn create_node_unavailable_without_admin() {
-        // Skeleton mode (admin: None) rejects writes with 503 rather than 404/500.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/nodes")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"r1","address":"10.0.0.1"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "admin_unavailable");
-    }
+    // `create_node` moved to `api/nodes.rs` and is guard-first now, so its skeleton-mode answer to
+    // an *anonymous* caller is 401 rather than 503 — pinned from both sides by
+    // `nodes::tests::every_inventory_write_is_authenticated_before_anything_else` and
+    // `nodes::tests::editing_the_inventory_takes_manage_config`.
 
     #[tokio::test]
     async fn node_status_reports_state_and_alerts() {
@@ -8727,22 +7800,10 @@ mod tests {
 
     #[tokio::test]
     async fn placement_routes_unavailable_without_admin() {
-        // Both drag-reorder routes are wired; in skeleton mode (admin: None) they are 503.
+        // The *group* drag-reorder route is still here and still availability-first. Its node
+        // sibling moved to `api/nodes.rs`, where the guard runs first — so it answers 401 to this
+        // anonymous request. `nodes::tests` pins both sides of that.
         let app = router(state_with(Arc::new(InMemorySink::default())));
-        let node_resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/nodes/00000000-0000-0000-0000-000000000000/placement")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"group_id":null}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(node_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-
         let group_resp = app
             .oneshot(
                 Request::builder()
@@ -9252,120 +8313,26 @@ mod tests {
 
     // ── Distributed poller pool (ADR-009/020) — Pollers API ───────────────────
 
-    #[test]
-    fn pool_name_validation() {
-        // Absent → leave the node's pool unchanged.
-        assert_eq!(validate_pool_update(None).ok(), Some(None));
-        // Empty / whitespace-only → clear to NULL (the default pool).
-        assert_eq!(
-            validate_pool_update(Some(String::new())).ok(),
-            Some(Some(None))
-        );
-        assert_eq!(
-            validate_pool_update(Some("   ".to_owned())).ok(),
-            Some(Some(None))
-        );
-        // A legal NATS-subject token → set (surrounding whitespace is trimmed).
-        assert_eq!(
-            validate_pool_update(Some("tokyo".to_owned())).ok(),
-            Some(Some(Some("tokyo".to_owned())))
-        );
-        assert_eq!(
-            validate_pool_update(Some("  edge-1_lab  ".to_owned())).ok(),
-            Some(Some(Some("edge-1_lab".to_owned())))
-        );
-        // Rejected: anything that would sanitize to a different subject token (dot / space / slash).
-        assert!(validate_pool_update(Some("tokyo.1".to_owned())).is_err());
-        assert!(validate_pool_update(Some("east dc".to_owned())).is_err());
-        assert!(validate_pool_update(Some("a/b".to_owned())).is_err());
-        // Rejected: over the length bound; the bound itself is accepted.
-        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN + 1))).is_err());
-        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN))).is_ok());
-    }
-
-    #[test]
-    fn pool_name_validation_on_create_collapses_absent_and_empty() {
-        // A create has no prior value to leave alone, so "absent" and "cleared" are the same answer.
-        assert_eq!(validate_pool_create(None).ok(), Some(None));
-        assert_eq!(validate_pool_create(Some(String::new())).ok(), Some(None));
-        assert_eq!(
-            validate_pool_create(Some(" tokyo ".to_owned())).ok(),
-            Some(Some("tokyo".to_owned()))
-        );
-        // The create paths used to skip validation entirely: `tokyo.1` reached the DB and its jobs
-        // were published to `yagra.jobs.tokyo.1`, a subject no poller subscribes to, and silently
-        // discarded (plain NATS, not JetStream).
-        assert!(validate_pool_create(Some("tokyo.1".to_owned())).is_err());
-        assert!(validate_pool_create(Some("east dc".to_owned())).is_err());
-    }
-
-    #[test]
-    fn pool_options_union_default_first_and_flag_liveness() {
-        let live: std::collections::HashSet<String> = ["tokyo".to_owned(), "spare".to_owned()]
-            .into_iter()
-            .collect();
-        let opts = build_pool_options(
-            // Duplicates within and across the two sources, plus blank/whitespace junk from rows
-            // written before the API validated pool names.
-            vec![
-                "tokyo".to_owned(),
-                "osaka".to_owned(),
-                "tokyo".to_owned(),
-                "  ".to_owned(),
-            ],
-            vec!["osaka".to_owned(), "  edge  ".to_owned()],
-            &live,
-        );
-        let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
-        // Default always offered and always first (it is where an unassigned node lands, whether
-        // or not anything references it); the rest alphabetical, deduped, trimmed.
-        assert_eq!(names, vec!["default", "edge", "osaka", "spare", "tokyo"]);
-
-        let live_of = |n: &str| opts.iter().find(|o| o.name == n).map(|o| o.live);
-        // A pool only referenced by a live poller still appears (nothing is assigned to it yet).
-        assert_eq!(live_of("spare"), Some(true));
-        assert_eq!(live_of("tokyo"), Some(true));
-        // Assigned but with no live poller — the picker must be able to warn about these.
-        assert_eq!(live_of("osaka"), Some(false));
-        assert_eq!(live_of("edge"), Some(false));
-        assert_eq!(live_of("default"), Some(false));
-    }
-
-    #[test]
-    fn pool_options_are_offered_even_with_nothing_configured() {
-        let opts = build_pool_options(Vec::new(), Vec::new(), &std::collections::HashSet::new());
-        assert_eq!(opts.len(), 1);
-        assert_eq!(opts[0].name, yagra_bus::DEFAULT_POOL);
-        assert!(!opts[0].live);
-    }
-
-    // NB: the 400-on-a-bad-pool path is covered directly by
-    // `pool_name_validation_on_create_collapses_absent_and_empty` — both handlers run
-    // `validate_pool_create`, but only after the admin check, so an HTTP-level test in skeleton
-    // mode would assert 503 and prove nothing.
-
     #[tokio::test]
-    async fn pool_writes_are_unavailable_without_admin() {
-        // Skeleton mode has no metadata store; both writes report the standard 503 rather than
-        // pretending to have moved anything.
-        for uri in [
-            format!("/api/v1/nodes/{}/pool", Uuid::nil()),
-            format!("/api/v1/node-groups/{}/pool", Uuid::nil()),
-        ] {
-            let app = router(state_with(Arc::new(InMemorySink::default())));
-            let resp = app
-                .oneshot(
-                    Request::builder()
-                        .method("PUT")
-                        .uri(&uri)
-                        .header("content-type", "application/json")
-                        .body(Body::from(r#"{"pool":"tokyo"}"#))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
-        }
+    async fn the_folder_pool_write_is_unavailable_without_admin() {
+        // Skeleton mode has no metadata store, so the write reports the standard 503 rather than
+        // pretending to have moved anything. The sibling `/nodes/:id/pool` route has moved to
+        // `api/nodes.rs` and is guard-first now, so it answers 401 here instead — see
+        // `nodes::tests::every_inventory_write_is_authenticated_before_anything_else`.
+        let uri = format!("/api/v1/node-groups/{}/pool", Uuid::nil());
+        let app = router(state_with(Arc::new(InMemorySink::default())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"pool":"tokyo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
     }
 
     #[test]

@@ -21,8 +21,9 @@
 //! resolution chain and its append-on-change history.
 
 use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::nodes::validate_pool_create;
 use super::util::CreatedId;
-use super::{validate_pool_create, AdminState, ApiError, ApiResult, ApiState};
+use super::{AdminState, ApiError, ApiResult, ApiState};
 use axum::{
     extract::{Path, Query},
     http::StatusCode,

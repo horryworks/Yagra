@@ -14,7 +14,8 @@
 //! large pages, an AI client wants small ones — because a clamp is surface policy, not assembly.
 
 use super::extract::RequireView;
-use super::{fresh_fallback_ids, ApiError, ApiResult, ApiState, NodePageQuery};
+use super::nodes::{fresh_fallback_ids, NodePageQuery};
+use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
 use axum::{extract::Query, routing::get, Json, Router};
 use serde::Serialize;

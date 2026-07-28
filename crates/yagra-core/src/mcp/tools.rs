@@ -103,7 +103,12 @@ impl YagraMcp {
             Ok(n) => n,
             Err(e) => return tool_error("list_nodes", "list nodes", &e),
         };
-        let states = self.state.alerts.node_states();
+        // The same state resolution the REST list uses, including its recent-RTT fallback for a
+        // node the alert engine has not observed yet. Reading `node_states()` directly — which is
+        // what this did — skips that, so a just-added node (or every node, in the window after a
+        // core restart) reported `unknown` here while the dashboard showed it `ok`.
+        let ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
+        let states = crate::api::nodes::display_states(&self.state, &ids).await;
         let out: Vec<NodeSummaryDto> = nodes
             .iter()
             .map(|n| NodeSummaryDto::from_node(n, states.get(&n.id).copied()))
@@ -128,7 +133,9 @@ impl YagraMcp {
             Err(e) => return tool_error("get_node_status", "load node", &e),
         };
         let nid = NodeId::from(p.node_id);
-        let state = self.state.alerts.node_state(nid);
+        // Same fallback as `list_nodes` above and as the REST detail view: the engine's opinion, or
+        // a recent RTT sample when it has none.
+        let state = crate::api::nodes::display_state(&self.state, nid).await;
         let alerts = self.state.alerts.alerts_for(nid);
         let interfaces = admin
             .repo
@@ -136,7 +143,7 @@ impl YagraMcp {
             .await
             .unwrap_or_default();
         let dto = NodeStatusDto {
-            node: NodeSummaryDto::from_node(&node, state),
+            node: NodeSummaryDto::from_node(&node, Some(state)),
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
