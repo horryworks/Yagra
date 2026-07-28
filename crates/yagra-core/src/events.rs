@@ -318,12 +318,15 @@ pub enum TokenVerify {
 /// a row can appear *behind* a cursor a client has already paged past. That is inherent to
 /// ordering a log by event time, and matches what the VictoriaLogs path has always done.
 ///
-/// **One difference between the backends is permitted and deliberate**: a plain `search` term is a
-/// substring here (`ILIKE '%term%'`) but a whole-token phrase on VictoriaLogs, so a mid-word term
-/// finds fewer rows on a log-store deployment. Making LogsQL do substring costs 300× (measured:
-/// a 24h aggregate 19ms → 5.6s, and the paged search exceeded VictoriaLogs' 30s query ceiling),
-/// because an inverted word index cannot serve a leading substring without a full scan. The
-/// operator's escape hatch is `regex`, which reaches inside tokens on both backends.
+/// **A plain `search` term is the one place the backends are permitted to differ**, on two axes.
+/// Here it is a case-insensitive substring (`ILIKE '%term%'`); on VictoriaLogs it is a
+/// case-sensitive whole-token phrase, so `SrcIp` and a mid-word `rror` find fewer rows on a
+/// log-store deployment. Both alternatives were measured on real syslog and declined: `i("term")`
+/// buys case-insensitivity at ~40× (750ms per 24h, 7.4s unbounded) and `~"(?i)term"` buys
+/// substring at ~300× (5.6s per 24h, 30.1s unbounded = VictoriaLogs' query ceiling). An inverted
+/// word index serves neither without a full scan, and the Events page defaults to an unbounded
+/// range. The operator's escape hatch for both is `regex`, which is case-insensitive and reaches
+/// inside tokens on either backend.
 #[derive(Debug, Default)]
 pub struct EventFilter {
     /// Keyset pagination cursor (exclusive upper bound, event time). Distinct from `until` (a

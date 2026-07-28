@@ -25,10 +25,15 @@ export interface EventLogFilter {
   node_id?: string;
   /** Already resolved to a boolean (the UI string ↔ boolean mapping stays at the call site). */
   matched?: boolean;
-  /** Free-text search. Substring over source (node name / IP) or message, or — when `regex` is
-   *  set — a regular expression matched against the message only. */
+  /** Free-text search over source (node name / IP) or message.
+   *
+   *  Matching depends on the backend: substring and case-insensitive on PostgreSQL, whole-token
+   *  and case-sensitive on a VictoriaLogs deployment (an inverted word index cannot do either
+   *  cheaply — see `logstore::build_filter_part`). `regex` is the escape hatch that behaves the
+   *  same on both. */
   search?: string;
-  /** Interpret `search` as a regular expression (message-only) rather than a substring. */
+  /** Interpret `search` as a regular expression (message-only). Case-insensitive on both
+   *  backends, and unlike a plain term it matches inside tokens — at a scan cost. */
   regex?: boolean;
   /** Time-range lower bound (inclusive, RFC 3339), or undefined for unbounded. */
   start?: string;

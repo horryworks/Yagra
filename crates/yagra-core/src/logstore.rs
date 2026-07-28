@@ -225,17 +225,15 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
             // case-sensitive here and case-insensitive there.
             clauses.push(format!("_msg:~{}", logsql_quote(&ci_regex(term))));
         } else {
-            // A phrase filter, which matches whole tokens — deliberately NOT the SQL path's
-            // `ILIKE '%term%'` substring, and the one place the two backends are allowed to
-            // differ. Measured against the live test server (2026-07-28), spelling this as
-            // `_msg:~"(?i)term"` to buy true substring semantics cost **300×**: a 24h aggregate
-            // went 19ms → 5.6s, and the paged search hit VictoriaLogs' 30s
-            // `-search.maxQueryDuration` ceiling outright. An inverted word index cannot satisfy a
-            // leading substring without scanning every block, so no LogsQL spelling avoids it.
+            // A phrase filter: whole-token and case-SENSITIVE. Deliberately NOT the SQL path's
+            // `ILIKE '%term%'`, and the one place the two backends are allowed to differ — on two
+            // axes, sub-token granularity and case. Both alternatives were measured against the
+            // live test server (2026-07-28) and cost more than the difference is worth; the
+            // numbers and the reasoning are in `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`.
             //
-            // The operator's escape hatch for a mid-word term is the search box's existing
-            // **regex** toggle, which does reach inside tokens here — at that scan cost, but only
-            // when explicitly asked for.
+            // The operator's escape hatch for either is the search box's existing **regex**
+            // toggle, which is case-insensitive and reaches inside tokens on both backends — at
+            // that scan cost, but only when explicitly asked for.
             let mut ors = vec![
                 format!("_msg:{}", logsql_quote(term)),
                 format!("source_ip:{}", logsql_quote(term)),
@@ -557,11 +555,11 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 /// Whether a stored record satisfies the filter, modelling the **PostgreSQL** contract:
 /// case-insensitive substring for a plain term, case-insensitive regex for a pattern.
 ///
-/// It cannot model both backends, because they legitimately differ on one axis: VictoriaLogs
-/// matches a plain term by token, not by substring (see [`build_filter_part`] for the measured
-/// reason). Everything else — the time base, regex case-insensitivity, which fields a term
-/// searches — is shared, and `both_backends_filter_on_event_time_with_the_same_case_rules` is what
-/// keeps it that way.
+/// It cannot model both backends, because for a *plain term* they legitimately differ on two axes:
+/// VictoriaLogs matches by whole token rather than substring, and case-sensitively (see
+/// [`build_filter_part`] for the measurements behind accepting that). Everything else — the time
+/// base, regex case-insensitivity, which fields a term searches — is shared, and
+/// `both_backends_filter_on_event_time_with_the_same_case_rules` is what keeps it that way.
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
     let m = &r.msg;
@@ -821,11 +819,19 @@ mod tests {
 
     #[test]
     fn a_plain_term_stays_a_phrase_filter_not_a_regex_scan() {
-        // Guards a fix that was tried and reverted. Rewriting this as `_msg:~"(?i)term"` does buy
-        // true substring semantics matching the SQL path's `ILIKE '%term%'` — and measured on the
-        // live test server it cost 300× (24h aggregate 19ms → 5.6s; the paged search hit
-        // VictoriaLogs' 30s query ceiling). A leading substring cannot use an inverted word index.
-        // Regex mode is the deliberate escape hatch; the plain path stays indexed.
+        // Guards a fix that was tried and reverted, and a second one that was measured and
+        // declined. Both would make a plain term match the SQL path's `ILIKE '%term%'` exactly;
+        // both cost too much, measured on the live test server against real syslog (2026-07-28):
+        //
+        //   `_msg:"term"`        phrase, case-SENSITIVE, token-exact   19ms/24h    <- what we ship
+        //   `_msg:i("term")`     case-insensitive, still token-exact   750ms/24h, 7.4s unbounded
+        //   `_msg:~"(?i)term"`   case-insensitive substring            5.6s/24h, 30.1s unbounded
+        //                                                             (= VL's query ceiling)
+        //
+        // An inverted word index cannot serve a leading substring, and case folding defeats the
+        // token index too. The Events page defaults to an UNBOUNDED range, so the unbounded column
+        // is the common case, not the corner. Regex mode is the deliberate escape hatch: it is
+        // case-insensitive and sub-token on both backends, and the operator opts into the cost.
         let filter = EventFilter {
             search: Some("link".into()),
             regex: false,
@@ -862,8 +868,8 @@ mod tests {
         );
 
         // 2. An operator-supplied *regex* is case-insensitive on both sides: `~*` there, `(?i)`
-        //    here. (A plain term is case-insensitive on both too — LogsQL phrase matching already
-        //    is — which is why only the regex spelling needs asserting.)
+        //    here. This is the axis that CAN be unified for free, because regex mode is already a
+        //    scan on both. A plain term cannot — see `a_plain_term_stays_a_phrase_filter_…`.
         assert!(EVENT_FILTER_WHERE.contains("ILIKE"));
         assert!(EVENT_FILTER_WHERE.contains("e.message ~* $7"));
         let pattern = build_filter_part(
