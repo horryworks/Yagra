@@ -43,6 +43,13 @@ import {
   isSelfOrDescendant,
   type StateCounts,
 } from '../lib/nodeTree';
+import {
+  isAddableKind,
+  monitorKind,
+  MONITOR_KINDS,
+  targetFilled,
+  type AddableKind,
+} from './monitorKinds';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
 import { inheritedGroupPool, isValidPoolName } from '../lib/pool';
@@ -50,6 +57,7 @@ import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
@@ -193,7 +201,7 @@ export function NodesPage() {
    *  level. createNode itself takes no group_id, so on success we follow up with setNodeGroup. */
   const [addGroupId, setAddGroupId] = useState<string | null>(null);
   /** Which kind of monitor to add: an SNMP/ICMP device, a URL/HTTP(S) endpoint, or a DNS name. */
-  const [monType, setMonType] = useState<'device' | 'url' | 'dns'>('device');
+  const [monType, setMonType] = useState<AddableKind>('device');
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [profileId, setProfileId] = useState('');
@@ -493,18 +501,15 @@ export function NodesPage() {
     setDnsResolver('');
   };
 
+  // Per-kind strings and the required-target rule come from the `MONITOR_KINDS` registry, so a
+  // fourth kind is one entry there rather than four more ternary chains in this file.
+  const kindSpec = monitorKind(monType);
   /** The error message for whichever monitor kind is being added. */
-  const addErrorKey = () => {
-    if (monType === 'url') return t('err.addUrlMonitor');
-    if (monType === 'dns') return t('err.addDnsMonitor');
-    return t('err.addNode');
-  };
-
+  const addErrorKey = () => t(kindSpec.errorKey);
   /** Modal title + primary-button label, per monitor kind. */
-  const addTitle =
-    monType === 'url' ? t('add.urlMonitor') : monType === 'dns' ? t('add.dnsMonitor') : t('add.node');
+  const addTitle = t(kindSpec.titleKey);
   /** Whether the kind-specific target field is filled (the name is checked separately). */
-  const addTargetFilled = monType === 'url' ? !!url : monType === 'dns' ? !!dnsName : !!address;
+  const addTargetFilled = targetFilled(monType, { address, url, dnsName });
 
   const submitAdd = () => {
     setAddError(null);
@@ -797,11 +802,17 @@ export function NodesPage() {
               {t('add.monitoringType')}
               <Select
                 value={monType}
-                onChange={(e) => setMonType(e.target.value as 'device' | 'url' | 'dns')}
+                onChange={(e) => {
+                  // Narrowed, not cast: the value arrives as a string, and casting it would admit
+                  // a kind with no create endpoint into the form state.
+                  if (isAddableKind(e.target.value)) setMonType(e.target.value);
+                }}
               >
-                <option value="device">{t('add.typeDevice')}</option>
-                <option value="url">{t('add.typeUrl')}</option>
-                <option value="dns">{t('add.typeDns')}</option>
+                {MONITOR_KINDS.map((k) => (
+                  <option key={k.kind} value={k.kind}>
+                    {t(k.optionKey)}
+                  </option>
+                ))}
               </Select>
             </label>
             <label className="form-label">
@@ -983,43 +994,26 @@ export function NodesPage() {
       )}
 
       {deletingGroup && (
-        <Modal
+        <ConfirmDeleteModal
           title={t('group.delete')}
+          onConfirm={() => api.deleteNodeGroup(deletingGroup.id)}
+          errorFallback={t('err.deleteGroup')}
           onClose={() => setDeletingGroup(null)}
-          footer={
-            <>
-              <Button variant="outline" onClick={() => setDeletingGroup(null)}>
-                {t('common:actions.cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() =>
-                  api
-                    .deleteNodeGroup(deletingGroup.id)
-                    .then(() => {
-                      setDeletingGroup(null);
-                      void reload();
-                    })
-                    .catch((e: unknown) => setError(errMsg(e, t('err.deleteGroup'))))
-                }
-              >
-                {t('common:actions.delete')}
-              </Button>
-            </>
-          }
+          onDone={() => {
+            setDeletingGroup(null);
+            void reload();
+          }}
         >
-          <p>
-            <Trans
-              t={t}
-              i18nKey="deleteGroup.confirm"
-              values={{
-                name: deletingGroup.name,
-                impact: groupDeletionImpact(groups, groupCounts, deletingGroup, t),
-              }}
-              components={{ b: <strong /> }}
-            />
-          </p>
-        </Modal>
+          <Trans
+            t={t}
+            i18nKey="deleteGroup.confirm"
+            values={{
+              name: deletingGroup.name,
+              impact: groupDeletionImpact(groups, groupCounts, deletingGroup, t),
+            }}
+            components={{ b: <strong /> }}
+          />
+        </ConfirmDeleteModal>
       )}
 
       {deletingNode && (

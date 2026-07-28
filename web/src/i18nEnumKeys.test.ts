@@ -25,6 +25,7 @@ import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
+import { MONITOR_KINDS } from './pages/monitorKinds';
 
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -115,5 +116,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // without its strings renders the raw key ("overview.gpuLoad") in both languages.
     const keys = METRIC_CARDS.map((c) => c.labelKey);
     expectKeys('metric card', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every addable monitor kind has its three strings (nodes:add.*/err.*)', () => {
+    // The select option, the modal title and the failure message are all read from the registry
+    // now. A kind added without strings would put a raw key in the dropdown an operator picks from.
+    const keys = MONITOR_KINDS.flatMap((k) => [k.optionKey, k.titleKey, k.errorKey]);
+    expectKeys('monitor kind', { en: enNodes, ja: jaNodes }, '', keys);
   });
 });
