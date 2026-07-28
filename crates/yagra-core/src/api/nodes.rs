@@ -11,11 +11,40 @@ use super::{pool_resolver, ApiError, ApiResult};
 use crate::api::ApiState;
 use axum::{extract::Path, http::StatusCode, routing::post, Json, Router};
 use serde::Serialize;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// The node routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
+}
+
+/// Resolve node ids → display names.
+///
+/// This is the ADR-011 join, and it is shared because the rule it encodes is easy to state and
+/// easy to get subtly wrong three separate times: **the TSDB carries only node ids**, so anything
+/// ranked or sampled out of it has to come back to PostgreSQL for a name. It is best-effort by
+/// design — skeleton mode has no repo, and a node deleted since the sample was written has no row
+/// — so a missing id is simply absent from the map and the caller falls back to the id string. A
+/// Top-N that fails because one node was deleted mid-query would be worse than one that shows a
+/// UUID.
+///
+/// Ids are sorted and deduplicated first: a ranking that mentions the same node twice must not
+/// widen the `IN (…)`, and an empty input skips the query entirely.
+pub(crate) async fn resolve_node_names(
+    st: &ApiState,
+    ids: impl IntoIterator<Item = Uuid>,
+) -> HashMap<Uuid, String> {
+    let mut ids: Vec<Uuid> = ids.into_iter().collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+    match st.admin.as_ref() {
+        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        None => HashMap::new(),
+    }
 }
 
 /// What an out-of-schedule poll dispatched.

@@ -33,6 +33,7 @@ pub(crate) mod extract;
 pub(crate) mod fleet;
 mod flow;
 pub(crate) mod maintenance;
+pub(crate) mod metrics;
 pub(crate) mod nodes;
 #[cfg(test)]
 mod route_table;
@@ -69,7 +70,7 @@ use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{self, ReportRunner, ScheduleInput};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
-use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
+use crate::store::{MetricPoint, MetricStore};
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
@@ -91,8 +92,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, DiskUsage, DnsCheckConfig, HostSample, IfIndex, Node,
-    NodeId, NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
+    is_ssrf_blocked, resolve_collection_set, DiskUsage, DnsCheckConfig, HostSample, Node, NodeId,
+    NodeState, Permission, ProfileCategory, Role, SeriesKey, Severity, UrlCheckConfig,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -333,17 +334,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/profiles/:id",
             put(update_profile).delete(delete_profile),
         )
-        .route(
-            "/api/v1/nodes/:node_id/metrics/:metric",
-            get(get_node_metric),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/metrics/:metric/range",
-            get(get_node_metric_range),
-        )
-        .route("/api/v1/metrics/top", get(top_metrics))
-        .route("/api/v1/metrics/interface-top", get(interface_top))
-        .route("/api/v1/metrics/interface-delta", get(interface_delta))
+        // Metric reads + fleet Top-N rankings, in `api/metrics.rs`.
+        .merge(metrics::routes())
         .route(
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
@@ -368,10 +360,6 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/nodes/:node_id/interfaces",
             get(list_node_interfaces),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
-            get(get_interface_series),
         )
         // Flow analysis (ADR-031) — the twelve `/flow/*` endpoints, in `api/flow.rs`.
         .merge(flow::routes())
@@ -457,8 +445,6 @@ pub fn router(state: ApiState) -> Router {
         .merge(topology::routes())
         // Fleet-wide rollups (summary / per-group / coverage / timeline), in `api/fleet.rs`.
         .merge(fleet::routes())
-        .route("/api/v1/metrics/throughput-range", get(throughput_range))
-        .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/poller-health", get(poller_health))
         // Distributed poller pool (ADR-009/020): the fleet of registered pollers + per-pool summary.
         .route("/api/v1/pollers", get(list_pollers))
@@ -758,22 +744,6 @@ async fn update_config(
 }
 
 // ── Response shapes ──────────────────────────────────────────────────────────
-
-/// Latest reading for one node metric.
-#[derive(Serialize)]
-struct MetricReading {
-    node_id: NodeId,
-    metric: String,
-    value: f64,
-}
-
-/// A time-series window for one node metric.
-#[derive(Serialize)]
-struct MetricRange {
-    node_id: NodeId,
-    metric: String,
-    points: Vec<MetricPoint>,
-}
 
 /// One inventory row (mirrors the WebUI `NodeSummary`).
 #[derive(Serialize)]
@@ -1223,455 +1193,6 @@ async fn get_node_status(
     };
     let alerts = st.alerts.alerts_for(node);
     Json(serde_json::json!({ "node_id": node, "state": state, "alerts": alerts })).into_response()
-}
-
-/// Optional aggregation for the metric reads. `agg=max` collapses a per-entity table gauge
-/// (e.g. CPU% per `entPhysicalIndex`) into one node-level value; absent ⇒ scalar node series.
-#[derive(Deserialize)]
-struct MetricQuery {
-    agg: Option<String>,
-}
-
-/// Reject an `agg` value we don't support (validate at the edge — security.md).
-fn invalid_agg(other: &str) -> Response {
-    error_response(
-        StatusCode::BAD_REQUEST,
-        "invalid_agg",
-        format!("unsupported agg {other:?}; expected 'max'"),
-    )
-}
-
-async fn get_node_metric(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path((node_id, metric)): Path<(Uuid, String)>,
-    Query(q): Query<MetricQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    if !is_valid_metric_name(&metric) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            format!("metric name {metric:?} is not a valid identifier"),
-        );
-    }
-    let node = NodeId::from(node_id);
-    let key = SeriesKey::node(node, metric.as_str());
-    let value = match q.agg.as_deref() {
-        Some("max") => st.store.aggregate_latest(&key).await,
-        Some(other) => return invalid_agg(other),
-        None => st.store.latest(&key).await,
-    };
-    match value {
-        Some(value) => Json(MetricReading {
-            node_id: node,
-            metric,
-            value,
-        })
-        .into_response(),
-        None => not_found(
-            "metric_not_found",
-            format!("no reading for metric '{metric}' on node {node_id}"),
-        ),
-    }
-}
-
-/// Query params for the range endpoint (all optional; sensible defaults applied).
-#[derive(Deserialize)]
-struct RangeQuery {
-    from: Option<i64>,
-    to: Option<i64>,
-    step: Option<u64>,
-    /// `max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series.
-    agg: Option<String>,
-}
-
-async fn get_node_metric_range(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path((node_id, metric)): Path<(Uuid, String)>,
-    Query(q): Query<RangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    if !is_valid_metric_name(&metric) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            format!("metric name {metric:?} is not a valid identifier"),
-        );
-    }
-    let node = NodeId::from(node_id);
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
-    let key = SeriesKey::node(node, metric.as_str());
-    let points = match q.agg.as_deref() {
-        Some("max") => st.store.aggregate_range(&key, from, to, step).await,
-        Some(other) => return invalid_agg(other),
-        None => st.store.range(&key, from, to, step).await,
-    };
-    Json(MetricRange {
-        node_id: node,
-        metric,
-        points,
-    })
-    .into_response()
-}
-
-/// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
-#[derive(Deserialize)]
-struct TopQuery {
-    /// Metric to rank by (validated identifier).
-    metric: String,
-    /// `now` (default) ⇒ most recent value; `max_1h` ⇒ trailing-hour peak.
-    agg: Option<String>,
-    /// How many nodes to return (default 5, clamped 1..=50).
-    limit: Option<usize>,
-}
-
-/// One ranked node in a Top-N result.
-#[derive(Serialize)]
-struct TopEntry {
-    node_id: Uuid,
-    /// Display name, joined from PostgreSQL (TSDB carries only the id, ADR-011); falls back to
-    /// the id string if the node has since been deleted.
-    name: String,
-    value: f64,
-}
-
-/// Logical node-metric aliases for the fleet Top-N: a friendly name → the set of per-vendor
-/// metric names ranked together via a `__name__` regex (one query collapses them with
-/// `max by (node)`). Only "busy-style" gauges where higher = worse are included — idle/temperature
-/// metrics are excluded. Memory uses the vendors that expose a direct % (bytes-derived % for
-/// Cisco/UCD is a later recording-rule job). The selector is built from these constants only, so
-/// it is safe to interpolate (no user input reaches the PromQL).
-fn logical_metric_selector(alias: &str) -> Option<String> {
-    let names: &[&str] = match alias {
-        "cpu" => &[
-            "huawei_cpu_usage",
-            "cisco_cpu_5min",
-            "nxos_cpu_util",
-            "fortinet_cpu_usage",
-            "juniper_cpu_1min",
-            "hr_processor_load",
-        ],
-        "memory" => &["huawei_mem_usage", "nxos_mem_util", "fortinet_mem_usage"],
-        _ => return None,
-    };
-    Some(format!("{{__name__=~\"{}\"}}", names.join("|")))
-}
-
-/// Parse the shared `agg` query param (`now` default | `max_1h`) into a [`TopAgg`]. The error is
-/// boxed so the `Ok` path stays cheap (`clippy::result_large_err`).
-fn parse_top_agg(agg: Option<&str>) -> Result<TopAgg, Box<Response>> {
-    match agg {
-        None | Some("now") => Ok(TopAgg::Now),
-        Some("max_1h") => Ok(TopAgg::Max1h),
-        Some(other) => Err(Box::new(error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_agg",
-            format!("agg must be 'now' or 'max_1h', got {other:?}"),
-        ))),
-    }
-}
-
-/// Fleet-wide Top-N for a metric: the highest-value nodes right now (or by hourly peak).
-/// Powers the dashboard "Top RTT / CPU / memory / …" widgets from one endpoint. `metric` is
-/// either a raw collected metric name (e.g. `icmp_rtt_ms`) or a logical alias (`cpu`, `memory`).
-async fn top_metrics(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<TopQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    // A logical alias expands to a constant `{__name__=~…}` selector; otherwise the metric must be
-    // a valid identifier (it's interpolated into the PromQL selector).
-    let selector = match logical_metric_selector(&q.metric) {
-        Some(sel) => sel,
-        None => {
-            if !is_valid_metric_name(&q.metric) {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_metric_name",
-                    format!("metric name {:?} is not a valid identifier", q.metric),
-                );
-            }
-            q.metric.clone()
-        }
-    };
-    let agg = match parse_top_agg(q.agg.as_deref()) {
-        Ok(a) => a,
-        Err(resp) => return *resp,
-    };
-    let limit = q.limit.unwrap_or(5).clamp(1, 50);
-    let ranked = st.store.top_nodes(&selector, agg, limit).await;
-    // Join node id → name (TSDB labels carry only the id, ADR-011). Best-effort: in skeleton
-    // mode (no repo) or for a since-deleted node the row keeps the id string as its name.
-    let ids: Vec<Uuid> = ranked.iter().map(|(id, _)| *id).collect();
-    let names = match st.admin.as_ref() {
-        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
-        None => std::collections::HashMap::new(),
-    };
-    let out: Vec<TopEntry> = ranked
-        .into_iter()
-        .map(|(id, value)| TopEntry {
-            node_id: id,
-            name: names.get(&id).cloned().unwrap_or_else(|| id.to_string()),
-            value,
-        })
-        .collect();
-    Json(out).into_response()
-}
-
-/// Query for the fleet interface Top-N endpoint.
-#[derive(Deserialize)]
-struct InterfaceTopQuery {
-    /// `throughput` | `in_bps` | `out_bps` | `errors` | `discards`.
-    metric: String,
-    agg: Option<String>,
-    limit: Option<usize>,
-}
-
-/// One ranked interface in a fleet interface Top-N.
-#[derive(Serialize)]
-struct InterfaceTopEntry {
-    node_id: Uuid,
-    node_name: String,
-    ifindex: i32,
-    if_name: Option<String>,
-    if_alias: Option<String>,
-    /// Configured speed (bits/sec) for util%; `null` if unknown.
-    if_speed_bps: Option<i64>,
-    /// bits/sec for throughput metrics, errors|discards per second otherwise.
-    value: f64,
-}
-
-/// Fleet-wide busiest/erroring interfaces. Ranks `(node,ifindex)` by a query-time rate, then
-/// joins node + interface names (and speed) from PostgreSQL (TSDB carries only ids, ADR-011).
-async fn interface_top(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<InterfaceTopQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let metric = match q.metric.as_str() {
-        "throughput" => InterfaceTopMetric::Throughput,
-        "in_bps" => InterfaceTopMetric::InBps,
-        "out_bps" => InterfaceTopMetric::OutBps,
-        "errors" => InterfaceTopMetric::Errors,
-        "discards" => InterfaceTopMetric::Discards,
-        other => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_metric",
-                format!("metric must be throughput|in_bps|out_bps|errors|discards, got {other:?}"),
-            )
-        }
-    };
-    let agg = match parse_top_agg(q.agg.as_deref()) {
-        Ok(a) => a,
-        Err(resp) => return *resp,
-    };
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let ranked = st.store.top_interfaces(metric, agg, limit).await;
-    Json(build_interface_entries(&st, ranked).await).into_response()
-}
-
-/// Join a fleet interface ranking `(node, ifindex, value)` to node + interface names (and speed)
-/// from PostgreSQL — one repo query over the distinct nodes in the result. Shared by the
-/// interface Top-N and interface-delta endpoints.
-async fn build_interface_entries(
-    st: &ApiState,
-    ranked: Vec<(Uuid, i32, f64)>,
-) -> Vec<InterfaceTopEntry> {
-    let node_ids: Vec<Uuid> = {
-        let mut ids: Vec<Uuid> = ranked.iter().map(|(n, _, _)| *n).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
-    };
-    let (names, idents) = match st.admin.as_ref() {
-        Some(admin) => (
-            admin.repo.node_names(&node_ids).await.unwrap_or_default(),
-            admin
-                .repo
-                .interface_idents_for(&node_ids)
-                .await
-                .unwrap_or_default(),
-        ),
-        None => (
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-        ),
-    };
-    ranked
-        .into_iter()
-        .map(|(node_id, ifindex, value)| {
-            let ident = idents.get(&(node_id, ifindex));
-            InterfaceTopEntry {
-                node_id,
-                node_name: names
-                    .get(&node_id)
-                    .cloned()
-                    .unwrap_or_else(|| node_id.to_string()),
-                ifindex,
-                if_name: ident.and_then(|i| i.if_name.clone()),
-                if_alias: ident.and_then(|i| i.if_alias.clone()),
-                if_speed_bps: ident.and_then(|i| i.if_speed),
-                value,
-            }
-        })
-        .collect()
-}
-
-/// Query for the interface rate-delta endpoint (traffic spikes/drops).
-#[derive(Deserialize)]
-struct InterfaceDeltaQuery {
-    /// `up` (spikes) | `down` (drops).
-    direction: String,
-    /// Comparison window in seconds (default 300 = now vs 5m ago).
-    window: Option<u64>,
-    limit: Option<usize>,
-}
-
-/// Interfaces whose total throughput moved the most vs `window` ago — spikes (`up`) or drops
-/// (`down`). `value` is the signed delta in bits/sec.
-async fn interface_delta(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<InterfaceDeltaQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let direction = match q.direction.as_str() {
-        "up" => DeltaDirection::Up,
-        "down" => DeltaDirection::Down,
-        other => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_direction",
-                format!("direction must be 'up' or 'down', got {other:?}"),
-            )
-        }
-    };
-    let window = q.window.unwrap_or(300).clamp(60, 3600);
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let ranked = st.store.interface_delta(direction, window, limit).await;
-    Json(build_interface_entries(&st, ranked).await).into_response()
-}
-
-/// Query for the aggregate-throughput range: `?from=&to=&step=` (default last 24h, 300s step).
-#[derive(Deserialize)]
-struct ThroughputRangeQuery {
-    from: Option<i64>,
-    to: Option<i64>,
-    step: Option<u64>,
-}
-
-/// Fleet aggregate ingress/egress (bits/sec) over time, aligned to one timestamp axis. For the
-/// "aggregate throughput" 2-series chart.
-async fn throughput_range(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<ThroughputRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - 24 * 3600);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(300), 60);
-    let (in_pts, out_pts) = st.store.throughput_range(from, to, step).await;
-    // Align in/out onto one sorted timestamp axis (null where a side has no point).
-    let mut grid: std::collections::BTreeMap<i64, (Option<f64>, Option<f64>)> =
-        std::collections::BTreeMap::new();
-    for p in in_pts {
-        grid.entry(p.t).or_default().0 = Some(p.v);
-    }
-    for p in out_pts {
-        grid.entry(p.t).or_default().1 = Some(p.v);
-    }
-    let timestamps: Vec<i64> = grid.keys().copied().collect();
-    let in_bps: Vec<Option<f64>> = grid.values().map(|(i, _)| *i).collect();
-    let out_bps: Vec<Option<f64>> = grid.values().map(|(_, o)| *o).collect();
-    Json(serde_json::json!({ "timestamps": timestamps, "in_bps": in_bps, "out_bps": out_bps }))
-        .into_response()
-}
-
-/// Query for the interface throughput heatmap: `?limit=&from=&to=&step=`.
-#[derive(Deserialize)]
-struct HeatmapQuery {
-    limit: Option<usize>,
-    from: Option<i64>,
-    to: Option<i64>,
-    step: Option<u64>,
-}
-
-/// Busiest-links × time heatmap: picks the top interfaces by current throughput, then returns
-/// each link's throughput (bits/sec) over time on a shared timestamp axis. Cells are intensity-
-/// shaded client-side.
-async fn interface_heatmap(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<HeatmapQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let limit = q.limit.unwrap_or(8).clamp(1, 20);
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - 6 * 3600);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(600), 60);
-    // Pick the busiest links now, then fetch each one's throughput series.
-    let top = st
-        .store
-        .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, limit)
-        .await;
-    let entries = build_interface_entries(&st, top).await;
-    // The per-link throughput queries are independent (bounded ≤ 20), so fan them out concurrently
-    // rather than awaiting one link at a time — one round-trip of latency instead of N.
-    let ranges = futures::future::join_all(entries.iter().map(|e| {
-        st.store
-            .interface_throughput_range(e.node_id, e.ifindex, from, to, step)
-    }))
-    .await;
-    let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-    let mut per_link: Vec<(String, std::collections::HashMap<i64, f64>)> = Vec::new();
-    for (e, pts) in entries.iter().zip(ranges) {
-        let mut m = std::collections::HashMap::new();
-        for p in pts {
-            union.insert(p.t);
-            m.insert(p.t, p.v);
-        }
-        let iface = e
-            .if_name
-            .clone()
-            .or_else(|| e.if_alias.clone())
-            .unwrap_or_else(|| format!("if{}", e.ifindex));
-        per_link.push((format!("{} · {}", e.node_name, iface), m));
-    }
-    let timestamps: Vec<i64> = union.into_iter().collect();
-    let links: Vec<String> = per_link.iter().map(|(l, _)| l.clone()).collect();
-    let values: Vec<Vec<f64>> = per_link
-        .iter()
-        .map(|(_, m)| {
-            timestamps
-                .iter()
-                .map(|t| m.get(t).copied().unwrap_or(0.0))
-                .collect()
-        })
-        .collect();
-    Json(serde_json::json!({ "links": links, "timestamps": timestamps, "values": values }))
-        .into_response()
 }
 
 /// Query for the standing discovery-candidates view.
@@ -9495,77 +9016,6 @@ async fn list_node_interfaces(
     Json(out).into_response()
 }
 
-/// Per-interface time-series for the node-detail Interfaces detail pane: In/Out throughput
-/// (bits/sec, from `rate()` of the octet counters) and In/Out errors (per second). All four
-/// share one `timestamps` x-axis (the union of returned points; gaps → null) so the chart
-/// gets aligned series. Derived at query time (ADR-012); empty when there's no history.
-#[derive(Serialize)]
-struct InterfaceSeries {
-    timestamps: Vec<i64>,
-    in_bps: Vec<Option<f64>>,
-    out_bps: Vec<Option<f64>>,
-    in_errors: Vec<Option<f64>>,
-    out_errors: Vec<Option<f64>>,
-}
-
-async fn get_interface_series(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path((node_id, ifindex)): Path<(Uuid, u32)>,
-    Query(q): Query<RangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let node = NodeId::from(node_id);
-    let key = |metric: &str| SeriesKey::interface(node, IfIndex(ifindex), metric);
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    // Default to ~120 points across the window; the rate lookback spans a few steps so a
-    // single missed poll doesn't punch a hole in the line.
-    let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
-    let step = clamp_range_step(from, to, q.step.unwrap_or((span / 120).max(60)), 1);
-    let lookback = (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS);
-
-    // The four series are independent range queries — fan them out concurrently (this endpoint
-    // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
-    // they outlive the joined futures.
-    let (k_in, k_out, k_ierr, k_oerr) = (
-        key("if_hc_in_octets"),
-        key("if_hc_out_octets"),
-        key("if_in_errors"),
-        key("if_out_errors"),
-    );
-    let (in_oct, out_oct, in_err, out_err) = tokio::join!(
-        st.store.rate_range(&k_in, from, to, step, lookback),
-        st.store.rate_range(&k_out, from, to, step, lookback),
-        st.store.rate_range(&k_ierr, from, to, step, lookback),
-        st.store.rate_range(&k_oerr, from, to, step, lookback),
-    );
-
-    // Shared x-axis = the union of all returned timestamps; align each series onto it.
-    let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-    for s in [&in_oct, &out_oct, &in_err, &out_err] {
-        for p in s {
-            grid_set.insert(p.t);
-        }
-    }
-    let grid: Vec<i64> = grid_set.into_iter().collect();
-    let align = |pts: &[MetricPoint], scale: f64| -> Vec<Option<f64>> {
-        let m: std::collections::HashMap<i64, f64> = pts.iter().map(|p| (p.t, p.v)).collect();
-        grid.iter().map(|t| m.get(t).map(|v| v * scale)).collect()
-    };
-
-    Json(InterfaceSeries {
-        in_bps: align(&in_oct, 8.0),
-        out_bps: align(&out_oct, 8.0),
-        in_errors: align(&in_err, 1.0),
-        out_errors: align(&out_err, 1.0),
-        timestamps: grid,
-    })
-    .into_response()
-}
-
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 /// Audit listing query: page size + a keyset cursor (rows strictly older than `before`).
@@ -10715,99 +10165,6 @@ mod tests {
         // Never-swept ⇒ never fresh, regardless of interval.
         assert!(!bus_sweep_is_fresh(None, 30, now));
     }
-
-    #[tokio::test]
-    async fn top_metrics_empty_on_in_memory_store() {
-        // Public-dashboard read; the in-memory sink can't rank a fleet, so the result is [].
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/metrics/top?metric=icmp_rtt_ms")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_json(resp).await, serde_json::json!([]));
-    }
-
-    #[tokio::test]
-    async fn interface_top_empty_on_in_memory_and_rejects_bad_metric() {
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        // In-memory store can't rank a fleet ⇒ [].
-        let ok = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/metrics/interface-top?metric=throughput")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ok.status(), StatusCode::OK);
-        assert_eq!(body_json(ok).await, serde_json::json!([]));
-        // Unknown metric ⇒ 400.
-        let bad = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/metrics/interface-top?metric=bogus")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(body_json(bad).await["error"]["code"], "invalid_metric");
-    }
-
-    #[test]
-    fn logical_metric_selector_expands_cpu_and_memory() {
-        let cpu = logical_metric_selector("cpu").unwrap();
-        assert!(cpu.starts_with("{__name__=~\""));
-        assert!(cpu.contains("huawei_cpu_usage") && cpu.contains("hr_processor_load"));
-        // idle/temperature are intentionally excluded from "busy" CPU ranking
-        assert!(!cpu.contains("idle") && !cpu.contains("temp"));
-        assert!(logical_metric_selector("memory")
-            .unwrap()
-            .contains("huawei_mem_usage"));
-        assert!(logical_metric_selector("icmp_rtt_ms").is_none());
-    }
-
-    #[tokio::test]
-    async fn top_metrics_rejects_invalid_metric_and_agg() {
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let bad_metric = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/metrics/top?metric=up}+or+vector(1)")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(bad_metric.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body_json(bad_metric).await["error"]["code"],
-            "invalid_metric_name"
-        );
-
-        let bad_agg = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/metrics/top?metric=icmp_rtt_ms&agg=bogus")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(bad_agg.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(body_json(bad_agg).await["error"]["code"], "invalid_agg");
-    }
-
     #[tokio::test]
     async fn dashboard_unavailable_without_admin() {
         // Skeleton has no user store; "My Dashboard" persistence needs the admin/DB side.
