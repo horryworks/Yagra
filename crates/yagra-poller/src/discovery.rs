@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
-use yagra_bus::{DiscoveredDevice, DiscoveryJob, DiscoveryResult, NatsBus, BUS_SCHEMA_VERSION};
+use yagra_bus::{DiscoveredDevice, DiscoveryJob, DiscoveryResult, NatsBus};
 use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 use yagra_transport::{SnmpV3Params, Transport};
 
@@ -116,7 +116,6 @@ where
             publish(
                 &bus,
                 DiscoveryResult {
-                    schema_version: BUS_SCHEMA_VERSION,
                     scan_id: job.scan_id,
                     found: found.clone(),
                     probed,
@@ -131,7 +130,6 @@ where
             publish(
                 &bus,
                 DiscoveryResult {
-                    schema_version: BUS_SCHEMA_VERSION,
                     scan_id: job.scan_id,
                     found: Vec::new(),
                     probed: 0,
@@ -529,7 +527,6 @@ mod tests {
 
     fn job(credentials: Vec<DiscoveryCredential>, communities: Vec<String>) -> DiscoveryJob {
         DiscoveryJob {
-            schema_version: BUS_SCHEMA_VERSION,
             scan_id: Uuid::nil(),
             targets: vec![target()],
             communities,

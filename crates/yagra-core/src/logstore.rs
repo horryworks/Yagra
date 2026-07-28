@@ -184,6 +184,12 @@ fn record_to_json(r: &PersistRecord) -> Value {
     Value::Object(obj)
 }
 
+/// Make a regex case-insensitive, matching PostgreSQL's `~*` / `ILIKE`. Applied to both the
+/// operator's own pattern and the escaped substring term so the two backends agree on casing.
+fn ci_regex(pattern: &str) -> String {
+    format!("(?i){pattern}")
+}
+
 /// Compile an [`EventFilter`] (+ resolved node-name ids) into the LogsQL *filter part* (the leading
 /// query before any `|` pipe). Space-separated clauses are ANDed; the free-text term ORs a `_msg`
 /// phrase, a `source_ip` phrase, and the resolved `node_id` set (the current 3-way search). Shared
@@ -215,11 +221,19 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
         if filter.regex {
             // Regex search is message-only (`~` is LogsQL's regexp operator). Node-name/IP
             // fan-out stays a substring-mode feature; the API skips name resolution here.
-            clauses.push(format!("_msg:~{}", logsql_quote(term)));
+            // `(?i)` because the SQL path uses `~*` — without it the same pattern was
+            // case-sensitive here and case-insensitive there.
+            clauses.push(format!("_msg:~{}", logsql_quote(&ci_regex(term))));
         } else {
+            // A case-insensitive regex over the escaped term, not a phrase filter: `_msg:"term"`
+            // matches whole tokens, so a mid-word term ("rror", a partial IP) found nothing here
+            // while the SQL path's `ILIKE '%term%'` found it. Substring is the contract.
             let mut ors = vec![
-                format!("_msg:{}", logsql_quote(term)),
-                format!("source_ip:{}", logsql_quote(term)),
+                format!("_msg:~{}", logsql_quote(&ci_regex(&regex::escape(term)))),
+                format!(
+                    "source_ip:~{}",
+                    logsql_quote(&ci_regex(&regex::escape(term)))
+                ),
             ];
             if !name_node_ids.is_empty() {
                 let ids = name_node_ids
@@ -535,8 +549,10 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
     }
 }
 
-/// Whether a stored record satisfies the filter (substring semantics, matching the current
-/// PostgreSQL `ILIKE` path — the fake models the API contract, not VL's phrase tokenizer).
+/// Whether a stored record satisfies the filter, modelling the **one** contract both real backends
+/// now implement: case-insensitive substring for a plain term, case-insensitive regex for a pattern
+/// (PostgreSQL `ILIKE` / `~*`; LogsQL `~"(?i)…"` via [`build_filter_part`]). It used to model the
+/// SQL path only, which is how the LogsQL path's phrase-and-case-sensitive behaviour went unnoticed.
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
     let m = &r.msg;
@@ -573,9 +589,10 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) ->
     }
     if let Some(term) = &f.search {
         if f.regex {
-            // Message-only regex (mirrors the LogsQL `_msg:~` path). A pattern that fails to
-            // compile matches nothing (the API rejects it at the edge before it reaches here).
-            match regex::Regex::new(term) {
+            // Message-only, case-insensitive regex (mirrors both `_msg:~"(?i)…"` and SQL `~*`).
+            // A pattern that fails to compile matches nothing (the API rejects it at the edge
+            // before it reaches here).
+            match regex::Regex::new(&ci_regex(term)) {
                 Ok(re) if re.is_match(&m.message) => {}
                 _ => return false,
             }
@@ -722,7 +739,6 @@ mod tests {
 
     fn msg(id: Uuid, message: &str, at_unix_ms: i64) -> EventMsg {
         EventMsg {
-            schema_version: 1,
             event_id: id,
             kind: EventKind::Syslog,
             at_unix_ms,
@@ -788,10 +804,95 @@ mod tests {
         assert!(q.contains("kind:=\"syslog\""));
         assert!(q.contains(&format!("node_id:=\"{node}\"")));
         assert!(q.contains("matched:=\"true\""));
-        assert!(q.contains("_msg:\"link down\""));
-        assert!(q.contains("source_ip:\"link down\""));
+        // Substring, case-insensitive — matching the SQL path's `ILIKE '%term%'`. A phrase filter
+        // (`_msg:"link down"`) would silently miss mid-word hits that the SQL path returns.
+        assert!(q.contains("_msg:~\"(?i)link down\""));
+        assert!(q.contains("source_ip:~\"(?i)link down\""));
         assert!(q.contains(&format!("node_id:in(\"{}\")", Uuid::from_u128(9))));
         assert!(q.ends_with("| sort by (_time) desc | limit 100"));
+    }
+
+    #[test]
+    fn a_substring_term_is_regex_escaped_before_it_becomes_a_pattern() {
+        // The term is a literal for the operator; unescaped it would be read as a pattern and a
+        // search for "10.0.0.1" would match "10x0y0z1".
+        let filter = EventFilter {
+            search: Some("10.0.0.1".into()),
+            regex: false,
+            ..EventFilter::default()
+        };
+        // Doubled backslashes: `regex::escape` produces `10\.0\.0\.1`, then `logsql_quote` escapes
+        // each backslash for the quoted-string wire form.
+        let q = build_search_logsql(&filter, &[], 100);
+        assert!(q.contains(r"(?i)10\\.0\\.0\\.1"), "{q}");
+    }
+
+    #[test]
+    fn both_backends_filter_on_event_time_with_the_same_case_rules() {
+        // The one test that pins the SQL and LogsQL builders to *each other*. They are separate
+        // implementations of one `EventFilter`, and they drifted on four points at once — time
+        // column, substring-vs-phrase, regex case, node-name resolution — with nothing failing.
+        // Anything that changes the contract has to change both sides or land here.
+        use crate::events::EVENT_FILTER_WHERE;
+
+        // 1. Time bounds are event time on both sides. `recorded_at` is ingest time and must not
+        //    appear in the predicate at all — VictoriaLogs has no equivalent to compare against.
+        assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms < $1"));
+        assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms >= $2"));
+        assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms <= $3"));
+        assert!(
+            !EVENT_FILTER_WHERE.contains("recorded_at"),
+            "{EVENT_FILTER_WHERE}"
+        );
+
+        // 2. Case-insensitivity is explicit on both sides: `ILIKE`/`~*` there, `(?i)` here.
+        assert!(EVENT_FILTER_WHERE.contains("ILIKE"));
+        assert!(EVENT_FILTER_WHERE.contains("e.message ~* $7"));
+        let substring = build_filter_part(
+            &EventFilter {
+                search: Some("Term".into()),
+                ..EventFilter::default()
+            },
+            &[],
+        );
+        let pattern = build_filter_part(
+            &EventFilter {
+                search: Some("Term".into()),
+                regex: true,
+                ..EventFilter::default()
+            },
+            &[],
+        );
+        assert!(substring.contains("(?i)"), "{substring}");
+        assert!(pattern.contains("(?i)"), "{pattern}");
+
+        // 3. Every filter dimension reaches both sides. A field added to one builder only is the
+        //    exact failure this catches.
+        let full = EventFilter {
+            before: Some(Utc::now()),
+            since: Some(Utc::now()),
+            until: Some(Utc::now()),
+            kind: Some("trap".into()),
+            node_id: Some(Uuid::from_u128(3)),
+            matched: Some(false),
+            search: Some("x".into()),
+            regex: false,
+        };
+        let logsql = build_filter_part(&full, &[]);
+        for clause in [
+            "_time:<",
+            "_time:>=",
+            "_time:<=",
+            "kind:=",
+            "node_id:=",
+            "matched:=",
+            "_msg:~",
+        ] {
+            assert!(logsql.contains(clause), "LogsQL missing {clause}: {logsql}");
+        }
+        for bind in ["$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8"] {
+            assert!(EVENT_FILTER_WHERE.contains(bind), "SQL missing {bind}");
+        }
     }
 
     #[test]
@@ -803,7 +904,8 @@ mod tests {
         };
         // Even with resolved name ids, regex mode restricts to the message field.
         let q = build_search_logsql(&filter, &[Uuid::from_u128(9)], 100);
-        assert!(q.contains("_msg:~\"^%LINK-3\""));
+        // `(?i)` mirrors the SQL path's `~*`; the operator's pattern is otherwise passed through.
+        assert!(q.contains("_msg:~\"(?i)^%LINK-3\""), "{q}");
         assert!(!q.contains("source_ip:"));
         assert!(!q.contains("node_id:in("));
     }

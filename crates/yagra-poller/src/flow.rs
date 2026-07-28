@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use yagra_bus::{encode_raw, Bus, FlowBatch, FlowRecord, RawFlowDatagram, BUS_SCHEMA_VERSION};
+use yagra_bus::{encode_raw, Bus, FlowBatch, FlowRecord, RawFlowDatagram};
 use yagra_ingest::{
     parse_flow_export, parse_sflow, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter,
 };
@@ -131,7 +131,6 @@ pub async fn run_raw_flow_relay<B: Bus>(bus: Arc<B>, mut relay: RawFlowRelay) {
     while let Some(item) = relay.rx.recv().await {
         let bytes = item.bytes.len() as u64;
         let datagram = RawFlowDatagram {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: relay.poller_id.clone(),
             pool: relay.pool.clone(),
             exporter_ip: item.exporter,
@@ -291,7 +290,6 @@ pub async fn run_flow_flusher<B: Bus>(
                     .increment(u64::from(eb.dropped));
             }
             let batch = FlowBatch {
-                schema_version: BUS_SCHEMA_VERSION,
                 poller_id: poller_id.clone(),
                 pool: pool.clone(),
                 exporter_ip: eb.exporter,

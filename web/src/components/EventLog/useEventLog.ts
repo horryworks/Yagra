@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Keyset-paginated passive-event log fetch, shared by the Events page and the NodeDetail
 // Events tab. Owns the rows / loading / exhausted state machine and the load-more cursor
-// (last row's recorded_at). Filters are passed as PRIMITIVES (kind / node_id / matched) so an
+// (last row's event time). Filters are passed as PRIMITIVES (kind / node_id / matched) so an
 // inline filter object at the call site can't retrigger the reload effect every render.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -9,6 +9,16 @@ import { api } from '../../services/api';
 import type { EventKind, EventRow } from '../../types/api';
 
 export const EVENT_PAGE_SIZE = 100;
+
+/** The `before` cursor for the next (older) page: the row's own **event time**, as RFC 3339.
+ *
+ *  It used to be `recorded_at` (ingest time), which only worked because the SQL backend also
+ *  ordered by ingest time — the VictoriaLogs backend never did, so the two returned different
+ *  pages for the same request. Both now order by event time, so the cursor has to be event time
+ *  or paging skips and repeats rows. */
+export function eventCursor(row: EventRow): string {
+  return new Date(row.at_unix_ms).toISOString();
+}
 
 export interface EventLogFilter {
   kind?: EventKind;
@@ -84,7 +94,7 @@ export function useEventLog({
     if (!last) return;
     loadingMore.current = true;
     api
-      .listEvents(filterOpts(last.recorded_at))
+      .listEvents(filterOpts(eventCursor(last)))
       .then((page) => {
         setRows((cur) => [...cur, ...page]);
         setExhausted(page.length < EVENT_PAGE_SIZE);

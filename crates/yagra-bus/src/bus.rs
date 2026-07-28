@@ -300,7 +300,6 @@ mod tests {
         let mut rx = bus.subscribe_results();
 
         let result = PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: NodeId::from(Uuid::nil()),
             at_unix_ms: 0,
@@ -326,7 +325,6 @@ mod tests {
         let mut backfill = bus.subscribe_results_backfill();
 
         let result = PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: NodeId::from(Uuid::nil()),
             at_unix_ms: 0,
@@ -349,13 +347,12 @@ mod tests {
 
     #[tokio::test]
     async fn published_event_reaches_subscriber() {
-        use crate::messages::{EventKind, EventMsg, BUS_SCHEMA_VERSION};
+        use crate::messages::{EventKind, EventMsg};
 
         let bus = InMemoryBus::new(8);
         let mut rx = bus.subscribe_events();
 
         let event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind: EventKind::Syslog,
             at_unix_ms: 0,
@@ -379,13 +376,12 @@ mod tests {
 
     #[tokio::test]
     async fn published_flow_batch_reaches_subscriber() {
-        use crate::messages::{FlowBatch, FlowRecord, BUS_SCHEMA_VERSION};
+        use crate::messages::{FlowBatch, FlowRecord};
 
         let bus = InMemoryBus::new(8);
         let mut rx = bus.subscribe_flows();
 
         let batch = FlowBatch {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: "default".into(),
             exporter_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -414,14 +410,13 @@ mod tests {
 
     #[tokio::test]
     async fn raw_flow_datagram_reaches_only_the_raw_subscriber() {
-        use crate::messages::{encode_raw, RawFlowDatagram, RawFlowProto, BUS_SCHEMA_VERSION};
+        use crate::messages::{encode_raw, RawFlowDatagram, RawFlowProto};
 
         let bus = InMemoryBus::new(8);
         let mut raw = bus.subscribe_raw_flows();
         let mut aggregate = bus.subscribe_flows();
 
         let dg = RawFlowDatagram {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: Some("tokyo".into()),
             exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
@@ -460,7 +455,6 @@ mod tests {
         let mut rx = bus.subscribe_heartbeats();
 
         let hb = HeartbeatMsg {
-            schema_version: 1,
             poller_id: "edge-1".into(),
             pool: "default".into(),
             incarnation: Uuid::nil(),
@@ -488,7 +482,6 @@ mod tests {
         let mut rx = bus.subscribe_sync_requests();
 
         let req = SyncRequest {
-            schema_version: 1,
             poller_id: "edge-1".into(),
             pool: "default".into(),
             incarnation: Uuid::nil(),
@@ -508,7 +501,6 @@ mod tests {
         let mut rx = bus.subscribe_sync();
 
         let msg = SyncMsg::Delta(WorkingSetDelta {
-            schema_version: 1,
             poller_id: "edge-1".into(),
             epoch: Uuid::nil(),
             seq: 1,

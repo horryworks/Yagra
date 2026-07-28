@@ -39,8 +39,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use working_set::{ApplyOutcome, WorkingSet};
 use yagra_bus::{
-    subjects, HeartbeatMsg, NatsBus, PollJob, SyncBus, SyncMsg, SyncRequest, BUS_SCHEMA_VERSION,
-    HEARTBEAT_SECS,
+    subjects, HeartbeatMsg, NatsBus, PollJob, SyncBus, SyncMsg, SyncRequest, HEARTBEAT_SECS,
 };
 use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
@@ -203,7 +202,6 @@ async fn main() -> anyhow::Result<()> {
     {
         let sync_sub = Box::pin(bus.subscribe_sync(&identity.id).await?);
         let initial = SyncRequest {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: identity.id.clone(),
             pool: identity.pool.clone(),
             incarnation: identity.incarnation,
@@ -331,7 +329,6 @@ async fn run_sync_loop<B, S>(
                 metrics::counter!("yagra_sync_gaps_total").increment(1);
                 tracing::info!("working-set gap/epoch mismatch — requesting a fresh snapshot");
                 let req = SyncRequest {
-                    schema_version: BUS_SCHEMA_VERSION,
                     poller_id: poller_id.clone(),
                     pool: pool.clone(),
                     incarnation,
@@ -397,7 +394,6 @@ async fn run_heartbeat_loop<B>(
         };
         metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
         let hb = HeartbeatMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: poller_id.clone(),
             pool: pool.clone(),
             incarnation,

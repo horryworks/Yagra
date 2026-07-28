@@ -1543,8 +1543,13 @@ export interface EventRuleTestResult {
 export interface EventRow {
   id: string;
   kind: EventKind;
+  /** Event time — when the device says it happened. The log is filtered, ordered and **paged**
+   *  by this; `eventCursor()` turns it into the `before` parameter. */
   at_unix_ms: number;
-  recorded_at: string; // keyset cursor (pass as `before`)
+  /** Ingest time. Informational only — not the paging cursor, and not what `start`/`end` filter
+   *  (the VictoriaLogs path has no true ingest time to report, so only event time can agree
+   *  across both backends). */
+  recorded_at: string;
   source_ip: string | null;
   node_id: string | null;
   source_id: string | null;

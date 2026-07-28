@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use futures::stream::{Stream, StreamExt};
 use serde::Serialize;
 use uuid::Uuid;
-use yagra_bus::{DiscoveryCredential, DiscoveryJob, DiscoveryResult, NatsBus, BUS_SCHEMA_VERSION};
+use yagra_bus::{DiscoveryCredential, DiscoveryJob, DiscoveryResult, NatsBus};
 
 use crate::classification::Classifier;
 
@@ -184,7 +184,6 @@ impl DiscoveryRunner {
             g.insert(scan_id, ScanState::new(targets.clone()));
         }
         let job = DiscoveryJob {
-            schema_version: BUS_SCHEMA_VERSION,
             scan_id,
             targets,
             communities,
@@ -284,7 +283,6 @@ mod tests {
 
     fn partial(probed: u32, done: bool, found: Vec<DiscoveredDevice>) -> DiscoveryResult {
         DiscoveryResult {
-            schema_version: BUS_SCHEMA_VERSION,
             scan_id: Uuid::nil(),
             found,
             probed,
@@ -391,7 +389,6 @@ mod tests {
         let mut s = ScanState::new(targets(2));
         s.apply(
             DiscoveryResult {
-                schema_version: BUS_SCHEMA_VERSION,
                 scan_id: Uuid::nil(),
                 found: vec![DiscoveredDevice {
                     address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),

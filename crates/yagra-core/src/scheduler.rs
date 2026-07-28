@@ -270,6 +270,39 @@ pub enum SnmpAuth {
     V3(secrets::SnmpV3Secret),
 }
 
+/// A node bound to a single-purpose monitor, which replaces the ordinary ICMP/SNMP jobs entirely.
+///
+/// This type exists so the URL-beats-DNS precedence is decided in exactly one place
+/// ([`SpecialMonitor::resolve`]). It used to be expressed twice — once in the load order of
+/// [`PollDispatcher::build_scheduled_jobs_hinted`] and again in `assemble_node_jobs` — and nothing
+/// checked that the two agreed.
+#[derive(Debug, Clone, Copy)]
+pub enum SpecialMonitor<'a> {
+    /// The node has a `url_checks` row: one HTTP job.
+    Url(&'a UrlCheckConfig),
+    /// The node has a `dns_checks` row: one DNS job.
+    Dns(&'a DnsCheckConfig),
+}
+
+impl<'a> SpecialMonitor<'a> {
+    /// Decide a node's monitor kind from the side-table rows it carries.
+    ///
+    /// **URL wins.** A node should never hold both rows — the API edge refuses the second one
+    /// (`api::reject_conflicting_monitor`) — but a row can predate that guard, so the resolution
+    /// still has to be deterministic rather than depending on which lookup ran first.
+    #[must_use]
+    pub fn resolve(
+        url: Option<&'a UrlCheckConfig>,
+        dns: Option<&'a DnsCheckConfig>,
+    ) -> Option<Self> {
+        match (url, dns) {
+            (Some(cfg), _) => Some(Self::Url(cfg)),
+            (None, Some(cfg)) => Some(Self::Dns(cfg)),
+            (None, None) => None,
+        }
+    }
+}
+
 /// Assemble every poll job for one node from its already-resolved SNMP auth + collection set:
 /// an ICMP liveness job always, plus the SNMP scalar/table (v2c) or scalar (v3) jobs the set
 /// calls for. Each job is tagged with a short kind label for logging. Pure (no I/O) — the async
@@ -283,23 +316,22 @@ pub fn assemble_node_jobs(
     node: &Node,
     auth: Option<&SnmpAuth>,
     items: &[CollectionItem],
-    url_check: Option<&UrlCheckConfig>,
-    dns_check: Option<&DnsCheckConfig>,
+    monitor: Option<SpecialMonitor<'_>>,
     interval_secs: u32,
 ) -> Vec<(PollJob, &'static str)> {
-    // A URL monitor is its own node kind: dispatch the HTTP job and nothing else. ICMP is *not*
-    // added (a URL target may be non-pingable, e.g. behind a CDN); SNMP doesn't apply here.
-    if let Some(cfg) = url_check {
-        let job = build_http_job(node, build_http_check(cfg), interval_secs, Uuid::new_v4());
-        return vec![(job, "http")];
-    }
-    // A DNS monitor is likewise its own node kind: the DNS job and nothing else. ICMP is *not*
-    // added — a name has no address of its own, and the resolver need not be pingable. URL is
-    // checked first so a node carrying both rows resolves deterministically; the API edge refuses
-    // to create the second one anyway.
-    if let Some(cfg) = dns_check {
-        let job = build_dns_job(node, build_dns_check(cfg), interval_secs, Uuid::new_v4());
-        return vec![(job, "dns")];
+    // A URL or DNS monitor is its own node kind: dispatch that one job and nothing else. ICMP is
+    // *not* added — a URL target may be non-pingable (e.g. behind a CDN), and a name has no
+    // address of its own — and SNMP doesn't apply to either.
+    match monitor {
+        Some(SpecialMonitor::Url(cfg)) => {
+            let job = build_http_job(node, build_http_check(cfg), interval_secs, Uuid::new_v4());
+            return vec![(job, "http")];
+        }
+        Some(SpecialMonitor::Dns(cfg)) => {
+            let job = build_dns_job(node, build_dns_check(cfg), interval_secs, Uuid::new_v4());
+            return vec![(job, "dns")];
+        }
+        None => {}
     }
     let mut jobs = Vec::new();
     let probe_identity = node.vendor.is_none();
@@ -447,27 +479,24 @@ impl PollDispatcher {
         dns_hint: Option<&HashSet<Uuid>>,
     ) -> Vec<(PollJob, &'static str)> {
         let node_uuid = node.id.as_uuid();
-        // URL monitor short-circuit: a node with a URL check is HTTP-only.
-        match self.url_checks.get(node_uuid).await {
-            Ok(Some(cfg)) => {
-                return assemble_node_jobs(node, None, &[], Some(&cfg), None, interval_secs)
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
-            }
-        }
-        // DNS monitor short-circuit: a node with a DNS check is DNS-only.
-        if dns_hint.is_none_or(|ids| ids.contains(&node_uuid)) {
-            match self.dns_checks.get(node_uuid).await {
-                Ok(Some(cfg)) => {
-                    return assemble_node_jobs(node, None, &[], None, Some(&cfg), interval_secs)
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(node = %node.id, error = %e, "dns-check load failed; treating as non-DNS node");
-                }
-            }
+        let url = self.url_checks.get(node_uuid).await.unwrap_or_else(|e| {
+            tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
+            None
+        });
+        // The DNS lookup is skipped for the 99.9% of the fleet the sweep's hint says are not DNS
+        // monitors, and skipped entirely once URL has already won — `resolve` would discard it.
+        let dns = if url.is_none() && dns_hint.is_none_or(|ids| ids.contains(&node_uuid)) {
+            self.dns_checks.get(node_uuid).await.unwrap_or_else(|e| {
+                tracing::warn!(node = %node.id, error = %e, "dns-check load failed; treating as non-DNS node");
+                None
+            })
+        } else {
+            None
+        };
+        // Single-purpose monitors replace ICMP/SNMP entirely, so neither the credential nor the
+        // collection lookup is worth paying for them.
+        if let Some(monitor) = SpecialMonitor::resolve(url.as_ref(), dns.as_ref()) {
+            return assemble_node_jobs(node, None, &[], Some(monitor), interval_secs);
         }
         let auth = resolve_snmp_auth(&self.creds, node, self.env_community.as_deref()).await;
         // Only resolve the collection set when SNMP is configured (ICMP needs none).
@@ -476,7 +505,7 @@ impl PollDispatcher {
         } else {
             Vec::new()
         };
-        assemble_node_jobs(node, auth.as_ref(), &items, None, None, interval_secs)
+        assemble_node_jobs(node, auth.as_ref(), &items, None, interval_secs)
     }
 
     /// The node's poll jobs as reusable working-set [`JobSpec`]s (ADR-020) — the distributed-pool
@@ -953,7 +982,7 @@ mod tests {
     #[test]
     fn assemble_without_auth_yields_icmp_only() {
         // No SNMP credential resolved ⇒ liveness only, regardless of the collection set.
-        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], None, None, 30);
+        let jobs = assemble_node_jobs(&node("ping-only"), None, &[], None, 30);
         assert_eq!(kinds(&jobs), vec!["icmp"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Icmp(_)));
     }
@@ -962,7 +991,8 @@ mod tests {
     fn assemble_url_monitor_yields_http_only_no_icmp() {
         // A URL monitor is HTTP-only: no ICMP (target may be non-pingable) and no SNMP.
         let cfg = UrlCheckConfig::new("https://api.example.com/health");
-        let jobs = assemble_node_jobs(&node("url-mon"), None, &[], Some(&cfg), None, 30);
+        let monitor = SpecialMonitor::resolve(Some(&cfg), None);
+        let jobs = assemble_node_jobs(&node("url-mon"), None, &[], monitor, 30);
         assert_eq!(kinds(&jobs), vec!["http"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Http(_)));
     }
@@ -972,19 +1002,40 @@ mod tests {
         // A DNS monitor is DNS-only: no ICMP (a name has no address of its own, and the resolver
         // need not be pingable) and no SNMP.
         let cfg = DnsCheckConfig::new("horryworks.net");
-        let jobs = assemble_node_jobs(&node("dns-mon"), None, &[], None, Some(&cfg), 30);
+        let monitor = SpecialMonitor::resolve(None, Some(&cfg));
+        let jobs = assemble_node_jobs(&node("dns-mon"), None, &[], monitor, 30);
         assert_eq!(kinds(&jobs), vec!["dns"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Dns(_)));
     }
 
     #[test]
-    fn assemble_prefers_url_when_a_node_somehow_has_both_kinds() {
-        // The API edge refuses to create the second row, but if one ever existed the dispatch must
-        // still be deterministic rather than order-dependent.
+    fn resolve_prefers_url_when_a_node_somehow_has_both_kinds() {
+        // The API edge refuses to create the second row (`api::reject_conflicting_monitor`, both
+        // directions), but a row can predate that guard, so dispatch must still be deterministic
+        // rather than depending on which side-table lookup ran first.
         let url = UrlCheckConfig::new("https://api.example.com/health");
         let dns = DnsCheckConfig::new("horryworks.net");
-        let jobs = assemble_node_jobs(&node("both"), None, &[], Some(&url), Some(&dns), 30);
+        let monitor = SpecialMonitor::resolve(Some(&url), Some(&dns));
+        assert!(matches!(monitor, Some(SpecialMonitor::Url(_))));
+        let jobs = assemble_node_jobs(&node("both"), None, &[], monitor, 30);
         assert_eq!(kinds(&jobs), vec!["http"]);
+    }
+
+    #[test]
+    fn resolve_maps_each_single_row_and_no_rows() {
+        // Pins the whole truth table in one place, since this is now the only expression of the
+        // URL-beats-DNS rule — the dispatcher's load order defers to it rather than repeating it.
+        let url = UrlCheckConfig::new("https://api.example.com/health");
+        let dns = DnsCheckConfig::new("horryworks.net");
+        assert!(matches!(
+            SpecialMonitor::resolve(Some(&url), None),
+            Some(SpecialMonitor::Url(_))
+        ));
+        assert!(matches!(
+            SpecialMonitor::resolve(None, Some(&dns)),
+            Some(SpecialMonitor::Dns(_))
+        ));
+        assert!(SpecialMonitor::resolve(None, None).is_none());
     }
 
     #[test]
@@ -1037,7 +1088,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, None, 30);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp", "snmp_table", "icmp"]);
         // The maker is unknown (vendor None), so the scalar SNMP job carries the identity probe.
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
@@ -1054,7 +1105,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, None, 30);
+        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, 30);
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
         assert!(
             !snmp.0.probe_identity,
@@ -1079,7 +1130,7 @@ mod tests {
             ),
         ];
         let auth = SnmpAuth::V3(v3_secret());
-        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, None, 30);
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp_v3", "snmp_v3_table", "icmp"]);
         assert!(matches!(
             jobs.iter().find(|(_, k)| *k == "snmp_v3").unwrap().0.check,
@@ -1104,7 +1155,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V3(v3_secret());
-        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, None, 30);
+        let jobs = assemble_node_jobs(&node("fw"), Some(&auth), &items, None, 30);
         assert_eq!(kinds(&jobs), vec!["snmp_v3", "icmp"]);
     }
 }

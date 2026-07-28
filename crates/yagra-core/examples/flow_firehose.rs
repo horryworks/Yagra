@@ -86,7 +86,6 @@ fn make_batch(exporter: IpAddr, seq: u64, records: usize) -> FlowBatch {
         })
         .collect();
     FlowBatch {
-        schema_version: 1,
         poller_id: "flow-firehose".to_owned(),
         pool: DEFAULT_POOL.to_owned(),
         exporter_ip: exporter,

@@ -35,7 +35,7 @@ use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
 use yagra_bus::{
     HeartbeatMsg, JobSpec, NodeJobs, SyncBus, SyncMsg, SyncRequest, WorkingSetDelta,
-    WorkingSetSnapshot, BUS_SCHEMA_VERSION, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    WorkingSetSnapshot, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 use yagra_common::{HostSample, NodeId};
 
@@ -566,7 +566,6 @@ impl<B: SyncBus> Coordinator<B> {
                         to_send.push((
                             m.clone(),
                             SyncMsg::SnapshotChunk(WorkingSetSnapshot {
-                                schema_version: BUS_SCHEMA_VERSION,
                                 poller_id: m.clone(),
                                 epoch,
                                 seq: new_seq,
@@ -583,7 +582,6 @@ impl<B: SyncBus> Coordinator<B> {
                     to_send.push((
                         m.clone(),
                         SyncMsg::Delta(WorkingSetDelta {
-                            schema_version: BUS_SCHEMA_VERSION,
                             poller_id: m.clone(),
                             epoch,
                             seq: new_seq,
@@ -787,7 +785,6 @@ mod tests {
 
     fn heartbeat(id: &str, pool: &str, incarnation: Uuid) -> HeartbeatMsg {
         HeartbeatMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: id.to_owned(),
             pool: pool.to_owned(),
             incarnation,
@@ -1253,7 +1250,6 @@ mod tests {
         coord
             .observe_sync_request(
                 SyncRequest {
-                    schema_version: BUS_SCHEMA_VERSION,
                     poller_id: "p1".to_owned(),
                     pool: "default".to_owned(),
                     incarnation: inc,

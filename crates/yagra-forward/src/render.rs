@@ -195,12 +195,10 @@ fn header_field(value: Option<&str>, max: usize) -> String {
 mod tests {
     use super::*;
     use uuid::Uuid;
-    use yagra_bus::BUS_SCHEMA_VERSION;
     use yagra_ingest::{parse_syslog, parse_trap, SyslogFormat};
 
     fn event(kind: EventKind) -> EventMsg {
         EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind,
             at_unix_ms: 1_700_000_000_123,

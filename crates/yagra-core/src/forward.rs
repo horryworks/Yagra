@@ -1516,7 +1516,6 @@ fn test_event(source: SourceKind) -> EventMsg {
         SourceKind::Syslog | SourceKind::Flow => EventKind::Syslog,
     };
     EventMsg {
-        schema_version: yagra_bus::BUS_SCHEMA_VERSION,
         event_id: Uuid::new_v4(),
         kind,
         at_unix_ms: now_unix_ms(),
@@ -1591,7 +1590,6 @@ mod tests {
 
     fn syslog_event(pool: Option<&str>, raw: Option<&[u8]>) -> EventMsg {
         EventMsg {
-            schema_version: yagra_bus::BUS_SCHEMA_VERSION,
             event_id: Uuid::new_v4(),
             kind: EventKind::Syslog,
             at_unix_ms: 1_700_000_000_000,
@@ -2047,7 +2045,6 @@ mod tests {
 
     fn raw_flow(bytes: Vec<u8>, pool: Option<&str>) -> RawFlowDatagram {
         RawFlowDatagram {
-            schema_version: yagra_bus::BUS_SCHEMA_VERSION,
             poller_id: "edge-1".to_owned(),
             pool: pool.map(str::to_owned),
             exporter_ip: "192.168.1.1".parse().unwrap(),

@@ -2,10 +2,28 @@
 //! Bus message contract between core (Yagra-core) and pollers (Yagra-poller).
 //!
 //! These are the *only* way core and pollers talk (ADR-003). Messages are
-//! **version-tolerant** (ADR-017): every message carries `schema_version`, new fields
-//! are added as `#[serde(default)]`, and unknown fields are ignored (we never use
-//! `deny_unknown_fields`). That is what lets a new core run against an old poller, and
-//! vice versa, during a rolling upgrade.
+//! **version-tolerant** (ADR-017) so a new core runs against an old poller, and vice
+//! versa, during a rolling upgrade.
+//!
+//! **There is deliberately no version field.** Compatibility rests entirely on structural
+//! tolerance, in five mechanisms:
+//!
+//! 1. Every new field is `#[serde(default)]`, so an N-1 producer that omits it still
+//!    deserializes. A new field needs a `…_tolerates_missing_and_unknown_fields` test.
+//! 2. We never use `deny_unknown_fields`, so a field an N-1 consumer has never heard of
+//!    (including the `schema_version` that older builds still send) is ignored.
+//! 3. [`crate::de_lenient_specs`] decodes list elements individually, so one unknown
+//!    `CheckSpec` variant drops that element instead of failing the whole message.
+//! 4. Subscribers filter with `.ok()`, and new message families get their own subject
+//!    ([`crate::subjects`]) rather than overloading an existing one — subject
+//!    partitioning is the real version gate.
+//! 5. Optional behaviour is negotiated by capability strings in [`HeartbeatMsg::caps`]
+//!    (see [`CAP_RAW_CAPTURE`], [`CAP_FLOW_RELAY`]), not by a version number.
+//!
+//! A `BUS_SCHEMA_VERSION` constant used to be stamped on every message here. Nothing ever
+//! read it — no producer varied its output by it and no consumer branched on it — so it
+//! read as a version gate without being one, and was removed. Do not reintroduce a version
+//! field unless something actually makes a decision from it.
 
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
@@ -14,14 +32,6 @@ use yagra_common::{
     DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpMethod, IfIndex, InterfaceField,
     MerakiTier, MetricKind, NodeId, SeriesKey,
 };
-
-/// Current bus message schema version. Bump on a backward-compatible change; a
-/// breaking change needs an N/N-1 migration plan (ADR-017).
-pub const BUS_SCHEMA_VERSION: u16 = 1;
-
-const fn default_version() -> u16 {
-    BUS_SCHEMA_VERSION
-}
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
 /// datagram to passive events ([`EventMsg::raw`], ADR-034). Core requires it before promising a
@@ -49,9 +59,6 @@ pub type TraceContext = std::collections::HashMap<String, String>;
 /// the skeleton's ICMP path needs none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PollJob {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Unique id of this job (correlates the result).
     pub job_id: Uuid,
     /// Node being polled.
@@ -91,7 +98,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -113,7 +119,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -135,7 +140,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -157,7 +161,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -180,7 +183,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -203,7 +205,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -227,7 +228,6 @@ impl PollJob {
         interval_secs: u32,
     ) -> Self {
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id,
             target,
@@ -248,7 +248,6 @@ impl PollJob {
     pub fn meraki_collect(job_id: Uuid, check: MerakiCollectCheck, interval_secs: u32) -> Self {
         let org_handle = NodeId::from(check.meraki_org_uuid);
         Self {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id: org_handle,
             target: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -267,9 +266,9 @@ impl PollJob {
 // poller a *working set* — the set of polling specs it owns — as a full snapshot plus
 // incremental deltas, and the poller schedules them locally (ADR-020). This cuts steady-state
 // bus traffic and keeps polling running through a WAN blip. The messages below are the wire
-// contract for that; they follow the same conventions as the rest of this file (`schema_version`
-// with `default_version()`, `#[serde(default)]` on optional fields, no `deny_unknown_fields`),
-// so they stay N/N-1 tolerant during a rolling upgrade (ADR-017).
+// contract for that; they follow the same conventions as the rest of this file
+// (`#[serde(default)]` on optional fields, no `deny_unknown_fields`), so they stay N/N-1
+// tolerant during a rolling upgrade (ADR-017).
 
 /// One polling work item as it lives in a poller's working set: a [`PollJob`] **without** its
 /// per-dispatch `job_id` (ADR-020). Core distributes reusable specs; the poller stamps a fresh
@@ -293,7 +292,7 @@ pub struct JobSpec {
 
 impl JobSpec {
     /// Strip a [`PollJob`] down to its reusable working-set spec, dropping the per-dispatch
-    /// identity (`job_id`, `schema_version`, `credential_ref`).
+    /// identity (`job_id`, `credential_ref`).
     #[must_use]
     pub fn from_job(job: &PollJob) -> Self {
         Self {
@@ -305,13 +304,12 @@ impl JobSpec {
         }
     }
 
-    /// Re-hydrate a dispatchable [`PollJob`] from this spec, stamping the given `job_id` and the
-    /// current [`BUS_SCHEMA_VERSION`]. Credentials are resolved/inlined by core separately, so
-    /// `credential_ref` is left `None` here.
+    /// Re-hydrate a dispatchable [`PollJob`] from this spec, stamping the given `job_id`.
+    /// Credentials are resolved/inlined by core separately, so `credential_ref` is left
+    /// `None` here.
     #[must_use]
     pub fn to_job(&self, job_id: Uuid) -> PollJob {
         PollJob {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id,
             node_id: self.node_id,
             target: self.target,
@@ -398,9 +396,6 @@ pub enum SyncMsg {
 /// counter, so the poller can tell a stale/racing snapshot from the current one (ADR-020).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkingSetSnapshot {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// The poller this snapshot is addressed to (sanitized id).
     pub poller_id: String,
     /// Core-process epoch — a change forces the poller to resync.
@@ -425,9 +420,6 @@ pub struct WorkingSetSnapshot {
 /// upsert/remove deltas — no special-case code path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkingSetDelta {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// The poller this delta is addressed to (sanitized id).
     pub poller_id: String,
     /// Core-process epoch (must match the poller's current epoch, else it resyncs).
@@ -489,9 +481,6 @@ pub const OFFLINE_AFTER_SECS: u64 = 30;
 /// N/N-1 tolerant (ADR-017).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatMsg {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Sanitized poller id (stable across restarts).
     pub poller_id: String,
     /// Pool this poller serves.
@@ -541,9 +530,6 @@ pub struct HeartbeatMsg {
 /// plain pub/sub, **not** request-reply, because the reply is several snapshot chunks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyncRequest {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Sanitized id of the poller requesting the snapshot.
     pub poller_id: String,
     /// Pool the poller serves.
@@ -863,9 +849,6 @@ pub struct MerakiDeviceRef {
 /// The result of executing a [`PollJob`], sent back to core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PollResult {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// The job this answers.
     pub job_id: Uuid,
     /// Node that was polled.
@@ -1007,8 +990,6 @@ impl Sample {
 /// raw-socket ICMP).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryJob {
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Correlates the result back to the originating scan.
     pub scan_id: Uuid,
     /// Addresses to probe (IPv4 or IPv6).
@@ -1090,8 +1071,6 @@ pub struct DiscoveredDevice {
 /// converges on correct data — ADR-017).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryResult {
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     pub scan_id: Uuid,
     /// All devices found so far (cumulative).
     pub found: Vec<DiscoveredDevice>,
@@ -1144,9 +1123,6 @@ impl EventKind {
 /// N/N-1 tolerant (ADR-017).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventMsg {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Receiver-generated id (idempotency / tracing).
     pub event_id: Uuid,
     /// What kind of event this is.
@@ -1229,9 +1205,6 @@ impl EventMsg {
 /// know which node an exporter maps to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowBatch {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Poller that received and aggregated the flows.
     pub poller_id: String,
     /// Pool the poller belongs to.
@@ -1328,9 +1301,6 @@ impl RawFlowProto {
 /// dropped, never buffered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawFlowDatagram {
-    /// Message schema version (defaulted for forward-compat).
-    #[serde(default = "default_version")]
-    pub schema_version: u16,
     /// Poller that received the datagram.
     pub poller_id: String,
     /// Which poller pool received it, if the poller declares one.
@@ -1411,10 +1381,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_and_missing_version_are_tolerated() {
-        // Simulates an older producer (no schema_version) that also a newer one added a
-        // field we don't know — ADR-017 forward/backward compatibility.
+    fn unknown_and_removed_fields_are_tolerated() {
+        // Both directions of ADR-017 at once: an N-1 producer still stamps the removed
+        // `schema_version`, and a newer one added a field we don't know. Neither may fail.
         let json = r#"{
+            "schema_version": 1,
             "job_id": "00000000-0000-0000-0000-000000000000",
             "node_id": "00000000-0000-0000-0000-000000000000",
             "target": "10.0.0.1",
@@ -1423,7 +1394,6 @@ mod tests {
             "future_field": "ignored"
         }"#;
         let job: PollJob = serde_json::from_str(json).unwrap();
-        assert_eq!(job.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(job.interval_secs, 30);
         assert!(!job.probe_identity); // N-1: absent identity-probe flag defaults off
     }
@@ -1598,7 +1568,6 @@ mod tests {
     #[test]
     fn discovery_job_with_credentials_round_trips() {
         let job = DiscoveryJob {
-            schema_version: BUS_SCHEMA_VERSION,
             scan_id: Uuid::nil(),
             targets: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))],
             communities: vec!["public".into()],
@@ -1657,7 +1626,6 @@ mod tests {
     #[test]
     fn event_msg_round_trips_through_json() {
         let event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind: EventKind::Syslog,
             at_unix_ms: 1_700_000_000_000,
@@ -1689,7 +1657,6 @@ mod tests {
     #[test]
     fn event_msg_without_raw_decodes_to_none_and_omits_the_field() {
         let event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind: EventKind::Webhook,
             at_unix_ms: 0,
@@ -1716,7 +1683,6 @@ mod tests {
     #[test]
     fn corrupt_raw_payload_decodes_to_none_instead_of_panicking() {
         let mut event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind: EventKind::Syslog,
             at_unix_ms: 0,
@@ -1743,6 +1709,7 @@ mod tests {
         // N/N-1 (ADR-017): a producer that sends only the required fields (or an older
         // schema without the detail fields) still deserializes; extras are ignored.
         let json = r#"{
+            "schema_version": 1,
             "event_id": "00000000-0000-0000-0000-000000000000",
             "kind": "trap",
             "at_unix_ms": 0,
@@ -1750,7 +1717,6 @@ mod tests {
             "future_field": "ignored"
         }"#;
         let event: EventMsg = serde_json::from_str(json).unwrap();
-        assert_eq!(event.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(event.kind, EventKind::Trap);
         assert!(event.source_ip.is_none());
         assert!(event.varbinds.is_empty());
@@ -1771,7 +1737,6 @@ mod tests {
     #[test]
     fn flow_batch_round_trips_through_json() {
         let batch = FlowBatch {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: "default".into(),
             exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
@@ -1821,8 +1786,9 @@ mod tests {
     }
 
     #[test]
-    fn minimal_flow_batch_defaults_version_and_dropped() {
+    fn minimal_flow_batch_defaults_dropped() {
         let json = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "pool": "default",
             "exporter_ip": "192.168.1.1",
@@ -1831,7 +1797,6 @@ mod tests {
             "records": []
         }"#;
         let batch: FlowBatch = serde_json::from_str(json).unwrap();
-        assert_eq!(batch.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(batch.dropped, 0); // defaulted
         assert!(batch.records.is_empty());
     }
@@ -1842,7 +1807,6 @@ mod tests {
         // which is the whole reason it is base64 rather than a string field.
         let original = [0x00u8, 0x09, 0x00, 0x01, 0xff, 0xfe, 0x00, 0x7f];
         let dg = RawFlowDatagram {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: Some("tokyo".into()),
             exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
@@ -1859,8 +1823,9 @@ mod tests {
     }
 
     #[test]
-    fn minimal_raw_flow_datagram_defaults_version_pool_and_port() {
+    fn minimal_raw_flow_datagram_defaults_pool_and_port() {
         let json = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "exporter_ip": "2001:db8::1",
             "proto": "sflow",
@@ -1869,7 +1834,6 @@ mod tests {
             "future_field": "ignored"
         }"#;
         let dg: RawFlowDatagram = serde_json::from_str(json).unwrap();
-        assert_eq!(dg.schema_version, BUS_SCHEMA_VERSION);
         assert_eq!(dg.pool, None);
         assert_eq!(dg.src_port, 0);
         assert!(dg.exporter_ip.is_ipv6()); // never assume v4
@@ -1879,7 +1843,6 @@ mod tests {
     #[test]
     fn corrupt_raw_flow_payload_decodes_to_none_instead_of_panicking() {
         let dg = RawFlowDatagram {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: None,
             exporter_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -2013,7 +1976,6 @@ mod tests {
     #[test]
     fn poll_result_with_poller_id_round_trips() {
         let result = PollResult {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id: Uuid::nil(),
             node_id: NodeId::from(Uuid::nil()),
             at_unix_ms: 42,
@@ -2050,7 +2012,6 @@ mod tests {
         let rebuilt = spec.to_job(new_id);
         // Everything but the per-dispatch identity survives the round-trip.
         assert_eq!(rebuilt.job_id, new_id);
-        assert_eq!(rebuilt.schema_version, BUS_SCHEMA_VERSION);
         assert_eq!(rebuilt.credential_ref, None);
         assert_eq!(rebuilt.node_id, job.node_id);
         assert_eq!(rebuilt.target, job.target);
@@ -2087,7 +2048,6 @@ mod tests {
     #[test]
     fn snapshot_chunk_round_trips_and_carries_snake_case_tag() {
         let msg = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             epoch: Uuid::nil(),
             seq: 7,
@@ -2105,7 +2065,6 @@ mod tests {
     #[test]
     fn delta_round_trips_and_carries_snake_case_tag() {
         let msg = SyncMsg::Delta(WorkingSetDelta {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             epoch: Uuid::nil(),
             seq: 8,
@@ -2140,8 +2099,10 @@ mod tests {
 
     #[test]
     fn working_set_snapshot_tolerates_missing_and_unknown_fields() {
-        // Old producer: no schema_version / total_nodes; new producer: an extra field (ADR-017).
+        // Old producer: the removed `schema_version`, no `total_nodes`; new producer: an
+        // extra field (ADR-017).
         let json = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "epoch": "00000000-0000-0000-0000-000000000000",
             "seq": 3,
@@ -2151,16 +2112,16 @@ mod tests {
             "future_field": 99
         }"#;
         let snap: WorkingSetSnapshot = serde_json::from_str(json).unwrap();
-        assert_eq!(snap.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert_eq!(snap.total_nodes, 0); // defaulted
         assert_eq!(snap.chunk_total, 4);
     }
 
     #[test]
     fn working_set_delta_tolerates_missing_and_unknown_fields() {
-        // A remove-only delta omits `upserts`; an upsert-only delta omits `removes`; both, plus a
-        // missing schema_version and an unknown field, must deserialize (ADR-017).
+        // A remove-only delta omits `upserts`; an upsert-only delta omits `removes`; both, plus
+        // the removed `schema_version` and an unknown field, must deserialize (ADR-017).
         let json = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "epoch": "00000000-0000-0000-0000-000000000000",
             "seq": 9,
@@ -2168,7 +2129,6 @@ mod tests {
             "future_field": true
         }"#;
         let delta: WorkingSetDelta = serde_json::from_str(json).unwrap();
-        assert_eq!(delta.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert!(delta.upserts.is_empty()); // defaulted
         assert_eq!(delta.removes.len(), 1);
     }
@@ -2176,7 +2136,6 @@ mod tests {
     #[test]
     fn heartbeat_round_trips_and_tolerates_minimal_form() {
         let hb = HeartbeatMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: "tokyo".into(),
             incarnation: Uuid::nil(),
@@ -2207,13 +2166,13 @@ mod tests {
 
         // Old producer: only the required identity fields + an unknown extra (ADR-017).
         let minimal = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "pool": "default",
             "incarnation": "00000000-0000-0000-0000-000000000000",
             "future_field": "ignored"
         }"#;
         let hb: HeartbeatMsg = serde_json::from_str(minimal).unwrap();
-        assert_eq!(hb.schema_version, BUS_SCHEMA_VERSION); // defaulted
         assert!(hb.version.is_empty());
         assert!(hb.epoch.is_none());
         assert_eq!(hb.last_seq, 0);
@@ -2223,9 +2182,8 @@ mod tests {
     }
 
     #[test]
-    fn sync_request_round_trips_and_tolerates_missing_version() {
+    fn sync_request_round_trips_and_tolerates_legacy_fields() {
         let req = SyncRequest {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             pool: "tokyo".into(),
             incarnation: Uuid::nil(),
@@ -2235,13 +2193,16 @@ mod tests {
         assert_eq!(req, back);
 
         let old = r#"{
+            "schema_version": 1,
             "poller_id": "edge-1",
             "pool": "default",
             "incarnation": "00000000-0000-0000-0000-000000000000",
             "future_field": 1
         }"#;
-        let req: SyncRequest = serde_json::from_str(old).unwrap();
-        assert_eq!(req.schema_version, BUS_SCHEMA_VERSION); // defaulted
+        let old: SyncRequest = serde_json::from_str(old).unwrap();
+        assert_eq!(old.poller_id, "edge-1");
+        assert_eq!(old.pool, "default");
+        assert_eq!(old.incarnation, Uuid::nil());
     }
 
     #[test]
@@ -2307,7 +2268,6 @@ mod tests {
             })
             .collect();
         let snap = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-poller-fully-qualified.example.com".into(),
             epoch: Uuid::new_v4(),
             seq: u64::MAX,

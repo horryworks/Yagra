@@ -276,7 +276,6 @@ mod tests {
 
     fn event(kind: EventKind) -> EventMsg {
         EventMsg {
-            schema_version: yagra_bus::BUS_SCHEMA_VERSION,
             event_id: Uuid::from_u128(7),
             kind,
             at_unix_ms: 1_700_000_000_000,

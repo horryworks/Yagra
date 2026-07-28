@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::Instrument as _;
 use yagra_bus::{
     CheckOutcome, CheckSpec, DiscoveredInterface, PollJob, PollResult, Sample, SnmpColumn,
-    SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck, BUS_SCHEMA_VERSION,
+    SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck,
 };
 use yagra_common::{
     DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
@@ -267,7 +267,6 @@ pub async fn execute_meraki(
             })
             .collect();
         results.push(PollResult {
-            schema_version: BUS_SCHEMA_VERSION,
             job_id: job.job_id,
             node_id,
             at_unix_ms,
@@ -524,7 +523,6 @@ async fn execute_table_walk(
     };
 
     PollResult {
-        schema_version: BUS_SCHEMA_VERSION,
         job_id: job.job_id,
         node_id: job.node_id,
         at_unix_ms,
@@ -714,7 +712,6 @@ fn result(
     samples: Vec<Sample>,
 ) -> PollResult {
     PollResult {
-        schema_version: BUS_SCHEMA_VERSION,
         job_id: job.job_id,
         node_id: job.node_id,
         at_unix_ms,
@@ -1568,7 +1565,7 @@ mod tests {
     async fn snapshot_due_job_flows_through_run_stream_with_poller_id() {
         use crate::working_set::{ApplyOutcome, WorkingSet};
         use std::time::Instant;
-        use yagra_bus::{NodeJobs, SyncMsg, WorkingSetSnapshot, BUS_SCHEMA_VERSION};
+        use yagra_bus::{NodeJobs, SyncMsg, WorkingSetSnapshot};
 
         let bus = Arc::new(InMemoryBus::new(16));
         let mut results_rx = bus.subscribe_results();
@@ -1577,7 +1574,6 @@ mod tests {
         // Build a one-node, one-ICMP-spec working set from a single-chunk snapshot.
         let node = NodeId::from(Uuid::nil());
         let snap = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
-            schema_version: BUS_SCHEMA_VERSION,
             poller_id: "edge-1".into(),
             epoch: Uuid::from_u128(1),
             seq: 1,

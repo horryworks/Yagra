@@ -84,7 +84,6 @@ fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResu
         })
         .collect();
     PollResult {
-        schema_version: 1,
         job_id: Uuid::new_v4(),
         node_id: node,
         at_unix_ms: now_ms(),

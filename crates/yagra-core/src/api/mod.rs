@@ -5601,6 +5601,54 @@ async fn resolve_monitor_address(url: &reqwest::Url) -> IpAddr {
     }
 }
 
+/// The single-purpose monitor kinds a node can be bound to. One node is one kind.
+#[derive(Clone, Copy)]
+enum MonitorKind {
+    Url,
+    Dns,
+}
+
+impl MonitorKind {
+    /// The kind that would conflict with this one.
+    fn other(self) -> &'static str {
+        match self {
+            Self::Url => "DNS",
+            Self::Dns => "URL",
+        }
+    }
+}
+
+/// Refuse to bind `incoming` to a node that already carries the *other* monitor kind.
+///
+/// The scheduler resolves a node's kind in one place ([`crate::scheduler::SpecialMonitor::resolve`])
+/// and URL wins, so a node holding both rows would have its DNS check silently never run. Guarding
+/// only the DNS writer — which is what shipped — just moved the hole to the URL writer, so both
+/// call this. Node *creation* needs no guard: those handlers make a fresh node.
+// The `Err` is the standard axum `Response`, same reasoning as `validate_monitor_url`.
+#[allow(clippy::result_large_err)]
+async fn reject_conflicting_monitor(
+    admin: &AdminState,
+    node_id: Uuid,
+    incoming: MonitorKind,
+) -> Result<(), Response> {
+    let existing = match incoming {
+        MonitorKind::Url => admin.dns_checks.get(node_id).await.map(|c| c.is_some()),
+        MonitorKind::Dns => admin.url_checks.get(node_id).await.map(|c| c.is_some()),
+    };
+    match existing {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(error_response(
+            StatusCode::CONFLICT,
+            "conflicting_monitor_kind",
+            format!("node is already a {} monitor", incoming.other()),
+        )),
+        Err(e) => {
+            tracing::error!(error = %e, "monitor-kind conflict lookup failed");
+            Err(internal("failed to check monitor kind"))
+        }
+    }
+}
+
 /// The URL-monitor config for a node, or 404 if the node isn't a URL monitor.
 async fn get_url_check(
     State(st): State<ApiState>,
@@ -5649,6 +5697,9 @@ async fn set_url_check(
             tracing::error!(error = %e, "set url check: load node failed");
             return internal("failed to load node");
         }
+    }
+    if let Err(resp) = reject_conflicting_monitor(admin, node_id, MonitorKind::Url).await {
+        return resp;
     }
     match admin.url_checks.upsert(node_id, &cfg).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -5873,21 +5924,8 @@ async fn set_dns_check(
             return internal("failed to load node");
         }
     }
-    // One node, one kind: the scheduler resolves URL before DNS, so allowing both rows would make
-    // the DNS config silently dead. Refuse it explicitly instead.
-    match admin.url_checks.get(node_id).await {
-        Ok(Some(_)) => {
-            return error_response(
-                StatusCode::CONFLICT,
-                "conflicting_monitor_kind",
-                "node is already a URL monitor".to_owned(),
-            )
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::error!(error = %e, "set dns check: url-check lookup failed");
-            return internal("failed to check monitor kind");
-        }
+    if let Err(resp) = reject_conflicting_monitor(admin, node_id, MonitorKind::Dns).await {
+        return resp;
     }
     match admin.dns_checks.upsert(node_id, &cfg).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -8965,7 +9003,6 @@ async fn ingest_webhook(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     let msg = yagra_bus::EventMsg {
-        schema_version: yagra_bus::BUS_SCHEMA_VERSION,
         event_id,
         kind: yagra_bus::EventKind::Webhook,
         at_unix_ms,
@@ -10808,7 +10845,6 @@ mod tests {
     fn store_with_reading(node: NodeId, metric: &str, value: f64) -> Arc<dyn MetricStore> {
         let sink = InMemorySink::default();
         sink.ingest(&PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: node,
             at_unix_ms: 0,
@@ -13036,6 +13072,15 @@ mod tests {
                 assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
             }
         }
+    }
+
+    #[test]
+    fn a_monitor_kind_conflict_names_the_kind_the_node_already_has() {
+        // The guard is symmetric now (it used to exist on the DNS writer only), so the message
+        // must name the *existing* kind, not the incoming one — otherwise the URL direction would
+        // tell an operator their node "is already a URL monitor" while they were setting a URL.
+        assert_eq!(MonitorKind::Url.other(), "DNS");
+        assert_eq!(MonitorKind::Dns.other(), "URL");
     }
 
     #[tokio::test]

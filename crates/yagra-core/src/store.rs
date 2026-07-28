@@ -1514,7 +1514,6 @@ mod tests {
         let node = NodeId::new();
         let store = InMemorySink::default();
         let result = PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: node,
             at_unix_ms: 0,
@@ -1542,7 +1541,6 @@ mod tests {
         let ids: Vec<NodeId> = (0..3).map(|_| NodeId::new()).collect();
         for n in &ids {
             let result = PollResult {
-                schema_version: 1,
                 job_id: Uuid::nil(),
                 node_id: *n,
                 at_unix_ms: 0,

@@ -310,7 +310,6 @@ mod tests {
 
     fn snapshot(epoch: Uuid, seq: u64, idx: u32, total: u32, nodes: Vec<NodeJobs>) -> SyncMsg {
         SyncMsg::SnapshotChunk(WorkingSetSnapshot {
-            schema_version: yagra_bus::BUS_SCHEMA_VERSION,
             poller_id: "p1".to_owned(),
             epoch,
             seq,
@@ -323,7 +322,6 @@ mod tests {
 
     fn delta(epoch: Uuid, seq: u64, upserts: Vec<NodeJobs>, removes: Vec<NodeId>) -> SyncMsg {
         SyncMsg::Delta(WorkingSetDelta {
-            schema_version: yagra_bus::BUS_SCHEMA_VERSION,
             poller_id: "p1".to_owned(),
             epoch,
             seq,

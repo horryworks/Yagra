@@ -1110,7 +1110,6 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     let sink = Arc::new(InMemorySink::default());
     // Demo seed so the walking-skeleton WebUI shows data before real polling is wired.
     sink.ingest(&PollResult {
-        schema_version: 1,
         job_id: Uuid::nil(),
         node_id: yagra_common::NodeId::from(Uuid::nil()),
         at_unix_ms: 0,
@@ -2877,7 +2876,6 @@ mod tests {
         let (metrics_tx, mut metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
         let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
         let result = PollResult {
-            schema_version: 1,
             job_id: uuid::Uuid::nil(),
             node_id: NodeId::from(uuid::Uuid::nil()),
             at_unix_ms: 1_000, // deliberately ancient — must NOT drive any "now" alert logic
@@ -2998,7 +2996,6 @@ mod tests {
 
     fn sample_result() -> Arc<PollResult> {
         Arc::new(PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: NodeId::new(),
             at_unix_ms: 1,
@@ -3110,7 +3107,6 @@ mod tests {
 
     fn flow_batch(exporter: &str, records: Vec<yagra_bus::FlowRecord>) -> FlowBatch {
         FlowBatch {
-            schema_version: 1,
             poller_id: "test-poller".into(),
             pool: DEFAULT_POOL.into(),
             exporter_ip: exporter.parse().unwrap(),

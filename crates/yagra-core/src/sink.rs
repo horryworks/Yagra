@@ -65,7 +65,6 @@ mod tests {
 
     fn result_with(node: NodeId, metric: &str, value: f64) -> PollResult {
         PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: node,
             at_unix_ms: 0,

@@ -1426,7 +1426,6 @@ mod tests {
 
     fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
         PollResult {
-            schema_version: 1,
             job_id: Uuid::nil(),
             node_id: node,
             at_unix_ms: at,

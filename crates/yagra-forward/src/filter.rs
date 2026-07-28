@@ -922,7 +922,6 @@ fn same_prefix(net: &[u8], addr: &[u8], prefix: u8) -> bool {
 mod tests {
     use super::*;
     use uuid::Uuid;
-    use yagra_bus::BUS_SCHEMA_VERSION;
 
     fn cond(field: FilterField, op: FilterOp, value: &str) -> Condition {
         Condition {
@@ -938,7 +937,6 @@ mod tests {
 
     fn syslog_event() -> EventMsg {
         EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::nil(),
             kind: EventKind::Syslog,
             at_unix_ms: 1_700_000_000_000,

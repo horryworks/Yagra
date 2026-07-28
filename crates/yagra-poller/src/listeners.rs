@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use uuid::Uuid;
-use yagra_bus::{encode_raw, Bus, EventKind, EventMsg, BUS_SCHEMA_VERSION};
+use yagra_bus::{encode_raw, Bus, EventKind, EventMsg};
 use yagra_ingest::{
     build_inform_response, clip_event_text, parse_syslog, parse_trap, SourceLimiter, TrapError,
 };
@@ -81,7 +81,6 @@ pub async fn run_syslog_listener<B: Bus>(
 
         let parsed = parse_syslog(&buf[..len]);
         let event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::new_v4(),
             kind: EventKind::Syslog,
             at_unix_ms: now_unix_ms(),
@@ -173,7 +172,6 @@ pub async fn run_trap_listener<B: Bus>(
         // here (the syslog parser clips internally) so every message satisfies the DB CHECK.
         let (message, truncated) = clip_event_text(&trap.render_message());
         let event = EventMsg {
-            schema_version: BUS_SCHEMA_VERSION,
             event_id: Uuid::new_v4(),
             kind: EventKind::Trap,
             at_unix_ms: now_unix_ms(),

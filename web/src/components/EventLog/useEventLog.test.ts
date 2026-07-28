@@ -6,17 +6,25 @@ import type { EventKind, EventRow } from '../../types/api';
 import { EVENT_PAGE_SIZE } from './useEventLog';
 
 // Keyset paging over the passive-event firehose. The subtle parts are all here: the cursor is the
-// last row's `recorded_at` (not an offset), "exhausted" is inferred from a short page, filters are
-// primitives so an inline object can't retrigger the reload effect, and concurrent loadMore calls
-// must not double-append.
+// last row's **event time** (not an offset, and not `recorded_at` — the two backends only agree on
+// event time), "exhausted" is inferred from a short page, filters are primitives so an inline
+// object can't retrigger the reload effect, and concurrent loadMore calls must not double-append.
 
 const listEvents = vi.fn();
 vi.mock('../../services/api', () => ({
   api: { listEvents: (opts: unknown) => listEvents(opts) },
 }));
 
+// `recorded_at` is deliberately set to a *different* instant from `at_unix_ms`: a cursor built from
+// the wrong one is then a visible mismatch rather than an accidental pass.
 const row = (id: string, at: string): EventRow =>
-  ({ id, recorded_at: at, kind: 'syslog', message: 'm' }) as unknown as EventRow;
+  ({
+    id,
+    at_unix_ms: Date.parse(at),
+    recorded_at: '2099-01-01T00:00:00.000Z',
+    kind: 'syslog',
+    message: 'm',
+  }) as unknown as EventRow;
 
 /** A full page (so the hook does not consider itself exhausted). */
 const fullPage = (prefix: string): EventRow[] =>
@@ -77,21 +85,25 @@ describe('useEventLog', () => {
     expect(listEvents.mock.calls[0][0]).toHaveProperty('matched', false);
   });
 
-  it('pages with the last row recorded_at as the cursor and appends', async () => {
+  it('pages with the last row event time as the cursor and appends', async () => {
     const first = fullPage('a');
     listEvents.mockResolvedValueOnce(first).mockResolvedValueOnce([row('b-0', '2026-07-24T00:00:00Z')]);
 
-    const { useEventLog } = await import('./useEventLog');
+    const { useEventLog, eventCursor } = await import('./useEventLog');
     const { result } = renderHook(() => useEventLog({}));
     await waitFor(() => expect(result.current.rows).toHaveLength(EVENT_PAGE_SIZE));
     expect(result.current.exhausted).toBe(false);
 
     result.current.loadMore();
     await waitFor(() => expect(result.current.rows).toHaveLength(EVENT_PAGE_SIZE + 1));
+    const last = first[first.length - 1];
     expect(listEvents).toHaveBeenLastCalledWith({
       limit: EVENT_PAGE_SIZE,
-      before: first[first.length - 1].recorded_at,
+      before: eventCursor(last),
     });
+    // Explicitly not the ingest time: the backends order by event time, so a `recorded_at` cursor
+    // would skip and repeat rows.
+    expect(listEvents.mock.calls.at(-1)?.[0].before).not.toBe(last.recorded_at);
     expect(result.current.exhausted).toBe(true);
   });
 

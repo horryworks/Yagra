@@ -304,14 +304,27 @@ pub enum TokenVerify {
 }
 
 /// Filters for the events list.
+///
+/// **Every time bound here is event time** — when the device says the event happened
+/// (`events.at_unix_ms`), not when Yagra wrote the row (`events.recorded_at`). The two backends
+/// used to disagree: the SQL builder filtered and ordered on `recorded_at` while VictoriaLogs
+/// filtered `_time`, which it writes from `at_unix_ms`. The same query therefore returned
+/// different rows in a different order depending on whether the log store was enabled, and
+/// `stats_series_sql` bucketed on one clock while filtering on the other. Event time is the one
+/// that can be unified: VictoriaLogs' `_time` is already written from `at_unix_ms` and cannot be
+/// rewritten retroactively.
+///
+/// Consequence to keep in mind: store-and-forward backfill inserts rows with old event times, so
+/// a row can appear *behind* a cursor a client has already paged past. That is inherent to
+/// ordering a log by event time, and matches what the VictoriaLogs path has always done.
 #[derive(Debug, Default)]
 pub struct EventFilter {
-    /// Keyset pagination cursor (exclusive upper bound). Distinct from `until` (a user-facing
-    /// range end); when both are set the effective upper bound is their min.
+    /// Keyset pagination cursor (exclusive upper bound, event time). Distinct from `until` (a
+    /// user-facing range end); when both are set the effective upper bound is their min.
     pub before: Option<DateTime<Utc>>,
-    /// User-facing time-range lower bound (inclusive), or `None` for unbounded.
+    /// User-facing time-range lower bound (inclusive, event time), or `None` for unbounded.
     pub since: Option<DateTime<Utc>>,
-    /// User-facing time-range upper bound (inclusive), or `None` for unbounded.
+    /// User-facing time-range upper bound (inclusive, event time), or `None` for unbounded.
     pub until: Option<DateTime<Utc>>,
     pub kind: Option<String>,
     pub node_id: Option<Uuid>,
@@ -354,9 +367,13 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// $8 regex. Kept in one place so `list_events` and `/events/stats` filter identically (the
 /// dashboard summaries must line up with the log). Uses the `e` (events) / `n` (nodes) aliases —
 /// every consumer joins `nodes n` (the name search needs it).
-const EVENT_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR e.recorded_at < $1) \
-     AND ($2::timestamptz IS NULL OR e.recorded_at >= $2) \
-     AND ($3::timestamptz IS NULL OR e.recorded_at <= $3) \
+///
+/// The three time bounds are **event time** in epoch milliseconds, matching what the VictoriaLogs
+/// builder filters on (`logstore::build_filter_part`) — see [`EventFilter`] for why. Callers bind
+/// them with [`ms_bound`]. `events_at_idx` (migration 0055) serves the ordering and the range.
+pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms < $1) \
+     AND ($2::bigint IS NULL OR e.at_unix_ms >= $2) \
+     AND ($3::bigint IS NULL OR e.at_unix_ms <= $3) \
      AND ($4::text IS NULL OR e.kind = $4) \
      AND ($5::uuid IS NULL OR e.node_id = $5) \
      AND ($6::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $6) \
@@ -365,6 +382,28 @@ const EVENT_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR e.recorded_at < $1
                                        OR host(e.source_ip) ILIKE '%' || $7 || '%' \
                                        OR n.name ILIKE '%' || $7 || '%')) \
           OR ($8::boolean = TRUE AND e.message ~* $7))";
+
+/// A time bound as the epoch milliseconds [`EVENT_FILTER_WHERE`] compares against. One helper so
+/// the three bounds can never be bound in different units.
+fn ms_bound(at: Option<DateTime<Utc>>) -> Option<i64> {
+    at.map(|t| t.timestamp_millis())
+}
+
+/// Build the keyset-paged event-list SQL. Binds are $1..=$8 (filter) + $9 (page size).
+///
+/// Extracted like the two stats builders so the **ordering column** is assertable: it has to be the
+/// one `EVENT_FILTER_WHERE`'s cursor compares against, and the same one VictoriaLogs sorts by, or
+/// paging skips and repeats rows. See `logstore::tests::both_backends_filter_on_event_time_…`.
+fn list_events_sql() -> String {
+    format!(
+        "SELECT e.id, e.kind, e.at_unix_ms, e.recorded_at, host(e.source_ip) AS source_ip, \
+                e.node_id, e.source_id, e.pool, e.facility, e.syslog_severity, e.hostname, \
+                e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} \
+         ORDER BY e.at_unix_ms DESC LIMIT $9"
+    )
+}
 
 /// Build the categorical `/events/stats` SQL for a group dimension. All identifiers are fixed
 /// (chosen by the enum, never from the request); binds are $1..=$8 (filter) + $9 (row cap).
@@ -663,31 +702,26 @@ impl EventRepo {
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
 
-    /// Keyset-paged event list, newest first (mirrors alert-history paging).
+    /// Keyset-paged event list, newest first by **event time** — the same ordering and the same
+    /// cursor column the VictoriaLogs path uses (`| sort by (_time) desc`), so a deployment with
+    /// the log store enabled and one without return the same page for the same request.
     pub async fn list_events(
         &self,
         filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
-        let rows = sqlx::query(&format!(
-            "SELECT e.id, e.kind, e.at_unix_ms, e.recorded_at, host(e.source_ip) AS source_ip, \
-                    e.node_id, e.source_id, e.pool, e.facility, e.syslog_severity, e.hostname, \
-                    e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
-             FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
-             WHERE {EVENT_FILTER_WHERE} \
-             ORDER BY e.recorded_at DESC LIMIT $9"
-        ))
-        .bind(filter.before)
-        .bind(filter.since)
-        .bind(filter.until)
-        .bind(filter.kind.as_deref())
-        .bind(filter.node_id)
-        .bind(filter.matched)
-        .bind(filter.search.as_deref())
-        .bind(filter.regex)
-        .bind(limit.clamp(1, 500))
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(&list_events_sql())
+            .bind(ms_bound(filter.before))
+            .bind(ms_bound(filter.since))
+            .bind(ms_bound(filter.until))
+            .bind(filter.kind.as_deref())
+            .bind(filter.node_id)
+            .bind(filter.matched)
+            .bind(filter.search.as_deref())
+            .bind(filter.regex)
+            .bind(limit.clamp(1, 500))
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 let trap_oid: Option<String> = row.try_get("trap_oid")?;
@@ -905,9 +939,9 @@ impl EventRepo {
     ) -> anyhow::Result<Vec<EventStatBucket>> {
         let sql = stats_grouped_sql(group);
         let rows = sqlx::query(&sql)
-            .bind(filter.before)
-            .bind(filter.since)
-            .bind(filter.until)
+            .bind(ms_bound(filter.before))
+            .bind(ms_bound(filter.since))
+            .bind(ms_bound(filter.until))
             .bind(filter.kind.as_deref())
             .bind(filter.node_id)
             .bind(filter.matched)
@@ -969,9 +1003,9 @@ impl EventRepo {
         let b = bucket_secs.clamp(1, 86_400);
         let sql = stats_series_sql(split_kind);
         let rows = sqlx::query(&sql)
-            .bind(filter.before)
-            .bind(filter.since)
-            .bind(filter.until)
+            .bind(ms_bound(filter.before))
+            .bind(ms_bound(filter.since))
+            .bind(ms_bound(filter.until))
             .bind(filter.kind.as_deref())
             .bind(filter.node_id)
             .bind(filter.matched)
@@ -1865,6 +1899,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_event_list_orders_and_pages_on_the_column_the_filter_cursors_on() {
+        // These three have to be the same column or paging is broken: the cursor predicate, the
+        // ORDER BY, and (in `stats_series_sql`) the bucketing. They were not — the predicate and
+        // ordering used `recorded_at` while the bucketing used `at_unix_ms`.
+        let sql = list_events_sql();
+        assert!(sql.contains("ORDER BY e.at_unix_ms DESC LIMIT $9"), "{sql}");
+        assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
+        assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms < $1"));
+        assert!(stats_series_sql(false).contains("(e.at_unix_ms / 1000 / $9)"));
+        // `recorded_at` is still selected and returned (it is real information), just never
+        // filtered or ordered on.
+        assert!(sql.contains("e.recorded_at,"), "{sql}");
+    }
+
+    #[test]
+    fn ms_bound_converts_to_the_epoch_millis_the_predicate_compares() {
+        let t = DateTime::parse_from_rfc3339("2026-07-28T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(ms_bound(Some(t)), Some(t.timestamp_millis()));
+        assert_eq!(ms_bound(None), None);
+    }
+
+    #[test]
     fn stats_grouped_sql_uses_shared_filter_and_fixed_columns() {
         // Every group reuses the shared filter predicate and only fixed identifiers reach SQL.
         for g in [
@@ -2229,7 +2287,6 @@ mod tests {
 
     fn syslog_msg(message: &str) -> EventMsg {
         EventMsg {
-            schema_version: 1,
             event_id: Uuid::new_v4(),
             kind: EventKind::Syslog,
             at_unix_ms: 1_000,
@@ -2252,7 +2309,6 @@ mod tests {
     /// identity OID (`render_message`), and `trap_oid` carries that identity for name resolution.
     fn trap_msg(trap_oid: &str) -> EventMsg {
         EventMsg {
-            schema_version: 1,
             event_id: Uuid::new_v4(),
             kind: EventKind::Trap,
             at_unix_ms: 1_000,
