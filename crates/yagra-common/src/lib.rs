@@ -18,6 +18,7 @@ pub mod ids;
 pub mod meraki;
 pub mod metric;
 pub mod node;
+pub mod node_kind;
 pub mod profile;
 pub mod rbac;
 pub mod severity;
@@ -52,6 +53,7 @@ pub use meraki::{
 };
 pub use metric::{is_valid_metric_name, MetricKind, SeriesKey};
 pub use node::Node;
+pub use node_kind::{NodeKind, NodeRows};
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope};
 pub use severity::Severity;

@@ -904,13 +904,22 @@ export interface NodeDetail {
    *  Deliberately the raw stored value so the edit form can tell explicit from inherited — for the
    *  *effective* pool and the current poller use `getNodeAssignment`. */
   pool: string | null;
-  /** URL-monitor config when this node is a URL monitor; `null` otherwise. */
+  /** **What this node is** — the kind the backend actually polls it as (`NodeKind::resolve`).
+   *  Branch on this, not on which of the three configs below is non-null: a node can carry more
+   *  than one row (the API refuses new ones, but older rows exist) and only one of them wins. */
+  kind: NodeKind;
+  /** URL-monitor config when this node carries a URL-check row; `null` otherwise. */
   url_check: UrlCheckConfig | null;
-  /** DNS-monitor config when this node is a DNS monitor; `null` otherwise. */
+  /** DNS-monitor config when this node carries a DNS-check row; `null` otherwise. */
   dns_check: DnsCheckConfig | null;
-  /** Cisco Meraki binding when this node is a Meraki device; `null` otherwise. */
+  /** Cisco Meraki binding when this node carries a Meraki row; `null` otherwise. */
   meraki_device: MerakiDeviceConfig | null;
 }
+
+/** A node's monitoring kind, in the backend's precedence order (`yagra_common::NodeKind`).
+ *  `device` is the fallthrough: ICMP liveness plus SNMP when configured. */
+export const NODE_KINDS = ['meraki', 'url', 'dns', 'device'] as const;
+export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** A node's Cisco Meraki binding (1:1; part of `NodeDetail`). */
 export interface MerakiDeviceConfig {

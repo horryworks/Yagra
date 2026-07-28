@@ -433,14 +433,16 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
     // both build jobs the same way.
     let dispatcher = Arc::new(scheduler::PollDispatcher::new(
-        bus.clone(),
-        creds.clone(),
-        collection.clone(),
-        url_checks.clone(),
-        dns_checks.clone(),
-        meraki_devices.clone(),
-        env_community.clone(),
-        cfg.poll_interval_secs,
+        scheduler::PollDispatcherSeams {
+            bus: bus.clone(),
+            creds: creds.clone(),
+            collection: collection.clone(),
+            url_checks: url_checks.clone(),
+            dns_checks: dns_checks.clone(),
+            meraki_devices: meraki_devices.clone(),
+            env_community: env_community.clone(),
+            interval_secs: cfg.poll_interval_secs,
+        },
     ));
 
     // Scheduler + Meraki scheduler are leader-only (spawned in `leader_work`). Collects route to the

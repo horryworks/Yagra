@@ -38,7 +38,9 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
-use yagra_common::{DnsCheckConfig, Node, NodeId, NodeState, SeriesKey, UrlCheckConfig};
+use yagra_common::{
+    DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, SeriesKey, UrlCheckConfig,
+};
 
 /// The node routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
@@ -457,11 +459,19 @@ pub(crate) struct NodeDetail {
     /// tell an explicit assignment from an inherited one — the *effective* pool (and which poller
     /// currently holds the node) comes from `GET /nodes/:id/assignment`.
     pool: Option<String>,
-    /// URL-monitor config when this node is a URL monitor; `null` otherwise.
+    /// **What this node is** — the kind the scheduler actually polls it as, resolved by the one
+    /// precedence in [`NodeKind::resolve`].
+    ///
+    /// The three configs below are the raw rows, and a node is not guaranteed to carry only one:
+    /// the API edge refuses a second, but rows predating that guard exist. Reading the configs and
+    /// concluding a kind from whichever is non-null is how the node page came to show a URL-monitor
+    /// health card for a node the poller was treating as a Meraki device. Branch on this instead.
+    kind: NodeKind,
+    /// URL-monitor config when this node carries a `url_checks` row; `null` otherwise.
     url_check: Option<UrlCheckConfig>,
-    /// DNS-monitor config when this node is a DNS monitor; `null` otherwise.
+    /// DNS-monitor config when this node carries a `dns_checks` row; `null` otherwise.
     dns_check: Option<DnsCheckConfig>,
-    /// Cisco Meraki binding when this node is a Meraki device; `null` otherwise.
+    /// Cisco Meraki binding when this node carries a `meraki_devices` row; `null` otherwise.
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
 }
 
@@ -480,11 +490,21 @@ async fn get_node(
         .await
         .map_err(|e| ApiError::from_internal(e.as_ref(), "get node", "failed to load node"))?
         .ok_or_else(missing)?;
-    // Best-effort: a URL/DNS-check or Meraki load failure shouldn't fail the node detail.
+    // Best-effort: a URL/DNS-check or Meraki load failure shouldn't fail the node detail. A failed
+    // lookup reads as "no row", which degrades the resolved kind toward `Device` — the same way the
+    // scheduler degrades on the same failure, so the two still agree.
+    let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
+    let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
+    let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
     Ok(Json(NodeDetail {
-        url_check: admin.url_checks.get(node_id).await.unwrap_or(None),
-        dns_check: admin.dns_checks.get(node_id).await.unwrap_or(None),
-        meraki_device: admin.meraki_devices.get(node_id).await.unwrap_or(None),
+        kind: NodeKind::resolve(NodeRows {
+            meraki: meraki_device.is_some(),
+            url: url_check.is_some(),
+            dns: dns_check.is_some(),
+        }),
+        url_check,
+        dns_check,
+        meraki_device,
         id: node.id,
         name: node.name,
         address: node.address.to_string(),
@@ -1303,5 +1323,34 @@ mod tests {
             .await,
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[test]
+    fn the_reported_kind_is_the_one_that_wins_not_the_first_row_found() {
+        // `get_node` returns every row it finds *and* the resolved kind. The UI branches on the
+        // kind; returning the rows as well is what lets an operator see the stray row that is being
+        // ignored, instead of it vanishing from the API and staying in the database forever.
+        //
+        // The pairing is the point: reading the configs and concluding a kind from whichever is
+        // non-null is what made the node page show a URL-monitor health card for a node the poller
+        // was treating as a Meraki device.
+        let both = NodeRows {
+            meraki: true,
+            url: true,
+            dns: false,
+        };
+        assert_eq!(NodeKind::resolve(both), NodeKind::Meraki);
+        assert_eq!(NodeKind::resolve(NodeRows::default()), NodeKind::Device);
+    }
+
+    #[test]
+    fn a_failed_side_table_read_degrades_the_kind_the_same_way_the_scheduler_does() {
+        // Every one of the three lookups in `get_node` is `unwrap_or(None)` — a check-config read
+        // failure must not fail the whole node detail. That makes a failed read indistinguishable
+        // from "no row", which is only safe because the scheduler degrades identically (its own
+        // lookups warn and treat the node as not-that-kind). Both sides fall toward `Device`, so a
+        // transient database error cannot make the API and the poller disagree about a node.
+        assert_eq!(NodeKind::resolve(NodeRows::default()), NodeKind::Device);
+        assert!(NodeKind::Device.is_polled_per_node());
     }
 }

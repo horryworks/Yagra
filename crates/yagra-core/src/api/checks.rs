@@ -34,7 +34,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
-use yagra_common::{is_ssrf_blocked, DnsCheckConfig, ProfileCategory, UrlCheckConfig};
+use yagra_common::{
+    is_ssrf_blocked, DnsCheckConfig, NodeKind, NodeRows, ProfileCategory, UrlCheckConfig,
+};
 
 /// The URL- and DNS-check routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
@@ -81,8 +83,9 @@ pub(crate) trait CheckKind: Send + Sync + 'static {
     /// The `404` code when the node carries no check of this kind. Spelled out per kind rather
     /// than built with `format!` so every code a client can match on is greppable in this repo.
     const NOT_FOUND_CODE: &'static str;
-    /// The *other* kind's label, as it appears in a conflict message.
-    const CONFLICTS_WITH: &'static str;
+    /// Which [`NodeKind`] a node becomes by carrying this check — the link to the one precedence
+    /// that decides whether it will actually be polled as one.
+    const KIND: NodeKind;
     /// The built-in profile a node of this kind is bound to on creation, so it inherits that
     /// kind's default thresholds.
     const CATEGORY: ProfileCategory;
@@ -99,12 +102,6 @@ pub(crate) trait CheckKind: Send + Sync + 'static {
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     fn remove(
-        admin: &AdminState,
-        node_id: Uuid,
-    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
-
-    /// Does the node already carry the *other* kind?
-    fn conflict_exists(
         admin: &AdminState,
         node_id: Uuid,
     ) -> impl Future<Output = anyhow::Result<bool>> + Send;
@@ -130,7 +127,7 @@ impl CheckKind for UrlCheck {
 
     const NOUN: &'static str = "url check";
     const NOT_FOUND_CODE: &'static str = "url_check_not_found";
-    const CONFLICTS_WITH: &'static str = "DNS";
+    const KIND: NodeKind = NodeKind::Url;
     const CATEGORY: ProfileCategory = ProfileCategory::UrlCheck;
 
     async fn load(admin: &AdminState, node_id: Uuid) -> anyhow::Result<Option<Self::Config>> {
@@ -143,10 +140,6 @@ impl CheckKind for UrlCheck {
 
     async fn remove(admin: &AdminState, node_id: Uuid) -> anyhow::Result<bool> {
         admin.url_checks.delete(node_id).await
-    }
-
-    async fn conflict_exists(admin: &AdminState, node_id: Uuid) -> anyhow::Result<bool> {
-        Ok(admin.dns_checks.get(node_id).await?.is_some())
     }
 
     fn validate(cfg: Self::Config) -> Result<Self::Config, ApiError> {
@@ -170,7 +163,7 @@ impl CheckKind for DnsCheck {
 
     const NOUN: &'static str = "dns check";
     const NOT_FOUND_CODE: &'static str = "dns_check_not_found";
-    const CONFLICTS_WITH: &'static str = "URL";
+    const KIND: NodeKind = NodeKind::Dns;
     const CATEGORY: ProfileCategory = ProfileCategory::DnsCheck;
 
     async fn load(admin: &AdminState, node_id: Uuid) -> anyhow::Result<Option<Self::Config>> {
@@ -183,10 +176,6 @@ impl CheckKind for DnsCheck {
 
     async fn remove(admin: &AdminState, node_id: Uuid) -> anyhow::Result<bool> {
         admin.dns_checks.delete(node_id).await
-    }
-
-    async fn conflict_exists(admin: &AdminState, node_id: Uuid) -> anyhow::Result<bool> {
-        Ok(admin.url_checks.get(node_id).await?.is_some())
     }
 
     fn validate(cfg: Self::Config) -> Result<Self::Config, ApiError> {
@@ -202,32 +191,68 @@ impl CheckKind for DnsCheck {
 
 // ── The shared operations ────────────────────────────────────────────────────
 
-/// Refuse to bind `K` to a node that already carries the *other* kind.
+/// Refuse to bind `K` to a node that is already some *other* kind. **A node is exactly one kind.**
 ///
-/// The scheduler resolves a node's kind in one place ([`crate::scheduler::SpecialMonitor::resolve`])
-/// and URL wins, so a node holding both rows would have its DNS check silently never run. Guarding
-/// only the DNS writer — which is what shipped — just moved the hole to the URL writer. Node
-/// *creation* needs no guard: those paths make a fresh node.
+/// The rule is stated once, against the resolved kind rather than against a list of pairs: a node
+/// whose rows resolve to anything but `Device` or `K` itself already has an identity, and binding
+/// `K` on top of it produces a row that will never be polled — a `201` that tells the operator a
+/// monitor is running when nothing will ever probe it. `K` itself is allowed through because these
+/// writers are upserts; editing an existing URL check must not be a conflict with itself.
+///
+/// Resolving is what makes the guard total. The first version guarded the DNS writer only, which
+/// moved the hole to the URL writer. The second guarded the two writers against each other and
+/// still let a **Meraki**-bound node accept a URL check: the row was stored, shown on the node
+/// page, and never polled, because a Meraki node is polled by the org collector and emits no
+/// per-node job at all. Enumerating pairs means the next kind reopens this; asking
+/// [`NodeKind::resolve`] does not.
+///
+/// Node *creation* needs no guard — those paths make a fresh node, which carries no other row.
 async fn reject_conflicting_monitor<K: CheckKind>(
     admin: &AdminState,
     node_id: Uuid,
 ) -> Result<(), ApiError> {
-    let conflicting = K::conflict_exists(admin, node_id).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "monitor-kind conflict lookup",
-            "failed to check monitor kind",
-        )
-    })?;
-    if conflicting {
-        // Name the kind the node *already* has, not the incoming one: an operator setting a URL
+    let existing = NodeKind::resolve(current_node_rows(admin, node_id).await?);
+    if existing != NodeKind::Device && existing != K::KIND {
+        // Name the kind the node *already* is, not the incoming one: an operator setting a URL
         // must not be told their node "is already a URL monitor".
         return Err(ApiError::conflict(
             "conflicting_monitor_kind",
-            format!("node is already a {} monitor", K::CONFLICTS_WITH),
+            format!("node is already a {} monitor", existing.display_name()),
         ));
     }
     Ok(())
+}
+
+/// The single-purpose rows a node carries right now.
+///
+/// Unlike the scheduler's per-sweep resolution, this pays for all three lookups: it runs on an
+/// operator write, not in the hot loop, and a guard that skips a lookup is a guard with a hole.
+async fn current_node_rows(admin: &AdminState, node_id: Uuid) -> Result<NodeRows, ApiError> {
+    let failed = |what: &'static str| {
+        move |e: anyhow::Error| {
+            ApiError::from_internal(e.as_ref(), what, "failed to check monitor kind")
+        }
+    };
+    Ok(NodeRows {
+        meraki: admin
+            .meraki_devices
+            .get(node_id)
+            .await
+            .map_err(failed("meraki-binding conflict lookup"))?
+            .is_some(),
+        url: admin
+            .url_checks
+            .get(node_id)
+            .await
+            .map_err(failed("url-check conflict lookup"))?
+            .is_some(),
+        dns: admin
+            .dns_checks
+            .get(node_id)
+            .await
+            .map_err(failed("dns-check conflict lookup"))?
+            .is_some(),
+    })
 }
 
 /// The check config for a node, or `404` if the node is not that kind of monitor.
@@ -746,13 +771,54 @@ mod tests {
         ]
     }
 
+    /// The decision `reject_conflicting_monitor` makes, over the rows a node carries — the whole
+    /// guard minus the three database reads that fetch them.
+    fn conflict_message<K: CheckKind>(rows: NodeRows) -> Option<&'static str> {
+        let existing = NodeKind::resolve(rows);
+        (existing != NodeKind::Device && existing != K::KIND).then(|| existing.display_name())
+    }
+
     #[test]
-    fn the_conflict_message_names_the_kind_the_node_already_has() {
-        // The guard is symmetric (it used to exist on the DNS writer only), so the message must
-        // name the *existing* kind, not the incoming one — otherwise the URL direction would tell
-        // an operator their node "is already a URL monitor" while they were setting a URL.
-        assert_eq!(UrlCheck::CONFLICTS_WITH, "DNS");
-        assert_eq!(DnsCheck::CONFLICTS_WITH, "URL");
+    fn a_node_that_is_already_another_kind_refuses_the_binding_and_is_told_which() {
+        let meraki = NodeRows {
+            meraki: true,
+            ..NodeRows::default()
+        };
+        let url = NodeRows {
+            url: true,
+            ..NodeRows::default()
+        };
+        let dns = NodeRows {
+            dns: true,
+            ..NodeRows::default()
+        };
+
+        // The bug this guard shipped with: a Meraki-bound node accepted a URL or DNS check. The row
+        // stored, the node page showed the monitor, and nothing ever probed it — a Meraki node is
+        // polled by the org collector and emits no per-node job at all.
+        assert_eq!(conflict_message::<UrlCheck>(meraki), Some("Meraki"));
+        assert_eq!(conflict_message::<DnsCheck>(meraki), Some("Meraki"));
+
+        // Both directions between the two check kinds. The message names the kind the node already
+        // is, never the incoming one: telling an operator setting a URL that their node "is already
+        // a URL monitor" is worse than saying nothing.
+        assert_eq!(conflict_message::<UrlCheck>(dns), Some("DNS"));
+        assert_eq!(conflict_message::<DnsCheck>(url), Some("URL"));
+
+        // Its own kind is not a conflict — these writers are upserts, so editing an existing check
+        // has to get through the guard that stops a *different* kind.
+        assert_eq!(conflict_message::<UrlCheck>(url), None);
+        assert_eq!(conflict_message::<DnsCheck>(dns), None);
+        assert_eq!(conflict_message::<UrlCheck>(NodeRows::default()), None);
+        assert_eq!(conflict_message::<DnsCheck>(NodeRows::default()), None);
+    }
+
+    #[test]
+    fn each_check_kind_agrees_with_the_node_kind_it_produces() {
+        // `KIND` is what ties this module to the scheduler's precedence. Getting it wrong would
+        // make the guard above compare against the wrong kind and pass everything.
+        assert_eq!(UrlCheck::KIND, NodeKind::Url);
+        assert_eq!(DnsCheck::KIND, NodeKind::Dns);
     }
 
     #[test]

@@ -20,7 +20,7 @@ use yagra_bus::{
 };
 use yagra_common::{
     builtin_interface_meta_columns, CollectionItem, CollectionKind, DnsCheckConfig, Node, NodeId,
-    ProfileId, UrlCheckConfig,
+    NodeKind, NodeRows, ProfileId, UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -272,10 +272,10 @@ pub enum SnmpAuth {
 
 /// A node bound to a single-purpose monitor, which replaces the ordinary ICMP/SNMP jobs entirely.
 ///
-/// This type exists so the URL-beats-DNS precedence is decided in exactly one place
-/// ([`SpecialMonitor::resolve`]). It used to be expressed twice — once in the load order of
-/// [`PollDispatcher::build_scheduled_jobs_hinted`] and again in `assemble_node_jobs` — and nothing
-/// checked that the two agreed.
+/// This is [`NodeKind`] carrying the config the job builder needs. The precedence itself lives in
+/// [`NodeKind::resolve`] and nowhere else — it used to be expressed twice here (the load order of
+/// [`PollDispatcher::build_scheduled_jobs_hinted`] and again in `assemble_node_jobs`), and a third
+/// time as the Meraki short-circuit below, with nothing checking that the three agreed.
 #[derive(Debug, Clone, Copy)]
 pub enum SpecialMonitor<'a> {
     /// The node has a `url_checks` row: one HTTP job.
@@ -285,20 +285,26 @@ pub enum SpecialMonitor<'a> {
 }
 
 impl<'a> SpecialMonitor<'a> {
-    /// Decide a node's monitor kind from the side-table rows it carries.
+    /// The single-purpose monitor a node's rows resolve to, if any.
     ///
-    /// **URL wins.** A node should never hold both rows — the API edge refuses the second one
-    /// (`api::reject_conflicting_monitor`) — but a row can predate that guard, so the resolution
-    /// still has to be deterministic rather than depending on which lookup ran first.
+    /// Meraki is passed as `false` because **both callers have already excluded Meraki nodes** —
+    /// the sweep by its preloaded id set, the on-demand path by its short-circuit — which is what
+    /// lets this skip a `meraki_devices` round trip per node per round. It is an invariant of the
+    /// call sites, not an assumption about the data.
     #[must_use]
     pub fn resolve(
         url: Option<&'a UrlCheckConfig>,
         dns: Option<&'a DnsCheckConfig>,
     ) -> Option<Self> {
-        match (url, dns) {
-            (Some(cfg), _) => Some(Self::Url(cfg)),
-            (None, Some(cfg)) => Some(Self::Dns(cfg)),
-            (None, None) => None,
+        let rows = NodeRows {
+            meraki: false,
+            url: url.is_some(),
+            dns: dns.is_some(),
+        };
+        match NodeKind::resolve(rows) {
+            NodeKind::Url => url.map(Self::Url),
+            NodeKind::Dns => dns.map(Self::Dns),
+            NodeKind::Meraki | NodeKind::Device => None,
         }
     }
 }
@@ -390,21 +396,39 @@ pub struct PollDispatcher {
     interval_secs: u32,
 }
 
+/// The seams a [`PollDispatcher`] needs, as one named value.
+///
+/// There is one repository per [`NodeKind`] that has a side table, so the argument list grew with
+/// every kind added — eight positional `Arc`s, three of them the same shape, behind an
+/// `#[allow(clippy::too_many_arguments)]`. Positional arguments of the same type are exactly where
+/// two get swapped without a type error, so adding a kind should add a *field*, not a position.
+pub struct PollDispatcherSeams {
+    pub bus: Arc<NatsBus>,
+    pub creds: Arc<CredentialStore>,
+    pub collection: Arc<CollectionRepo>,
+    pub url_checks: Arc<UrlCheckRepo>,
+    pub dns_checks: Arc<DnsCheckRepo>,
+    pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
+    /// v2c community fallback for nodes without a bound credential.
+    pub env_community: Option<String>,
+    /// Fallback poll interval (seconds) for on-demand "poll now" jobs — see the field of the
+    /// same name on [`PollDispatcher`].
+    pub interval_secs: u32,
+}
+
 impl PollDispatcher {
-    // One seam per node kind plus the bus and defaults; splitting them into a config struct would
-    // add indirection without removing anything.
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
-        bus: Arc<NatsBus>,
-        creds: Arc<CredentialStore>,
-        collection: Arc<CollectionRepo>,
-        url_checks: Arc<UrlCheckRepo>,
-        dns_checks: Arc<DnsCheckRepo>,
-        meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
-        env_community: Option<String>,
-        interval_secs: u32,
-    ) -> Self {
+    pub fn new(seams: PollDispatcherSeams) -> Self {
+        let PollDispatcherSeams {
+            bus,
+            creds,
+            collection,
+            url_checks,
+            dns_checks,
+            meraki_devices,
+            env_community,
+            interval_secs,
+        } = seams;
         Self {
             bus,
             creds,
@@ -442,12 +466,21 @@ impl PollDispatcher {
         // emits no per-node ICMP/SNMP/HTTP job. This guards the on-demand "poll now" path; the
         // periodic scheduler already excludes these nodes (it preloads their ids) and calls
         // `build_scheduled_jobs`, which skips this per-node lookup.
-        match self.meraki_devices.get(node.id.as_uuid()).await {
-            Ok(Some(_)) => return Vec::new(),
-            Ok(None) => {}
+        let bound = match self.meraki_devices.get(node.id.as_uuid()).await {
+            Ok(bound) => bound.is_some(),
             Err(e) => {
                 tracing::warn!(node = %node.id, error = %e, "meraki-device load failed; treating as non-Meraki node");
+                false
             }
+        };
+        // Asked as "is this kind scheduled per node" rather than "is it Meraki", so a future kind
+        // that is also collected elsewhere does not have to remember to add itself here.
+        let kind = NodeKind::resolve(NodeRows {
+            meraki: bound,
+            ..NodeRows::default()
+        });
+        if !kind.is_polled_per_node() {
+            return Vec::new();
         }
         self.build_scheduled_jobs(node, interval_secs).await
     }
@@ -1023,8 +1056,8 @@ mod tests {
 
     #[test]
     fn resolve_maps_each_single_row_and_no_rows() {
-        // Pins the whole truth table in one place, since this is now the only expression of the
-        // URL-beats-DNS rule — the dispatcher's load order defers to it rather than repeating it.
+        // Pins the truth table for the job builder's view of it. The rule itself lives in
+        // `NodeKind::resolve`; the dispatcher's load order defers to this, which defers to that.
         let url = UrlCheckConfig::new("https://api.example.com/health");
         let dns = DnsCheckConfig::new("horryworks.net");
         assert!(matches!(
@@ -1036,6 +1069,39 @@ mod tests {
             Some(SpecialMonitor::Dns(_))
         ));
         assert!(SpecialMonitor::resolve(None, None).is_none());
+    }
+
+    #[test]
+    fn the_job_builder_and_the_api_resolve_a_node_to_the_same_kind() {
+        // `SpecialMonitor::resolve` is a view of `NodeKind::resolve`, not a second copy of the
+        // precedence — the node-detail API answers the same question from the same function, and
+        // the two disagreeing is exactly the bug this arrangement removes (a node polled as one
+        // kind while the operator is shown another). Delegation is cheap to "optimize" back into a
+        // local match, so pin it.
+        let url = UrlCheckConfig::new("https://api.example.com/health");
+        let dns = DnsCheckConfig::new("horryworks.net");
+        for (u, d) in [
+            (None, None),
+            (Some(&url), None),
+            (None, Some(&dns)),
+            (Some(&url), Some(&dns)),
+        ] {
+            let rows = NodeRows {
+                meraki: false,
+                url: u.is_some(),
+                dns: d.is_some(),
+            };
+            let expected = match NodeKind::resolve(rows) {
+                NodeKind::Url => Some("url"),
+                NodeKind::Dns => Some("dns"),
+                NodeKind::Meraki | NodeKind::Device => None,
+            };
+            let actual = SpecialMonitor::resolve(u, d).map(|m| match m {
+                SpecialMonitor::Url(_) => "url",
+                SpecialMonitor::Dns(_) => "dns",
+            });
+            assert_eq!(actual, expected, "rows {rows:?} resolved differently");
+        }
     }
 
     #[test]

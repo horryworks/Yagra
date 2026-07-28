@@ -110,9 +110,18 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
         </section>
       )}
 
-      {node.url_check && <UrlHealth nodeId={node.id} url={node.url_check.url} />}
-      {node.dns_check && <DnsHealth nodeId={node.id} check={node.dns_check} />}
-      {node.meraki_device && (
+      {/* Gated on `node.kind` — the kind the backend actually polls — not on which config happens
+          to be non-null. A node can carry more than one of these rows (older ones predate the API
+          guard that now refuses a second), and only one of them is ever probed; keying off the
+          configs rendered a health card for every row, so a Meraki node could show a URL-monitor
+          card whose metrics never arrive. The config check that follows is type narrowing. */}
+      {node.kind === 'url' && node.url_check && (
+        <UrlHealth nodeId={node.id} url={node.url_check.url} />
+      )}
+      {node.kind === 'dns' && node.dns_check && (
+        <DnsHealth nodeId={node.id} check={node.dns_check} />
+      )}
+      {node.kind === 'meraki' && node.meraki_device && (
         <MerakiHealth nodeId={node.id} device={node.meraki_device} />
       )}
       <DeviceHealth nodeId={node.id} />
