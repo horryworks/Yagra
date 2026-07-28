@@ -33,6 +33,7 @@ import type {
   Mute,
   NodeGroup,
   NodeSummary,
+  PoolOption,
   ProfileSummary,
 } from '../types/api';
 import {
@@ -55,6 +56,7 @@ import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail
 import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
+import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
@@ -230,6 +232,10 @@ export function NodesPage() {
   const [mutes, setMutes] = useState<Mute[]>([]);
   const [maintenanceTarget, setMaintenanceTarget] = useState<SuppressionTarget | null>(null);
   const [muteTarget, setMuteTarget] = useState<SuppressionTarget | null>(null);
+  // Poll-pool assignment from the tree's right-click chips (ADR-009/020). `pools` feeds the chips;
+  // `poolTarget` holds the target whose "Custom…" dialog is open.
+  const [pools, setPools] = useState<PoolOption[]>([]);
+  const [poolTarget, setPoolTarget] = useState<SuppressionTarget | null>(null);
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
   const groupCounts = groupSummary?.groups ?? EMPTY_GROUP_COUNTS;
 
@@ -407,6 +413,39 @@ export function NodesPage() {
       })
       .then(reloadSuppression)
       .catch((e: unknown) => scopeError(e, t('err.mute')));
+  };
+
+  // The pools the chips offer. Cheap (two indexed DISTINCTs server-side), so it is refreshed with
+  // the inventory rather than polled; a failure just leaves the chips empty — "Custom…" still works.
+  const reloadPools = useCallback(() => {
+    api
+      .listPools()
+      .then((r) => setPools(r.pools))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    reloadPools();
+  }, [reloadPools]);
+
+  // Right-click → assign a poll-pool. A chip writes immediately (like the suppression presets);
+  // "Custom…" (pool === null) opens the dialog for a pool that doesn't exist yet. Assigning a
+  // folder re-pools every node beneath it that has no pool of its own.
+  const setPool = (target: SuppressionTarget, pool: string | null) => {
+    if (pool === null) {
+      setPoolTarget(target);
+      return;
+    }
+    const call =
+      target.kind === 'node'
+        ? api.setNodePool(target.id, pool)
+        : api.setNodeGroupPool(target.id, pool);
+    call
+      .then(() => {
+        reloadPools();
+        return reload();
+      })
+      .catch((e: unknown) => scopeError(e, t('err.setPool')));
   };
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
@@ -685,6 +724,8 @@ export function NodesPage() {
             suppression={suppression}
             onSetMaintenance={authed ? setMaintenance : undefined}
             onSetMute={authed ? setMute : undefined}
+            pools={pools}
+            onSetPool={authed ? setPool : undefined}
           />
           </div>
         )}
@@ -1024,6 +1065,28 @@ export function NodesPage() {
           initialScope={muteTarget}
           onClose={() => setMuteTarget(null)}
           onSaved={reloadSuppression}
+        />
+      )}
+      {poolTarget && (
+        <SetPoolModal
+          target={poolTarget}
+          currentPool={
+            poolTarget.kind === 'group'
+              ? (groups.find((g) => g.id === poolTarget.id)?.pool ?? null)
+              : (treeNodes.find((n) => n.id === poolTarget.id)?.pool ?? null)
+          }
+          inheritedPool={inheritedGroupPool(
+            groups,
+            poolTarget.kind === 'group'
+              ? (groups.find((g) => g.id === poolTarget.id)?.parent_id ?? null)
+              : (treeNodes.find((n) => n.id === poolTarget.id)?.group_id ?? null),
+          )}
+          onClose={() => setPoolTarget(null)}
+          onSaved={() => {
+            setPoolTarget(null);
+            reloadPools();
+            void reload();
+          }}
         />
       )}
     </div>

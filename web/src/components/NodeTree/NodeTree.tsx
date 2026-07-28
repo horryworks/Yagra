@@ -18,7 +18,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import type { NodeGroup, NodeSummary } from '../../types/api';
+import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
+import { poolChoices } from '../../lib/pool';
 import {
   buildNodeTree,
   flattenTree,
@@ -118,6 +119,12 @@ interface Props {
   onSetMaintenance?: (target: SuppressionTarget, durationMs: number | null) => void;
   /** Right-click → mute a node/group. `durationMs`/`null` as for `onSetMaintenance`. */
   onSetMute?: (target: SuppressionTarget, durationMs: number | null) => void;
+  /** Pools offered by the right-click poll-pool chips (`GET /api/v1/pools`). */
+  pools?: PoolOption[];
+  /** Right-click → assign a node/group to a poll-pool. A pool name sets it, `''` clears it back
+   *  to inherited, and `null` opens the Custom… dialog — the same convention as the suppression
+   *  chips above. */
+  onSetPool?: (target: SuppressionTarget, pool: string | null) => void;
 }
 
 export function NodeTree({
@@ -146,6 +153,8 @@ export function NodeTree({
   suppression,
   onSetMaintenance,
   onSetMute,
+  pools,
+  onSetPool,
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
@@ -240,6 +249,57 @@ export function NodeTree({
         <div className="ntree-menu-sep" />
         {onSetMaintenance && row(t('tree.maintenance'), onSetMaintenance)}
         {onSetMute && row(t('tree.mute'), onSetMute)}
+      </>
+    );
+  };
+
+  // The poll-pool chip section appended to a row's context menu (ADR-009/020). A pool chip assigns
+  // immediately, "Inherit" clears the target's own pool, and "Custom…" opens the dialog for a pool
+  // that doesn't exist yet. Same shape and same immediate-write behaviour as `suppressionMenu`.
+  //
+  // `currentPool` is the target's OWN pool (`null` ⇒ inherited), which is exactly what these chips
+  // write — so it is what marks the active one.
+  const poolMenu = (
+    target: SuppressionTarget,
+    currentPool: string | null | undefined,
+  ): React.ReactNode => {
+    if (!onSetPool) return null;
+    const choices = poolChoices(pools ?? [], currentPool);
+    const inherited = !currentPool?.trim();
+    const chip = (
+      key: string,
+      label: string,
+      value: string | null,
+      opts: { current?: boolean; warn?: boolean } = {},
+    ) => (
+      <button
+        type="button"
+        key={key}
+        className={`ntree-dur${opts.current ? ' is-current' : ''}${opts.warn ? ' warn' : ''}`}
+        // The warning is spelled out for screen readers and on hover, not carried by colour alone.
+        title={opts.warn ? t('tree.poolNoLivePoller') : undefined}
+        onClick={() => {
+          onSetPool(target, value);
+          setMenu(null);
+        }}
+      >
+        {label}
+        {opts.warn && <span aria-hidden="true"> !</span>}
+      </button>
+    );
+    return (
+      <>
+        <div className="ntree-menu-sep" />
+        <div className="ntree-menu-section">
+          <div className="ntree-menu-label">{t('tree.pool')}</div>
+          <div className="ntree-menu-durs">
+            {choices.map((c) =>
+              chip(c.name, c.name, c.name, { current: c.current, warn: !c.live }),
+            )}
+            {chip('__inherit', t('tree.poolInherit'), '', { current: inherited })}
+            {chip('__custom', t('tree.custom'), null)}
+          </div>
+        </div>
       </>
     );
   };
@@ -623,6 +683,10 @@ export function NodeTree({
               <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
                 {t('tree.editMove')}
               </button>
+              {poolMenu(
+                { kind: 'group', id: menu.group.id, name: menu.group.name },
+                menu.group.pool,
+              )}
               {suppressionMenu({ kind: 'group', id: menu.group.id, name: menu.group.name })}
               <div className="ntree-menu-sep" />
               <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
@@ -642,6 +706,7 @@ export function NodeTree({
                   {t('tree.addNodeEllipsis')}
                 </button>
               )}
+              {poolMenu({ kind: 'node', id: menu.node.id, name: menu.node.name }, menu.node.pool)}
               {suppressionMenu({ kind: 'node', id: menu.node.id, name: menu.node.name })}
               {onDeleteNode && (
                 <>

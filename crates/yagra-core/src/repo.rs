@@ -534,6 +534,32 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) a node's own poll-pool (ADR-009/020). `None` ⇒ NULL, so the node
+    /// falls back to its folder's pool, else the default pool. Returns whether the node exists.
+    ///
+    /// Single-purpose on purpose: [`Self::set_node_bindings`] overwrites profile/credential/
+    /// vendor/model unconditionally (only its `pool` is three-state-gated), so a caller that wants
+    /// to move *just* the pool — the inventory tree's context menu — must not go through it.
+    pub async fn set_node_pool(&self, id: Uuid, pool: Option<&str>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE nodes SET pool = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(pool)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// The distinct non-empty pools nodes are assigned to. Feeds the pool picker; the `pool` index
+    /// (migration 0001) keeps this cheap even at fleet scale.
+    pub async fn distinct_pools(&self) -> anyhow::Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT pool FROM nodes WHERE pool IS NOT NULL AND pool <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Set (or clear with `None`) a node's **dependency parent** (upstream) — the `parent_id`
     /// edge that feeds parent-down alert suppression and root-cause roll-up (ADR-015). Distinct
     /// from [`Self::set_node_group`], which moves a node in the inventory *folder* tree. Returns

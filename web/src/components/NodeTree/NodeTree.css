@@ -286,6 +286,9 @@
 .ntree-menu-durs {
   display: flex;
   gap: 4px;
+  /* The 3 duration chips never wrapped; the pool row can hold up to 8 names plus Inherit/Custom. */
+  flex-wrap: wrap;
+  max-width: 260px;
 }
 
 /* Override the generic `.ntree-menu button` block padding for the compact duration chips. */
@@ -301,6 +304,20 @@
   background: var(--bg-secondary);
   color: var(--text-primary);
   border-color: var(--accent-color);
+}
+
+/* The pool the target is already assigned to. */
+.ntree-menu .ntree-dur.is-current {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+/* A pool with no live poller: its jobs go to a subject nothing subscribes to, so assigning to it
+   leaves the node unmonitored. Paired with a "!" glyph + title so colour is never the only cue. */
+.ntree-menu .ntree-dur.warn {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
 }
 
 /* Per-row suppression markers (maintenance wrench + mute bell-off), always visible when active.

@@ -98,6 +98,7 @@
     "loadNodes": "ノードの読み込みに失敗しました",
     "setMaintenance": "メンテナンスの設定に失敗しました",
     "mute": "ミュートに失敗しました",
+    "setPool": "ポーラープールの設定に失敗しました",
     "addUrlMonitor": "URL監視の追加に失敗しました",
     "addNode": "ノードの追加に失敗しました",
     "moveNode": "ノードの移動に失敗しました",
@@ -297,12 +298,19 @@
     "editMove": "編集 / 移動…",
     "open": "開く",
     "addNodeEllipsis": "ノードを追加…",
-    "deleteEllipsis": "削除…"
+    "deleteEllipsis": "削除…",
+    "pool": "ポーラープール",
+    "poolInherit": "継承",
+    "poolNoLivePoller": "このプールには稼働中のポーラーがありません — 割り当てたノードはポーリングされません。"
   },
   "moveNode": {
     "title": "{{name}} を移動",
     "move": "移動",
     "ungroupedOption": "— 未分類 —"
+  },
+  "setPool": {
+    "title": "{{name}} のポーラープール",
+    "groupHint": "このグループ (とサブグループ) のノードは、ノード側で個別指定がない限りこのプールがポーリングします。空欄なら継承します。次のポーリング周期から反映されます。"
   },
   "setParent": {
     "title": "{{name}} の依存関係",

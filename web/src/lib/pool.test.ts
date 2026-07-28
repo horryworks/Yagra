@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { NodeAssignment, NodeGroup, PolledBy } from '../types/api';
+import type { NodeAssignment, NodeGroup, PolledBy, PoolOption } from '../types/api';
 import i18n from '../i18n';
 import {
   MAX_POOL_LEN,
+  POOL_CHIP_LIMIT,
   inheritedGroupPool,
   isValidPoolName,
+  poolChoices,
   poolFactLabel,
   polledByIsWarning,
   polledByLabel,
@@ -113,6 +115,47 @@ describe('poolFactLabel', () => {
 
   it('renders an em dash with no assignment', () => {
     expect(poolFactLabel(undefined, names, t)).toBe('—');
+  });
+});
+
+describe('poolChoices', () => {
+  const opt = (name: string, live = true): PoolOption => ({ name, live });
+
+  it('keeps the server order and marks liveness', () => {
+    const chips = poolChoices([opt('default'), opt('tokyo'), opt('osaka', false)], null);
+    expect(chips.map((c) => c.name)).toEqual(['default', 'tokyo', 'osaka']);
+    expect(chips.map((c) => c.live)).toEqual([true, true, false]);
+    // Nothing is current when the target inherits.
+    expect(chips.some((c) => c.current)).toBe(false);
+  });
+
+  it('puts the current pool first and marks it, without duplicating it', () => {
+    const chips = poolChoices([opt('default'), opt('tokyo'), opt('osaka')], 'tokyo');
+    expect(chips.map((c) => c.name)).toEqual(['tokyo', 'default', 'osaka']);
+    expect(chips[0].current).toBe(true);
+    expect(chips.filter((c) => c.name === 'tokyo')).toHaveLength(1);
+  });
+
+  it('still shows a current pool the server no longer lists', () => {
+    // e.g. its last poller went away and nothing else references it — the menu must not silently
+    // fail to show what the node is actually set to.
+    const chips = poolChoices([opt('default')], 'retired');
+    expect(chips[0]).toEqual({ name: 'retired', live: false, current: true });
+    expect(chips.map((c) => c.name)).toContain('default');
+  });
+
+  it('treats blank/whitespace as inherited', () => {
+    for (const current of [null, undefined, '', '   ']) {
+      expect(poolChoices([opt('default')], current).some((c) => c.current)).toBe(false);
+    }
+  });
+
+  it('caps the row but never drops the current pool', () => {
+    const many = Array.from({ length: 20 }, (_, i) => opt(`p${i}`));
+    expect(poolChoices(many, null)).toHaveLength(POOL_CHIP_LIMIT);
+    const withCurrent = poolChoices(many, 'p19');
+    expect(withCurrent).toHaveLength(POOL_CHIP_LIMIT);
+    expect(withCurrent[0]).toMatchObject({ name: 'p19', current: true });
   });
 });
 

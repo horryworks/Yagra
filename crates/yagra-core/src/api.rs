@@ -276,6 +276,10 @@ pub fn router(state: ApiState) -> Router {
             get(get_meraki_polling).put(set_meraki_polling),
         )
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
+        // Poll-pool assignment from the inventory tree (ADR-009/020). Single-field writes, so a
+        // pool move can't clobber the node's profile/credential/vendor/model.
+        .route("/api/v1/nodes/:node_id/pool", put(set_node_pool))
+        .route("/api/v1/pools", get(list_pools))
         .route("/api/v1/nodes/:node_id/parent", put(set_node_parent))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route(
@@ -288,6 +292,7 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/api/v1/node-groups/:id/placement", put(place_group))
         .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
+        .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route(
             "/api/v1/profiles/:id",
@@ -822,6 +827,10 @@ struct NodeSummary {
     group_id: Option<Uuid>,
     /// Manual order within the group (the tree sorts members by this, then by name).
     sort_order: f64,
+    /// The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
+    /// The tree's pool picker edits exactly this value, so it is what marks the active choice —
+    /// the *effective* pool (and the poller holding the node) comes from `/nodes/:id/assignment`.
+    pool: Option<String>,
     /// How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
     /// otherwise `"device"`. (URL monitors can reuse this later.)
     source: &'static str,
@@ -1084,6 +1093,7 @@ async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummar
                 model: n.model,
                 group_id: n.group.map(|g| g.as_uuid()),
                 sort_order,
+                pool: n.pool,
                 source,
             }
         })
@@ -7306,6 +7316,144 @@ async fn set_node_group(
     }
 }
 
+/// Move a node to a poll-pool, or clear it back to inherited. Used by the inventory tree's
+/// context menu. Absent or `""` ⇒ NULL (inherit from the folder, else the default pool).
+#[derive(Deserialize)]
+struct PoolAssignment {
+    #[serde(default)]
+    pool: Option<String>,
+}
+
+/// `PUT /api/v1/nodes/:node_id/pool` — set just the node's own pool.
+///
+/// Deliberately **not** folded into `set_node_bindings`: that handler overwrites
+/// profile/credential/vendor/model unconditionally (only its `pool` is three-state-gated), so a
+/// pool-only caller going through it would silently blank all four.
+async fn set_node_pool(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PoolAssignment>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    // A single-field endpoint has no "leave unchanged" case, so absent and empty both mean clear.
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match admin.repo.set_node_pool(id, pool.as_deref()).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("node_not_found", format!("no node {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set node pool failed");
+            internal("failed to set node pool")
+        }
+    }
+}
+
+/// `PUT /api/v1/node-groups/:id/pool` — set just the folder's pool. Every node beneath it that
+/// has no pool of its own follows on the next sweep (see `poolres`).
+async fn set_node_group_pool(
+    State(st): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PoolAssignment>,
+) -> Response {
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
+        return resp;
+    }
+    let pool = match validate_pool_create(body.pool) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    match admin.groups.set_pool(id, pool.as_deref()).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("group_not_found", format!("no group {id}")),
+        Err(e) => {
+            tracing::error!(error = %e, "set group pool failed");
+            internal("failed to set group pool")
+        }
+    }
+}
+
+/// One pool offered by the pool picker.
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct PoolOption {
+    /// Pool name.
+    name: String,
+    /// Whether a live poller currently serves it. A pool with none takes the legacy per-job path
+    /// onto a subject nothing subscribes to, so its jobs are silently discarded — the picker has to
+    /// say so rather than present it as an equivalent choice.
+    live: bool,
+}
+
+/// Merge the pools nodes use, the pools folders assign, and the pools with a live poller into the
+/// picker's option list. Pure so the union, the default-first ordering, and the `live` flag are
+/// unit-testable without a database or a coordinator.
+///
+/// [`yagra_bus::DEFAULT_POOL`] is always offered (it is where an unassigned node lands, whether or
+/// not anything references it explicitly); the rest follow alphabetically.
+fn build_pool_options(
+    node_pools: Vec<String>,
+    group_pools: Vec<String>,
+    live: &std::collections::HashSet<String>,
+) -> Vec<PoolOption> {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for p in node_pools.into_iter().chain(group_pools) {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            names.insert(trimmed.to_owned());
+        }
+    }
+    names.extend(live.iter().cloned());
+    names.remove(yagra_bus::DEFAULT_POOL);
+
+    let option = |name: String| PoolOption {
+        live: live.contains(&name),
+        name,
+    };
+    std::iter::once(option(yagra_bus::DEFAULT_POOL.to_owned()))
+        .chain(names.into_iter().map(option))
+        .collect()
+}
+
+/// `GET /api/v1/pools` — the pools that exist, for the assignment picker. `View`-gated; names
+/// only, no telemetry.
+///
+/// Deliberately separate from `GET /pollers`, which scans the whole node table to build its
+/// per-pool counts; this is two indexed `DISTINCT`s and is loaded by an ordinary page.
+async fn list_pools(State(st): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(resp) = require_view(&st, &headers) {
+        return resp;
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return unavailable();
+    };
+    // A read error degrades to "fewer suggestions", never to a failed picker — the operator can
+    // still type any pool via Custom.
+    let node_pools = admin.repo.distinct_pools().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "listing node pools failed");
+        Vec::new()
+    });
+    let group_pools = admin.groups.distinct_pools().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "listing folder pools failed");
+        Vec::new()
+    });
+    let live = admin.coordinator.live_pools(Instant::now());
+    Json(serde_json::json!({
+        "pools": build_pool_options(node_pools, group_pools, &live)
+    }))
+    .into_response()
+}
+
 /// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
 /// dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
 /// distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
@@ -12929,6 +13077,75 @@ mod tests {
         // discarded (plain NATS, not JetStream).
         assert!(validate_pool_create(Some("tokyo.1".to_owned())).is_err());
         assert!(validate_pool_create(Some("east dc".to_owned())).is_err());
+    }
+
+    #[test]
+    fn pool_options_union_default_first_and_flag_liveness() {
+        let live: std::collections::HashSet<String> = ["tokyo".to_owned(), "spare".to_owned()]
+            .into_iter()
+            .collect();
+        let opts = build_pool_options(
+            // Duplicates within and across the two sources, plus blank/whitespace junk from rows
+            // written before the API validated pool names.
+            vec![
+                "tokyo".to_owned(),
+                "osaka".to_owned(),
+                "tokyo".to_owned(),
+                "  ".to_owned(),
+            ],
+            vec!["osaka".to_owned(), "  edge  ".to_owned()],
+            &live,
+        );
+        let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
+        // Default always offered and always first (it is where an unassigned node lands, whether
+        // or not anything references it); the rest alphabetical, deduped, trimmed.
+        assert_eq!(names, vec!["default", "edge", "osaka", "spare", "tokyo"]);
+
+        let live_of = |n: &str| opts.iter().find(|o| o.name == n).map(|o| o.live);
+        // A pool only referenced by a live poller still appears (nothing is assigned to it yet).
+        assert_eq!(live_of("spare"), Some(true));
+        assert_eq!(live_of("tokyo"), Some(true));
+        // Assigned but with no live poller — the picker must be able to warn about these.
+        assert_eq!(live_of("osaka"), Some(false));
+        assert_eq!(live_of("edge"), Some(false));
+        assert_eq!(live_of("default"), Some(false));
+    }
+
+    #[test]
+    fn pool_options_are_offered_even_with_nothing_configured() {
+        let opts = build_pool_options(Vec::new(), Vec::new(), &std::collections::HashSet::new());
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].name, yagra_bus::DEFAULT_POOL);
+        assert!(!opts[0].live);
+    }
+
+    // NB: the 400-on-a-bad-pool path is covered directly by
+    // `pool_name_validation_on_create_collapses_absent_and_empty` — both handlers run
+    // `validate_pool_create`, but only after the admin check, so an HTTP-level test in skeleton
+    // mode would assert 503 and prove nothing.
+
+    #[tokio::test]
+    async fn pool_writes_are_unavailable_without_admin() {
+        // Skeleton mode has no metadata store; both writes report the standard 503 rather than
+        // pretending to have moved anything.
+        for uri in [
+            format!("/api/v1/nodes/{}/pool", Uuid::nil()),
+            format!("/api/v1/node-groups/{}/pool", Uuid::nil()),
+        ] {
+            let app = router(state_with(Arc::new(InMemorySink::default())));
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(&uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"pool":"tokyo"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+        }
     }
 
     #[test]

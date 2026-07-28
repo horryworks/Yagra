@@ -76,6 +76,7 @@ import type {
   PollerHealth,
   PollerNodesResponse,
   PollersResponse,
+  PoolsResponse,
   SystemHealth,
   SystemHostsResponse,
   HostMetricRange,
@@ -638,6 +639,22 @@ export const api = {
    *  polls it. Separate from `getNode` because it reads the live coordinator, not the inventory. */
   getNodeAssignment: (id: string): Promise<NodeAssignment> =>
     request(`/nodes/${encodeURIComponent(id)}/assignment`),
+
+  /** The pools that exist, for the assignment picker. View-gated; names only.
+   *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */
+  listPools: (): Promise<PoolsResponse> => request('/pools'),
+
+  /** Move a node to a poll-pool. `''` clears it back to inherited (folder, else default pool).
+   *
+   *  Single-field on purpose — do NOT reach for `setNodeBindings({ pool })`: that endpoint
+   *  overwrites profile/credential/vendor/model unconditionally and would blank all four. */
+  setNodePool: (id: string, pool: string): Promise<void> =>
+    request(`/nodes/${encodeURIComponent(id)}/pool`, jsonBody('PUT', { pool })),
+
+  /** Move a folder to a poll-pool (`''` ⇒ inherit). Every node beneath it without a pool of its
+   *  own follows on the next sweep. */
+  setNodeGroupPool: (id: string, pool: string): Promise<void> =>
+    request(`/node-groups/${encodeURIComponent(id)}/pool`, jsonBody('PUT', { pool })),
 
   /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by the
    *  "Move to…" picker and a drop directly onto a group. */

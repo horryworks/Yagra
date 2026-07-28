@@ -170,6 +170,10 @@ export interface NodeSummary {
   group_id: string | null;
   /** Manual order within the group (tree sorts members by this, then by name). */
   sort_order: number;
+  /** The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
+   *  The tree's pool picker edits exactly this, so it marks the active choice. Optional so an
+   *  older core (which doesn't send it) still deserializes. */
+  pool?: string | null;
   /** How this node is monitored, for the tree badge: `"meraki"` or `"device"` (default). */
   source?: 'device' | 'meraki';
 }
@@ -1055,6 +1059,20 @@ export interface PollersResponse {
 
 /** Where a node's effective pool came from (yagra-core `PoolSource`). */
 export type PoolSource = 'node' | 'group' | 'default';
+
+/** One pool offered by the assignment picker (`GET /api/v1/pools`). */
+export interface PoolOption {
+  name: string;
+  /** Whether a live poller currently serves it. A pool with none takes the legacy per-job path
+   *  onto a subject nothing subscribes to, so assigning to it leaves the node unmonitored — the
+   *  picker warns rather than presenting it as an equivalent choice. */
+  live: boolean;
+}
+
+/** The `GET /api/v1/pools` body. */
+export interface PoolsResponse {
+  pools: PoolOption[];
+}
 
 /** Which poller currently polls a node.
  *  - `assigned` — it is in that poller's published working set (`poller_id` set).

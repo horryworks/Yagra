@@ -261,6 +261,28 @@ impl GroupRepo {
             .collect()
     }
 
+    /// Set (or clear with `None`) just this folder's poll-pool, leaving name/type/parent alone —
+    /// the inventory tree's context-menu action. Returns whether the group exists.
+    pub async fn set_pool(&self, id: Uuid, pool: Option<&str>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET pool = $2 WHERE id = $1")
+            .bind(id)
+            .bind(pool)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// The distinct non-empty pools folders assign. Feeds the pool picker together with
+    /// [`crate::repo::NodeRepo::distinct_pools`].
+    pub async fn distinct_pools(&self) -> anyhow::Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT pool FROM node_groups WHERE pool IS NOT NULL AND pool <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Create a group; returns its id. `pool` is the folder's poll-pool assignment (`None` ⇒
     /// inherit), already validated by the caller.
     pub async fn create(

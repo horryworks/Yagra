@@ -5,11 +5,50 @@
 // `.ts` tests, never `.tsx`).
 
 import type { TFunction } from 'i18next';
-import type { NodeAssignment, NodeGroup, PolledBy } from '../types/api';
+import type { NodeAssignment, NodeGroup, PolledBy, PoolOption } from '../types/api';
 import { isValidPollerToken } from './pollers';
 
 /** Longest accepted pool name — one NATS subject token, matching `MAX_POOL_LEN` in yagra-core. */
 export const MAX_POOL_LEN = 63;
+
+/** How many pool chips the tree's context menu shows before relying on "Custom…". Kept small so
+ *  the menu stays a menu; the Custom… chip is always rendered, so nothing becomes unreachable. */
+export const POOL_CHIP_LIMIT = 8;
+
+/** One chip in the context menu's pool row. */
+export interface PoolChoice {
+  name: string;
+  /** A live poller serves this pool (else assigning to it leaves the node unmonitored). */
+  live: boolean;
+  /** This is the target's current own pool — the chip renders as already-selected. */
+  current: boolean;
+}
+
+/** The pool chips to offer for a target whose own pool is `current` (`null`/`''` ⇒ inherited).
+ *
+ *  The current pool is always included and always first even if it fell out of the server's list
+ *  (e.g. its last poller went away and nothing else references it) — otherwise the menu would
+ *  silently fail to show what the node is actually set to. The rest keep the server's order,
+ *  capped at [`POOL_CHIP_LIMIT`]. */
+export function poolChoices(
+  pools: PoolOption[],
+  current: string | null | undefined,
+): PoolChoice[] {
+  const own = current?.trim() || null;
+  const seen = new Set<string>();
+  const out: PoolChoice[] = [];
+  if (own) {
+    seen.add(own);
+    out.push({ name: own, live: pools.some((p) => p.name === own && p.live), current: true });
+  }
+  for (const p of pools) {
+    if (out.length >= POOL_CHIP_LIMIT) break;
+    if (seen.has(p.name)) continue;
+    seen.add(p.name);
+    out.push({ name: p.name, live: p.live, current: false });
+  }
+  return out;
+}
 
 /** Whether a pool name is acceptable. Same alphabet as a poller id (it becomes the
  *  `yagra.jobs.<pool>` subject token), plus the server's length bound. Empty is **valid** here and

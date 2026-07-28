@@ -98,6 +98,7 @@
     "loadNodes": "failed to load nodes",
     "setMaintenance": "failed to set maintenance",
     "mute": "failed to mute",
+    "setPool": "failed to set poller pool",
     "addUrlMonitor": "failed to add URL monitor",
     "addNode": "failed to add node",
     "moveNode": "failed to move node",
@@ -297,12 +298,19 @@
     "editMove": "Edit / move…",
     "open": "Open",
     "addNodeEllipsis": "Add node…",
-    "deleteEllipsis": "Delete…"
+    "deleteEllipsis": "Delete…",
+    "pool": "Poller pool",
+    "poolInherit": "Inherit",
+    "poolNoLivePoller": "No live poller serves this pool — nodes assigned to it are not polled."
   },
   "moveNode": {
     "title": "Move {{name}}",
     "move": "Move",
     "ungroupedOption": "— Ungrouped —"
+  },
+  "setPool": {
+    "title": "Poller pool for {{name}}",
+    "groupHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit. Takes effect on the next poll round."
   },
   "setParent": {
     "title": "Dependency for {{name}}",
