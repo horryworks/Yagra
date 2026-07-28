@@ -7,7 +7,8 @@
 //! implementation (the production path) slots in behind the same trait later.
 
 use crate::messages::{
-    EventMsg, FlowBatch, HeartbeatMsg, PollJob, PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
+    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
+    PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -83,6 +84,45 @@ pub trait SyncBus: Send + Sync {
     async fn publish_job_for_pool(&self, pool: &str, job: PollJob) -> Result<(), BusError>;
 }
 
+/// The discovery-sweep side of the bus (Phase C).
+///
+/// A third seam rather than more methods on [`Bus`] because the two ends are different code:
+/// core's `DiscoveryRunner` only publishes jobs, the poller's sweep only publishes results, and
+/// neither wants the poll-job surface. Keeping it separate is what lets each take
+/// `Arc<dyn DiscoveryBus>` and be driven by [`InMemoryBus`] in a test — the reason these four
+/// publishes are on a trait at all (they lived on the NATS type, so both call sites named the
+/// production transport and neither was testable).
+///
+/// The pool split mirrors [`Bus::publish_job`] / [`SyncBus::publish_job_for_pool`] exactly: the
+/// global subject is the compatibility path, the per-pool subject routes a sweep to a remote site
+/// (ADR-009/020).
+#[async_trait]
+pub trait DiscoveryBus: Send + Sync {
+    /// Publish a discovery sweep job on the global subject — core side.
+    async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError>;
+    /// Publish a discovery sweep job to a specific pool's subject — core side.
+    async fn publish_discovery_job_for_pool(
+        &self,
+        pool: &str,
+        job: DiscoveryJob,
+    ) -> Result<(), BusError>;
+    /// Publish a (cumulative, possibly partial) sweep result — poller side.
+    async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError>;
+}
+
+/// The core⇄core fan-out (Core HA active/active, ADR-016 Increment 2a).
+///
+/// Not part of [`Bus`]: no poller publishes or consumes these, and a poller should not be handed a
+/// seam that can revoke sessions. Separate from [`SyncBus`] for the same reason — that one is the
+/// poller control plane.
+#[async_trait]
+pub trait PeerBus: Send + Sync {
+    /// Fan out a session revocation so every other core denies the token too. Best-effort live
+    /// propagation: the durable `auth_revocations` table is the source of truth, so a failed
+    /// publish delays a peer's denial until its next cold load rather than losing it.
+    async fn publish_auth_revoke(&self, msg: AuthRevoke) -> Result<(), BusError>;
+}
+
 /// An in-process bus over Tokio broadcast channels.
 ///
 /// Fan-out, fire-and-forget: publishing with no current subscribers is **not** an error
@@ -109,6 +149,13 @@ pub struct InMemoryBus {
     sync_requests: broadcast::Sender<SyncRequest>,
     sync: broadcast::Sender<(String, SyncMsg)>,
     pool_jobs: broadcast::Sender<(String, PollJob)>,
+    // Discovery (Phase C). `pool_discovery_jobs` carries its routing key alongside the message,
+    // exactly like `pool_jobs`.
+    discovery_jobs: broadcast::Sender<DiscoveryJob>,
+    pool_discovery_jobs: broadcast::Sender<(String, DiscoveryJob)>,
+    discovery_results: broadcast::Sender<DiscoveryResult>,
+    // Core⇄core session revocation (ADR-016 Increment 2a).
+    auth_revokes: broadcast::Sender<AuthRevoke>,
 }
 
 impl InMemoryBus {
@@ -125,6 +172,10 @@ impl InMemoryBus {
         let (sync_requests, _) = broadcast::channel(capacity);
         let (sync, _) = broadcast::channel(capacity);
         let (pool_jobs, _) = broadcast::channel(capacity);
+        let (discovery_jobs, _) = broadcast::channel(capacity);
+        let (pool_discovery_jobs, _) = broadcast::channel(capacity);
+        let (discovery_results, _) = broadcast::channel(capacity);
+        let (auth_revokes, _) = broadcast::channel(capacity);
         Self {
             jobs,
             results,
@@ -136,6 +187,10 @@ impl InMemoryBus {
             sync_requests,
             sync,
             pool_jobs,
+            discovery_jobs,
+            pool_discovery_jobs,
+            discovery_results,
+            auth_revokes,
         }
     }
 
@@ -203,6 +258,31 @@ impl InMemoryBus {
     pub fn subscribe_pool_jobs(&self) -> broadcast::Receiver<(String, PollJob)> {
         self.pool_jobs.subscribe()
     }
+
+    /// Subscribe to global-subject discovery jobs (poller side).
+    #[must_use]
+    pub fn subscribe_discovery_jobs(&self) -> broadcast::Receiver<DiscoveryJob> {
+        self.discovery_jobs.subscribe()
+    }
+
+    /// Subscribe to pool-scoped discovery jobs (poller side). Yields `(pool, job)`; the caller
+    /// keeps only the tuples for its own pool, as with [`Self::subscribe_pool_jobs`].
+    #[must_use]
+    pub fn subscribe_pool_discovery_jobs(&self) -> broadcast::Receiver<(String, DiscoveryJob)> {
+        self.pool_discovery_jobs.subscribe()
+    }
+
+    /// Subscribe to discovery sweep results (core side).
+    #[must_use]
+    pub fn subscribe_discovery_results(&self) -> broadcast::Receiver<DiscoveryResult> {
+        self.discovery_results.subscribe()
+    }
+
+    /// Subscribe to session revocations fanned out by other cores.
+    #[must_use]
+    pub fn subscribe_auth_revoke(&self) -> broadcast::Receiver<AuthRevoke> {
+        self.auth_revokes.subscribe()
+    }
 }
 
 impl Default for InMemoryBus {
@@ -265,6 +345,36 @@ impl SyncBus for InMemoryBus {
 
     async fn publish_job_for_pool(&self, pool: &str, job: PollJob) -> Result<(), BusError> {
         let _ = self.pool_jobs.send((pool.to_owned(), job));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DiscoveryBus for InMemoryBus {
+    async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError> {
+        let _ = self.discovery_jobs.send(job);
+        Ok(())
+    }
+
+    async fn publish_discovery_job_for_pool(
+        &self,
+        pool: &str,
+        job: DiscoveryJob,
+    ) -> Result<(), BusError> {
+        let _ = self.pool_discovery_jobs.send((pool.to_owned(), job));
+        Ok(())
+    }
+
+    async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
+        let _ = self.discovery_results.send(result);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PeerBus for InMemoryBus {
+    async fn publish_auth_revoke(&self, msg: AuthRevoke) -> Result<(), BusError> {
+        let _ = self.auth_revokes.send(msg);
         Ok(())
     }
 }
@@ -535,5 +645,89 @@ mod tests {
         let (pool, got) = rx.recv().await.unwrap();
         assert_eq!(pool, "tokyo"); // the subscriber filters on this
         assert_eq!(got, job);
+    }
+
+    fn discovery_job() -> crate::messages::DiscoveryJob {
+        crate::messages::DiscoveryJob {
+            scan_id: Uuid::from_u128(3),
+            targets: vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))],
+            communities: vec!["public".into()],
+            credentials: Vec::new(),
+            timeout_ms: 500,
+        }
+    }
+
+    /// The two discovery subjects must stay isolated for the same reason the poll-job ones do: a
+    /// pool-scoped sweep is routed to one site's poller, and a wildcard poller absorbing it as well
+    /// would run the scan twice from two networks.
+    #[tokio::test]
+    async fn a_pooled_discovery_job_does_not_reach_the_global_subscriber() {
+        let bus = InMemoryBus::new(8);
+        let mut global = bus.subscribe_discovery_jobs();
+        let mut pooled = bus.subscribe_pool_discovery_jobs();
+
+        let job = discovery_job();
+        DiscoveryBus::publish_discovery_job_for_pool(&bus, "tokyo", job.clone())
+            .await
+            .unwrap();
+
+        let (pool, got) = pooled.recv().await.unwrap();
+        assert_eq!(pool, "tokyo"); // the subscriber filters on this
+        assert_eq!(got, job);
+        assert!(global.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_global_discovery_job_does_not_reach_the_pooled_subscriber() {
+        let bus = InMemoryBus::new(8);
+        let mut global = bus.subscribe_discovery_jobs();
+        let mut pooled = bus.subscribe_pool_discovery_jobs();
+
+        let job = discovery_job();
+        DiscoveryBus::publish_discovery_job(&bus, job.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(global.recv().await.unwrap(), job);
+        assert!(pooled.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn published_discovery_result_reaches_subscriber() {
+        use crate::messages::DiscoveryResult;
+
+        let bus = InMemoryBus::new(8);
+        let mut rx = bus.subscribe_discovery_results();
+
+        let result = DiscoveryResult {
+            scan_id: Uuid::from_u128(3),
+            found: Vec::new(),
+            probed: 1,
+            total: 1,
+            done: true,
+        };
+        DiscoveryBus::publish_discovery_result(&bus, result.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(rx.recv().await.unwrap(), result);
+    }
+
+    #[tokio::test]
+    async fn published_auth_revoke_reaches_subscriber() {
+        use crate::messages::AuthRevoke;
+
+        let bus = InMemoryBus::new(8);
+        let mut rx = bus.subscribe_auth_revoke();
+
+        let msg = AuthRevoke::Token {
+            hash: "0".repeat(64),
+            exp_unix: 1_700_000_000,
+        };
+        PeerBus::publish_auth_revoke(&bus, msg.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(rx.recv().await.unwrap(), msg);
     }
 }

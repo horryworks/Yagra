@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
-use yagra_bus::{DiscoveredDevice, DiscoveryJob, DiscoveryResult, NatsBus};
+use yagra_bus::{DiscoveredDevice, DiscoveryBus, DiscoveryJob, DiscoveryResult};
 use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 use yagra_transport::{SnmpV3Params, Transport};
 
@@ -93,8 +93,11 @@ fn candidates_of(job: &DiscoveryJob) -> Vec<SnmpCandidate> {
 
 /// Drain discovery jobs off the bus, sweeping each and publishing cumulative progress
 /// results. Returns when the stream ends.
-pub async fn run_discovery_stream<S>(mut jobs: S, bus: Arc<NatsBus>, transport: Arc<dyn Transport>)
-where
+pub async fn run_discovery_stream<S>(
+    mut jobs: S,
+    bus: Arc<dyn DiscoveryBus>,
+    transport: Arc<dyn Transport>,
+) where
     S: Stream<Item = DiscoveryJob> + Unpin,
 {
     while let Some(job) = jobs.next().await {
@@ -114,7 +117,7 @@ where
             found.extend(sweep_chunk(chunk, &candidates, timeout, transport.clone(), rate).await);
             probed = probed.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
             publish(
-                &bus,
+                bus.as_ref(),
                 DiscoveryResult {
                     scan_id: job.scan_id,
                     found: found.clone(),
@@ -128,7 +131,7 @@ where
         if job.targets.is_empty() {
             // Degenerate sweep: still complete the scan so core doesn't wait forever.
             publish(
-                &bus,
+                bus.as_ref(),
                 DiscoveryResult {
                     scan_id: job.scan_id,
                     found: Vec::new(),
@@ -144,7 +147,7 @@ where
     tracing::warn!("discovery job stream ended");
 }
 
-async fn publish(bus: &NatsBus, result: DiscoveryResult) {
+async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
     let scan_id = result.scan_id;
     if let Err(e) = bus.publish_discovery_result(result).await {
         tracing::warn!(error = %e, scan = %scan_id, "publish discovery result failed");
@@ -800,5 +803,90 @@ mod tests {
             2,
             "device is backed off after the failure limit instead of trying all five"
         );
+    }
+
+    /// The sweep loop itself — untestable until the bus became a trait, because it published
+    /// through the NATS type. What matters to core is the *shape* of the progress stream: one
+    /// result per chunk, `probed` monotone, `found` cumulative, and exactly one terminal `done`.
+    #[tokio::test]
+    async fn a_sweep_publishes_one_cumulative_result_per_chunk_and_one_terminal_done() {
+        use yagra_bus::InMemoryBus;
+
+        let bus = Arc::new(InMemoryBus::new(64));
+        let mut rx = bus.subscribe_discovery_results();
+
+        // Two chunks' worth of targets, all answering, so `found` must grow across the boundary.
+        let count = u8::try_from(PROGRESS_CHUNK).unwrap() + 5;
+        let targets: Vec<IpAddr> = (1..=count)
+            .map(|i| IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)))
+            .collect();
+        let total = u32::from(count);
+        let job = DiscoveryJob {
+            scan_id: Uuid::from_u128(11),
+            targets,
+            communities: vec!["public".to_owned()],
+            credentials: Vec::new(),
+            timeout_ms: 100,
+        };
+        let transport = Arc::new(SelectiveFake {
+            ping: true,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        });
+
+        run_discovery_stream(
+            futures::stream::iter(vec![job]),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            transport,
+        )
+        .await;
+
+        let mut results = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            results.push(r);
+        }
+        assert_eq!(results.len(), 2, "one progress result per chunk");
+        assert!(!results[0].done);
+        assert_eq!(results[0].probed, u32::try_from(PROGRESS_CHUNK).unwrap());
+        assert_eq!(results[0].found.len(), PROGRESS_CHUNK);
+        assert!(results[1].done, "the last chunk closes the scan");
+        assert_eq!(results[1].probed, total);
+        assert_eq!(results[1].total, total);
+        // Cumulative, not per-chunk: core replaces its candidate list wholesale from each partial,
+        // so a delta here would make the UI drop everything found before the final chunk.
+        assert_eq!(results[1].found.len(), usize::from(count));
+    }
+
+    /// A sweep with no targets still has to close, or core's scan sits at "scanning" forever.
+    #[tokio::test]
+    async fn an_empty_sweep_still_completes_the_scan() {
+        use yagra_bus::InMemoryBus;
+
+        let bus = Arc::new(InMemoryBus::new(8));
+        let mut rx = bus.subscribe_discovery_results();
+        let job = DiscoveryJob {
+            scan_id: Uuid::from_u128(12),
+            targets: Vec::new(),
+            communities: Vec::new(),
+            credentials: Vec::new(),
+            timeout_ms: 100,
+        };
+        let transport = Arc::new(SelectiveFake {
+            ping: false,
+            good_community: None,
+            good_v3_user: None,
+        });
+
+        run_discovery_stream(
+            futures::stream::iter(vec![job]),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            transport,
+        )
+        .await;
+
+        let r = rx.try_recv().expect("the degenerate sweep still reports");
+        assert!(r.done);
+        assert_eq!((r.probed, r.total), (0, 0));
+        assert!(rx.try_recv().is_err(), "exactly one message");
     }
 }

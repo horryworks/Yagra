@@ -13,7 +13,7 @@ pub mod messages;
 pub mod nats;
 pub mod subjects;
 
-pub use bus::{Bus, BusError, InMemoryBus, SyncBus};
+pub use bus::{Bus, BusError, DiscoveryBus, InMemoryBus, PeerBus, SyncBus};
 pub use messages::{
     encode_raw, AuthRevoke, CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface,
     DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, DnsCheck, EventKind, EventMsg,

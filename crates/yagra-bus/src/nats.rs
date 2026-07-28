@@ -10,7 +10,7 @@
 //! pool subject and pollers consume them with a **queue group** so each job is delivered
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
-use crate::bus::{Bus, BusError, SyncBus};
+use crate::bus::{Bus, BusError, DiscoveryBus, PeerBus, SyncBus};
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
     PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
@@ -288,17 +288,6 @@ impl NatsBus {
 
     // ── Core⇄core control plane (ADR-016 Increment 2 — active/active API) ────────────
 
-    /// Publish a session-revocation notice to every other core — core side (Core HA active/active,
-    /// ADR-016 Increment 2a). Plain publish on the shared [`subjects::auth_revoke`] fan-out subject.
-    pub async fn publish_auth_revoke(&self, msg: &AuthRevoke) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(msg)
-            .map_err(|e| BusError::Publish(format!("encode auth revoke: {e}")))?;
-        self.client
-            .publish(subjects::auth_revoke(), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish auth revoke: {e}")))
-    }
-
     /// Subscribe to session-revocation notices from other cores — core side (fan-out, every core
     /// receives every revocation). Malformed messages are skipped. Additive: an N-1 core never
     /// subscribes here, so a revocation simply doesn't reach it live — the durable `auth_revocations`
@@ -320,16 +309,6 @@ impl NatsBus {
         }))
     }
 
-    /// Publish a discovery sweep job — core side.
-    pub async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&job)
-            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
-        self.client
-            .publish(subjects::discovery_jobs(), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish discovery job: {e}")))
-    }
-
     /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
     pub async fn subscribe_discovery_jobs(
         &self,
@@ -349,16 +328,6 @@ impl NatsBus {
                 }
             }
         }))
-    }
-
-    /// Publish a discovery result — poller side.
-    pub async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&result)
-            .map_err(|e| BusError::Publish(format!("encode discovery result: {e}")))?;
-        self.client
-            .publish(subjects::discovery_results(), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish discovery result: {e}")))
     }
 
     /// Subscribe to discovery results — core side. Malformed messages skipped.
@@ -421,21 +390,6 @@ impl NatsBus {
                 }
             }
         }))
-    }
-
-    /// Publish a pool-scoped discovery job — core side (the discovery analogue of
-    /// [`SyncBus::publish_job_for_pool`]).
-    pub async fn publish_discovery_job_for_pool(
-        &self,
-        pool: &str,
-        job: DiscoveryJob,
-    ) -> Result<(), BusError> {
-        let payload = serde_json::to_vec(&job)
-            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
-        self.client
-            .publish(subjects::discovery_jobs_for_pool(pool), payload.into())
-            .await
-            .map_err(|e| BusError::Publish(format!("publish discovery job for pool {pool}: {e}")))
     }
 
     /// Subscribe to this poller's working-set sync — poller side. A **plain** subscribe (no queue
@@ -613,6 +567,52 @@ impl SyncBus for NatsBus {
             .publish(subjects::jobs_for_pool(pool), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish job for pool {pool}: {e}")))
+    }
+}
+
+#[async_trait]
+impl DiscoveryBus for NatsBus {
+    async fn publish_discovery_job(&self, job: DiscoveryJob) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&job)
+            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
+        self.client
+            .publish(subjects::discovery_jobs(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery job: {e}")))
+    }
+
+    async fn publish_discovery_job_for_pool(
+        &self,
+        pool: &str,
+        job: DiscoveryJob,
+    ) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&job)
+            .map_err(|e| BusError::Publish(format!("encode discovery job: {e}")))?;
+        self.client
+            .publish(subjects::discovery_jobs_for_pool(pool), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery job for pool {pool}: {e}")))
+    }
+
+    async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&result)
+            .map_err(|e| BusError::Publish(format!("encode discovery result: {e}")))?;
+        self.client
+            .publish(subjects::discovery_results(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery result: {e}")))
+    }
+}
+
+#[async_trait]
+impl PeerBus for NatsBus {
+    async fn publish_auth_revoke(&self, msg: AuthRevoke) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&msg)
+            .map_err(|e| BusError::Publish(format!("encode auth revoke: {e}")))?;
+        self.client
+            .publish(subjects::auth_revoke(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish auth revoke: {e}")))
     }
 }
 

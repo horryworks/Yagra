@@ -781,7 +781,7 @@ struct LeaderTasks {
     /// Cancelled on shutdown; every spawned task is cancellable on it.
     shutdown: CancellationToken,
     bus: Arc<NatsBus>,
-    coordinator: Arc<Coordinator<NatsBus>>,
+    coordinator: Arc<Coordinator>,
     notifier: Arc<Notifier>,
     store: Arc<dyn MetricStore>,
     repo: Arc<NodeRepo>,
@@ -1163,7 +1163,7 @@ const HOST_SAMPLE_SECS: u64 = 15;
 /// Increment 2a). Runs on every core. Loops until the channel closes on shutdown.
 async fn run_auth_revoke_writer(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<yagra_bus::AuthRevoke>,
-    bus: Arc<NatsBus>,
+    bus: Arc<dyn yagra_bus::PeerBus>,
     pool: sqlx::PgPool,
 ) {
     while let Some(revoke) = rx.recv().await {
@@ -1171,7 +1171,7 @@ async fn run_auth_revoke_writer(
         if let Err(e) = auth::persist_revocation(&pool, &revoke).await {
             tracing::warn!(error = %e, "failed to persist session revocation");
         }
-        if let Err(e) = bus.publish_auth_revoke(&revoke).await {
+        if let Err(e) = bus.publish_auth_revoke(revoke).await {
             tracing::warn!(error = %e, "failed to fan out session revocation to other cores");
         }
     }
@@ -1301,7 +1301,7 @@ async fn consume_results<S>(
     history: Arc<AlertHistoryStore>,
     stats: Arc<scheduler::SchedulerStats>,
     meraki_inflight: Arc<meraki::MerakiInflight>,
-    coordinator: Arc<Coordinator<NatsBus>>,
+    coordinator: Arc<Coordinator>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
@@ -1546,7 +1546,7 @@ async fn ingest_result(
     history: &Arc<AlertHistoryStore>,
     stats: &Arc<scheduler::SchedulerStats>,
     meraki_inflight: &Arc<meraki::MerakiInflight>,
-    coordinator: &Arc<Coordinator<NatsBus>>,
+    coordinator: &Arc<Coordinator>,
 ) {
     use crate::alerts::NotifyAction;
     metrics::counter!("yagra_poll_results_total").increment(1);
@@ -2181,7 +2181,7 @@ async fn run_scheduler(
     dispatcher: Arc<scheduler::PollDispatcher>,
     stats: Arc<scheduler::SchedulerStats>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
-    coordinator: Arc<Coordinator<NatsBus>>,
+    coordinator: Arc<Coordinator>,
 ) {
     use std::collections::HashSet;
     use std::time::Instant;

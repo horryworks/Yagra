@@ -176,16 +176,21 @@ pub struct PollerView {
 
 /// Live poller registry + working-set publisher (ADR-009/020).
 ///
-/// Generic over [`SyncBus`] so it runs over NATS in production and over
-/// [`yagra_bus::InMemoryBus`] in tests. Holds the process `epoch` (a fresh UUID each start; a bump
-/// forces every poller to resync), the guarded registry, the Redis mirror, the optional durable
-/// inventory (`None` where PG isn't wired, e.g. tests), and the shared scheduler stats handle it
-/// bumps as it publishes.
-pub struct Coordinator<B: SyncBus> {
+/// Takes the [`SyncBus`] as a trait object so it runs over NATS in production and over
+/// [`yagra_bus::InMemoryBus`] in tests. It was generic over the bus instead, which is strictly
+/// stronger *here* but leaked outward: every holder had to name the implementation, so
+/// `ApiState.coordinator` spelled `Coordinator<NatsBus>` and the API layer — which never touches
+/// the bus — depended on the production transport. Publishing a working set is per-poller
+/// bookkeeping, not a hot loop, so the virtual call costs nothing worth measuring.
+///
+/// Holds the process `epoch` (a fresh UUID each start; a bump forces every poller to resync), the
+/// guarded registry, the Redis mirror, the optional durable inventory (`None` where PG isn't wired,
+/// e.g. tests), and the shared scheduler stats handle it bumps as it publishes.
+pub struct Coordinator {
     /// Core-process epoch — stamped on every snapshot/delta; a restart bumps it and forces resync.
     epoch: Uuid,
     /// The control-plane bus (snapshot/delta publish).
-    bus: Arc<B>,
+    bus: Arc<dyn SyncBus>,
     /// Best-effort Redis liveness/assignment mirror (ADR-004).
     volatile: Arc<VolatileStore>,
     /// Durable poller inventory (`None` in skeleton/tests — no PG).
@@ -208,13 +213,13 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
-impl<B: SyncBus> Coordinator<B> {
+impl Coordinator {
     /// Build a coordinator with a fresh process epoch. `pollers_repo == None` disables durable
     /// inventory writes (skeleton/tests); `volatile` may be [`VolatileStore::disabled`] to disable
     /// the Redis mirror — both degrade to no-ops without affecting the in-memory source of truth.
     #[must_use]
     pub fn new(
-        bus: Arc<B>,
+        bus: Arc<dyn SyncBus>,
         volatile: Arc<VolatileStore>,
         pollers_repo: Option<Arc<PollerRepo>>,
         stats: Arc<SchedulerStats>,
@@ -766,11 +771,7 @@ mod tests {
     use yagra_bus::{CheckSpec, IcmpCheck, InMemoryBus, PollJob};
 
     /// Build a coordinator over an in-memory bus with Redis + PG mirrors disabled (pure registry).
-    fn coordinator() -> (
-        Arc<Coordinator<InMemoryBus>>,
-        Arc<InMemoryBus>,
-        Arc<SchedulerStats>,
-    ) {
+    fn coordinator() -> (Arc<Coordinator>, Arc<InMemoryBus>, Arc<SchedulerStats>) {
         let bus = Arc::new(InMemoryBus::new(4096));
         let stats = Arc::new(SchedulerStats::default());
         let coord = Arc::new(Coordinator::new(

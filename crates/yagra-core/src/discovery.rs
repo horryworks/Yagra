@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use futures::stream::{Stream, StreamExt};
 use serde::Serialize;
 use uuid::Uuid;
-use yagra_bus::{DiscoveryCredential, DiscoveryJob, DiscoveryResult, NatsBus};
+use yagra_bus::{DiscoveryBus, DiscoveryCredential, DiscoveryJob, DiscoveryResult};
 
 use crate::classification::Classifier;
 
@@ -148,14 +148,16 @@ impl ScanState {
 
 /// Orchestrates discovery scans: publishes jobs, accumulates results, exposes status.
 pub struct DiscoveryRunner {
-    bus: Arc<NatsBus>,
+    /// The publish seam, not the NATS type: this held `Arc<NatsBus>` and so could only ever be
+    /// driven by a running broker, which is why the routing decision in [`Self::start`] had no test.
+    bus: Arc<dyn DiscoveryBus>,
     classifier: Arc<Classifier>,
     scans: Mutex<HashMap<Uuid, ScanState>>,
 }
 
 impl DiscoveryRunner {
     #[must_use]
-    pub fn new(bus: Arc<NatsBus>, classifier: Arc<Classifier>) -> Self {
+    pub fn new(bus: Arc<dyn DiscoveryBus>, classifier: Arc<Classifier>) -> Self {
         Self {
             bus,
             classifier,
@@ -413,5 +415,80 @@ mod tests {
             st.candidates[0].suggested_profile_id,
             Some(Uuid::from_u128(GENERIC_PROFILE))
         );
+    }
+
+    /// `start`'s routing choice, which had no test while the runner held the NATS type. Getting it
+    /// wrong is invisible locally and wrong remotely: a sweep meant for a remote site published on
+    /// the global subject is absorbed by whichever poller answers first, so it scans the *wrong*
+    /// network and reports nothing found.
+    #[tokio::test]
+    async fn a_pool_scoped_scan_is_published_only_to_that_pool() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let mut pooled = bus.subscribe_pool_discovery_jobs();
+        let mut global = bus.subscribe_discovery_jobs();
+        let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
+
+        let scan = runner
+            .start(
+                targets(2),
+                vec!["public".to_owned()],
+                Vec::new(),
+                Some("tokyo"),
+            )
+            .await
+            .expect("publish succeeds");
+
+        let (pool, job) = pooled.recv().await.expect("job published");
+        assert_eq!(pool, "tokyo");
+        assert_eq!(job.scan_id, scan);
+        assert_eq!(job.targets.len(), 2);
+        assert!(global.try_recv().is_err(), "must not also hit the wildcard");
+        // The scan is registered before publish, so status is available the moment start returns.
+        assert!(runner.get(scan).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_scan_with_no_pool_falls_back_to_the_global_subject() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let mut pooled = bus.subscribe_pool_discovery_jobs();
+        let mut global = bus.subscribe_discovery_jobs();
+        let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
+
+        let scan = runner
+            .start(targets(1), Vec::new(), Vec::new(), None)
+            .await
+            .expect("publish succeeds");
+
+        assert_eq!(global.recv().await.expect("job published").scan_id, scan);
+        assert!(pooled.try_recv().is_err());
+    }
+
+    /// Credentials are passed through to the poller verbatim (it needs the plaintext to probe) but
+    /// must never be logged — this pins the pass-through half so a future "sanitize the job" change
+    /// cannot silently empty it and make every stored-credential sweep find nothing.
+    #[tokio::test]
+    async fn stored_credentials_reach_the_poller_in_the_job() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let mut global = bus.subscribe_discovery_jobs();
+        let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
+
+        let cred_ref = Uuid::from_u128(9);
+        runner
+            .start(
+                targets(1),
+                Vec::new(),
+                vec![DiscoveryCredential {
+                    cred_ref,
+                    community: Some("s3cret".to_owned()),
+                    v3: None,
+                }],
+                None,
+            )
+            .await
+            .expect("publish succeeds");
+
+        let job = global.recv().await.expect("job published");
+        assert_eq!(job.credentials.len(), 1);
+        assert_eq!(job.credentials[0].cred_ref, cred_ref);
     }
 }

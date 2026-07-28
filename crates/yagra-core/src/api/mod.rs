@@ -147,7 +147,7 @@ pub struct AdminState {
     /// Distributed poller pool control plane (ADR-009/020): the live poller registry + working-set
     /// publisher. Backs the Pollers view's live stats and the pool-routing decisions (discovery
     /// scans, node pool moves). Live mode only — skeleton mode has no coordinator.
-    pub coordinator: Arc<Coordinator<yagra_bus::NatsBus>>,
+    pub coordinator: Arc<Coordinator>,
     /// Durable poller inventory (ADR-009): lets the Pollers view surface a poller that is currently
     /// offline (its live liveness lives only in the coordinator/Redis, which forget it on TTL).
     pub pollers: Arc<PollerRepo>,
