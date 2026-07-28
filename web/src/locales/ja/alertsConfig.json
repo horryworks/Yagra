@@ -96,6 +96,7 @@
     },
     "empty": "しきい値ルールがまだありません",
     "emptySub": "プロファイル・グループ・ノードにスコープしたメトリクスしきい値を追加します。",
+    "truncated": "{{total}} 件中 {{shown}} 件を表示",
     "warnShort": "W",
     "critShort": "C",
     "dwellValue": "dwell {{n}}",

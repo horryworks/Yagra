@@ -98,6 +98,7 @@
     },
     "empty": "No threshold rules yet",
     "emptySub": "Add a metric threshold scoped to a profile, group, or node.",
+    "truncated": "Showing {{shown}} of {{total}} rules",
     "warnShort": "W",
     "critShort": "C",
     "dwellValue": "dwell {{n}}",

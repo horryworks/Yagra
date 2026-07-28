@@ -42,6 +42,7 @@ pub(crate) mod nodes;
 mod route_table;
 #[cfg(test)]
 mod tests_support;
+pub(crate) mod thresholds;
 pub(crate) mod topology;
 mod users;
 mod util;
@@ -316,11 +317,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/credentials/:id",
             put(update_credential).delete(delete_credential),
         )
-        .route(
-            "/api/v1/thresholds",
-            get(list_thresholds).post(create_threshold),
-        )
-        .route("/api/v1/thresholds/:id", delete(delete_threshold))
+        // Threshold rules — the one config table that grows with the fleet, so its list is capped.
+        .merge(thresholds::routes())
         .route(
             "/api/v1/nodes/:node_id/collection",
             get(list_node_collection).post(create_node_collection),
@@ -4708,103 +4706,6 @@ async fn delete_credential(
         Err(e) => {
             tracing::error!(error = %e, "delete credential failed");
             internal("failed to delete credential")
-        }
-    }
-}
-
-async fn list_thresholds(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.thresholds.list_all().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list thresholds failed");
-            internal("failed to list thresholds")
-        }
-    }
-}
-
-/// Create-threshold request body.
-#[derive(Deserialize)]
-struct CreateThreshold {
-    scope_level: String,
-    scope_id: String,
-    metric: String,
-    direction: String,
-    warning: Option<f64>,
-    critical: Option<f64>,
-    dwell_samples: Option<i32>,
-}
-
-async fn create_threshold(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateThreshold>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if !is_valid_metric_name(&body.metric) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            "metric must be a valid identifier".to_owned(),
-        );
-    }
-    if !matches!(body.scope_level.as_str(), "profile" | "group" | "node")
-        || !matches!(body.direction.as_str(), "above" | "below")
-    {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_threshold",
-            "scope_level must be profile|group|node and direction above|below".to_owned(),
-        );
-    }
-    match admin
-        .thresholds
-        .create(
-            &body.scope_level,
-            &body.scope_id,
-            &body.metric,
-            &body.direction,
-            body.warning,
-            body.critical,
-            body.dwell_samples.unwrap_or(3),
-        )
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create threshold failed");
-            internal("failed to create threshold")
-        }
-    }
-}
-
-async fn delete_threshold(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.thresholds.delete(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("threshold_not_found", format!("no threshold {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete threshold failed");
-            internal("failed to delete threshold")
         }
     }
 }

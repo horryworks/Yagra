@@ -49,31 +49,63 @@ impl ThresholdStore {
         Self { pool }
     }
 
-    /// All threshold rules (the alert engine snapshots these).
+    /// Columns every read below selects, in the order [`Self::row_to_threshold`] expects.
+    const COLUMNS: &'static str =
+        "id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples";
+
+    /// **Every** threshold rule — the alert engine snapshots these to evaluate against.
+    ///
+    /// Deliberately uncapped, and must stay so: a truncated snapshot is not a shorter list, it is
+    /// an alert engine that silently stops evaluating some rules. The *API* read is capped
+    /// separately ([`Self::list_page`]) because a browser rendering the whole fleet's node-level
+    /// overrides is a different problem from the engine needing all of them.
     pub async fn list_all(&self) -> anyhow::Result<Vec<StoredThreshold>> {
-        let rows = sqlx::query(
-            "SELECT id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples \
-             FROM thresholds",
-        )
+        let rows = sqlx::query(&format!("SELECT {} FROM thresholds", Self::COLUMNS))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(Self::row_to_threshold).collect()
+    }
+
+    /// One page of threshold rules for the API, plus the total, so the caller can tell the operator
+    /// how many were withheld rather than silently showing a prefix.
+    ///
+    /// Ordered so the page is stable and readable: broadest scope first (profile → group → node),
+    /// then by metric. Without an `ORDER BY`, PostgreSQL is free to return a different arbitrary
+    /// subset each time the same page is fetched.
+    pub async fn list_page(&self, limit: i64) -> anyhow::Result<(Vec<StoredThreshold>, i64)> {
+        let total: i64 = sqlx::query_scalar("SELECT count(*) FROM thresholds")
+            .fetch_one(&self.pool)
+            .await?;
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM thresholds \
+             ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END, \
+             metric, scope_id LIMIT $1",
+            Self::COLUMNS
+        ))
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                let dwell: i32 = row.try_get("dwell_samples")?;
-                Ok(StoredThreshold {
-                    id: row.try_get("id")?,
-                    level: parse_level(&row.try_get::<String, _>("scope_level")?),
-                    scope_id: row.try_get("scope_id")?,
-                    rule: ThresholdRule {
-                        metric: row.try_get("metric")?,
-                        direction: parse_direction(&row.try_get::<String, _>("direction")?),
-                        warning: row.try_get("warning")?,
-                        critical: row.try_get("critical")?,
-                        dwell_samples: u32::try_from(dwell).unwrap_or(1),
-                    },
-                })
-            })
-            .collect()
+        let items = rows
+            .into_iter()
+            .map(Self::row_to_threshold)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok((items, total))
+    }
+
+    fn row_to_threshold(row: sqlx::postgres::PgRow) -> anyhow::Result<StoredThreshold> {
+        let dwell: i32 = row.try_get("dwell_samples")?;
+        Ok(StoredThreshold {
+            id: row.try_get("id")?,
+            level: parse_level(&row.try_get::<String, _>("scope_level")?),
+            scope_id: row.try_get("scope_id")?,
+            rule: ThresholdRule {
+                metric: row.try_get("metric")?,
+                direction: parse_direction(&row.try_get::<String, _>("direction")?),
+                warning: row.try_get("warning")?,
+                critical: row.try_get("critical")?,
+                dwell_samples: u32::try_from(dwell).unwrap_or(1),
+            },
+        })
     }
 
     /// Create a threshold rule; returns its id.

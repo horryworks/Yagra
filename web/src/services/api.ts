@@ -98,7 +98,7 @@ import type {
   StateHistory,
   ThroughputRange,
   StoredCollectionItem,
-  StoredThreshold,
+  ThresholdPage,
   TopEntry,
   TopologyNode,
   UrlCheckConfig,
@@ -842,7 +842,7 @@ export const api = {
     request(`/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Threshold rules (hierarchical overrides; most-specific scope wins). */
-  listThresholds: (): Promise<StoredThreshold[]> => request('/thresholds'),
+  listThresholds: (): Promise<ThresholdPage> => request('/thresholds'),
 
   /** Create a threshold rule. */
   createThreshold: (body: {

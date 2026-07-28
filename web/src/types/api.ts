@@ -563,6 +563,18 @@ export interface StoredThreshold {
   dwell_samples: number;
 }
 
+/** A capped page of threshold rules (`GET /api/v1/thresholds`, core `ThresholdPage`).
+ *
+ *  Thresholds are the one configuration table that grows with the fleet — a node-level override is
+ *  per (node × metric) — so the list is capped server-side. `total` is the whole ruleset's size,
+ *  and `truncated` says outright that `items` is a prefix, rather than leaving the UI to infer it
+ *  from `items.length` (which is wrong when the ruleset is exactly the cap). */
+export interface ThresholdPage {
+  items: StoredThreshold[];
+  total: number;
+  truncated: boolean;
+}
+
 /** One alert-history row (`GET /api/v1/alerts/history`, core `AlertHistoryRow`). */
 export interface AlertHistoryRow {
   node: string;

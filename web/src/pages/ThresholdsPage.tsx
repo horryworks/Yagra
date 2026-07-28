@@ -5,9 +5,14 @@
 // snapshots them (refreshed every ~30s) and checks each matching poll sample through the
 // same hysteresis/flapping machinery as liveness, so a breach fires a real alert.
 //
-// Data-table standard v2: a toolbar (count + "+ Add rule") over the shared `.ytable`; the
+// Data-table standard v2: a toolbar (count + "+ Add rule") over the shared `DataTable`; the
 // add form and delete confirmation both go through modals. The blue-left-border note card
 // above the toolbar keeps the "what a rule is" explainer in view.
+//
+// This is the one configuration list that grows with the fleet — a node-level override is per
+// (node × metric) — so it uses the virtualized `DataTable` rather than a hand-rolled grid, and the
+// server caps the response. When the cap bites, the toolbar says so: a silently short ruleset reads
+// as "these are all the rules", which is exactly the wrong belief to hold about alerting config.
 
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -31,11 +36,9 @@ import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
-
-
-const COLS = '1.6fr 1.4fr 110px 170px 100px 92px';
 
 /** Create a threshold rule (focused-editing modal). */
 function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -209,6 +212,11 @@ export function ThresholdsPage() {
   const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<StoredThreshold[]>([]);
+  /** Whole-ruleset size and whether `rows` is only a prefix of it — both come from the server. */
+  const [page, setPage] = useState<{ total: number; truncated: boolean }>({
+    total: 0,
+    truncated: false,
+  });
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -219,8 +227,9 @@ export function ThresholdsPage() {
   const load = useCallback(() => {
     api
       .listThresholds()
-      .then((list) => {
-        setRows(list);
+      .then((p) => {
+        setRows(p.items);
+        setPage({ total: p.total, truncated: p.truncated });
         setUnavailable(false);
       })
       .catch((e: unknown) => {
@@ -232,6 +241,73 @@ export function ThresholdsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const columns: Column<StoredThreshold>[] = [
+    {
+      key: 'scope',
+      header: t('thresholds.cols.scope'),
+      width: '1.6fr',
+      render: (row) => (
+        <>
+          <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
+          <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+        </>
+      ),
+    },
+    {
+      key: 'metric',
+      header: t('thresholds.cols.metric'),
+      width: '1.4fr',
+      render: (row) => <span className="mono">{row.metric}</span>,
+    },
+    {
+      key: 'direction',
+      header: t('thresholds.cols.direction'),
+      width: '110px',
+      render: (row) => <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>,
+    },
+    {
+      key: 'bounds',
+      header: t('thresholds.cols.bounds'),
+      width: '170px',
+      render: (row) => (
+        <span className="thresholds-bounds">
+          {row.warning != null && (
+            <Badge tone="warning">
+              {t('thresholds.warnShort')} {row.warning}
+            </Badge>
+          )}
+          {row.critical != null && (
+            <Badge tone="critical">
+              {t('thresholds.critShort')} {row.critical}
+            </Badge>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'dwell',
+      header: t('thresholds.cols.dwell'),
+      width: '100px',
+      render: (row) => (
+        <span className="muted">{t('thresholds.dwellValue', { n: row.dwell_samples })}</span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: t('thresholds.cols.actions'),
+      width: '92px',
+      align: 'right',
+      render: (row) =>
+        authed && (
+          <span className="ytable-actions">
+            <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(row)}>
+              <TrashIcon />
+            </IconButton>
+          </span>
+        ),
+    },
+  ];
 
   return (
     <div>
@@ -253,6 +329,13 @@ export function ThresholdsPage() {
         <>
           <TableToolbar>
             <TableSpacer />
+            {/* Says how many of how many when the server capped the response — never a bare count
+                that would read as the whole ruleset. */}
+            {page.truncated && (
+              <span className="muted thresholds-truncated">
+                {t('thresholds.truncated', { shown: rows.length, total: page.total })}
+              </span>
+            )}
             <ResultCount shown={rows.length} noun={t('common:noun.rule', { count: rows.length })} />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
@@ -263,66 +346,18 @@ export function ThresholdsPage() {
 
           {error && <p className="form-error">{error}</p>}
 
-          <div className="ytable">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('thresholds.cols.scope')}</div>
-              <div className="ytable-h">{t('thresholds.cols.metric')}</div>
-              <div className="ytable-h">{t('thresholds.cols.direction')}</div>
-              <div className="ytable-h">{t('thresholds.cols.bounds')}</div>
-              <div className="ytable-h">{t('thresholds.cols.dwell')}</div>
-              <div className="ytable-h right">{t('thresholds.cols.actions')}</div>
-            </div>
-
-            {rows.length === 0 ? (
+          <DataTable
+            rows={rows}
+            columns={columns}
+            rowKey={(r) => r.id}
+            loading={loading}
+            empty={
               <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading ? t('common:loading') : t('thresholds.empty')}
-                </p>
-                {!loading && <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>}
+                <p className="yt-empty-title">{t('thresholds.empty')}</p>
+                <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
               </div>
-            ) : (
-              rows.map((row) => (
-                <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={row.id}>
-                  <div className="ytable-cell">
-                    <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
-                    <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
-                  </div>
-                  <div className="ytable-cell mono">{row.metric}</div>
-                  <div className="ytable-cell muted">{t(`thresholds.direction.${row.direction}`)}</div>
-                  <div className="ytable-cell">
-                    <span className="thresholds-bounds">
-                      {row.warning != null && (
-                        <Badge tone="warning">
-                          {t('thresholds.warnShort')} {row.warning}
-                        </Badge>
-                      )}
-                      {row.critical != null && (
-                        <Badge tone="critical">
-                          {t('thresholds.critShort')} {row.critical}
-                        </Badge>
-                      )}
-                    </span>
-                  </div>
-                  <div className="ytable-cell muted">
-                    {t('thresholds.dwellValue', { n: row.dwell_samples })}
-                  </div>
-                  <div className="ytable-cell right">
-                    {authed && (
-                      <span className="ytable-actions">
-                        <IconButton
-                          title={t('common:actions.delete')}
-                          danger
-                          onClick={() => setDeleting(row)}
-                        >
-                          <TrashIcon />
-                        </IconButton>
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+            }
+          />
         </>
       )}
 
