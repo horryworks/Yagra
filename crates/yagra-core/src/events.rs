@@ -317,6 +317,13 @@ pub enum TokenVerify {
 /// Consequence to keep in mind: store-and-forward backfill inserts rows with old event times, so
 /// a row can appear *behind* a cursor a client has already paged past. That is inherent to
 /// ordering a log by event time, and matches what the VictoriaLogs path has always done.
+///
+/// **One difference between the backends is permitted and deliberate**: a plain `search` term is a
+/// substring here (`ILIKE '%term%'`) but a whole-token phrase on VictoriaLogs, so a mid-word term
+/// finds fewer rows on a log-store deployment. Making LogsQL do substring costs 300× (measured:
+/// a 24h aggregate 19ms → 5.6s, and the paged search exceeded VictoriaLogs' 30s query ceiling),
+/// because an inverted word index cannot serve a leading substring without a full scan. The
+/// operator's escape hatch is `regex`, which reaches inside tokens on both backends.
 #[derive(Debug, Default)]
 pub struct EventFilter {
     /// Keyset pagination cursor (exclusive upper bound, event time). Distinct from `until` (a

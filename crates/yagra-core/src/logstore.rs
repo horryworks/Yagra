@@ -184,8 +184,8 @@ fn record_to_json(r: &PersistRecord) -> Value {
     Value::Object(obj)
 }
 
-/// Make a regex case-insensitive, matching PostgreSQL's `~*` / `ILIKE`. Applied to both the
-/// operator's own pattern and the escaped substring term so the two backends agree on casing.
+/// Make a regex case-insensitive, matching PostgreSQL's `~*`. LogsQL's `~` is case-sensitive, so
+/// without this the same pattern meant different things on the two backends.
 fn ci_regex(pattern: &str) -> String {
     format!("(?i){pattern}")
 }
@@ -225,15 +225,20 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
             // case-sensitive here and case-insensitive there.
             clauses.push(format!("_msg:~{}", logsql_quote(&ci_regex(term))));
         } else {
-            // A case-insensitive regex over the escaped term, not a phrase filter: `_msg:"term"`
-            // matches whole tokens, so a mid-word term ("rror", a partial IP) found nothing here
-            // while the SQL path's `ILIKE '%term%'` found it. Substring is the contract.
+            // A phrase filter, which matches whole tokens — deliberately NOT the SQL path's
+            // `ILIKE '%term%'` substring, and the one place the two backends are allowed to
+            // differ. Measured against the live test server (2026-07-28), spelling this as
+            // `_msg:~"(?i)term"` to buy true substring semantics cost **300×**: a 24h aggregate
+            // went 19ms → 5.6s, and the paged search hit VictoriaLogs' 30s
+            // `-search.maxQueryDuration` ceiling outright. An inverted word index cannot satisfy a
+            // leading substring without scanning every block, so no LogsQL spelling avoids it.
+            //
+            // The operator's escape hatch for a mid-word term is the search box's existing
+            // **regex** toggle, which does reach inside tokens here — at that scan cost, but only
+            // when explicitly asked for.
             let mut ors = vec![
-                format!("_msg:~{}", logsql_quote(&ci_regex(&regex::escape(term)))),
-                format!(
-                    "source_ip:~{}",
-                    logsql_quote(&ci_regex(&regex::escape(term)))
-                ),
+                format!("_msg:{}", logsql_quote(term)),
+                format!("source_ip:{}", logsql_quote(term)),
             ];
             if !name_node_ids.is_empty() {
                 let ids = name_node_ids
@@ -549,10 +554,14 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
     }
 }
 
-/// Whether a stored record satisfies the filter, modelling the **one** contract both real backends
-/// now implement: case-insensitive substring for a plain term, case-insensitive regex for a pattern
-/// (PostgreSQL `ILIKE` / `~*`; LogsQL `~"(?i)…"` via [`build_filter_part`]). It used to model the
-/// SQL path only, which is how the LogsQL path's phrase-and-case-sensitive behaviour went unnoticed.
+/// Whether a stored record satisfies the filter, modelling the **PostgreSQL** contract:
+/// case-insensitive substring for a plain term, case-insensitive regex for a pattern.
+///
+/// It cannot model both backends, because they legitimately differ on one axis: VictoriaLogs
+/// matches a plain term by token, not by substring (see [`build_filter_part`] for the measured
+/// reason). Everything else — the time base, regex case-insensitivity, which fields a term
+/// searches — is shared, and `both_backends_filter_on_event_time_with_the_same_case_rules` is what
+/// keeps it that way.
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
     let m = &r.msg;
@@ -804,35 +813,42 @@ mod tests {
         assert!(q.contains("kind:=\"syslog\""));
         assert!(q.contains(&format!("node_id:=\"{node}\"")));
         assert!(q.contains("matched:=\"true\""));
-        // Substring, case-insensitive — matching the SQL path's `ILIKE '%term%'`. A phrase filter
-        // (`_msg:"link down"`) would silently miss mid-word hits that the SQL path returns.
-        assert!(q.contains("_msg:~\"(?i)link down\""));
-        assert!(q.contains("source_ip:~\"(?i)link down\""));
+        assert!(q.contains("_msg:\"link down\""));
+        assert!(q.contains("source_ip:\"link down\""));
         assert!(q.contains(&format!("node_id:in(\"{}\")", Uuid::from_u128(9))));
         assert!(q.ends_with("| sort by (_time) desc | limit 100"));
     }
 
     #[test]
-    fn a_substring_term_is_regex_escaped_before_it_becomes_a_pattern() {
-        // The term is a literal for the operator; unescaped it would be read as a pattern and a
-        // search for "10.0.0.1" would match "10x0y0z1".
+    fn a_plain_term_stays_a_phrase_filter_not_a_regex_scan() {
+        // Guards a fix that was tried and reverted. Rewriting this as `_msg:~"(?i)term"` does buy
+        // true substring semantics matching the SQL path's `ILIKE '%term%'` — and measured on the
+        // live test server it cost 300× (24h aggregate 19ms → 5.6s; the paged search hit
+        // VictoriaLogs' 30s query ceiling). A leading substring cannot use an inverted word index.
+        // Regex mode is the deliberate escape hatch; the plain path stays indexed.
         let filter = EventFilter {
-            search: Some("10.0.0.1".into()),
+            search: Some("link".into()),
             regex: false,
             ..EventFilter::default()
         };
-        // Doubled backslashes: `regex::escape` produces `10\.0\.0\.1`, then `logsql_quote` escapes
-        // each backslash for the quoted-string wire form.
         let q = build_search_logsql(&filter, &[], 100);
-        assert!(q.contains(r"(?i)10\\.0\\.0\\.1"), "{q}");
+        assert!(q.contains("_msg:\"link\""), "{q}");
+        assert!(
+            !q.contains("_msg:~"),
+            "plain term must not become a regex scan: {q}"
+        );
     }
 
     #[test]
     fn both_backends_filter_on_event_time_with_the_same_case_rules() {
         // The one test that pins the SQL and LogsQL builders to *each other*. They are separate
-        // implementations of one `EventFilter`, and they drifted on four points at once — time
+        // implementations of one `EventFilter` and they drifted on four points at once — time
         // column, substring-vs-phrase, regex case, node-name resolution — with nothing failing.
-        // Anything that changes the contract has to change both sides or land here.
+        //
+        // Three of the four are now shared and asserted here. The fourth, sub-token granularity of
+        // a plain term, is a *permitted* difference: see `a_plain_term_stays_a_phrase_filter_…`
+        // for the 300× measurement behind that decision. Permitted, not forgotten — anything else
+        // that changes the contract has to change both sides or fail here.
         use crate::events::EVENT_FILTER_WHERE;
 
         // 1. Time bounds are event time on both sides. `recorded_at` is ingest time and must not
@@ -845,16 +861,11 @@ mod tests {
             "{EVENT_FILTER_WHERE}"
         );
 
-        // 2. Case-insensitivity is explicit on both sides: `ILIKE`/`~*` there, `(?i)` here.
+        // 2. An operator-supplied *regex* is case-insensitive on both sides: `~*` there, `(?i)`
+        //    here. (A plain term is case-insensitive on both too — LogsQL phrase matching already
+        //    is — which is why only the regex spelling needs asserting.)
         assert!(EVENT_FILTER_WHERE.contains("ILIKE"));
         assert!(EVENT_FILTER_WHERE.contains("e.message ~* $7"));
-        let substring = build_filter_part(
-            &EventFilter {
-                search: Some("Term".into()),
-                ..EventFilter::default()
-            },
-            &[],
-        );
         let pattern = build_filter_part(
             &EventFilter {
                 search: Some("Term".into()),
@@ -863,7 +874,6 @@ mod tests {
             },
             &[],
         );
-        assert!(substring.contains("(?i)"), "{substring}");
         assert!(pattern.contains("(?i)"), "{pattern}");
 
         // 3. Every filter dimension reaches both sides. A field added to one builder only is the
@@ -886,7 +896,7 @@ mod tests {
             "kind:=",
             "node_id:=",
             "matched:=",
-            "_msg:~",
+            "_msg:",
         ] {
             assert!(logsql.contains(clause), "LogsQL missing {clause}: {logsql}");
         }
