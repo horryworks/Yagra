@@ -170,10 +170,51 @@ fn is_v6_link_local(a: Ipv6Addr) -> bool {
     (a.segments()[0] & 0xffc0) == 0xfe80
 }
 
+/// The IP a URL's host component names, or `None` if it is a hostname.
+///
+/// The whole job is the brackets. `Url::host_str` returns an IPv6 literal **with** its enclosing
+/// `[…]` (`"[::1]"`), which `IpAddr::from_str` rejects — so `host.parse().ok()` reads as "this is a
+/// hostname" for every IPv6 address, and any check gated on it is skipped. That is not
+/// hypothetical: it is what let `http://[::1]/` past the URL-monitor edge validator while the
+/// identical check in the transport (which stripped the brackets) refused it. Four sites needed
+/// this and three had their own copy, so it lives here, next to the check it feeds.
+#[must_use]
+pub fn host_ip(host: &str) -> Option<IpAddr> {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+        .parse::<IpAddr>()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn a_bracketed_ipv6_host_is_still_recognized_as_a_literal() {
+        // The whole reason this function exists. `Url::host_str` hands back "[::1]", and every
+        // caller here feeds the result to `is_ssrf_blocked` — so reading a v6 literal as a
+        // hostname does not fail closed, it skips the SSRF check entirely.
+        for (host, want) in [
+            ("[::1]", Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            ("[fe80::1]", Some("fe80::1".parse().unwrap())),
+            ("::1", Some(IpAddr::V6(Ipv6Addr::LOCALHOST))), // unbracketed still works
+            ("127.0.0.1", Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            ("example.com", None),
+            ("", None),
+            ("[not-an-ip]", None),
+        ] {
+            assert_eq!(host_ip(host), want, "{host}");
+        }
+
+        // The pairing that matters: every blocked literal must survive the round trip bracketed.
+        for blocked in ["[::1]", "[::]", "[fe80::1]", "[::ffff:169.254.169.254]"] {
+            let ip = host_ip(blocked).expect(blocked);
+            assert!(is_ssrf_blocked(ip), "{blocked} must be refused");
+        }
+    }
 
     #[test]
     fn http_method_round_trips_token() {

@@ -11,7 +11,7 @@
 //! Errors are reserved for un-runnable configs (bad URL/scheme, SSRF-blocked target).
 
 use crate::{HttpProbe, HttpProbeSpec, TransportError};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use yagra_common::{is_ssrf_blocked, HttpMethod};
@@ -36,7 +36,7 @@ pub(crate) async fn probe_http(
     // (incl. cloud metadata) / multicast / unspecified targets. Private ranges are allowed —
     // an NMS legitimately monitors internal endpoints.
     if let Some(host) = url.host_str() {
-        match parse_host_ip(host) {
+        match yagra_common::host_ip(host) {
             Some(ip) => {
                 if is_ssrf_blocked(ip) {
                     return Err(TransportError::Io("blocked target address".to_owned()));
@@ -164,16 +164,6 @@ fn build_probe_client(
         .map_err(|e| TransportError::Io(format!("http client build failed: {e}")))
 }
 
-/// Parse a URL host string as an IP literal, tolerating the bracketed IPv6 form (`[::1]`).
-/// Returns `None` for a domain name (resolution is checked separately).
-fn parse_host_ip(host: &str) -> Option<IpAddr> {
-    let bare = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    bare.parse::<IpAddr>().ok()
-}
-
 /// Whether a redirect hop's URL must be refused (per-hop SSRF defense). Blocks non-http(s)
 /// schemes and IP-literal hosts that are SSRF-blocked; a hostname hop is allowed (see the
 /// redirect-policy comment in `probe_http`).
@@ -182,7 +172,7 @@ fn redirect_hop_blocked(url: &reqwest::Url) -> bool {
         return true;
     }
     url.host_str()
-        .and_then(parse_host_ip)
+        .and_then(yagra_common::host_ip)
         .is_some_and(is_ssrf_blocked)
 }
 
@@ -233,6 +223,7 @@ fn cert_days_to_expiry(der: &[u8]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::IpAddr;
 
     #[tokio::test]
     async fn rejects_non_http_scheme() {

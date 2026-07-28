@@ -9,8 +9,19 @@
 //! Keep this module for things with no better home. Anything that is really about errors belongs in
 //! [`super::error`], anything about request identity or guards in [`super::extract`].
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+/// The id of a freshly created resource — the whole body of a `201`.
+///
+/// Deliberately one shape for every creator. The `json!({"id": …})` literal it replaces was written
+/// out per handler, which is how `{"id": …}` and `{"node_id": …}` both ended up in this API for the
+/// same idea; a client then needs to know which creator it called to read the id back.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CreatedId {
+    pub id: Uuid,
+}
 
 /// `?limit=` on its own — the query shape for endpoints that cap a list but do not page it.
 ///

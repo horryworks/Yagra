@@ -780,11 +780,7 @@ async fn webhook_target_blocked(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return true;
     };
-    let literal = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
+    if let Some(ip) = yagra_common::host_ip(host) {
         return is_ssrf_blocked(ip);
     }
     let port = url

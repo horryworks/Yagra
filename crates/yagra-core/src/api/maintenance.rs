@@ -14,6 +14,7 @@
 //! operator like it worked. That is a worse failure than a rejection.
 
 use super::extract::{Admin, RequireAckAlerts, RequireManageMaintenance, RequireView};
+use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
 use axum::{
     extract::Path,
@@ -22,7 +23,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 /// The maintenance + mute routes, merged into `/api/v1` by [`super::router`].
@@ -46,12 +47,6 @@ pub(crate) fn routes() -> Router<ApiState> {
 const WINDOW_SCOPE_LEVELS: [&str; 4] = ["profile", "group", "node", "group_id"];
 /// The scope kinds a mute may target.
 const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
-
-/// The id of a newly created window or mute.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct CreatedId {
-    pub id: Uuid,
-}
 
 /// Parse and sanity-check a window's bounds.
 ///

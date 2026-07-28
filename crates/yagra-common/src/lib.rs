@@ -61,6 +61,6 @@ pub use thresholds::{
 };
 pub use trap::trap_oid_name;
 pub use url_check::{
-    is_ssrf_blocked, ExpectedStatus, HttpMethod, UrlCheckConfig, METRIC_HTTP_STATUS_CODE,
+    host_ip, is_ssrf_blocked, ExpectedStatus, HttpMethod, UrlCheckConfig, METRIC_HTTP_STATUS_CODE,
     METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
 };
