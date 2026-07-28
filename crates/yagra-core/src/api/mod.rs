@@ -35,9 +35,12 @@ mod route_table;
 #[cfg(test)]
 mod tests_support;
 mod users;
+mod util;
 
-pub(crate) use error::error_response;
+pub(crate) use error::{error_response, internal, not_found, unavailable};
 pub use error::{ApiError, ApiResult};
+pub(crate) use extract::{authorize, bearer, current_username, require_leader, require_view};
+pub(crate) use util::{now_unix_s, parse_rfc3339};
 
 use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
@@ -65,10 +68,7 @@ use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore,
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{
-        header::{self, AUTHORIZATION},
-        HeaderMap, HeaderValue, StatusCode,
-    },
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -684,21 +684,6 @@ async fn readyz(State(st): State<ApiState>) -> StatusCode {
     }
 }
 
-/// Guard for handlers that touch leader-only in-memory pipelines (ADR-016): `Some(503)` on a
-/// standby, `None` on the leader (and always `None` when HA is off / this core is always leader).
-/// Mirrors [`authorize`]'s `Option<Response>` shape so call sites read the same.
-fn require_leader(st: &ApiState) -> Option<Response> {
-    if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
-        None
-    } else {
-        Some(error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "not_leader",
-            "this core is a standby; the request must be routed to the leader".to_owned(),
-        ))
-    }
-}
-
 /// Product/build version for the WebUI's Settings ▸ About page. Public (no secrets) — just the
 /// running `yagra-core` crate version, which inherits the workspace version (the canonical source
 /// of truth). The WebUI shows its own build version alongside this, so a core/web skew during a
@@ -784,12 +769,6 @@ async fn update_config(
     }
 }
 
-fn now_unix_s() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
 // ── Response shapes ──────────────────────────────────────────────────────────
 
 /// Latest reading for one node metric.
@@ -829,11 +808,6 @@ struct NodeSummary {
     /// How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
     /// otherwise `"device"`. (URL monitors can reuse this later.)
     source: &'static str,
-}
-
-/// The fixed error envelope (ADR-019).
-fn not_found(code: &str, message: String) -> Response {
-    error_response(StatusCode::NOT_FOUND, code, message)
 }
 
 /// A Prometheus-style metric name: `[a-zA-Z_:][a-zA-Z0-9_:]*`. Validating at the edge
@@ -4163,67 +4137,7 @@ async fn stream_report_runs(State(st): State<ApiState>, headers: HeaderMap) -> R
         .into_response()
 }
 
-/// The caller's username from the bearer session, if any (for audit attribution).
-fn current_username(st: &ApiState, headers: &HeaderMap) -> Option<String> {
-    bearer(headers)
-        .and_then(|t| st.sessions.lookup(t))
-        .map(|s| s.username)
-}
-
 // ── Admin (write) handlers — live mode only ──────────────────────────────────
-
-fn unavailable() -> Response {
-    error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "admin_unavailable",
-        "inventory/credential management is not available in skeleton mode".to_owned(),
-    )
-}
-
-fn internal(what: &str) -> Response {
-    error_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal_error",
-        what.to_owned(),
-    )
-}
-
-/// Extract the `Authorization: Bearer <token>` value, if present.
-pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
-}
-
-/// Require a valid token with `perm`. Returns `Some(error response)` to short-circuit the
-/// handler on failure (401/403), or `None` when authorized.
-fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) -> Option<Response> {
-    match st.sessions.authorize(bearer(headers), perm) {
-        Ok(_) => None,
-        Err(AuthError::Forbidden) => Some(error_response(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "your role does not permit this action".to_owned(),
-        )),
-        Err(_) => Some(error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "a valid bearer token is required".to_owned(),
-        )),
-    }
-}
-
-/// Gate a read-only endpoint. In public-dashboard mode reads are open (returns `None`);
-/// otherwise a valid session with `View` (granted to every role) is required. Returns
-/// `Some(error response)` to short-circuit on failure.
-fn require_view(st: &ApiState, headers: &HeaderMap) -> Option<Response> {
-    if st.public_dashboard {
-        return None;
-    }
-    authorize(st, headers, Permission::View)
-}
 
 /// Login request body.
 #[derive(Deserialize)]
@@ -10455,13 +10369,6 @@ async fn put_shared_dashboard(
 
 // ── Maintenance windows + mutes ──────────────────────────────────────────────
 
-/// Parse an RFC 3339 timestamp from the API edge into UTC.
-fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|t| t.with_timezone(&chrono::Utc))
-}
-
 async fn list_maintenance_windows(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
@@ -10750,7 +10657,7 @@ mod tests {
     use crate::repo::StaticNodeList;
     use crate::sink::InMemorySink;
     use axum::body::{to_bytes, Body};
-    use axum::http::Request;
+    use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt; // for `oneshot`
     use yagra_bus::{CheckOutcome, PollResult, Sample};
 

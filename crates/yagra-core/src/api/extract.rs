@@ -17,18 +17,82 @@
 //! **authenticate first, then report availability.** An unauthenticated caller learns only that it
 //! is unauthenticated — never which subsystems this deployment happens to have configured.
 
-use super::{ApiError, ApiState};
-use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
+use super::{error_response, ApiError, ApiState};
+use axum::{
+    async_trait,
+    extract::FromRequestParts,
+    http::{request::Parts, HeaderMap, StatusCode},
+    response::Response,
+};
 use std::sync::Arc;
 use yagra_common::Permission;
 
 /// Extract the `Authorization: Bearer <token>` value, if present.
-pub(crate) fn bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
         .ok()?
         .strip_prefix("Bearer ")
+}
+
+/// The caller's username from the bearer session, if any (for audit attribution).
+pub(crate) fn current_username(st: &ApiState, headers: &HeaderMap) -> Option<String> {
+    bearer(headers)
+        .and_then(|t| st.sessions.lookup(t))
+        .map(|s| s.username)
+}
+
+// ── Legacy prologue guards for the domains still in `mod.rs` ─────────────────
+//
+// The `Option<Response>` shape below is what the extractors above replace: the caller must
+// remember to write `if let Some(resp) = authorize(…) { return resp; }`, so forgetting it is a
+// silent authorization hole. They live here rather than in `mod.rs` because they are shared by
+// every domain — leaving them among the handlers would make each domain move break the rest.
+//
+// Do not add call sites: a new or moved handler takes a `Require*` extractor instead.
+
+/// Require a valid token with `perm`. Returns `Some(error response)` to short-circuit the
+/// handler on failure (401/403), or `None` when authorized.
+pub(crate) fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) -> Option<Response> {
+    match st.sessions.authorize(bearer(headers), perm) {
+        Ok(_) => None,
+        Err(crate::auth::AuthError::Forbidden) => Some(error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "your role does not permit this action".to_owned(),
+        )),
+        Err(_) => Some(error_response(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "a valid bearer token is required".to_owned(),
+        )),
+    }
+}
+
+/// Gate a read-only endpoint. In public-dashboard mode reads are open (returns `None`);
+/// otherwise a valid session with `View` (granted to every role) is required. Returns
+/// `Some(error response)` to short-circuit on failure.
+pub(crate) fn require_view(st: &ApiState, headers: &HeaderMap) -> Option<Response> {
+    if st.public_dashboard {
+        return None;
+    }
+    authorize(st, headers, Permission::View)
+}
+
+/// Guard for handlers that touch leader-only in-memory pipelines (ADR-016): `Some(503)` on a
+/// standby, `None` on the leader (and always `None` when HA is off / this core is always leader).
+/// Mirrors [`authorize`]'s `Option<Response>` shape so call sites read the same.
+pub(crate) fn require_leader(st: &ApiState) -> Option<Response> {
+    if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
+        None
+    } else {
+        Some(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_leader",
+            "this core is a standby; the request must be routed to the leader".to_owned(),
+        ))
+    }
 }
 
 /// The permission a [`Require`] guard demands. Implemented by the marker types below so the
