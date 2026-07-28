@@ -32,7 +32,6 @@ use yagra_common::{NodeId, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
-use crate::analysis::{AnalysisTool, CreateError, JobParams, ScopeKind};
 use crate::api::{ApiError, ApiState};
 use crate::events::EventFilter;
 use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
@@ -388,71 +387,42 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("run_analysis", "analysis requires live mode");
         };
-        let Some(tool) = AnalysisTool::from_str(&p.tool) else {
-            return tool_bad_params(
-                "run_analysis",
-                "`tool` must be one of: anomaly, correlation, capacity, flap, event_storm, \
-                 event_flap, severity_shift, rule_gap, auth_probe, traffic_anomaly, talker_shift, \
-                 new_destination, flow_scan, saturation, incident_correlate",
-            );
-        };
+        // A readable label for the runs list (mirrors the WebUI's launch drawer). Built before
+        // validation because it needs a name lookup; an invalid scope is rejected either way.
         let scope = p.scope.as_deref().unwrap_or("all");
-        let Some(scope_kind) = ScopeKind::from_str(scope) else {
-            return tool_bad_params("run_analysis", "`scope` must be all, group, or node");
+        let scope_label = match (scope, p.scope_id) {
+            ("node", Some(id)) => self
+                .resolve_names(std::iter::once(id))
+                .await
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| format!("node {id}")),
+            ("group", Some(id)) => format!("group {id}"),
+            _ => "All nodes".to_owned(),
         };
-        let scope_id = p.scope_id;
-        if scope_kind != ScopeKind::All && scope_id.is_none() {
-            return tool_bad_params(
-                "run_analysis",
-                "`scope_id` is required for group or node scope",
-            );
-        }
-        // A readable label for the runs list (mirrors the WebUI's launch drawer).
-        let scope_label = match &scope_kind {
-            ScopeKind::All => "All nodes".to_owned(),
-            ScopeKind::Node => match scope_id {
-                Some(id) => self
-                    .resolve_names(std::iter::once(id))
-                    .await
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("node {id}")),
-                None => "node".to_owned(),
-            },
-            ScopeKind::Group => {
-                scope_id.map_or_else(|| "group".to_owned(), |id| format!("group {id}"))
-            }
-        };
-        // Clamp numerics like the REST edge; force `notify = false` — a read-only MCP run must never
-        // trigger the one external side effect (a notification). ADR-028 Increment 2 design decision.
-        let params = JobParams {
-            tool,
-            scope_kind,
-            scope_id,
+        // Same validation and the same clamps as `POST /api/v1/analysis/jobs` — these were written
+        // out twice, and two copies of a *validation* rule is the worst kind to keep, because when
+        // they drift the looser one becomes the boundary.
+        //
+        // `notify: false` is this surface's one deliberate difference: a read-only MCP run must
+        // never trigger the single external side effect an analysis has (ADR-028 Increment 2).
+        let req = crate::api::analysis::AnalysisRequest {
+            tool: p.tool.clone(),
+            scope_kind: scope.to_owned(),
+            scope_id: p.scope_id,
             scope_label,
-            window_secs: p
-                .window_secs
-                .unwrap_or(DEFAULT_WINDOW_SECS)
-                .clamp(300, 365 * 86_400),
-            baseline_secs: p
-                .baseline_secs
-                .unwrap_or(14 * 86_400)
-                .clamp(3600, 365 * 86_400),
-            sensitivity: p.sensitivity.unwrap_or(3.0).clamp(0.5, 6.0),
-            depth: p.depth.clone().unwrap_or_else(|| "standard".to_owned()),
-            family: p.family.clone().unwrap_or_else(|| "all".to_owned()),
+            window_secs: p.window_secs.unwrap_or(DEFAULT_WINDOW_SECS),
+            baseline_secs: p.baseline_secs,
+            sensitivity: p.sensitivity,
+            depth: p.depth.clone(),
+            family: p.family.clone(),
             notify: false,
         };
-        let job = match admin.analysis.create(params, Some("mcp".to_owned())).await {
+        let job = match crate::api::analysis::launch(admin, req, Some("mcp".to_owned())).await {
             Ok(j) => j,
-            // Capacity/rate rejections are transient — present as unavailable-with-reason so the model
-            // retries rather than treating it as a hard failure.
-            Err(e @ (CreateError::TooManyConcurrent(_) | CreateError::RateLimited(_))) => {
-                return tool_unavailable("run_analysis", &e.to_string());
-            }
-            Err(CreateError::Internal(e)) => {
-                return tool_error("run_analysis", "create analysis", &e)
-            }
+            // 429 (capacity/rate) arrives here as a *successful* unavailable-with-reason result so
+            // the model retries rather than treating a transient refusal as a hard failure.
+            Err(e) => return tool_api_error("run_analysis", &e),
         };
         // Block-poll until the job reaches a terminal state or the wait budget is spent.
         let deadline = Instant::now() + ANALYSIS_MAX_WAIT;
@@ -477,20 +447,10 @@ impl YagraMcp {
                 Err(e) => return tool_error("run_analysis", "poll analysis", &e),
             }
         };
-        // Findings exist only on success; a failed/cancelled job carries its state/error instead.
-        let findings: Vec<AnalysisFindingDto> = if final_job.state == "done" {
-            match admin.analysis.findings(final_job.id).await {
-                Ok(fs) => fs.iter().map(AnalysisFindingDto::from_finding).collect(),
-                Err(e) => return tool_error("run_analysis", "load findings", &e),
-            }
-        } else {
-            Vec::new()
-        };
-        let body = serde_json::json!({
-            "job": AnalysisJobDto::from_job(&final_job),
-            "findings": findings,
-        });
-        ok_json_value("run_analysis", body)
+        match crate::api::analysis::report(admin, final_job.id).await {
+            Ok(r) => ok_json_value("run_analysis", analysis_report_body(&r)),
+            Err(e) => tool_api_error("run_analysis", &e),
+        }
     }
 
     #[tool(
@@ -505,22 +465,10 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_analysis_findings", "analysis requires live mode");
         };
-        let job = match admin.analysis.get(p.job_id).await {
-            Ok(Some(j)) => j,
-            Ok(None) => {
-                return tool_unavailable("get_analysis_findings", "no analysis job with that id")
-            }
-            Err(e) => return tool_error("get_analysis_findings", "load job", &e),
-        };
-        let findings: Vec<AnalysisFindingDto> = match admin.analysis.findings(p.job_id).await {
-            Ok(fs) => fs.iter().map(AnalysisFindingDto::from_finding).collect(),
-            Err(e) => return tool_error("get_analysis_findings", "load findings", &e),
-        };
-        let body = serde_json::json!({
-            "job": AnalysisJobDto::from_job(&job),
-            "findings": findings,
-        });
-        ok_json_value("get_analysis_findings", body)
+        match crate::api::analysis::report(admin, p.job_id).await {
+            Ok(r) => ok_json_value("get_analysis_findings", analysis_report_body(&r)),
+            Err(e) => tool_api_error("get_analysis_findings", &e),
+        }
     }
 
     #[tool(
@@ -535,6 +483,8 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("list_analyses", "analysis requires live mode");
         };
+        // A smaller page than the REST default (50): an AI client reads the runs list to orient,
+        // not to render a table.
         let limit = p.limit.unwrap_or(20).clamp(1, 100);
         let jobs = match admin.analysis.list(limit).await {
             Ok(js) => js,
@@ -1169,19 +1119,34 @@ fn tool_error(tool: &str, context: &str, err: &anyhow::Error) -> Result<CallTool
     Err(McpError::internal_error(context.to_string(), None))
 }
 
+/// Render a shared [`AnalysisReport`](crate::api::analysis::AnalysisReport) through this surface's
+/// sanitized DTOs.
+///
+/// The *assembly* is shared — which job, whether its findings exist yet — but the *serialization*
+/// is not, and deliberately so: `dto.rs` is the ADR-018 enforcement boundary, and letting an
+/// internal model serialize itself straight to an AI client is exactly the leak that file exists to
+/// prevent. Sharing the query while keeping the projection is the whole point of the split.
+fn analysis_report_body(report: &crate::api::analysis::AnalysisReport) -> Value {
+    serde_json::json!({
+        "job": AnalysisJobDto::from_job(&report.job),
+        "findings": report.findings.iter().map(AnalysisFindingDto::from_finding).collect::<Vec<_>>(),
+    })
+}
+
 /// Translate a failure from a shared API service function into this surface's vocabulary.
 ///
 /// The tools call the same `pub(crate)` service functions as the REST handlers, so they inherit
 /// [`ApiError`] — which is an HTTP shape. This is the single place that mapping happens; doing it
 /// per tool is how the two surfaces drifted into answering differently for the same condition.
 ///
-/// "Missing" and "not configured" come back as **successful** results carrying `available: false`,
-/// deliberately: a model that receives a hard JSON-RPC error tends to retry or give up, where an
-/// explanatory body lets it say "there is no node with that id" and move on. Genuine faults stay
-/// hard errors. Forwarding `message()` is safe by construction — see [`ApiError::message`].
+/// "Missing", "not configured" and "busy, try later" come back as **successful** results carrying
+/// `available: false`, deliberately: a model that receives a hard JSON-RPC error tends to retry
+/// blindly or give up, where an explanatory body lets it say "there is no node with that id" — or
+/// wait out a full analysis queue — and move on. Genuine faults stay hard errors. Forwarding
+/// `message()` is safe by construction — see [`ApiError::message`].
 fn tool_api_error(tool: &str, err: &ApiError) -> Result<CallToolResult, McpError> {
     match err.status() {
-        StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE => {
+        StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE | StatusCode::TOO_MANY_REQUESTS => {
             tool_unavailable(tool, err.message())
         }
         StatusCode::BAD_REQUEST => tool_bad_params(tool, err.message()),

@@ -27,6 +27,7 @@
 //! Handlers not yet moved still return a bare `Response` and use the `error_response`/`internal`
 //! helpers; both styles are supported during the migration. New endpoints should use the new one.
 
+pub(crate) mod analysis;
 mod error;
 pub(crate) mod extract;
 mod flow;
@@ -46,7 +47,7 @@ pub(crate) use util::{now_unix_s, parse_rfc3339};
 
 use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
-use crate::analysis::{AnalysisRunner, AnalysisTool, CreateError, JobParams, ScopeKind};
+use crate::analysis::AnalysisRunner;
 use crate::audit::AuditRepo;
 use crate::auth::{AuthError, LoginThrottle, SessionStore, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
@@ -502,17 +503,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
         .route("/api/v1/discovery/import", post(import_discovered))
         .route("/api/v1/discovery/candidates", get(discovery_candidates))
-        .route(
-            "/api/v1/analysis/jobs",
-            get(list_analysis_jobs).post(create_analysis_job),
-        )
-        .route("/api/v1/analysis/jobs/:id", get(get_analysis_job))
-        .route("/api/v1/analysis/jobs/:id/findings", get(analysis_findings))
-        .route(
-            "/api/v1/analysis/jobs/:id/cancel",
-            post(cancel_analysis_job),
-        )
-        .route("/api/v1/stream/analysis", get(stream_analysis))
+        // Troubleshoot analysis jobs (ADR-022), in `api/analysis.rs`.
+        .merge(analysis::routes())
         .route("/api/v1/reports/sections", get(list_report_sections))
         .route(
             "/api/v1/reports/definitions",
@@ -3242,203 +3234,6 @@ async fn stream_node_states(State(st): State<ApiState>, headers: HeaderMap) -> R
                         missed = n,
                         "SSE node-state subscriber lagged; emitting resync hint"
                     );
-                    Some(Ok(Event::default().event("resync").data(n.to_string())))
-                }
-            }
-        });
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
-
-// ── Troubleshoot analysis jobs (ADR-022) ─────────────────────────────────────
-
-/// Recent analysis jobs (the runs list). `?limit=` (default 50). Empty in skeleton mode.
-async fn list_analysis_jobs(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<HistoryQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return Json(Vec::<serde_json::Value>::new()).into_response();
-    };
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    match admin.analysis.list(limit).await {
-        Ok(jobs) => Json(jobs).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list analysis jobs failed");
-            internal("failed to list analysis jobs")
-        }
-    }
-}
-
-/// One analysis job by id.
-async fn get_analysis_job(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return not_found("job_not_found", format!("no analysis job {id}"));
-    };
-    match admin.analysis.get(id).await {
-        Ok(Some(job)) => Json(job).into_response(),
-        Ok(None) => not_found("job_not_found", format!("no analysis job {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "get analysis job failed");
-            internal("failed to load analysis job")
-        }
-    }
-}
-
-/// A job's findings (the report list). Empty in skeleton mode.
-async fn analysis_findings(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return Json(Vec::<serde_json::Value>::new()).into_response();
-    };
-    match admin.analysis.findings(id).await {
-        Ok(findings) => Json(findings).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list analysis findings failed");
-            internal("failed to load findings")
-        }
-    }
-}
-
-/// Request body to launch an analysis (launch drawer / report config bar).
-#[derive(Deserialize)]
-struct CreateAnalysisJob {
-    tool: String,
-    scope_kind: String,
-    scope_id: Option<Uuid>,
-    scope_label: String,
-    window_secs: i64,
-    baseline_secs: Option<i64>,
-    sensitivity: Option<f64>,
-    depth: Option<String>,
-    family: Option<String>,
-    notify: Option<bool>,
-}
-
-/// Launch a background analysis job (operator+). Validates the tool/scope at the edge, then
-/// hands off to the runner; the row is returned immediately and progresses over SSE.
-async fn create_analysis_job(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateAnalysisJob>,
-) -> Response {
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    let Some(tool) = AnalysisTool::from_str(&body.tool) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_tool",
-            format!("unknown analysis tool {:?}", body.tool),
-        );
-    };
-    let Some(scope_kind) = ScopeKind::from_str(&body.scope_kind) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_scope",
-            format!(
-                "scope_kind must be all|group|node, got {:?}",
-                body.scope_kind
-            ),
-        );
-    };
-    if scope_kind != ScopeKind::All && body.scope_id.is_none() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "missing_scope_id",
-            "scope_id is required for group/node scope".to_owned(),
-        );
-    }
-    // Clamp every numeric param to a sane bound (defence in depth at the edge — security.md).
-    let params = JobParams {
-        tool,
-        scope_kind,
-        scope_id: body.scope_id,
-        scope_label: body.scope_label,
-        window_secs: body.window_secs.clamp(300, 365 * 86_400),
-        baseline_secs: body
-            .baseline_secs
-            .unwrap_or(14 * 86_400)
-            .clamp(3600, 365 * 86_400),
-        sensitivity: body.sensitivity.unwrap_or(3.0).clamp(0.5, 6.0),
-        depth: body.depth.unwrap_or_else(|| "standard".to_owned()),
-        family: body.family.unwrap_or_else(|| "all".to_owned()),
-        notify: body.notify.unwrap_or(true),
-    };
-    let user = bearer(&headers)
-        .and_then(|t| st.sessions.lookup(t))
-        .map(|s| s.username);
-    match admin.analysis.create(params, user).await {
-        Ok(job) => Json(job).into_response(),
-        // Admission control (ADR-028 Increment 2 WS-A): capacity/rate rejections are retryable → 429.
-        Err(e @ (CreateError::TooManyConcurrent(_) | CreateError::RateLimited(_))) => {
-            error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                "analysis_busy",
-                e.to_string(),
-            )
-        }
-        Err(CreateError::Internal(e)) => {
-            tracing::error!(error = %e, "create analysis job failed");
-            internal("failed to create analysis job")
-        }
-    }
-}
-
-/// Cancel a running analysis job (operator+). The task observes the flag between phases.
-async fn cancel_analysis_job(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if admin.analysis.cancel(id) {
-        Json(serde_json::json!({ "cancelled": true })).into_response()
-    } else {
-        not_found("job_not_running", format!("no running analysis job {id}"))
-    }
-}
-
-/// Live analysis-job status stream (SSE): each event is the job JSON with its current state and
-/// progress. Mirrors the alert stream (lagged subscribers get a `resync` hint).
-async fn stream_analysis(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    let stream = tokio_stream::wrappers::BroadcastStream::new(admin.analysis.subscribe())
-        .filter_map(|r| async move {
-            match r {
-                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
                     Some(Ok(Event::default().event("resync").data(n.to_string())))
                 }
             }

@@ -113,6 +113,13 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, code, message)
     }
 
+    /// `429` — refused for capacity or rate, and **retryable**. Distinct from `503` (a subsystem
+    /// this deployment does not have) and from `500` (a fault): a client that cannot tell the
+    /// three apart either hammers a full queue or gives up on a transient refusal.
+    pub fn too_many_requests(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, code, message)
+    }
+
     /// `503` with a caller-chosen code — a subsystem this endpoint needs is not configured
     /// (e.g. `flow_unavailable` when no ClickHouse flow store is set up).
     pub fn unavailable(code: &'static str, message: impl Into<String>) -> Self {

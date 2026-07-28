@@ -116,6 +116,40 @@ pub enum AnalysisTool {
 }
 
 impl AnalysisTool {
+    /// Every tool, grouped by the store it reads: metric, passive-event, flow, then cross-store.
+    ///
+    /// This is the enumeration, and [`AnalysisTool::from_str`] is derived from it. It used to be a
+    /// second hand-written `match` listing all fifteen tokens, with a third copy in the MCP tool's
+    /// description text — so adding a tool meant remembering three places, and forgetting the
+    /// parser meant the API silently rejected a tool the UI offered.
+    pub const ALL: [AnalysisTool; 15] = [
+        AnalysisTool::Anomaly,
+        AnalysisTool::Correlation,
+        AnalysisTool::Capacity,
+        AnalysisTool::Flap,
+        AnalysisTool::EventStorm,
+        AnalysisTool::EventFlap,
+        AnalysisTool::SeverityShift,
+        AnalysisTool::RuleGap,
+        AnalysisTool::AuthProbe,
+        AnalysisTool::TrafficAnomaly,
+        AnalysisTool::TalkerShift,
+        AnalysisTool::NewDestination,
+        AnalysisTool::FlowScan,
+        AnalysisTool::Saturation,
+        AnalysisTool::IncidentCorrelate,
+    ];
+
+    /// The valid tokens, comma-separated — for the "must be one of…" half of a rejection message.
+    #[must_use]
+    pub fn token_list() -> String {
+        Self::ALL
+            .iter()
+            .map(|t| t.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -137,26 +171,11 @@ impl AnalysisTool {
         }
     }
 
+    /// Parse the API/DB token back into a tool. Derived from [`AnalysisTool::ALL`], so a variant
+    /// that reaches `as_str` is parseable by construction.
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "anomaly" => Some(AnalysisTool::Anomaly),
-            "correlation" => Some(AnalysisTool::Correlation),
-            "capacity" => Some(AnalysisTool::Capacity),
-            "flap" => Some(AnalysisTool::Flap),
-            "event_storm" => Some(AnalysisTool::EventStorm),
-            "event_flap" => Some(AnalysisTool::EventFlap),
-            "severity_shift" => Some(AnalysisTool::SeverityShift),
-            "rule_gap" => Some(AnalysisTool::RuleGap),
-            "auth_probe" => Some(AnalysisTool::AuthProbe),
-            "traffic_anomaly" => Some(AnalysisTool::TrafficAnomaly),
-            "talker_shift" => Some(AnalysisTool::TalkerShift),
-            "new_destination" => Some(AnalysisTool::NewDestination),
-            "flow_scan" => Some(AnalysisTool::FlowScan),
-            "saturation" => Some(AnalysisTool::Saturation),
-            "incident_correlate" => Some(AnalysisTool::IncidentCorrelate),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|t| t.as_str() == s)
     }
 }
 
@@ -2783,26 +2802,38 @@ mod tests {
 
     #[test]
     fn tool_round_trips() {
-        for t in [
-            AnalysisTool::Anomaly,
-            AnalysisTool::Correlation,
-            AnalysisTool::Capacity,
-            AnalysisTool::Flap,
-            AnalysisTool::EventStorm,
-            AnalysisTool::EventFlap,
-            AnalysisTool::SeverityShift,
-            AnalysisTool::RuleGap,
-            AnalysisTool::AuthProbe,
-            AnalysisTool::TrafficAnomaly,
-            AnalysisTool::TalkerShift,
-            AnalysisTool::NewDestination,
-            AnalysisTool::FlowScan,
-            AnalysisTool::Saturation,
-            AnalysisTool::IncidentCorrelate,
-        ] {
-            assert_eq!(AnalysisTool::from_str(t.as_str()), Some(t));
+        // `as_str` is an exhaustive match, so a new variant cannot avoid getting a token — but
+        // nothing forces it into `ALL`, and a tool missing from `ALL` is unparseable while still
+        // being displayable. Pinning the expected tokens against `ALL` closes the gap either way
+        // round: adding to `ALL` without updating this list fails on the length, and adding here
+        // without updating `ALL` fails on the membership.
+        let expected = [
+            "anomaly",
+            "correlation",
+            "capacity",
+            "flap",
+            "event_storm",
+            "event_flap",
+            "severity_shift",
+            "rule_gap",
+            "auth_probe",
+            "traffic_anomaly",
+            "talker_shift",
+            "new_destination",
+            "flow_scan",
+            "saturation",
+            "incident_correlate",
+        ];
+        assert_eq!(AnalysisTool::ALL.len(), expected.len());
+        for token in expected {
+            let tool =
+                AnalysisTool::from_str(token).unwrap_or_else(|| panic!("{token} must parse"));
+            assert_eq!(tool.as_str(), token);
+            assert!(AnalysisTool::ALL.contains(&tool));
         }
         assert_eq!(AnalysisTool::from_str("nope"), None);
+        // The rejection message enumerates the real list rather than a hand-copied one.
+        assert_eq!(AnalysisTool::token_list(), expected.join(", "));
     }
 
     #[test]
