@@ -28,6 +28,25 @@ pub enum NodeState {
 }
 
 impl NodeState {
+    /// Every state, in **display order** — best first, then problems by severity, then the two
+    /// that are neither.
+    ///
+    /// This is the enumeration for anything that must present all six: a per-state tally whose keys
+    /// are always present, a pivoted timeline's series set, a report's status table. Those existed
+    /// as three separate hand-written arrays in `yagra-core`, in two different orders, so a
+    /// seventh state would have appeared in some tallies and silently not others.
+    ///
+    /// Note this is display order, **not** severity order — `is_problem`/`severity` are the
+    /// predicates for ranking, and the WebUI keeps its own orders in `lib/nodeState.ts`.
+    pub const ALL: [NodeState; 6] = [
+        NodeState::Ok,
+        NodeState::Warning,
+        NodeState::Critical,
+        NodeState::Unreachable,
+        NodeState::Unknown,
+        NodeState::Maintenance,
+    ];
+
     /// Stable lowercase string for labels, API payloads, and logs.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
@@ -95,6 +114,31 @@ mod tests {
         assert_eq!(NodeState::Warning.severity(), Some(Severity::Warning));
         assert_eq!(NodeState::Ok.severity(), None);
         assert_eq!(NodeState::Maintenance.severity(), None);
+    }
+
+    #[test]
+    fn all_lists_every_state_exactly_once() {
+        // `as_str` is an exhaustive match, so a new variant is forced to get a token — but nothing
+        // forces it into `ALL`, and a state missing from `ALL` drops out of every full tally
+        // (fleet summary, state-history series, the report status table) without an error. Pinning
+        // the tokens against `ALL` fails either way round: a variant added to `ALL` without this
+        // list fails on the length, and one added here without `ALL` fails on the lookup.
+        let expected = [
+            "ok",
+            "warning",
+            "critical",
+            "unreachable",
+            "unknown",
+            "maintenance",
+        ];
+        assert_eq!(NodeState::ALL.len(), expected.len());
+        let tokens: Vec<&str> = NodeState::ALL.iter().map(NodeState::as_str).collect();
+        assert_eq!(tokens, expected, "ALL is the display order");
+        // No duplicates: a copy-paste slip in `ALL` would otherwise double-count one state.
+        let mut sorted = tokens.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), NodeState::ALL.len());
     }
 
     #[test]

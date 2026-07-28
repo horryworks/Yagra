@@ -64,21 +64,20 @@ impl YagraMcp {
                        alerts, and which optional data tiers (metrics/flow/log) are enabled. Start here."
     )]
     async fn get_fleet_summary(&self) -> Result<CallToolResult, McpError> {
-        let counts = self.state.alerts.node_state_counts();
-        let total = self.state.nodes.count().await.unwrap_or(0);
-        let observed: i64 = counts.values().map(|&n| n as i64).sum();
-        let mut states: BTreeMap<String, i64> = BTreeMap::new();
-        for (st, n) in &counts {
-            states.insert(st.as_str().to_owned(), *n as i64);
-        }
-        // Never-observed nodes read as "unknown" (total minus what the engine has seen).
-        let unknown = (total - observed).max(0);
-        if unknown > 0 {
-            *states.entry("unknown".to_owned()).or_insert(0) += unknown;
-        }
+        // Same tally as `GET /api/v1/fleet/summary`. This used to be a second implementation that
+        // inserted only the states it had observed, so an AI client reading `states["warning"]`
+        // got a missing key where the WebUI got a zero — the kind of difference that only shows up
+        // as a model confidently reporting there is no warning data.
+        let summary = crate::api::fleet::state_tally(&self.state).await;
         let dto = FleetSummaryDto {
-            total_nodes: total,
-            states,
+            total_nodes: summary.total,
+            states: summary
+                .states
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+            // Beyond the shared tally, this surface adds what an AI client needs to know before
+            // trusting an answer: how much is currently wrong, and which tiers exist at all.
             active_alerts: self.state.alerts.active_alerts().len(),
             metrics_healthy: self.state.store.healthy().await,
             flow_tier_enabled: self.state.flows.is_some(),

@@ -29,6 +29,7 @@ use crate::alerts::AlertManager;
 use crate::history::AlertHistoryStore;
 use crate::repo::NodeRepo;
 use crate::store::{MetricStore, TopAgg};
+use yagra_common::NodeState;
 
 /// Broadcast buffer for the run-status SSE stream (matches the analysis runner's sizing).
 const EVENT_BUFFER: usize = 256;
@@ -448,15 +449,9 @@ fn availability_from_snapshots(rows: &[(i64, String, i64)]) -> (Option<f64>, Vec
     } else {
         None
     };
-    // Stable display order.
-    let order = [
-        "ok",
-        "warning",
-        "critical",
-        "unreachable",
-        "unknown",
-        "maintenance",
-    ];
+    // Stable display order, from the one enumeration (`NodeState::ALL`) rather than a third
+    // hand-written copy of the six states.
+    let order: Vec<&'static str> = NodeState::ALL.iter().map(NodeState::as_str).collect();
     let mut out: Vec<(String, i64)> = order
         .iter()
         .filter_map(|s| by_state.get(*s).map(|c| ((*s).to_owned(), *c)))
