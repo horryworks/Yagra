@@ -23,6 +23,7 @@ import type {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
@@ -43,8 +44,6 @@ import './PollersPage.css';
 
 const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 112px 58px';
 const REFRESH_MS = 10_000;
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 /** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
  *  the pool has nodes but no live poller (icon + text, never color alone — a11y). */
@@ -89,46 +88,22 @@ function DeletePollerModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('system');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deletePoller(poller.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('pollers.err.remove')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('pollers.remove.title')}
+      confirmLabel={t('pollers.remove.title')}
+      onConfirm={() => api.deletePoller(poller.id)}
+      errorFallback={t('pollers.err.remove')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('pollers.remove.title')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="pollers.remove.confirmText"
-          values={{ id: poller.id }}
-          components={{ code: <strong className="mono" /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="pollers.remove.confirmText"
+        values={{ id: poller.id }}
+        components={{ code: <strong className="mono" /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }
 

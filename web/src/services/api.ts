@@ -181,6 +181,15 @@ export class ApiError extends Error {
   }
 }
 
+/** The server's message for a failed call, or a localized fallback for anything else (network
+ *  drop, aborted fetch, a thrown non-Error). Every `.catch` that surfaces text to the operator
+ *  goes through this, so an unexpected throw can never leak a raw stack string into the UI.
+ *  It lives beside {@link ApiError} because that is the only type it inspects — it used to be
+ *  copy-pasted, byte-identical, into 29 components and pages. */
+export function errMsg(e: unknown, fallback: string): string {
+  return e instanceof ApiError ? e.message : fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Attach the bearer token when logged in; otherwise keep the single-arg call shape
   // for plain GETs (tests assert on it).

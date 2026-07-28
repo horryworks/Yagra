@@ -6,9 +6,9 @@
 // pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
 import { isValidPoolName } from '../../lib/pool';
@@ -24,6 +24,7 @@ import type {
   ProfileSummary,
 } from '../../types/api';
 import { Button } from '../ui/Button';
+import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { Modal } from '../ui/Modal';
 import { Select, TextInput } from '../ui/Field';
 import { BoxIcon } from '../ui/icons';
@@ -32,14 +33,18 @@ import { InterfacesTab } from './InterfacesTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
 import { FlowTab } from './FlowTab';
-import { normalizeNodeDetailTab } from './tabs';
+import {
+  NODE_DETAIL_TAB_META,
+  NODE_DETAIL_TABS,
+  normalizeNodeDetailTab,
+  type NodeDetailTab,
+  type NodeDetailTabStats,
+} from './tabs';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import './NodeDetail.css';
 
 const METRIC = 'icmp_rtt_ms';
 const RTT_WINDOW_SECS = 30 * 60;
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 interface Props {
   nodeId: string;
@@ -192,8 +197,33 @@ export function NodeDetail({
   const state = status?.state ?? 'unknown';
   const path = groupPath(groups, node.group_id);
   const lastSeen = series.timestamps.at(-1);
-  const ifWarn = interfaces.some((r) => r.oper_status != null && r.oper_status !== 1);
-  const collWarn = !!node.credential_id && (state === 'unreachable' || state === 'unknown');
+  // What the tab bar decorates itself from (count pills / warning dots) — the rules themselves live
+  // beside the whitelist in tabs.ts.
+  const tabStats: NodeDetailTabStats = {
+    interfaces,
+    collCount,
+    hasCredential: !!node.credential_id,
+    state,
+  };
+  // Keyed by NodeDetailTab, so adding a tab to NODE_DETAIL_TABS without a body fails to compile.
+  const tabBodies: Record<NodeDetailTab, ReactNode> = {
+    overview: (
+      <OverviewTab
+        node={node}
+        groups={groups}
+        nodes={nodes}
+        status={status}
+        series={series}
+        unreachable={state === 'unreachable'}
+      />
+    ),
+    interfaces: (
+      <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
+    ),
+    collection: <CollectionTab node={node} canEdit={canEdit} />,
+    events: <EventsTab node={node} />,
+    flow: <FlowTab node={node} />,
+  };
 
   return (
     <div className="nd">
@@ -263,50 +293,31 @@ export function NodeDetail({
       )}
 
       <div className="nd-tabs" role="tablist">
-        {[
-          { key: 'overview', label: t('tabs.overview') },
-          { key: 'interfaces', label: t('tabs.interfaces'), n: interfaces.length || null, warn: ifWarn },
-          { key: 'collection', label: t('tabs.collection'), n: collCount, warn: collWarn },
-          { key: 'events', label: t('tabs.events') },
-          { key: 'flow', label: t('tabs.flow') },
-        ].map((tb) => (
-          <button
-            key={tb.key}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tb.key}
-            className={`nd-tab${activeTab === tb.key ? ' on' : ''}`}
-            onClick={() => onTabChange(tb.key)}
-          >
-            {tb.label}
-            {'n' in tb && tb.n != null && <span className="nd-tab-n">{tb.n}</span>}
-            {'warn' in tb && tb.warn && (
-              <span className="nd-tab-warn" aria-label={t('detail.needsAttention')}>
-                ●
-              </span>
-            )}
-          </button>
-        ))}
+        {NODE_DETAIL_TABS.map((key) => {
+          const meta = NODE_DETAIL_TAB_META[key];
+          const n = meta.badge?.(tabStats) ?? null;
+          return (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === key}
+              className={`nd-tab${activeTab === key ? ' on' : ''}`}
+              onClick={() => onTabChange(key)}
+            >
+              {t(meta.labelKey)}
+              {n != null && <span className="nd-tab-n">{n}</span>}
+              {meta.warn?.(tabStats) && (
+                <span className="nd-tab-warn" aria-label={t('detail.needsAttention')}>
+                  ●
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      <div className="nd-body">
-        {activeTab === 'overview' && (
-          <OverviewTab
-            node={node}
-            groups={groups}
-            nodes={nodes}
-            status={status}
-            series={series}
-            unreachable={state === 'unreachable'}
-          />
-        )}
-        {activeTab === 'interfaces' && (
-          <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
-        )}
-        {activeTab === 'collection' && <CollectionTab node={node} canEdit={canEdit} />}
-        {activeTab === 'events' && <EventsTab node={node} />}
-        {activeTab === 'flow' && <FlowTab node={node} />}
-      </div>
+      <div className="nd-body">{tabBodies[activeTab]}</div>
 
       {editingBindings && (
         <BindingsModal
@@ -366,41 +377,16 @@ export function DeleteNodeModal({
   onDeleted: () => void;
 }) {
   const { t } = useTranslation('nodes');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteNode(nodeId)
-      .then(onDeleted)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.deleteNode')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('deleteNode.title')}
+      onConfirm={() => api.deleteNode(nodeId)}
+      errorFallback={t('err.deleteNode')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDeleted}
     >
-      <p>
-        <Trans t={t} i18nKey="deleteNode.body" values={{ name }} components={{ b: <strong /> }} />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans t={t} i18nKey="deleteNode.body" values={{ name }} components={{ b: <strong /> }} />
+    </ConfirmDeleteModal>
   );
 }
 

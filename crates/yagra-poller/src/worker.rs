@@ -62,102 +62,38 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::Snmp(snmp) => {
             let timeout = Duration::from_millis(u64::from(snmp.timeout_ms));
-            // GET the bare OIDs and the explicitly-named scalar columns together.
-            let col_by_oid: HashMap<&str, &SnmpColumn> =
-                snmp.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
-            let mut all_oids = snmp.oids.clone();
-            all_oids.extend(snmp.columns.iter().map(|c| c.oid.clone()));
-            match transport
-                .snmp_get(job.target, &snmp.community, &all_oids, timeout)
-                .await
-            {
-                Ok(samples) => {
-                    // No values back ⇒ treat as unreachable (agent down / wrong community).
-                    let outcome = if samples.is_empty() {
-                        CheckOutcome::Unreachable
-                    } else {
-                        CheckOutcome::Reachable
-                    };
-                    let mapped = samples
-                        .into_iter()
-                        .map(|s| match col_by_oid.get(s.oid.as_str()) {
-                            // Configured column → honour its metric name and kind.
-                            Some(col) => Sample {
-                                metric: col.metric_name.clone(),
-                                ifindex: None,
-                                value: s.value,
-                                kind: col.kind,
-                            },
-                            // Bare OID → the poller's built-in naming (gauge).
-                            None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
-                        })
-                        .collect();
-                    let mut r = result(job, at_unix_ms, outcome, mapped);
-                    // Identity probe: on a reachable poll core asked us to classify, fetch
-                    // sysDescr.0 so core can fill the node's maker/model (best-effort).
-                    if job.probe_identity && outcome == CheckOutcome::Reachable {
-                        r.sys_descr =
-                            fetch_sys_descr_v2c(job.target, &snmp.community, timeout, transport)
-                                .await;
-                    }
-                    r
-                }
-                Err(err) => {
-                    tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
-                    result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
-                }
-            }
+            let walker = SnmpWalker::V2c(snmp.community.clone());
+            execute_scalar_get(
+                job,
+                transport,
+                at_unix_ms,
+                &snmp.oids,
+                &snmp.columns,
+                timeout,
+                &walker,
+            )
+            .await
         }
         CheckSpec::SnmpV3(v3) => {
             let timeout = Duration::from_millis(u64::from(v3.timeout_ms));
-            let params = yagra_transport::SnmpV3Params {
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
                 user: v3.user.clone(),
                 security_level: v3.security_level.clone(),
                 auth_protocol: v3.auth_protocol.clone(),
                 auth_key: v3.auth_key.clone(),
                 priv_protocol: v3.priv_protocol.clone(),
                 priv_key: v3.priv_key.clone(),
-            };
-            // GET the bare OIDs and the explicitly-named scalar columns together (mirrors
-            // the v2c arm: configured collection sets travel as named columns).
-            let col_by_oid: HashMap<&str, &SnmpColumn> =
-                v3.columns.iter().map(|c| (c.oid.as_str(), c)).collect();
-            let mut all_oids = v3.oids.clone();
-            all_oids.extend(v3.columns.iter().map(|c| c.oid.clone()));
-            match transport
-                .snmp_v3_get(job.target, &params, &all_oids, timeout)
-                .await
-            {
-                Ok(samples) => {
-                    let outcome = if samples.is_empty() {
-                        CheckOutcome::Unreachable
-                    } else {
-                        CheckOutcome::Reachable
-                    };
-                    let mapped = samples
-                        .into_iter()
-                        .map(|s| match col_by_oid.get(s.oid.as_str()) {
-                            Some(col) => Sample {
-                                metric: col.metric_name.clone(),
-                                ifindex: None,
-                                value: s.value,
-                                kind: col.kind,
-                            },
-                            None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
-                        })
-                        .collect();
-                    let mut r = result(job, at_unix_ms, outcome, mapped);
-                    if job.probe_identity && outcome == CheckOutcome::Reachable {
-                        r.sys_descr =
-                            fetch_sys_descr_v3(job.target, &params, timeout, transport).await;
-                    }
-                    r
-                }
-                Err(err) => {
-                    tracing::warn!(job_id = %job.job_id, error = %err, "snmp v3 get failed");
-                    result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
-                }
-            }
+            });
+            execute_scalar_get(
+                job,
+                transport,
+                at_unix_ms,
+                &v3.oids,
+                &v3.columns,
+                timeout,
+                &walker,
+            )
+            .await
         }
         CheckSpec::SnmpTable(table) => {
             let timeout = Duration::from_millis(u64::from(table.timeout_ms));
@@ -347,15 +283,67 @@ pub async fn execute_meraki(
     results
 }
 
-/// The credential half of a table walk that differs between v2c and v3 (community vs USM params).
-/// Capturing it here lets the column-walk + interface-metadata logic below be shared across both
-/// protocols instead of duplicated — a v3 walk keys rows and folds interface metadata identically.
+/// The credential half of an SNMP check that differs between v2c and v3 (community vs USM params).
+/// Capturing it here lets everything above it — the scalar GET, the column walk, the interface
+/// metadata fold, the identity probe — be written once instead of twice: v2c and v3 differ only in
+/// which transport method carries the credential, never in what is done with the rows.
 enum SnmpWalker {
     V2c(String),
     V3(SnmpV3Params),
 }
 
 impl SnmpWalker {
+    /// GET scalar OIDs via the appropriate protocol.
+    async fn get(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<yagra_transport::SnmpSample>, TransportError> {
+        match self {
+            SnmpWalker::V2c(community) => {
+                transport.snmp_get(target, community, oids, timeout).await
+            }
+            SnmpWalker::V3(params) => transport.snmp_v3_get(target, params, oids, timeout).await,
+        }
+    }
+
+    /// Fetch `sysDescr.0` for the identity probe, so core can fill the node's maker/model.
+    /// Best-effort: `None` on any transport error or an empty/missing value. The two protocols
+    /// reach it differently — v2c walks the column base (its GET path returns numerics only),
+    /// v3 does a scalar string GET.
+    async fn fetch_sys_descr(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        timeout: Duration,
+    ) -> Option<String> {
+        let value = match self {
+            SnmpWalker::V2c(community) => {
+                let bases = [SYSDESCR_BASE.to_owned()];
+                transport
+                    .snmp_walk_strings(target, community, &bases, timeout)
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .find(|r| r.oid_base == SYSDESCR_BASE)
+                    .map(|r| r.value)
+            }
+            SnmpWalker::V3(params) => {
+                let oids = [SYSDESCR_OID.to_owned()];
+                transport
+                    .snmp_v3_get_strings(target, params, &oids, timeout)
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .find(|r| r.oid == SYSDESCR_OID)
+                    .map(|r| r.value)
+            }
+        };
+        value.filter(|v| !v.is_empty())
+    }
+
     /// Walk numeric table columns via the appropriate protocol.
     async fn walk(
         &self,
@@ -397,6 +385,63 @@ impl SnmpWalker {
                     .snmp_v3_walk_strings(target, params, columns, timeout)
                     .await
             }
+        }
+    }
+}
+
+/// Execute an SNMP scalar-GET check (v2c or v3, selected by `walker`): GET the bare OIDs and the
+/// explicitly-named scalar columns together, name each sample (a configured column keeps its metric
+/// name and kind; a bare OID falls back to the poller's built-in naming), and run the identity
+/// probe when core asked for one.
+///
+/// The v2c and v3 arms of [`execute`] used to carry a copy of this each — ~48 lines apiece that
+/// differed only in the credential type and which transport method was called. The table path had
+/// already solved exactly that with [`SnmpWalker`]; this brings the scalar path in line, so an SNMP
+/// behaviour change (a new outcome rule, a naming tweak) is one edit rather than two that can drift.
+async fn execute_scalar_get(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    oids: &[String],
+    columns: &[SnmpColumn],
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let col_by_oid: HashMap<&str, &SnmpColumn> =
+        columns.iter().map(|c| (c.oid.as_str(), c)).collect();
+    let mut all_oids = oids.to_vec();
+    all_oids.extend(columns.iter().map(|c| c.oid.clone()));
+    match walker.get(transport, job.target, &all_oids, timeout).await {
+        Ok(samples) => {
+            // No values back ⇒ treat as unreachable (agent down / wrong credential).
+            let outcome = if samples.is_empty() {
+                CheckOutcome::Unreachable
+            } else {
+                CheckOutcome::Reachable
+            };
+            let mapped = samples
+                .into_iter()
+                .map(|s| match col_by_oid.get(s.oid.as_str()) {
+                    // Configured column → honour its metric name and kind.
+                    Some(col) => Sample {
+                        metric: col.metric_name.clone(),
+                        ifindex: None,
+                        value: s.value,
+                        kind: col.kind,
+                    },
+                    // Bare OID → the poller's built-in naming (gauge).
+                    None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
+                })
+                .collect();
+            let mut r = result(job, at_unix_ms, outcome, mapped);
+            if job.probe_identity && outcome == CheckOutcome::Reachable {
+                r.sys_descr = walker.fetch_sys_descr(transport, job.target, timeout).await;
+            }
+            r
+        }
+        Err(err) => {
+            tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
+            result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
         }
     }
 }
@@ -682,43 +727,6 @@ fn result(
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
     }
-}
-
-/// Fetch `sysDescr.0` over v2c (walk the column base → the `.0` instance). Best-effort: `None`
-/// on any transport error or an empty/missing value. Used for the identity probe (maker/model).
-async fn fetch_sys_descr_v2c(
-    target: std::net::IpAddr,
-    community: &str,
-    timeout: Duration,
-    transport: &dyn Transport,
-) -> Option<String> {
-    let bases = [SYSDESCR_BASE.to_owned()];
-    let rows = transport
-        .snmp_walk_strings(target, community, &bases, timeout)
-        .await
-        .ok()?;
-    rows.into_iter()
-        .find(|r| r.oid_base == SYSDESCR_BASE)
-        .map(|r| r.value)
-        .filter(|v| !v.is_empty())
-}
-
-/// Fetch `sysDescr.0` over v3 (scalar GET). Best-effort, like [`fetch_sys_descr_v2c`].
-async fn fetch_sys_descr_v3(
-    target: std::net::IpAddr,
-    params: &yagra_transport::SnmpV3Params,
-    timeout: Duration,
-    transport: &dyn Transport,
-) -> Option<String> {
-    let oids = [SYSDESCR_OID.to_owned()];
-    let rows = transport
-        .snmp_v3_get_strings(target, params, &oids, timeout)
-        .await
-        .ok()?;
-    rows.into_iter()
-        .find(|r| r.oid == SYSDESCR_OID)
-        .map(|r| r.value)
-        .filter(|v| !v.is_empty())
 }
 
 fn now_unix_ms() -> i64 {

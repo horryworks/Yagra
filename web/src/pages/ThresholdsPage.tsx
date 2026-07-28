@@ -11,12 +11,20 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { Direction, ScopeLevel, StoredThreshold } from '../types/api';
+import {
+  DIRECTIONS,
+  SCOPE_LEVELS,
+  type Direction,
+  type ScopeLevel,
+  type StoredThreshold,
+} from '../types/api';
+import { METRIC_PRESETS } from '../lib/suppression';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -26,16 +34,8 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
 
-const LEVELS: ScopeLevel[] = ['profile', 'group', 'node'];
-const DIRECTIONS: Direction[] = ['above', 'below'];
-// Metrics the pollers emit today (ICMP every node, SNMP when a community is bound). Offered
-// as presets so operators don't have to guess the exact series name; free text is still
-// allowed for any other collected metric (e.g. snmp_oid_*).
-const METRIC_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
 
 const COLS = '1.6fr 1.4fr 110px 170px 100px 92px';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 /** Create a threshold rule (focused-editing modal). */
 function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -95,7 +95,7 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.scopeLevel')}</label>
         <Select value={level} onChange={(e) => setLevel(e.target.value as ScopeLevel)}>
-          {LEVELS.map((l) => (
+          {SCOPE_LEVELS.map((l) => (
             <option key={l} value={l}>
               {t(`thresholds.scopeLevel.${l}`)}
             </option>
@@ -183,50 +183,25 @@ function DeleteThresholdModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteThreshold(rule.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('thresholds.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('thresholds.deleteModal.title')}
+      onConfirm={() => api.deleteThreshold(rule.id)}
+      errorFallback={t('thresholds.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="thresholds.deleteModal.body"
-          values={{
-            level: t(`thresholds.scopeLevel.${rule.scope_level}`),
-            metric: rule.metric,
-            scope: rule.scope_id,
-          }}
-          components={{ strong: <strong />, mono: <strong className="mono" /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="thresholds.deleteModal.body"
+        values={{
+          level: t(`thresholds.scopeLevel.${rule.scope_level}`),
+          metric: rule.metric,
+          scope: rule.scope_id,
+        }}
+        components={{ strong: <strong />, mono: <strong className="mono" /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }
 

@@ -12,12 +12,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -28,8 +29,6 @@ import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
 
 const COLS = '90px 1.7fr 1.2fr 110px 110px';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
@@ -416,46 +415,21 @@ function DeleteRuleModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('monitoring');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteClassificationRule(rule.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('rules.err.delete')));
-        setBusy(false);
-      });
-  };
-
   const sig = rule.sysobjectid_prefix ?? rule.sysdescr_regex ?? '';
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('rules.modal.deleteTitle')}
+      onConfirm={() => api.deleteClassificationRule(rule.id)}
+      errorFallback={t('rules.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="rules.delete.confirm"
-          values={{ sig, profile: profileName }}
-          components={{ m: <strong className="mono" />, strong: <strong /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="rules.delete.confirm"
+        values={{ sig, profile: profileName }}
+        components={{ m: <strong className="mono" />, strong: <strong /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }

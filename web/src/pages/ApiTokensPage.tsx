@@ -10,12 +10,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { ApiTokenSummary, CreatedApiToken, Role } from '../types/api';
+import { ROLES, type ApiTokenSummary, type CreatedApiToken, type Role } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
@@ -26,9 +27,6 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
 import './ApiTokensPage.css';
 
-const ROLES: Role[] = ['viewer', 'operator', 'admin'];
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 /** Elevated roles read as a warmer tone so a non-viewer token stands out in the list. */
 const roleTone = (role: Role): 'neutral' | 'info' | 'warning' =>
@@ -218,40 +216,17 @@ function RevokeTokenModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('settings-tokens');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('revoke.title')}
+      confirmLabel={t('revoke.action')}
+      onConfirm={() => api.revokeApiToken(token.id)}
+      errorFallback={t('err.revoke')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setError(null);
-              api
-                .revokeApiToken(token.id)
-                .then(onDone)
-                .catch((e: unknown) => {
-                  setError(errMsg(e, t('err.revoke')));
-                  setBusy(false);
-                });
-            }}
-          >
-            {t('revoke.action')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">{t('revoke.confirm', { name: token.name })}</p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      {t('revoke.confirm', { name: token.name })}
+    </ConfirmDeleteModal>
   );
 }
 

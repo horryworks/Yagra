@@ -899,7 +899,7 @@ async fn run_sender(
         ca_cert,
         ..
     } = spec;
-    let mut transport = match Transport::new(kind, ca_cert.as_deref()) {
+    let mut socket = match WireSocket::new(kind, ca_cert.as_deref()) {
         Ok(t) => t,
         Err(e) => {
             // A TLS destination whose trust configuration cannot be built will never connect, so
@@ -945,7 +945,7 @@ async fn run_sender(
         }
 
         let bytes = payload.len() as u64;
-        match transport.send(&target, &payload).await {
+        match socket.send(&target, &payload).await {
             Ok(()) => {
                 counters.sent.fetch_add(1, Ordering::Relaxed);
                 counters
@@ -963,7 +963,7 @@ async fn run_sender(
                 counters.record_error(&e);
                 metrics::counter!("yagra_forward_errors_total", "kind" => kind.as_str())
                     .increment(1);
-                transport.reset();
+                socket.reset();
                 if circuit.record(false) {
                     counters.circuit_open.store(true, Ordering::Relaxed);
                     // The payload is never logged — syslog bodies carry credentials (security.md).
@@ -1154,9 +1154,14 @@ async fn flush_bq(
 }
 
 /// The socket/connection a sender owns. Kept across messages so UDP does not re-bind and TCP/TLS do
-/// not re-connect (or re-handshake) per message; [`Transport::reset`] drops it after an error so the
+/// not re-connect (or re-handshake) per message; [`WireSocket::reset`] drops it after an error so the
 /// next attempt re-resolves and reconnects.
-enum Transport {
+///
+/// Named `Transport` until it collided, when read out of context, with `yagra_transport::Transport`
+/// — the device-I/O trait that is a completely different thing (polling a device, not relaying a
+/// received datagram outbound). Two unrelated types sharing a name in one workspace is a real cost
+/// when grepping, so this one says what it actually is: the wire socket to a forward destination.
+enum WireSocket {
     Udp {
         sock: Option<UdpSocket>,
         addr: Option<SocketAddr>,
@@ -1171,7 +1176,7 @@ enum Transport {
     },
 }
 
-impl Transport {
+impl WireSocket {
     /// Build the transport for `kind`. Fails only for TLS, and only when the trust configuration is
     /// unusable (no system roots readable, or an operator-supplied CA that is not a certificate).
     fn new(kind: DestKind, ca_cert: Option<&str>) -> Result<Self, String> {
@@ -1425,11 +1430,11 @@ pub async fn send_test(dest: &OpenDestination) -> Result<(), String> {
         DestKind::SnmpTrapUdp => render_trap_v2c(&msg, community)
             .ok_or_else(|| "could not build a test trap".to_owned())?,
         DestKind::FlowUdp => test_flow_datagram(),
-        // Handled above; `Transport::new` would refuse it.
+        // Handled above; `WireSocket::new` would refuse it.
         DestKind::BigQuery => return Err("unreachable BigQuery transport".to_owned()),
     };
-    let mut transport = Transport::new(dest.dest.dest_kind, dest.dest.ca_cert.as_deref())?;
-    transport.send(&dest.dest.target, &payload).await
+    let mut socket = WireSocket::new(dest.dest.dest_kind, dest.dest.ca_cert.as_deref())?;
+    socket.send(&dest.dest.target, &payload).await
 }
 
 /// The synthetic flow record the Test button writes to a BigQuery flow table. Documentation
@@ -2342,18 +2347,18 @@ mod tests {
     #[test]
     fn tls_transport_accepts_system_roots_and_rejects_a_bogus_ca() {
         // No CA supplied: the container's system bundle is the trust set.
-        assert!(Transport::new(DestKind::SyslogTls, None).is_ok());
+        assert!(WireSocket::new(DestKind::SyslogTls, None).is_ok());
         // A CA that is not a certificate must fail at setup, not at handshake time — the sender
         // reports it once and stops, rather than retrying a hopeless connection per message.
-        let err = Transport::new(DestKind::SyslogTls, Some("-----BEGIN NONSENSE-----\nzz\n"))
+        let err = WireSocket::new(DestKind::SyslogTls, Some("-----BEGIN NONSENSE-----\nzz\n"))
             .err()
             .expect("a non-certificate CA must be rejected at setup");
         assert!(!err.is_empty(), "{err}");
         // Blank/whitespace is treated as "not set" rather than as a parse failure.
-        assert!(Transport::new(DestKind::SyslogTls, Some("   ")).is_ok());
+        assert!(WireSocket::new(DestKind::SyslogTls, Some("   ")).is_ok());
         // Non-TLS kinds never touch the trust store.
-        assert!(Transport::new(DestKind::SyslogUdp, None).is_ok());
-        assert!(Transport::new(DestKind::FlowUdp, None).is_ok());
+        assert!(WireSocket::new(DestKind::SyslogUdp, None).is_ok());
+        assert!(WireSocket::new(DestKind::FlowUdp, None).is_ok());
     }
 
     #[tokio::test]
@@ -2366,10 +2371,10 @@ mod tests {
             // Accept and close without ever speaking TLS.
             let _ = listener.accept().await;
         });
-        let mut transport = Transport::new(DestKind::SyslogTls, None).unwrap();
+        let mut socket = WireSocket::new(DestKind::SyslogTls, None).unwrap();
         // A literal address is used rather than `localhost` so the test cannot fail on a host that
         // resolves it to ::1 first; rustls verifies an IP target against an iPAddress SAN.
-        let err = transport
+        let err = socket
             .send(&addr.to_string(), b"<13>1 - - - - - - x")
             .await
             .expect_err("a plaintext peer must not be accepted by a TLS destination");

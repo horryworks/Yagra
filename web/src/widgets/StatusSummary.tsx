@@ -6,10 +6,9 @@
 
 import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../lib/format';
+import { SEVERITY_ORDER } from '../lib/nodeState';
 import type { NodeState } from '../types/api';
 import './StatusSummary.css';
-
-const ORDER: NodeState[] = ['critical', 'unreachable', 'warning', 'unknown', 'maintenance', 'ok'];
 
 /** Roll-up of node counts by state. `counts` + `total` are computed server-side over the whole
  *  fleet (`/fleet/summary`), so this stays correct beyond the first page of nodes (S12). */
@@ -23,7 +22,7 @@ export function StatusSummary({
   loading?: boolean;
 }) {
   const { t } = useTranslation();
-  const present = ORDER.filter((s) => counts[s]);
+  const present = SEVERITY_ORDER.filter((s) => counts[s]);
 
   return (
     <div className="statussummary">

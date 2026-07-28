@@ -5,14 +5,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import type { MerakiCandidate, MerakiOrg } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import './MerakiImportModal.css';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 export function MerakiImportModal({
   org,

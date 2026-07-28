@@ -1483,271 +1483,163 @@ fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
     }
 }
 
-/// `GET /api/v1/nodes/:node_id/flow/series` — bytes/packets over time per protocol (trend).
-async fn get_node_flow_series(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(Some(node_id), &q);
-    let sq = crate::flowstore::FlowSeriesQuery {
-        node_id: fq.node_id,
-        from_unix_ms: fq.from_unix_ms,
-        to_unix_ms: fq.to_unix_ms,
-        proto: fq.proto,
-    };
-    match store.series(&sq).await {
-        Ok(points) => Json(points).into_response(),
-        Err(e) => flow_query_failed("series", &e),
-    }
+/// The six flow aggregations the API exposes. Each is served at two routes — scoped to one
+/// exporter node (`/nodes/:id/flow/*`) and fleet-wide across every exporter (`/flow/*`) — which
+/// differ *only* in whether a node scope is supplied. Adding a seventh aggregation is a variant
+/// here, an arm in [`run_flow_agg`], and the two route lines.
+#[derive(Clone, Copy)]
+enum FlowAgg {
+    Series,
+    TopTalkers,
+    Conversations,
+    TopPorts,
+    Protocols,
+    TopAs,
 }
 
-/// `GET /api/v1/nodes/:node_id/flow/top-talkers` — top source hosts by bytes.
-async fn get_node_flow_top_talkers(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(Some(node_id), &q);
-    match store.top_talkers(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("top-talkers", &e),
-    }
-}
-
-/// `GET /api/v1/nodes/:node_id/flow/conversations` — top src→dst conversations by bytes.
-async fn get_node_flow_conversations(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(Some(node_id), &q);
-    match store.top_conversations(&fq).await {
-        Ok(mut rows) => {
-            resolve_conversation_as_names(&st, &mut rows);
-            Json(rows).into_response()
+impl FlowAgg {
+    /// Log label for a failed query, e.g. `flow fleet top-as query failed`.
+    fn label(self, fleet: bool) -> &'static str {
+        match (self, fleet) {
+            (Self::Series, false) => "series",
+            (Self::Series, true) => "fleet series",
+            (Self::TopTalkers, false) => "top-talkers",
+            (Self::TopTalkers, true) => "fleet top-talkers",
+            (Self::Conversations, false) => "conversations",
+            (Self::Conversations, true) => "fleet conversations",
+            (Self::TopPorts, false) => "top-ports",
+            (Self::TopPorts, true) => "fleet top-ports",
+            (Self::Protocols, false) => "protocols",
+            (Self::Protocols, true) => "fleet protocols",
+            (Self::TopAs, false) => "top-as",
+            (Self::TopAs, true) => "fleet top-as",
         }
-        Err(e) => flow_query_failed("conversations", &e),
     }
 }
 
-/// `GET /api/v1/nodes/:node_id/flow/top-ports` — top destination ports by bytes.
-async fn get_node_flow_top_ports(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
+/// Run one flow aggregation over an optional node scope (`None` ⇒ fleet-wide). This is the body
+/// all twelve `/flow/*` endpoints share: view-auth, the flow-disabled 503 gate, query validation,
+/// the store call, AS-name resolution, and error mapping. It used to be written out twelve times —
+/// six per-node handlers and their fleet twins, each differing only in `Some(node_id)` vs `None`
+/// and a log string — so a fix to any of that had to be applied twelve times to stay consistent.
+async fn run_flow_agg(
+    st: &ApiState,
+    headers: &HeaderMap,
+    node_id: Option<Uuid>,
+    q: &FlowRangeQuery,
+    agg: FlowAgg,
 ) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
+    if let Some(resp) = require_view(st, headers) {
         return resp;
     }
     let Some(store) = st.flows.clone() else {
         return flow_unavailable();
     };
-    let fq = flow_query_params(Some(node_id), &q);
-    match store.top_ports(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("top-ports", &e),
-    }
-}
-
-/// `GET /api/v1/nodes/:node_id/flow/protocols` — traffic by IP protocol.
-async fn get_node_flow_protocols(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(Some(node_id), &q);
-    match store.top_protocols(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("protocols", &e),
-    }
-}
-
-/// `GET /api/v1/nodes/:node_id/flow/top-as` — top autonomous systems by bytes (`dir=src|dst`,
-/// default `dst`). AS numbers come from the store; names are resolved from the IP→ASN table here.
-async fn get_node_flow_top_as(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(Some(node_id), &q);
-    let dir = flow_as_dir(&q);
-    match store.top_as(&fq, dir).await {
-        Ok(mut rows) => {
-            resolve_as_names(&st, &mut rows);
-            Json(rows).into_response()
+    let fq = flow_query_params(node_id, q);
+    let what = agg.label(node_id.is_none());
+    match agg {
+        FlowAgg::Series => {
+            let sq = crate::flowstore::FlowSeriesQuery {
+                node_id: fq.node_id,
+                from_unix_ms: fq.from_unix_ms,
+                to_unix_ms: fq.to_unix_ms,
+                proto: fq.proto,
+            };
+            match store.series(&sq).await {
+                Ok(points) => Json(points).into_response(),
+                Err(e) => flow_query_failed(what, &e),
+            }
         }
-        Err(e) => flow_query_failed("top-as", &e),
+        FlowAgg::TopTalkers => match store.top_talkers(&fq).await {
+            Ok(rows) => Json(rows).into_response(),
+            Err(e) => flow_query_failed(what, &e),
+        },
+        FlowAgg::Conversations => match store.top_conversations(&fq).await {
+            Ok(mut rows) => {
+                resolve_conversation_as_names(st, &mut rows);
+                Json(rows).into_response()
+            }
+            Err(e) => flow_query_failed(what, &e),
+        },
+        FlowAgg::TopPorts => match store.top_ports(&fq).await {
+            Ok(rows) => Json(rows).into_response(),
+            Err(e) => flow_query_failed(what, &e),
+        },
+        FlowAgg::Protocols => match store.top_protocols(&fq).await {
+            Ok(rows) => Json(rows).into_response(),
+            Err(e) => flow_query_failed(what, &e),
+        },
+        FlowAgg::TopAs => match store.top_as(&fq, flow_as_dir(q)).await {
+            Ok(mut rows) => {
+                resolve_as_names(st, &mut rows);
+                Json(rows).into_response()
+            }
+            Err(e) => flow_query_failed(what, &e),
+        },
     }
 }
 
-// ── Fleet-wide flow (all exporters, ADR-031) ─────────────────────────────────────────
-// The same six aggregations as the per-node endpoints, but across every exporter's node (no node
-// scope — `flow_query_params(None, …)`). Same store methods, same DTOs, same auth + 503 gate; the
-// dashboard's Traffic-flow widgets read these.
-
-/// `GET /api/v1/flow/series` — fleet bytes/packets over time per protocol.
-async fn get_flow_series(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    let sq = crate::flowstore::FlowSeriesQuery {
-        node_id: fq.node_id,
-        from_unix_ms: fq.from_unix_ms,
-        to_unix_ms: fq.to_unix_ms,
-        proto: fq.proto,
-    };
-    match store.series(&sq).await {
-        Ok(points) => Json(points).into_response(),
-        Err(e) => flow_query_failed("fleet series", &e),
-    }
-}
-
-/// `GET /api/v1/flow/top-talkers` — fleet top source hosts by bytes.
-async fn get_flow_top_talkers(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    match store.top_talkers(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("fleet top-talkers", &e),
-    }
-}
-
-/// `GET /api/v1/flow/conversations` — fleet top src→dst conversations by bytes (AS names resolved).
-async fn get_flow_conversations(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    match store.top_conversations(&fq).await {
-        Ok(mut rows) => {
-            resolve_conversation_as_names(&st, &mut rows);
-            Json(rows).into_response()
+/// Define the per-node and fleet handler pair for one aggregation. Both are thin: they exist only
+/// because the two routes need different extractors (`Path<Uuid>` vs none).
+macro_rules! flow_endpoints {
+    ($node_fn:ident, $fleet_fn:ident, $agg:expr, $doc:literal) => {
+        #[doc = concat!("`GET /api/v1/nodes/:node_id/flow/", $doc, "` — for one exporter node.")]
+        async fn $node_fn(
+            State(st): State<ApiState>,
+            headers: HeaderMap,
+            Path(node_id): Path<Uuid>,
+            Query(q): Query<FlowRangeQuery>,
+        ) -> Response {
+            run_flow_agg(&st, &headers, Some(node_id), &q, $agg).await
         }
-        Err(e) => flow_query_failed("fleet conversations", &e),
-    }
-}
 
-/// `GET /api/v1/flow/top-ports` — fleet top destination ports by bytes.
-async fn get_flow_top_ports(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    match store.top_ports(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("fleet top-ports", &e),
-    }
-}
-
-/// `GET /api/v1/flow/protocols` — fleet traffic by IP protocol.
-async fn get_flow_protocols(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    match store.top_protocols(&fq).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => flow_query_failed("fleet protocols", &e),
-    }
-}
-
-/// `GET /api/v1/flow/top-as` — fleet top autonomous systems by bytes (`dir=src|dst`, default `dst`).
-async fn get_flow_top_as(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<FlowRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(None, &q);
-    let dir = flow_as_dir(&q);
-    match store.top_as(&fq, dir).await {
-        Ok(mut rows) => {
-            resolve_as_names(&st, &mut rows);
-            Json(rows).into_response()
+        #[doc = concat!("`GET /api/v1/flow/", $doc, "` — fleet-wide, across every exporter.")]
+        async fn $fleet_fn(
+            State(st): State<ApiState>,
+            headers: HeaderMap,
+            Query(q): Query<FlowRangeQuery>,
+        ) -> Response {
+            run_flow_agg(&st, &headers, None, &q, $agg).await
         }
-        Err(e) => flow_query_failed("fleet top-as", &e),
-    }
+    };
 }
+
+flow_endpoints!(
+    get_node_flow_series,
+    get_flow_series,
+    FlowAgg::Series,
+    "series"
+);
+flow_endpoints!(
+    get_node_flow_top_talkers,
+    get_flow_top_talkers,
+    FlowAgg::TopTalkers,
+    "top-talkers"
+);
+flow_endpoints!(
+    get_node_flow_conversations,
+    get_flow_conversations,
+    FlowAgg::Conversations,
+    "conversations"
+);
+flow_endpoints!(
+    get_node_flow_top_ports,
+    get_flow_top_ports,
+    FlowAgg::TopPorts,
+    "top-ports"
+);
+flow_endpoints!(
+    get_node_flow_protocols,
+    get_flow_protocols,
+    FlowAgg::Protocols,
+    "protocols"
+);
+flow_endpoints!(
+    get_node_flow_top_as,
+    get_flow_top_as,
+    FlowAgg::TopAs,
+    "top-as"
+);
 
 /// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
 #[derive(Deserialize)]

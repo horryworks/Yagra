@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, getToken, setToken, setUnauthorizedHandler } from './api';
+import { api, ApiError, errMsg, getToken, setToken, setUnauthorizedHandler } from './api';
 
 function mockFetch(status: number, body: unknown) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -42,6 +42,18 @@ describe('api client', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err.code).toBe('http_error');
     expect(err.status).toBe(500);
+  });
+
+  // errMsg is what ~29 pages call in their `.catch` to decide what the operator sees. The server's
+  // message wins when the call actually failed; anything else (network drop, a thrown string) must
+  // fall back to the caller's localized text rather than leaking an internal message.
+  it('surfaces the server message for an ApiError and the fallback for anything else', () => {
+    expect(errMsg(new ApiError('conflict', 'name already taken', 409), 'fallback')).toBe(
+      'name already taken',
+    );
+    expect(errMsg(new TypeError('Failed to fetch'), 'could not save')).toBe('could not save');
+    expect(errMsg('a bare string', 'could not save')).toBe('could not save');
+    expect(errMsg(undefined, 'could not save')).toBe('could not save');
   });
 
   it('url-encodes path parameters', async () => {

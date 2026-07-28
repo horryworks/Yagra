@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -19,8 +19,6 @@ import './SystemSettingsPage.css';
 // re-validates and is authoritative.
 const MIN = 10;
 const MAX = 3600;
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function SystemSettingsPage() {
   const { t } = useTranslation('system');

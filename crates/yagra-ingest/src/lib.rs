@@ -2,11 +2,12 @@
 //! Yagra-ingest — passive event parsing for the poller's edge listeners (Phase 2).
 //!
 //! Pure logic only: syslog parsing (RFC 5424 → RFC 3164 → raw fallback), SNMP trap PDU
-//! normalization (over the vendored `snmp2` decode types), and a per-source token-bucket
-//! rate limiter. The UDP socket loops live in `yagra-poller` (`listeners.rs`); keeping the
-//! parsers here lets them unit-test against byte fixtures — including hostile ones — without
-//! any I/O, and isolates the raw SNMP library dependency the way `yagra-transport` does for
-//! the polling path.
+//! normalization (over the vendored `snmp2` decode types), **traffic-flow decoding (NetFlow
+//! v5/v9, IPFIX and sFlow v5, with the template cache and per-exporter aggregator — ADR-031,
+//! and by volume the largest thing in this crate)**, and a per-source token-bucket rate limiter.
+//! The UDP socket loops live in `yagra-poller` (`listeners.rs`); keeping the parsers here lets
+//! them unit-test against byte fixtures — including hostile ones — without any I/O, and isolates
+//! the raw SNMP library dependency the way `yagra-transport` does for the polling path.
 //!
 //! **Robustness contract:** every input here is an attacker-controlled datagram. Parsers
 //! never panic — syslog parsing is infallible (worst case: raw fallback), trap parsing

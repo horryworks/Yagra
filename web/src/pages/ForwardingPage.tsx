@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
   ForwardCondition,
@@ -24,6 +24,7 @@ import type {
   ForwardSourceKind,
   ForwardStatus,
 } from '../types/api';
+import { FORWARD_SOURCE_KINDS } from '../types/api';
 import {
   destKindsForSource,
   fieldsForSource,
@@ -40,6 +41,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../components/ui/Field';
@@ -49,10 +51,7 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import './ForwardingPage.css';
 
-const SOURCE_KINDS: ForwardSourceKind[] = ['syslog', 'trap', 'flow'];
 const STATUS_POLL_MS = 10_000;
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 /** The editable shape of the modal form — flattened so the condition rows are easy to splice. */
 interface Draft {
@@ -375,7 +374,7 @@ function DestinationModal({
             value={draft.source_kind}
             onChange={(e) => update({ source_kind: e.target.value as ForwardSourceKind })}
           >
-            {SOURCE_KINDS.map((k) => (
+            {FORWARD_SOURCE_KINDS.map((k) => (
               <option key={k} value={k}>
                 {t(`source.${k}`)}
               </option>
@@ -593,40 +592,17 @@ function DeleteModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('settings-forwarding');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('delete.title')}
+      confirmLabel={t('actions.delete')}
+      onConfirm={() => api.deleteForwardDestination(row.id)}
+      errorFallback={t('err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setError(null);
-              api
-                .deleteForwardDestination(row.id)
-                .then(onDone)
-                .catch((e: unknown) => {
-                  setError(errMsg(e, t('err.delete')));
-                  setBusy(false);
-                });
-            }}
-          >
-            {t('actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">{t('delete.confirm', { name: row.name })}</p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      {t('delete.confirm', { name: row.name })}
+    </ConfirmDeleteModal>
   );
 }
 

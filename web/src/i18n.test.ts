@@ -6,7 +6,7 @@
 //      which runs `npm run test` — gates on translation completeness, not just the CLI.
 
 import { afterAll, describe, expect, it } from 'vitest';
-import i18n from './i18n';
+import i18n, { NAMESPACES as REGISTERED_NAMESPACES } from './i18n';
 
 // English namespaces are bundled; import them directly for the parity check (type-safe, no fs).
 import enCommon from './locales/en/common.json';
@@ -80,9 +80,10 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   troubleshoot: { en: enTroubleshoot, ja: jaTroubleshoot },
   access: { en: enAccess, ja: jaAccess },
   system: { en: enSystem, ja: jaSystem },
-  // The `settings-*` namespaces were missing from this map, so CI (which runs `npm run test`,
+  // The `settings-*` namespaces were once missing from this map, so CI (which runs `npm run test`,
   // not `npm run i18n:check`) was not actually gating their translations despite the claim at the
-  // top of this file. Listed now so the gate matches the CLI's directory scan.
+  // top of this file. The `covers every registered namespace` test below now makes that class of
+  // silent gap impossible: this map is checked against i18n.ts's own NAMESPACES list.
   'settings-auth': { en: enSettingsAuth, ja: jaSettingsAuth },
   'settings-tokens': { en: enSettingsTokens, ja: jaSettingsTokens },
   'settings-forwarding': { en: enSettingsForwarding, ja: jaSettingsForwarding },
@@ -126,6 +127,14 @@ describe('i18n mechanism', () => {
 });
 
 describe('i18n EN/JA parity', () => {
+  // The parity map above is hand-maintained; i18n.ts's NAMESPACES is what the app actually loads.
+  // If they diverge, a whole namespace goes ungated in CI without any test turning red — which is
+  // exactly what happened to the four `settings-*` namespaces. Pinning them to each other means a
+  // new namespace is either gated or the suite fails.
+  it('covers every registered namespace (no silent gaps in the gate)', () => {
+    expect(Object.keys(NAMESPACES).sort()).toEqual([...REGISTERED_NAMESPACES].sort());
+  });
+
   for (const [ns, { en, ja }] of Object.entries(NAMESPACES)) {
     it(`${ns}: JA mirrors EN keys (English-only *_one plurals excepted)`, () => {
       const enKeys = flatten(en);

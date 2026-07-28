@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary, DiscoveryCandidate, ProfileSummary } from '../types/api';
 import { expandTargets } from '../lib/cidr';
@@ -19,9 +19,6 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import './DiscoveryPage.css';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 /** Credential kinds that make sense as SNMP scan candidates. */
 const SNMP_KINDS = ['snmp_v2c', 'snmp_v3'];

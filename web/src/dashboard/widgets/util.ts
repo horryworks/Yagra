@@ -10,16 +10,8 @@ import type {
   NodeSummary,
   TopologyNode,
 } from '../../types/api';
-
-/** Worst-first precedence for rolling a set of node states up to a single "group" state. */
-const SEVERITY_ORDER: NodeState[] = [
-  'critical',
-  'unreachable',
-  'warning',
-  'unknown',
-  'maintenance',
-  'ok',
-];
+// Worst-first precedence for rolling a set of node states up to a single "group" state.
+import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
 
 /** The worst (most severe) state in a set, or `ok` when empty. Used for site/region tiles. */
 export function worstState(states: NodeState[]): NodeState {
@@ -48,14 +40,7 @@ export function countsTotal(c: StateCounts): number {
 
 /** Count nodes by state. */
 export function stateCounts(nodes: NodeSummary[]): Record<NodeState, number> {
-  const counts: Record<NodeState, number> = {
-    ok: 0,
-    warning: 0,
-    critical: 0,
-    unknown: 0,
-    unreachable: 0,
-    maintenance: 0,
-  };
+  const counts = emptyStateCounts();
   for (const n of nodes) counts[n.state] += 1;
   return counts;
 }

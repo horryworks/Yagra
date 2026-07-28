@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError, type CollectionItemInput } from '../../services/api';
+import { api, errMsg, type CollectionItemInput } from '../../services/api';
 import type {
   CollectionKind,
   MetricKind,
@@ -19,8 +19,6 @@ import { TextInput, Select } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
 import { TrashIcon } from '../ui/icons';
 import './CollectionEditor.css';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 // Mirrors the server's is_valid_oid (dotted digits only).
 const OID_RE = /^[0-9]+(\.[0-9]+)*$/;

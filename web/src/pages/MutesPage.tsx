@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -26,9 +26,6 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import './MutesPage.css';
 
 const COLS = '1.4fr 170px 180px 1fr 92px';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, {

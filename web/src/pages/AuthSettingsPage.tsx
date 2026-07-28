@@ -5,21 +5,19 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { OidcProviderSummary, OidcProviderInput, Role } from '../types/api';
+import { ROLES, type OidcProviderSummary, type OidcProviderInput, type Role } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './AuthSettingsPage.css';
 
-const ROLES: Role[] = ['viewer', 'operator', 'admin'];
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 /** One editable IdP-group → role mapping row. */
 interface MapRow {
@@ -260,40 +258,16 @@ function DeleteProviderModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('settings-auth');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('delete.title')}
+      onConfirm={() => api.deleteOidcProvider(provider.id)}
+      errorFallback={t('err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              setError(null);
-              api
-                .deleteOidcProvider(provider.id)
-                .then(onDone)
-                .catch((e: unknown) => {
-                  setError(errMsg(e, t('err.delete')));
-                  setBusy(false);
-                });
-            }}
-          >
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">{t('delete.confirm', { name: provider.name })}</p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      {t('delete.confirm', { name: provider.name })}
+    </ConfirmDeleteModal>
   );
 }
 

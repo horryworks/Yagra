@@ -9,6 +9,7 @@
 // it can be tested without a network stream.
 
 import type { Alert, AnalysisJob, NodeState, ReportRun } from '../types/api';
+import { isNodeState } from '../lib/nodeState';
 import { getToken, notifyAuthFailure } from './api';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -51,15 +52,6 @@ export interface NodeStateEvent {
   at_unix_ms: number;
 }
 
-const NODE_STATES: readonly string[] = [
-  'ok',
-  'warning',
-  'critical',
-  'unknown',
-  'unreachable',
-  'maintenance',
-];
-
 /** Parse one node-state SSE payload, or null if malformed (also rejects the `resync` hint, whose
  *  `data` is a bare number). */
 export function parseNodeStateEvent(data: string): NodeStateEvent | null {
@@ -68,7 +60,7 @@ export function parseNodeStateEvent(data: string): NodeStateEvent | null {
     if (
       typeof obj.node_id === 'string' &&
       typeof obj.state === 'string' &&
-      NODE_STATES.includes(obj.state)
+      isNodeState(obj.state)
     ) {
       return obj as NodeStateEvent;
     }

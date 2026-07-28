@@ -4,6 +4,11 @@
 // group's descendant nodes. Kept free of React so they can be unit-tested directly.
 
 import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
+import { DISPLAY_ORDER, PROBLEM_STATES, emptyStateCounts } from './nodeState';
+
+/** Re-exported for the health-bar/legend call sites that read "the order states are shown in".
+ *  The definition lives in `nodeState.ts` with the rest of the NodeState vocabulary. */
+export { DISPLAY_ORDER as STATE_ORDER } from './nodeState';
 
 /** A group with its child groups and member nodes resolved (built from the flat lists). */
 export interface TreeGroup extends NodeGroup {
@@ -141,9 +146,9 @@ export function flattenTree(
     if (filtering && !effMatch && !subtreeMatches(group, q)) return;
 
     const isOpen = filtering ? true : !opts.collapsed[group.id];
-    const tally = subtree ? subtree.get(group.id) ?? tallyFromCounts(emptyCounts())
+    const tally = subtree ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
                           : tallyStates(descendantNodes(group));
-    const directTotal = counts ? countsTotal(counts[group.id] ?? emptyCounts()) : group.nodes.length;
+    const directTotal = counts ? countsTotal(counts[group.id] ?? emptyStateCounts()) : group.nodes.length;
     // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it.
     const hasChildren = group.children.length > 0 || tally.total > 0;
     rows.push({ kind: 'group', depth, group, isOpen, hasChildren, tally });
@@ -180,20 +185,6 @@ export function flattenTree(
   return rows;
 }
 
-/** The order states are shown in a health bar / legend (best → worst, with the neutral states
- *  trailing). Stable so the bar segments and legend read consistently everywhere. */
-export const STATE_ORDER: NodeState[] = [
-  'ok',
-  'warning',
-  'critical',
-  'unreachable',
-  'maintenance',
-  'unknown',
-];
-
-/** States that mean a node "needs attention" (surfaced in red counts on group rollups). */
-const PROBLEM_STATES = new Set<NodeState>(['warning', 'critical', 'unreachable']);
-
 /** A per-state tally of a node set, plus how many of them need attention. Counts cover every
  *  `NodeState`, so a missing state is simply `0` (handy for proportional bar widths). */
 export interface StateTally {
@@ -205,14 +196,7 @@ export interface StateTally {
 /** Count a node set by state. Drives the health bar segment widths, the per-state legend, and the
  *  "N need attention" summary on group rollups and the page header. */
 export function tallyStates(nodes: NodeSummary[]): StateTally {
-  const counts: Record<NodeState, number> = {
-    ok: 0,
-    warning: 0,
-    critical: 0,
-    unreachable: 0,
-    maintenance: 0,
-    unknown: 0,
-  };
+  const counts = emptyStateCounts();
   let needAttention = 0;
   for (const n of nodes) {
     counts[n.state] += 1;
@@ -225,14 +209,9 @@ export function tallyStates(nodes: NodeSummary[]): StateTally {
  *  A-1/A-3). Structurally identical to `StateTally.counts`. */
 export type StateCounts = Record<NodeState, number>;
 
-/** A zero-filled per-state count object. */
-function emptyCounts(): StateCounts {
-  return { ok: 0, warning: 0, critical: 0, unreachable: 0, maintenance: 0, unknown: 0 };
-}
-
 /** Sum of every state count in a per-state tally. */
 export function countsTotal(c: StateCounts): number {
-  return STATE_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
+  return DISPLAY_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
 }
 
 /** Build a `StateTally` (counts + total + need-attention) from a raw per-state count object — the
@@ -240,7 +219,7 @@ export function countsTotal(c: StateCounts): number {
 export function tallyFromCounts(counts: StateCounts): StateTally {
   let total = 0;
   let needAttention = 0;
-  for (const s of STATE_ORDER) {
+  for (const s of DISPLAY_ORDER) {
     const n = counts[s] ?? 0;
     total += n;
     if (PROBLEM_STATES.has(s)) needAttention += n;
@@ -257,12 +236,12 @@ function subtreeTallyMap(
 ): Map<string, StateTally> {
   const out = new Map<string, StateTally>();
   const visit = (g: TreeGroup): StateCounts => {
-    const acc = emptyCounts();
+    const acc = emptyStateCounts();
     const own = counts[g.id];
-    if (own) for (const s of STATE_ORDER) acc[s] += own[s] ?? 0;
+    if (own) for (const s of DISPLAY_ORDER) acc[s] += own[s] ?? 0;
     for (const child of g.children) {
       const sub = visit(child);
-      for (const s of STATE_ORDER) acc[s] += sub[s];
+      for (const s of DISPLAY_ORDER) acc[s] += sub[s];
     }
     out.set(g.id, tallyFromCounts(acc));
     return acc;

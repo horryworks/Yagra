@@ -13,6 +13,13 @@ export interface SuppressionTarget {
   name: string;
 }
 
+/** Metric-name presets offered as a `<datalist>` wherever the operator types a metric by hand
+ *  (alert-rule metric, mute check). These are the series every node emits today — ICMP on all of
+ *  them, sysUptime whenever SNMP is bound — so they cover the common case without pretending to be
+ *  the full catalogue; free text stays allowed for anything else collected. Shared because the
+ *  alert-rule form and the mute form each carried their own identical copy. */
+export const METRIC_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
+
 /** Quick-duration presets (milliseconds from "now") offered in the right-click submenu. */
 export const DURATION_PRESETS: { label: string; ms: number }[] = [
   { label: '1h', ms: 3_600_000 },

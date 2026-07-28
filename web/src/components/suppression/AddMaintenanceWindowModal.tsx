@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import type { MaintenanceScopeLevel, NodeGroup, ProfileSummary } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -20,9 +20,6 @@ import type { SuppressionTarget } from '../../lib/suppression';
 
 const TZ = localTimeZone();
 const toRfc3339 = (local: string) => new Date(local).toISOString();
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
-
 /** Scope choices when not locked to a right-click target. */
 type CreateScope = 'node' | 'group_id' | 'profile';
 

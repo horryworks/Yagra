@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
   ChannelConfigInput,
@@ -32,9 +32,6 @@ import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, PowerIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
 import './RoutingPage.css';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'neutral'> = {
   critical: 'critical',

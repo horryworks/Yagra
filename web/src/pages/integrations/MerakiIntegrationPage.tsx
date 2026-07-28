@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../../services/api';
+import { api, errMsg, ApiError } from '../../services/api';
 import { useAuthStore } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -28,9 +28,6 @@ const REGIONS: { labelKey: string; base_url: string }[] = [
   { labelKey: 'meraki.regions.china', base_url: 'https://api.meraki.cn' },
   { labelKey: 'meraki.regions.usGov', base_url: 'https://api.gov-meraki.com' },
 ];
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 const tierList = (tiers: string[], t: TFunction) =>
   tiers.length ? tiers.map((x) => t(`meraki.tier.${x}`)).join(', ') : t('meraki.tiersNone');

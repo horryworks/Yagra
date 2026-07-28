@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { NODE_DETAIL_TABS, normalizeNodeDetailTab } from './tabs';
+import {
+  NODE_DETAIL_TAB_META,
+  NODE_DETAIL_TABS,
+  normalizeNodeDetailTab,
+  type NodeDetailTabStats,
+} from './tabs';
+import type { InterfaceRow } from '../../types/api';
 
-// Regression guard for the ADR-031 Flow-tab bug: the node-detail tab whitelist was duplicated across
-// NodeDetail.tsx, NodeDetailPage.tsx, and NodesPage.tsx (the split-view host). The split-view copy
-// was missed when Flow was added, so the Flow button rendered but clicking it bounced back to
-// Overview. All three now import NODE_DETAIL_TABS, so they cannot drift — these tests pin the shared
-// source and the normalization the three surfaces rely on.
+// Regression guard for the ADR-031 Flow-tab bug: the node-detail tab whitelist was duplicated
+// across NodeDetail.tsx, NodeDetailPage.tsx, and NodesPage.tsx (the split-view host). The
+// split-view copy was missed when Flow was added, so the Flow button rendered but clicking it
+// bounced back to Overview. All three now import NODE_DETAIL_TABS, and the tab bar + body inside
+// NodeDetail.tsx are `Record<NodeDetailTab, …>` maps, so the compiler rejects a half-added tab.
+// These tests pin the shared source, the normalization, and the badge/warn rules the bar reads.
 describe('node-detail tabs', () => {
   it('whitelists every rendered tab, including flow', () => {
     expect([...NODE_DETAIL_TABS]).toEqual([
@@ -29,5 +36,71 @@ describe('node-detail tabs', () => {
     expect(normalizeNodeDetailTab('')).toBe('overview');
     expect(normalizeNodeDetailTab('bogus')).toBe('overview');
     expect(normalizeNodeDetailTab('FLOW')).toBe('overview');
+  });
+
+  it('gives every whitelisted tab a label key, and defines no orphan entries', () => {
+    expect(Object.keys(NODE_DETAIL_TAB_META).sort()).toEqual([...NODE_DETAIL_TABS].sort());
+    const keys = Object.values(NODE_DETAIL_TAB_META).map((m) => m.labelKey);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const k of keys) expect(k).toMatch(/^tabs\./);
+  });
+});
+
+const iface = (oper: number | null): InterfaceRow => ({
+  ifindex: 1,
+  if_name: 'eth0',
+  if_alias: null,
+  if_speed_bps: null,
+  oper_status: oper,
+  in_bps: null,
+  out_bps: null,
+  in_util_pct: null,
+  out_util_pct: null,
+  last_seen_unix: null,
+  stale: false,
+});
+
+const stats = (over: Partial<NodeDetailTabStats> = {}): NodeDetailTabStats => ({
+  interfaces: [],
+  collCount: null,
+  hasCredential: false,
+  state: 'ok',
+  ...over,
+});
+
+describe('node-detail tab badges and warnings', () => {
+  it('shows the interface count, but no pill when there are none', () => {
+    const meta = NODE_DETAIL_TAB_META.interfaces;
+    expect(meta.badge?.(stats({ interfaces: [iface(1), iface(1)] }))).toBe(2);
+    expect(meta.badge?.(stats())).toBeNull();
+  });
+
+  it('warns on interfaces only when one is known-down (unknown oper_status is not a warning)', () => {
+    const meta = NODE_DETAIL_TAB_META.interfaces;
+    expect(meta.warn?.(stats({ interfaces: [iface(1), iface(1)] }))).toBe(false);
+    expect(meta.warn?.(stats({ interfaces: [iface(1), iface(2)] }))).toBe(true);
+    expect(meta.warn?.(stats({ interfaces: [iface(null)] }))).toBe(false);
+  });
+
+  it('passes the collection count through, including the loading null', () => {
+    const meta = NODE_DETAIL_TAB_META.collection;
+    expect(meta.badge?.(stats({ collCount: 4 }))).toBe(4);
+    expect(meta.badge?.(stats({ collCount: null }))).toBeNull();
+  });
+
+  it('warns on collection only for an SNMP-bound node we cannot currently reach', () => {
+    const meta = NODE_DETAIL_TAB_META.collection;
+    expect(meta.warn?.(stats({ hasCredential: true, state: 'unreachable' }))).toBe(true);
+    expect(meta.warn?.(stats({ hasCredential: true, state: 'unknown' }))).toBe(true);
+    expect(meta.warn?.(stats({ hasCredential: true, state: 'ok' }))).toBe(false);
+    // No credential bound ⇒ nothing is expected to collect, so it is not "needs attention".
+    expect(meta.warn?.(stats({ hasCredential: false, state: 'unreachable' }))).toBe(false);
+  });
+
+  it('leaves the plain tabs undecorated', () => {
+    for (const key of ['overview', 'events', 'flow'] as const) {
+      expect(NODE_DETAIL_TAB_META[key].badge).toBeUndefined();
+      expect(NODE_DETAIL_TAB_META[key].warn).toBeUndefined();
+    }
   });
 });

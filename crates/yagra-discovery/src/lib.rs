@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Yagra-discovery — device discovery and classification.
+//! Yagra-discovery — the *pure* half of device discovery: `sysDescr` identification and the
+//! Credential Finder's probe rate limiter.
 //!
-//! IP-range / SNMP sweep / LLDP-CDP based discovery, classification into profiles, and
-//! the built-in **Credential Finder** that probes candidate credentials to find the one a
-//! device accepts. The per-device probe rate limiter ([`credential_finder`]) is enforced by the
-//! poller's discovery sweep (raw-socket ICMP). Profile suggestion is owned by the
-//! core `Classifier` (authoritative `sysObjectID` rules); [`identify`] here only extracts a
-//! best-effort vendor/model from the free-form `sysDescr` to pre-fill the import form.
+//! Despite the name, the discovery **sweep** is not here — it lives in `yagra-poller`
+//! (`discovery.rs`), because it needs sockets. Nor is the classifier: profile suggestion is owned
+//! authoritatively by `yagra-core`'s `Classifier` (`sysObjectID`/`sysDescr` rules, operator-
+//! editable), over the rule table seeded from `yagra-common`. What this crate holds is the logic
+//! that must stay I/O-free and unit-testable:
+//!
+//!  - [`identify`] — best-effort vendor/model extraction from free-form, untrusted `sysDescr`,
+//!    used only to pre-fill the operator's import form.
+//!  - [`credential_finder`] — the per-device rate limiter for the **Credential Finder**, which
+//!    probes candidate credentials to find the one a device accepts. Enforced by the poller's
+//!    sweep; rate limiting is what keeps probing from tripping device account lockout.
 
 pub mod credential_finder;
 

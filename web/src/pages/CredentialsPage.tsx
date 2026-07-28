@@ -14,12 +14,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -46,9 +47,6 @@ const KIND_META: Record<string, { labelKey: string; Icon: ComponentType }> = {
 };
 
 const COLS = '1.7fr 150px 130px 110px 1fr 92px';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 const kindLabel = (kind: string, t: TFunction) => {
   const meta = KIND_META[kind];
@@ -375,50 +373,25 @@ function DeleteCredentialModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('access');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteCredential(cred.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('cred.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('cred.delete.title')}
+      onConfirm={() => api.deleteCredential(cred.id)}
+      errorFallback={t('cred.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="cred.delete.confirm"
-          values={{ name: cred.name }}
-          components={{ strong: <strong /> }}
-        />{' '}
-        {cred.used_by > 0
-          ? t('cred.delete.inUse', { usage: usageLabel(cred.used_by, t) })
-          : t('cred.delete.unused')}{' '}
-        {t('cred.delete.irreversible')}
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="cred.delete.confirm"
+        values={{ name: cred.name }}
+        components={{ strong: <strong /> }}
+      />{' '}
+      {cred.used_by > 0
+        ? t('cred.delete.inUse', { usage: usageLabel(cred.used_by, t) })
+        : t('cred.delete.unused')}{' '}
+      {t('cred.delete.irreversible')}
+    </ConfirmDeleteModal>
   );
 }
 

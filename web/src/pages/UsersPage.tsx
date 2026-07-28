@@ -8,13 +8,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { Role, UserSummary } from '../types/api';
+import { ROLES, type Role, type UserSummary } from '../types/api';
 import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -23,13 +24,9 @@ import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './UsersPage.css';
 
-const ROLES: Role[] = ['viewer', 'operator', 'admin'];
 const MIN_PW = 8;
 // Role filter segments. The filter key drives the query; the label is resolved with `t` in render.
 const SEGMENTS = ['all', 'admin', 'operator', 'viewer'] as const;
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 export function UsersPage() {
   const { t } = useTranslation('access');
@@ -420,45 +417,20 @@ function DeleteUserModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('access');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteUser(user.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('users.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('users.delete.title')}
+      onConfirm={() => api.deleteUser(user.id)}
+      errorFallback={t('users.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="users.delete.confirm"
-          values={{ name: user.username }}
-          components={{ strong: <strong /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="users.delete.confirm"
+        values={{ name: user.username }}
+        components={{ strong: <strong /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }

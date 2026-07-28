@@ -9,12 +9,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -22,9 +23,6 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
 import './MibRepositoryPage.css';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 const OID_RE = /^[0-9]+(\.[0-9]+)*$/;
 
@@ -140,46 +138,21 @@ function DeleteMibEntryModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('monitoring');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteMibEntry(entry.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('mib.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('mib.deleteTitle')}
+      onConfirm={() => api.deleteMibEntry(entry.id)}
+      errorFallback={t('mib.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="mib.delete.confirm"
-          values={{ name: entry.metric_name }}
-          components={{ strong: <strong /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="mib.delete.confirm"
+        values={{ name: entry.metric_name }}
+        components={{ strong: <strong /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }
 

@@ -10,13 +10,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
@@ -26,9 +26,6 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 /** RFC 3339 → compact local display. */
 const fmtTime = (iso: string) =>
@@ -59,46 +56,21 @@ function DeleteWindowModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('suppression');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteMaintenanceWindow(win.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('maintenance.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('maintenance.delete.title')}
+      onConfirm={() => api.deleteMaintenanceWindow(win.id)}
+      errorFallback={t('maintenance.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="maintenance.delete.confirm"
-          values={{ name: win.name }}
-          components={{ b: <strong /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="maintenance.delete.confirm"
+        values={{ name: win.name }}
+        components={{ b: <strong /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }
 

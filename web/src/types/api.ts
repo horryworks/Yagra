@@ -11,8 +11,13 @@ export type NodeState =
   | 'unreachable'
   | 'maintenance';
 
+/** Every alert severity, ordered info < warning < critical. `Severity` derives from it, so the
+ *  union and the runtime list can never disagree — and the i18n key-coverage test iterates the
+ *  list, so a new severity without its `format:severity.*` strings fails the suite. */
+export const SEVERITIES = ['info', 'warning', 'critical'] as const;
+
 /** Alert severity (yagra-common `Severity`), ordered info < warning < critical. */
-export type Severity = 'info' | 'warning' | 'critical';
+export type Severity = (typeof SEVERITIES)[number];
 
 /** Optional server-side aggregation for a node metric read. `max` collapses a per-entity
  *  table gauge (e.g. CPU% per entPhysicalIndex) into one node-level value. */
@@ -202,8 +207,11 @@ export interface GroupNodesResult {
   truncated: boolean;
 }
 
+/** Every node-group type, in picker order. */
+export const GROUP_TYPES = ['site', 'region', 'device_type', 'service', 'generic'] as const;
+
 /** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
-export type GroupType = 'site' | 'region' | 'device_type' | 'service' | 'generic';
+export type GroupType = (typeof GROUP_TYPES)[number];
 
 /** One node group (folder) in the hierarchical inventory tree (`GET /api/v1/node-groups`). */
 export interface NodeGroup {
@@ -252,8 +260,13 @@ export interface AuthMe {
   username: string;
 }
 
+/** Every predefined role, least → most privileged — the order role pickers offer them in.
+ *  `Role` is derived from it, so the union and the list can never disagree. (Users, API tokens and
+ *  the OIDC group mapping each used to carry their own literal copy.) */
+export const ROLES = ['viewer', 'operator', 'admin'] as const;
+
 /** A predefined role (yagra-common `Role`, snake_case), ordered least → most privileged. */
-export type Role = 'viewer' | 'operator' | 'admin';
+export type Role = (typeof ROLES)[number];
 
 /** One capability in the role/privilege matrix (`GET /api/v1/roles`). */
 export interface PermissionInfo {
@@ -358,17 +371,24 @@ export interface CreatedApiToken {
 
 // ── Forwarding ("tee", ADR-034) — relay received syslog/traps to external collectors ────────────
 
+/** Every received stream a destination can tee. */
+export const FORWARD_SOURCE_KINDS = ['syslog', 'trap', 'flow'] as const;
+
 /** Which received stream a destination tees (core `yagra_forward::SourceKind`). */
-export type ForwardSourceKind = 'syslog' | 'trap' | 'flow';
+export type ForwardSourceKind = (typeof FORWARD_SOURCE_KINDS)[number];
+
+/** Every way a destination can be spoken to. */
+export const FORWARD_DEST_KINDS = [
+  'syslog_udp',
+  'syslog_tcp',
+  'syslog_tls',
+  'snmp_trap_udp',
+  'flow_udp',
+  'bigquery',
+] as const;
 
 /** How a destination is spoken to (core `yagra_forward::DestKind`). */
-export type ForwardDestKind =
-  | 'syslog_udp'
-  | 'syslog_tcp'
-  | 'syslog_tls'
-  | 'snmp_trap_udp'
-  | 'flow_udp'
-  | 'bigquery';
+export type ForwardDestKind = (typeof FORWARD_DEST_KINDS)[number];
 
 /** A filter condition's subject (core `yagra_forward::FilterField`). For flow, `source_ip` is the
  *  exporting device and `kind` is the wire format (`netflow`/`sflow`); the record's own endpoints
@@ -513,16 +533,22 @@ export interface ProfileInput {
   poll_interval_secs?: number | null;
 }
 
+/** Every threshold scope level, broadest → most specific. */
+export const SCOPE_LEVELS = ['profile', 'group', 'node'] as const;
+
 /** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */
-export type ScopeLevel = 'profile' | 'group' | 'node';
+export type ScopeLevel = (typeof SCOPE_LEVELS)[number];
 
 /** Maintenance-window scope. The threshold scopes plus `group_id` — a hierarchical folder group
  *  (the All Nodes tree), resolved recursively incl. subgroups (ADR-022). Distinct from the legacy
  *  tag-based `group` scope (`scope_id` is a group UUID, not a tag value). */
 export type MaintenanceScopeLevel = ScopeLevel | 'group_id';
 
+/** Every breach direction. */
+export const DIRECTIONS = ['above', 'below'] as const;
+
 /** Breach direction (yagra-common `Direction`, snake_case). */
-export type Direction = 'above' | 'below';
+export type Direction = (typeof DIRECTIONS)[number];
 
 /** A stored threshold rule (`GET /api/v1/thresholds`, core `StoredThreshold`). The rule
  *  fields are flattened onto the row. The GET shape uses `scope_level`, matching the POST body. */

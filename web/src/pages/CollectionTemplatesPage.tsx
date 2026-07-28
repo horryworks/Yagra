@@ -10,12 +10,13 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
@@ -25,8 +26,6 @@ import { CollectionEditor } from '../components/CollectionEditor/CollectionEdito
 import './CollectionTemplatesPage.css';
 
 const COLS = '1.6fr 1.6fr 130px 72px';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
@@ -271,45 +270,20 @@ function DeleteTemplateModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('monitoring');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteCollectionTemplate(template.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('sets.err.delete')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('sets.deleteSet')}
+      onConfirm={() => api.deleteCollectionTemplate(template.id)}
+      errorFallback={t('sets.err.delete')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="sets.delete.confirm"
-          values={{ name: template.name }}
-          components={{ strong: <strong /> }}
-        />
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      <Trans
+        t={t}
+        i18nKey="sets.delete.confirm"
+        values={{ name: template.name }}
+        components={{ strong: <strong /> }}
+      />
+    </ConfirmDeleteModal>
   );
 }

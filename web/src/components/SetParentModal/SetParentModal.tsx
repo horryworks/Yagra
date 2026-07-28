@@ -7,14 +7,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import type { TopologyNode } from '../../types/api';
 import { invalidParentIds } from '../../lib/dependencies';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { NodePicker } from '../NodePicker/NodePicker';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function SetParentModal({
   nodeId,

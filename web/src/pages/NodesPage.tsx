@@ -19,10 +19,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
+import { GROUP_TYPES } from '../types/api';
 import type {
   CredentialSummary,
   DnsRecordType,
@@ -73,7 +74,6 @@ const UNGROUPED = '__ungrouped__';
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 
-const GROUP_TYPES: GroupType[] = ['site', 'region', 'device_type', 'service', 'generic'];
 
 /** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
  *  every group that is open AND visible (all its ancestors open) — i.e. its expanded content is
@@ -117,9 +117,6 @@ function subtreeGroupIds(groups: NodeGroup[], rootId: string): string[] {
   walk(rootId);
   return out;
 }
-
-const errMsg = (e: unknown, fallback: string) =>
-  e instanceof ApiError ? e.message : fallback;
 
 /** Add/edit a group: name, type, and parent (parent doubles as "move"). */
 interface GroupModalState {

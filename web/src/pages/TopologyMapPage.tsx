@@ -15,7 +15,7 @@ import { Card } from '../components/ui/Card';
 import { TopologyMap } from '../components/TopologyMap/TopologyMap';
 import { layoutTopology } from '../components/TopologyMap/layout';
 import { stateColorVar, stateLabel } from '../lib/format';
-import type { NodeState } from '../types/api';
+import { SEVERITY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
@@ -24,15 +24,6 @@ import './TopologyMapPage.css';
 /** Above this many linked nodes an SVG map stops being legible (and cheap) — surface the size
  *  and point at the tree/filter rather than paint an unreadable hairball. */
 const MAP_CAP = 300;
-
-const LEGEND_ORDER: NodeState[] = [
-  'critical',
-  'unreachable',
-  'warning',
-  'unknown',
-  'maintenance',
-  'ok',
-];
 
 export function TopologyMapPage() {
   const { t } = useTranslation('topology');
@@ -51,7 +42,7 @@ export function TopologyMapPage() {
 
   const presentStates = useMemo(() => {
     const set = new Set(layout.nodes.map((n) => n.state));
-    return LEGEND_ORDER.filter((s) => set.has(s));
+    return SEVERITY_ORDER.filter((s) => set.has(s));
   }, [layout.nodes]);
   const anySuppressed = layout.nodes.some((n) => n.suppressed);
 

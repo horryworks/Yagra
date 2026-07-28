@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { LlmConfigView, LlmProviderChoice } from '../types/api';
 import { formatExactTime } from '../lib/format';
@@ -29,8 +29,6 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea, Select, FieldHint, RequiredMark } from '../components/ui/Field';
 import './AiSettingsPage.css';
-
-const errMsg = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export function AiSettingsPage() {
   const { t } = useTranslation('settings-ai');
