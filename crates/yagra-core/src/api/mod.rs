@@ -7,14 +7,43 @@
 //! the inventory from a [`NodeListing`]. A node's display state and the alert endpoints are
 //! served from the live [`AlertManager`] (committed liveness + threshold roll-up + active
 //! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
+//!
+//! ## Layout
+//!
+//! This module was a single 13.7k-line file holding 28 unrelated domains separated only by comment
+//! banners, with one 393-line `router()` expression registering all ~200 method/path pairs — so
+//! every feature branch edited the same two places and conflicted. It is being split per domain:
+//! each `api/<domain>.rs` owns its handlers, its DTOs and its own [`axum::Router`], and
+//! [`router`] merges them.
+//!
+//! Cross-cutting pieces live beside it:
+//!  - [`error`] — the typed [`ApiError`] and the ADR-019 envelope. New handlers return
+//!    `ApiResult<T>` and propagate with `?`.
+//!  - [`extract`] — auth/availability guards as extractors, so a missing guard is a compile error
+//!    rather than a silent hole.
+//!  - [`route_table`] — the full method/path inventory, pinned by a test, so moving a domain out
+//!    cannot quietly drop an endpoint.
+//!
+//! Handlers not yet moved still return a bare `Response` and use the `error_response`/`internal`
+//! helpers; both styles are supported during the migration. New endpoints should use the new one.
+
+mod error;
+pub(crate) mod extract;
+mod flow;
+#[cfg(test)]
+mod route_table;
+#[cfg(test)]
+mod tests_support;
+mod users;
+
+pub(crate) use error::error_response;
+pub use error::{ApiError, ApiResult};
 
 use crate::ack::{AckKey, AckRepo, AckView};
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, AnalysisTool, CreateError, JobParams, ScopeKind};
 use crate::audit::AuditRepo;
-use crate::auth::{
-    AuthError, LoginThrottle, SessionStore, UserCreateOutcome, UserMutation, UserStore,
-};
+use crate::auth::{AuthError, LoginThrottle, SessionStore, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::{CollectionRepo, CreateTemplateOutcome};
 use crate::coordinator::{Coordinator, PollerView};
@@ -338,39 +367,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
             get(get_interface_series),
         )
-        // Flow analysis (ADR-031) — served only when a ClickHouse flow store is configured.
-        .route(
-            "/api/v1/nodes/:node_id/flow/series",
-            get(get_node_flow_series),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/flow/top-talkers",
-            get(get_node_flow_top_talkers),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/flow/conversations",
-            get(get_node_flow_conversations),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/flow/top-ports",
-            get(get_node_flow_top_ports),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/flow/protocols",
-            get(get_node_flow_protocols),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/flow/top-as",
-            get(get_node_flow_top_as),
-        )
-        // Fleet-wide flow (all exporters) — the dashboard Traffic-flow widgets. Same six
-        // aggregations without a node scope.
-        .route("/api/v1/flow/series", get(get_flow_series))
-        .route("/api/v1/flow/top-talkers", get(get_flow_top_talkers))
-        .route("/api/v1/flow/conversations", get(get_flow_conversations))
-        .route("/api/v1/flow/top-ports", get(get_flow_top_ports))
-        .route("/api/v1/flow/protocols", get(get_flow_protocols))
-        .route("/api/v1/flow/top-as", get(get_flow_top_as))
+        // Flow analysis (ADR-031) — the twelve `/flow/*` endpoints, in `api/flow.rs`.
+        .merge(flow::routes())
         .route(
             "/api/v1/collection-templates",
             get(list_collection_templates).post(create_collection_template),
@@ -391,11 +389,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/profiles/:id/templates",
             get(list_profile_templates).put(set_profile_templates),
         )
-        .route("/api/v1/users", get(list_users).post(create_user))
-        .route("/api/v1/users/:id", delete(delete_user))
-        .route("/api/v1/users/:id/role", put(set_user_role))
-        .route("/api/v1/users/:id/enabled", put(set_user_status))
-        .route("/api/v1/users/:id/password", put(set_user_password))
+        // Local user accounts + roles (admin-only), in `api/users.rs`.
+        .merge(users::routes())
         // API tokens (PATs) for non-browser clients / the MCP tool surface (ADR-028). Admin-only;
         // issuance/revocation are audited by `audit_mw`. The raw token is returned once on create.
         .route(
@@ -837,30 +832,6 @@ struct NodeSummary {
 }
 
 /// The fixed error envelope (ADR-019).
-#[derive(Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
-}
-
-#[derive(Serialize)]
-struct ErrorDetail {
-    code: String,
-    message: String,
-}
-
-pub(crate) fn error_response(status: StatusCode, code: &str, message: String) -> Response {
-    (
-        status,
-        Json(ErrorBody {
-            error: ErrorDetail {
-                code: code.to_owned(),
-                message,
-            },
-        }),
-    )
-        .into_response()
-}
-
 fn not_found(code: &str, message: String) -> Response {
     error_response(StatusCode::NOT_FOUND, code, message)
 }
@@ -1388,258 +1359,6 @@ async fn get_node_metric_range(
     })
     .into_response()
 }
-
-// ── Flow analysis (ADR-031) ──────────────────────────────────────────────────
-
-/// Time-window + limit query for the flow endpoints. `from`/`to` are Unix seconds (defaulting to
-/// the trailing hour); `limit` caps top-N rows. `proto`/`port`/`peer` are optional drill-down
-/// filters and `dir` selects the AS side for the top-AS endpoint — all parsed into strong types
-/// (unparseable values are ignored), so no untrusted string reaches the store query.
-#[derive(Deserialize)]
-struct FlowRangeQuery {
-    from: Option<i64>,
-    to: Option<i64>,
-    limit: Option<u32>,
-    proto: Option<String>,
-    port: Option<String>,
-    peer: Option<String>,
-    asn: Option<String>,
-    dir: Option<String>,
-}
-
-/// 503 when flow monitoring is disabled (no ClickHouse flow store configured).
-fn flow_unavailable() -> Response {
-    error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "flow_unavailable",
-        "flow monitoring is not enabled (no ClickHouse flow store configured)".to_owned(),
-    )
-}
-
-/// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
-/// path) for a per-node query or `None` for the fleet-wide (all-exporters) endpoints; the window is
-/// converted to ms and the limit clamped — no untrusted string ever reaches the store query.
-fn flow_query_params(node_id: Option<Uuid>, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let limit = q.limit.unwrap_or(20).clamp(1, 1000);
-    crate::flowstore::FlowQuery {
-        node_id,
-        from_unix_ms: from.saturating_mul(1000),
-        to_unix_ms: to.saturating_mul(1000),
-        limit,
-        // Parse into strong types; anything unparseable is simply ignored (no raw string in SQL).
-        proto: q.proto.as_deref().and_then(|s| s.trim().parse::<u8>().ok()),
-        dst_port: q.port.as_deref().and_then(|s| s.trim().parse::<u16>().ok()),
-        peer: q
-            .peer
-            .as_deref()
-            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok()),
-        asn: q.asn.as_deref().and_then(|s| s.trim().parse::<u32>().ok()),
-    }
-}
-
-/// Which AS side the top-AS endpoint aggregates on (`dir=src`; default destination).
-fn flow_as_dir(q: &FlowRangeQuery) -> crate::flowstore::AsDir {
-    match q.dir.as_deref() {
-        Some("src") => crate::flowstore::AsDir::Src,
-        _ => crate::flowstore::AsDir::Dst,
-    }
-}
-
-/// Map a flow-store error to a 500 without leaking the internal error to the client (security.md).
-fn flow_query_failed(what: &str, e: &anyhow::Error) -> Response {
-    tracing::warn!(error = %e, "flow {what} query failed");
-    internal("flow query failed")
-}
-
-/// Fill conversation `*_as_name` fields from the hot-swappable IP→ASN table (a reloader may swap it
-/// concurrently, so snapshot once). Names are resolved here, never stored (flowstore.rs leaves them
-/// `None`). Shared by the per-node and fleet conversation endpoints.
-fn resolve_conversation_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowConversation]) {
-    let db = st.ipasn.read().unwrap().clone();
-    if let Some(db) = &db {
-        for r in rows.iter_mut() {
-            if r.src_asn != 0 {
-                r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
-            }
-            if r.dst_asn != 0 {
-                r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
-            }
-        }
-    }
-}
-
-/// Fill AS-aggregate `name` fields from the hot-swappable IP→ASN table. Shared by the per-node and
-/// fleet top-AS endpoints.
-fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
-    let db = st.ipasn.read().unwrap().clone();
-    if let Some(db) = &db {
-        for r in rows.iter_mut() {
-            if r.asn != 0 {
-                r.name = db.name_of(r.asn).map(str::to_owned);
-            }
-        }
-    }
-}
-
-/// The six flow aggregations the API exposes. Each is served at two routes — scoped to one
-/// exporter node (`/nodes/:id/flow/*`) and fleet-wide across every exporter (`/flow/*`) — which
-/// differ *only* in whether a node scope is supplied. Adding a seventh aggregation is a variant
-/// here, an arm in [`run_flow_agg`], and the two route lines.
-#[derive(Clone, Copy)]
-enum FlowAgg {
-    Series,
-    TopTalkers,
-    Conversations,
-    TopPorts,
-    Protocols,
-    TopAs,
-}
-
-impl FlowAgg {
-    /// Log label for a failed query, e.g. `flow fleet top-as query failed`.
-    fn label(self, fleet: bool) -> &'static str {
-        match (self, fleet) {
-            (Self::Series, false) => "series",
-            (Self::Series, true) => "fleet series",
-            (Self::TopTalkers, false) => "top-talkers",
-            (Self::TopTalkers, true) => "fleet top-talkers",
-            (Self::Conversations, false) => "conversations",
-            (Self::Conversations, true) => "fleet conversations",
-            (Self::TopPorts, false) => "top-ports",
-            (Self::TopPorts, true) => "fleet top-ports",
-            (Self::Protocols, false) => "protocols",
-            (Self::Protocols, true) => "fleet protocols",
-            (Self::TopAs, false) => "top-as",
-            (Self::TopAs, true) => "fleet top-as",
-        }
-    }
-}
-
-/// Run one flow aggregation over an optional node scope (`None` ⇒ fleet-wide). This is the body
-/// all twelve `/flow/*` endpoints share: view-auth, the flow-disabled 503 gate, query validation,
-/// the store call, AS-name resolution, and error mapping. It used to be written out twelve times —
-/// six per-node handlers and their fleet twins, each differing only in `Some(node_id)` vs `None`
-/// and a log string — so a fix to any of that had to be applied twelve times to stay consistent.
-async fn run_flow_agg(
-    st: &ApiState,
-    headers: &HeaderMap,
-    node_id: Option<Uuid>,
-    q: &FlowRangeQuery,
-    agg: FlowAgg,
-) -> Response {
-    if let Some(resp) = require_view(st, headers) {
-        return resp;
-    }
-    let Some(store) = st.flows.clone() else {
-        return flow_unavailable();
-    };
-    let fq = flow_query_params(node_id, q);
-    let what = agg.label(node_id.is_none());
-    match agg {
-        FlowAgg::Series => {
-            let sq = crate::flowstore::FlowSeriesQuery {
-                node_id: fq.node_id,
-                from_unix_ms: fq.from_unix_ms,
-                to_unix_ms: fq.to_unix_ms,
-                proto: fq.proto,
-            };
-            match store.series(&sq).await {
-                Ok(points) => Json(points).into_response(),
-                Err(e) => flow_query_failed(what, &e),
-            }
-        }
-        FlowAgg::TopTalkers => match store.top_talkers(&fq).await {
-            Ok(rows) => Json(rows).into_response(),
-            Err(e) => flow_query_failed(what, &e),
-        },
-        FlowAgg::Conversations => match store.top_conversations(&fq).await {
-            Ok(mut rows) => {
-                resolve_conversation_as_names(st, &mut rows);
-                Json(rows).into_response()
-            }
-            Err(e) => flow_query_failed(what, &e),
-        },
-        FlowAgg::TopPorts => match store.top_ports(&fq).await {
-            Ok(rows) => Json(rows).into_response(),
-            Err(e) => flow_query_failed(what, &e),
-        },
-        FlowAgg::Protocols => match store.top_protocols(&fq).await {
-            Ok(rows) => Json(rows).into_response(),
-            Err(e) => flow_query_failed(what, &e),
-        },
-        FlowAgg::TopAs => match store.top_as(&fq, flow_as_dir(q)).await {
-            Ok(mut rows) => {
-                resolve_as_names(st, &mut rows);
-                Json(rows).into_response()
-            }
-            Err(e) => flow_query_failed(what, &e),
-        },
-    }
-}
-
-/// Define the per-node and fleet handler pair for one aggregation. Both are thin: they exist only
-/// because the two routes need different extractors (`Path<Uuid>` vs none).
-macro_rules! flow_endpoints {
-    ($node_fn:ident, $fleet_fn:ident, $agg:expr, $doc:literal) => {
-        #[doc = concat!("`GET /api/v1/nodes/:node_id/flow/", $doc, "` — for one exporter node.")]
-        async fn $node_fn(
-            State(st): State<ApiState>,
-            headers: HeaderMap,
-            Path(node_id): Path<Uuid>,
-            Query(q): Query<FlowRangeQuery>,
-        ) -> Response {
-            run_flow_agg(&st, &headers, Some(node_id), &q, $agg).await
-        }
-
-        #[doc = concat!("`GET /api/v1/flow/", $doc, "` — fleet-wide, across every exporter.")]
-        async fn $fleet_fn(
-            State(st): State<ApiState>,
-            headers: HeaderMap,
-            Query(q): Query<FlowRangeQuery>,
-        ) -> Response {
-            run_flow_agg(&st, &headers, None, &q, $agg).await
-        }
-    };
-}
-
-flow_endpoints!(
-    get_node_flow_series,
-    get_flow_series,
-    FlowAgg::Series,
-    "series"
-);
-flow_endpoints!(
-    get_node_flow_top_talkers,
-    get_flow_top_talkers,
-    FlowAgg::TopTalkers,
-    "top-talkers"
-);
-flow_endpoints!(
-    get_node_flow_conversations,
-    get_flow_conversations,
-    FlowAgg::Conversations,
-    "conversations"
-);
-flow_endpoints!(
-    get_node_flow_top_ports,
-    get_flow_top_ports,
-    FlowAgg::TopPorts,
-    "top-ports"
-);
-flow_endpoints!(
-    get_node_flow_protocols,
-    get_flow_protocols,
-    FlowAgg::Protocols,
-    "protocols"
-);
-flow_endpoints!(
-    get_node_flow_top_as,
-    get_flow_top_as,
-    FlowAgg::TopAs,
-    "top-as"
-);
 
 /// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
 #[derive(Deserialize)]
@@ -5442,17 +5161,15 @@ fn rca_error_response(e: &crate::rca::orchestrator::RcaError) -> Response {
         ),
         // `Retry-After: 60` matches the rate window; a client that honors it comes back exactly
         // when a slot is guaranteed to have freed.
-        RcaError::TooManyConcurrent(_) | RcaError::RateLimited(_) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(axum::http::header::RETRY_AFTER, "60")],
-            Json(ErrorBody {
-                error: ErrorDetail {
-                    code: "rate_limited".to_owned(),
-                    message: e.to_string(),
-                },
-            }),
-        )
-            .into_response(),
+        RcaError::TooManyConcurrent(_) | RcaError::RateLimited(_) => {
+            let mut resp =
+                error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", e.to_string());
+            resp.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_static("60"),
+            );
+            resp
+        }
         RcaError::NoIncident(msg) => not_found("no_incident", msg.clone()),
         // 502, not 500: the failure is the upstream vendor's, and the text is the typed error —
         // never a raw body, which can echo the prompt (and therefore device output) back.
@@ -10481,245 +10198,6 @@ async fn get_interface_series(
     .into_response()
 }
 
-// ── Users & roles (Settings ▸ Users & roles) — ManageUsers (admin) only ──────
-
-/// Minimum password length accepted for a new account or a reset.
-const MIN_PASSWORD_LEN: usize = 8;
-
-/// A valid role string (mirrors `yagra_common::Role`, snake_case).
-fn is_valid_role(role: &str) -> bool {
-    matches!(role, "viewer" | "operator" | "admin")
-}
-
-async fn list_users(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match admin.users.list().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list users failed");
-            internal("failed to list users")
-        }
-    }
-}
-
-/// Create-user request body. The password is hashed before storage and never logged.
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
-    password: String,
-    role: String,
-}
-
-async fn create_user(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateUser>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    let username = body.username.trim();
-    if username.is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_user",
-            "username must not be empty".to_owned(),
-        );
-    }
-    if body.password.len() < MIN_PASSWORD_LEN {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "weak_password",
-            format!("password must be at least {MIN_PASSWORD_LEN} characters"),
-        );
-    }
-    if !is_valid_role(&body.role) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_role",
-            "role must be viewer, operator, or admin".to_owned(),
-        );
-    }
-    match admin
-        .users
-        .create(username, &body.password, &body.role)
-        .await
-    {
-        Ok(UserCreateOutcome::Created(id)) => {
-            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
-        }
-        Ok(UserCreateOutcome::UsernameTaken) => error_response(
-            StatusCode::CONFLICT,
-            "username_taken",
-            format!("username {username:?} is already taken"),
-        ),
-        Err(e) => {
-            tracing::error!(error = %e, "create user failed");
-            internal("failed to create user")
-        }
-    }
-}
-
-async fn delete_user(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match admin.users.delete(id).await {
-        Ok(UserMutation::Done) => {
-            // Drop any live sessions the deleted account still holds.
-            st.sessions.revoke_user(id);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
-        Ok(UserMutation::LastAdmin) => last_admin(),
-        Err(e) => {
-            tracing::error!(error = %e, "delete user failed");
-            internal("failed to delete user")
-        }
-    }
-}
-
-/// Change-role request body.
-#[derive(Deserialize)]
-struct SetRole {
-    role: String,
-}
-
-async fn set_user_role(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<SetRole>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    if !is_valid_role(&body.role) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_role",
-            "role must be viewer, operator, or admin".to_owned(),
-        );
-    }
-    match admin.users.set_role(id, &body.role).await {
-        Ok(UserMutation::Done) => {
-            // Force re-login so the new role's permissions take effect immediately (the old
-            // principal is cached in the session).
-            st.sessions.revoke_user(id);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
-        Ok(UserMutation::LastAdmin) => last_admin(),
-        Err(e) => {
-            tracing::error!(error = %e, "set user role failed");
-            internal("failed to update user role")
-        }
-    }
-}
-
-/// Enable/disable-account request body.
-#[derive(Deserialize)]
-struct SetStatus {
-    enabled: bool,
-}
-
-async fn set_user_status(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<SetStatus>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match admin.users.set_enabled(id, body.enabled).await {
-        Ok(UserMutation::Done) => {
-            // Disabling an account must also cut its live sessions (the whole point of disabling a
-            // compromised account); enabling has nothing to revoke.
-            if !body.enabled {
-                st.sessions.revoke_user(id);
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(UserMutation::NotFound) => not_found("user_not_found", format!("no user {id}")),
-        Ok(UserMutation::LastAdmin) => last_admin(),
-        Err(e) => {
-            tracing::error!(error = %e, "set user status failed");
-            internal("failed to update user status")
-        }
-    }
-}
-
-/// Reset-password request body. The password is hashed before storage and never logged.
-#[derive(Deserialize)]
-struct SetPassword {
-    password: String,
-}
-
-async fn set_user_password(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<SetPassword>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    if body.password.len() < MIN_PASSWORD_LEN {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "weak_password",
-            format!("password must be at least {MIN_PASSWORD_LEN} characters"),
-        );
-    }
-    match admin.users.set_password(id, &body.password).await {
-        Ok(true) => {
-            // A password reset (e.g. after a compromise) must invalidate existing sessions, or the
-            // attacker's stolen token survives the reset.
-            st.sessions.revoke_user(id);
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => not_found("user_not_found", format!("no user {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "reset user password failed");
-            internal("failed to reset password")
-        }
-    }
-}
-
-/// 409 for the last-admin lock-out guard (delete or demote of the only admin).
-fn last_admin() -> Response {
-    error_response(
-        StatusCode::CONFLICT,
-        "last_admin",
-        "cannot remove, demote, or disable the last admin account".to_owned(),
-    )
-}
-
 // ── Audit log ────────────────────────────────────────────────────────────────
 
 /// Audit listing query: page size + a keyset cursor (rows strictly older than `before`).
@@ -12057,75 +11535,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn role_validation_accepts_only_known_roles() {
-        assert!(is_valid_role("viewer"));
-        assert!(is_valid_role("operator"));
-        assert!(is_valid_role("admin"));
-        assert!(!is_valid_role("Admin")); // case-sensitive (matches serde snake_case)
-        assert!(!is_valid_role("superuser"));
-        assert!(!is_valid_role(""));
-    }
-
-    #[tokio::test]
-    async fn list_users_unavailable_without_admin() {
-        // Skeleton mode (admin: None) has no user store, so user management is 503.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/users")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn set_user_status_unavailable_without_admin() {
-        // The enable/disable route is wired; in skeleton mode (admin: None) it is 503.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/users/00000000-0000-0000-0000-000000000000/enabled")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"enabled":false}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn create_user_unavailable_without_admin() {
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/users")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"alice","password":"hunter2hunter2","role":"viewer"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]

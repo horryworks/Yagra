@@ -1,0 +1,198 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Auth and availability guards as axum extractors.
+//!
+//! A guard you must remember to write is a guard you can forget to write. These were hand-copied
+//! prologues at the top of nearly every handler — 154 `let Some(admin) = st.admin.as_ref() else {
+//! return unavailable(); };`, 106 `if let Some(resp) = authorize(&st, &headers, …) { return resp; }`
+//! and 77 `require_view(…)` — which meant omitting one was a silent authorization hole rather than a
+//! compile error. Worse, they had drifted out of order: 101 handlers checked skeleton-mode
+//! availability *before* authenticating and 46 authenticated first, so the same anonymous request
+//! got `503 admin_unavailable` from one endpoint and `401 unauthorized` from the next.
+//!
+//! As extractors the guard is part of the handler's *signature*: a handler that takes
+//! [`RequireManageUsers`] cannot run unauthorized, and one that takes [`Admin`] cannot run in
+//! skeleton mode. Extractors run in argument order, and every guarded handler lists its permission
+//! guard before [`Admin`], so the ordering question is answered once, here:
+//!
+//! **authenticate first, then report availability.** An unauthenticated caller learns only that it
+//! is unauthenticated — never which subsystems this deployment happens to have configured.
+
+use super::{ApiError, ApiState};
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
+use std::sync::Arc;
+use yagra_common::Permission;
+
+/// Extract the `Authorization: Bearer <token>` value, if present.
+pub(crate) fn bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+/// The permission a [`Require`] guard demands. Implemented by the marker types below so the
+/// permission is part of the handler's type, visible in its signature.
+pub trait RequiredPermission: Send + Sync + 'static {
+    const PERMISSION: Permission;
+    /// When true, the guard is skipped in public-dashboard mode (read-only endpoints are open).
+    /// Only [`ViewPerm`] sets this — a write must stay authenticated on a public deployment.
+    const OPEN_ON_PUBLIC_DASHBOARD: bool = false;
+}
+
+/// Read access. Granted to every role, and skipped entirely in public-dashboard mode.
+pub struct ViewPerm;
+impl RequiredPermission for ViewPerm {
+    const PERMISSION: Permission = Permission::View;
+    const OPEN_ON_PUBLIC_DASHBOARD: bool = true;
+}
+
+/// Manage user accounts and roles.
+pub struct ManageUsersPerm;
+impl RequiredPermission for ManageUsersPerm {
+    const PERMISSION: Permission = Permission::ManageUsers;
+}
+
+// `Permission::ManageConfig` and `Permission::AckAlerts` have no markers yet: the domains that
+// need them still live in `mod.rs` behind the old `authorize(&st, &headers, …)` prologue. Add each
+// marker + alias in the commit that moves its first domain here — a marker with no user is dead
+// code, and hand-rolling one at a call site would defeat the point of keeping the permission
+// vocabulary in a single file.
+
+/// A handler argument that proves the caller holds `P`. Rejects with `401` when there is no valid
+/// session and `403` when the session's role lacks the permission.
+pub struct Require<P: RequiredPermission>(pub std::marker::PhantomData<P>);
+
+/// Read-gated: open in public-dashboard mode, otherwise any authenticated role.
+pub type RequireView = Require<ViewPerm>;
+/// Write-gated on user administration.
+pub type RequireManageUsers = Require<ManageUsersPerm>;
+
+#[async_trait]
+impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        if P::OPEN_ON_PUBLIC_DASHBOARD && st.public_dashboard {
+            return Ok(Self(std::marker::PhantomData));
+        }
+        match st.sessions.authorize(bearer(&parts.headers), P::PERMISSION) {
+            Ok(_) => Ok(Self(std::marker::PhantomData)),
+            Err(crate::auth::AuthError::Forbidden) => Err(ApiError::forbidden()),
+            Err(_) => Err(ApiError::unauthorized()),
+        }
+    }
+}
+
+/// The live write side. Extracting it replaces the `let Some(admin) = st.admin.as_ref() else {…}`
+/// prologue: a handler that needs the inventory/credential stores simply takes this, and skeleton
+/// mode rejects it with `503 admin_unavailable` before the body runs.
+///
+/// List it *after* a `Require*` guard in the argument list so an unauthenticated caller cannot use
+/// the 503-vs-401 difference to probe which subsystems a deployment has configured.
+pub struct Admin(pub Arc<super::AdminState>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Admin {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.admin
+            .as_ref()
+            .map(|a| Self(a.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for Admin {
+    type Target = super::AdminState;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// A `Leader` extractor (the ADR-016 standby guard) is not here yet either: the two handlers that
+// need it still call `require_leader(&st)` in `mod.rs`. It arrives with the events domain,
+// alongside the `AckAlerts` marker — same reasoning, an extractor with no user is dead code.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::tests_support::{private_state, public_state};
+    use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+    use yagra_common::{Principal, Role, Scope};
+
+    fn parts_with(token: Option<&str>) -> Parts {
+        let mut headers = HeaderMap::new();
+        if let Some(t) = token {
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
+            );
+        }
+        let mut req = Request::new(());
+        *req.headers_mut() = headers;
+        req.into_parts().0
+    }
+
+    #[tokio::test]
+    async fn view_is_open_on_a_public_dashboard_but_gated_otherwise() {
+        let public = public_state();
+        assert!(
+            RequireView::from_request_parts(&mut parts_with(None), &public)
+                .await
+                .is_ok()
+        );
+
+        let private = private_state();
+        let err = RequireView::from_request_parts(&mut parts_with(None), &private)
+            .await
+            .err()
+            .expect("a private deployment must not serve reads anonymously");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_write_guard_stays_closed_even_on_a_public_dashboard() {
+        // The public-dashboard escape hatch is for reads only — a write must never be anonymous.
+        let public = public_state();
+        let err = RequireManageUsers::from_request_parts(&mut parts_with(None), &public)
+            .await
+            .err()
+            .expect("public-dashboard mode must not open write endpoints");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_role_without_the_permission_is_403_not_401() {
+        let st = private_state();
+        let token = st.sessions.issue(
+            uuid::Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
+        // The viewer authenticates fine (View passes) but cannot administer accounts. The two
+        // failures must stay distinguishable: 401 means "who are you", 403 means "not allowed".
+        assert!(
+            RequireView::from_request_parts(&mut parts_with(Some(&token)), &st)
+                .await
+                .is_ok()
+        );
+        let err = RequireManageUsers::from_request_parts(&mut parts_with(Some(&token)), &st)
+            .await
+            .err()
+            .expect("a viewer must not pass ManageUsers");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_rejects_in_skeleton_mode() {
+        let st = public_state();
+        let err = Admin::from_request_parts(&mut parts_with(None), &st)
+            .await
+            .err()
+            .expect("skeleton mode has no write side");
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.code(), "admin_unavailable");
+    }
+}

@@ -540,267 +540,50 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     metrics::gauge!("yagra_core_is_leader").set(if cfg.enable_ha { 0.0 } else { 1.0 });
 
     // Every leader-only background task, deferred so it starts exactly once — the moment this core
-    // holds the advisory lock (immediately when HA is off). It captures *clones* so `AdminState`/
-    // `ApiState` below keep their own handles; the single-owner channel receivers (`persist_rx`,
-    // `event_action_rx`) and `meraki_pool` move in (only the leader drains them). Bus subscriptions
-    // happen *inside* so a standby never subscribes. On a standby these never run, so the
-    // event-webhook/close API handlers 503 (see api.rs) to avoid enqueuing to an undrained channel.
-    let leader_work = {
-        let shutdown = shutdown.clone();
-        let bus = bus.clone();
-        let coordinator = coordinator.clone();
-        let notifier = notifier.clone();
-        let store = store.clone();
-        let repo = repo.clone();
-        let history = history.clone();
-        let alerts = alerts.clone();
-        let scheduler_stats = scheduler_stats.clone();
-        let meraki_inflight = meraki_inflight.clone();
-        let meraki_devices = meraki_devices.clone();
-        let meraki_orgs = meraki_orgs.clone();
-        let creds = creds.clone();
-        let dispatcher = dispatcher.clone();
-        let discovery = discovery.clone();
-        let event_engine = event_engine.clone();
-        let events_repo = events_repo.clone();
-        let logs = logs.clone();
-        let flows = flows.clone();
-        let ipasn = ipasn.clone();
-        let thresholds = thresholds.clone();
-        let maintenance = maintenance.clone();
-        let group_repo = group_repo.clone();
-        let classifier = classifier.clone();
-        let classification = classification.clone();
-        let notifications = notifications.clone();
-        let analysis_repo = analysis_repo.clone();
-        let reports_repo = reports_repo.clone();
-        let reports = reports.clone();
-        let dns_checks = dns_checks.clone();
-        let forward_handle = forward_handle.clone();
-        async move {
-            // Coordinator registry: heartbeats + snapshot requests.
-            let hb = Box::pin(bus.subscribe_heartbeats().await?);
-            spawn_cancellable(&shutdown, coordinator.clone().run_heartbeat_consumer(hb));
-            let sr = Box::pin(bus.subscribe_sync_requests().await?);
-            spawn_cancellable(&shutdown, coordinator.clone().run_sync_request_consumer(sr));
-
-            // Notification delivery worker (bounded queue, single ordered consumer) — fed by the
-            // matcher so a slow vendor endpoint can never stall ingest.
-            let (notify_tx, mut notify_rx) =
-                tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
-            {
-                let notifier = notifier.clone();
-                spawn_cancellable(&shutdown, async move {
-                    while let Some(action) = notify_rx.recv().await {
-                        notifier.handle(action).await;
-                    }
-                });
-            }
-
-            // Poll-result ingestion (ADR-025): async batch writers + the single in-memory matcher.
-            let (metrics_tx, metrics_rx) =
-                tokio::sync::mpsc::channel::<Arc<PollResult>>(RESULT_PERSIST_CHANNEL_CAP);
-            let (meta_tx, meta_rx) =
-                tokio::sync::mpsc::channel::<MetaRecord>(RESULT_PERSIST_CHANNEL_CAP);
-            let (history_tx, history_rx) =
-                tokio::sync::mpsc::channel::<HistoryRecord>(RESULT_PERSIST_CHANNEL_CAP);
-            tokio::spawn(run_vm_writer(metrics_rx, store.clone(), shutdown.clone()));
-            tokio::spawn(run_pg_writer(
-                meta_rx,
-                history_rx,
-                repo.clone(),
-                history.clone(),
-                dns_checks.clone(),
-                shutdown.clone(),
-            ));
-            {
-                let results = Box::pin(bus.subscribe_results().await?);
-                spawn_cancellable(
-                    &shutdown,
-                    consume_results(
-                        results,
-                        alerts.clone(),
-                        notify_tx,
-                        metrics_tx.clone(),
-                        meta_tx.clone(),
-                        history_tx,
-                        history.clone(),
-                        scheduler_stats.clone(),
-                        meraki_inflight.clone(),
-                        coordinator.clone(),
-                    ),
-                );
-            }
-
-            // Backfill-result consumer (store-and-forward replay, Phase 3): a remote poller replays a
-            // partition's buffered results on the dedicated backfill subject; core imports the metrics
-            // at their original timestamp but NEVER runs alert evaluation over them. Leader-only, and
-            // shares the same VM/PG writers as the live consumer via cloned senders.
-            {
-                let backfill = Box::pin(bus.subscribe_results_backfill().await?);
-                spawn_cancellable(
-                    &shutdown,
-                    consume_results_backfill(backfill, metrics_tx, meta_tx),
-                );
-            }
-
-            // Discovery-result consumer (folds swept devices back in, classified to a profile).
-            {
-                let results = Box::pin(bus.subscribe_discovery_results().await?);
-                spawn_cancellable(&shutdown, discovery.clone().run_consumer(results));
-            }
-
-            // Forwarding dispatcher (ADR-034). Leader-only so a passive core never double-sends;
-            // it owns the sender tasks and reloads destinations on every config change.
-            tokio::spawn(forward_runner.run(shutdown.clone()));
-
-            // Passive-event pipeline: consumer + TTL sweeper + persist/action writers (ADR-024).
-            // The consumer also tees each message to the forwarder before rule matching.
-            {
-                let stream = Box::pin(bus.subscribe_events().await?);
-                spawn_cancellable(
-                    &shutdown,
-                    events::consume_events(
-                        stream,
-                        event_engine.clone(),
-                        Some(forward_handle.clone()),
-                    ),
-                );
-            }
-            spawn_cancellable(&shutdown, events::run_ttl_sweeper(event_engine.clone()));
-
-            // Flow pipeline (ADR-031, Phase 3): ensure the ClickHouse schema, then consume
-            // `yagra.flows` and batch-write to ClickHouse (leader-only, so exactly one writer
-            // persists). Best-effort, loss-tolerant tier — insert failures are dropped, never
-            // buffered. Absent when no ClickHouse URL is configured (default-OFF).
-            if let Some(flow_store) = flows.clone() {
-                ensure_flow_schema(&flow_store).await;
-                // Match/persist split (ADR-024/025, S27): the consumer resolves + enriches and hands
-                // rows to the writer over a bounded queue, so a slow/hung ClickHouse can't stall the
-                // `yagra.flows` subscription into a silent NATS slow-consumer drop. Leader-only, so
-                // exactly one writer persists; the writer owns the final flush on shutdown.
-                let (flow_tx, flow_rx) =
-                    tokio::sync::mpsc::channel::<FlowRow>(FLOW_PERSIST_CHANNEL_CAP);
-                tokio::spawn(run_flow_writer(flow_rx, flow_store, shutdown.clone()));
-                let flow_stream = Box::pin(bus.subscribe_flows().await?);
-                spawn_cancellable(
-                    &shutdown,
-                    consume_flows(flow_stream, flow_tx, repo.clone(), ipasn.clone()),
-                );
-            }
-
-            // Verbatim flow relay (ADR-034 Increment 2): pollers publish every received flow
-            // datagram on `yagra.flows.raw`, and the forwarder tees the ones a destination wants.
-            // Subscribed unconditionally — independently of the ClickHouse tier above, since flow
-            // forwarding is useful without a flow store — and cheap when unused: `offer_flow`
-            // returns after one relaxed load when no flow destination exists. The WAN cost is paid
-            // by the poller's publish either way; this hop is core↔NATS.
-            {
-                let raw_flows = Box::pin(bus.subscribe_raw_flows().await?);
-                spawn_cancellable(
-                    &shutdown,
-                    consume_raw_flows(raw_flows, forward_handle.clone()),
-                );
-            }
-
-            tokio::spawn(events::run_persist_writer(
-                persist_rx,
-                events_repo.clone(),
-                logs.clone(),
-                shutdown.clone(),
-            ));
-            tokio::spawn(events::run_event_action_writer(
-                event_action_rx,
-                history.clone(),
-                notifier.clone(),
-                shutdown.clone(),
-            ));
-
-            // Per-node scheduler (working-set syncs / jittered dispatch) + Meraki scheduler.
-            spawn_cancellable(
-                &shutdown,
-                run_scheduler(
-                    repo.clone(),
-                    group_repo.clone(),
-                    dispatcher.clone(),
-                    scheduler_stats.clone(),
-                    meraki_devices.clone(),
-                    coordinator.clone(),
-                ),
-            );
-            spawn_cancellable(
-                &shutdown,
-                run_meraki_scheduler(
-                    meraki_orgs.clone(),
-                    meraki_devices.clone(),
-                    creds.clone(),
-                    bus.clone(),
-                    meraki_inflight.clone(),
-                    repo.clone(),
-                    meraki_pool,
-                ),
-            );
-
-            // Config / retention / routing refresh loops.
-            spawn_cancellable(
-                &shutdown,
-                run_alert_config_refresh(
-                    alerts.clone(),
-                    repo.clone(),
-                    thresholds.clone(),
-                    maintenance.clone(),
-                    group_repo.clone(),
-                    classifier.clone(),
-                    classification.clone(),
-                    event_engine.clone(),
-                ),
-            );
-            spawn_cancellable(
-                &shutdown,
-                run_fleet_health_timeline(
-                    repo.clone(),
-                    alerts.clone(),
-                    history.clone(),
-                    events_repo.clone(),
-                    dns_checks.clone(),
-                ),
-            );
-            spawn_cancellable(
-                &shutdown,
-                run_routing_refresh(
-                    notifier.clone(),
-                    notifications.clone(),
-                    maintenance.clone(),
-                    repo.clone(),
-                    group_repo.clone(),
-                ),
-            );
-
-            // Orphan reconcile: fail analysis/report jobs a previous leader left `running`
-            // (leader-only — a standby must never touch the live leader's in-flight jobs).
-            match analysis_repo.fail_orphans().await {
-                Ok(n) if n > 0 => tracing::warn!(
-                    orphans = n,
-                    "failed analysis jobs left running by a previous process"
-                ),
-                Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
-                _ => {}
-            }
-            match reports_repo.fail_orphans().await {
-                Ok(n) if n > 0 => tracing::warn!(
-                    orphans = n,
-                    "failed report runs left running by a previous process"
-                ),
-                Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned report runs"),
-                _ => {}
-            }
-
-            // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
-            spawn_cancellable(&shutdown, run_report_scheduler(reports.clone()));
-
-            Ok::<(), anyhow::Error>(())
-        }
+    // holds the advisory lock (immediately when HA is off). `LeaderTasks` holds *clones* so
+    // `AdminState`/`ApiState` below keep their own handles; the single-owner resources (the two
+    // channel receivers, the forwarding runner, the Meraki pool name) move in, because only the
+    // leader drains/runs them. Bus subscriptions happen inside `run`, so a standby never subscribes.
+    // On a standby none of this runs, which is why the event-webhook/close API handlers 503 rather
+    // than enqueue to an undrained channel.
+    let leader_tasks = LeaderTasks {
+        shutdown: shutdown.clone(),
+        bus: bus.clone(),
+        coordinator: coordinator.clone(),
+        notifier: notifier.clone(),
+        store: store.clone(),
+        repo: repo.clone(),
+        history: history.clone(),
+        alerts: alerts.clone(),
+        scheduler_stats: scheduler_stats.clone(),
+        meraki_inflight: meraki_inflight.clone(),
+        meraki_devices: meraki_devices.clone(),
+        meraki_orgs: meraki_orgs.clone(),
+        meraki_pool,
+        creds: creds.clone(),
+        dispatcher: dispatcher.clone(),
+        discovery: discovery.clone(),
+        event_engine: event_engine.clone(),
+        events_repo: events_repo.clone(),
+        persist_rx,
+        event_action_rx,
+        logs: logs.clone(),
+        flows: flows.clone(),
+        ipasn: ipasn.clone(),
+        thresholds: thresholds.clone(),
+        maintenance: maintenance.clone(),
+        group_repo: group_repo.clone(),
+        classifier: classifier.clone(),
+        classification: classification.clone(),
+        notifications: notifications.clone(),
+        analysis_repo: analysis_repo.clone(),
+        reports_repo: reports_repo.clone(),
+        reports: reports.clone(),
+        dns_checks: dns_checks.clone(),
+        forward_handle: forward_handle.clone(),
+        forward_runner: Some(forward_runner),
     };
+    let leader_work = leader_tasks.run();
 
     // AI-assisted RCA (ADR-029). The store backs Settings ▸ AI; the orchestrator serves the
     // on-demand endpoint. Present on every core, leader or not: generating an explanation is a read
@@ -975,6 +758,350 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     }
 
     serve(state, &cfg.api_addr, metrics, shutdown).await
+}
+
+/// Everything the leader-only background work needs, and the work itself.
+///
+/// This used to be an 828-line `run_live` whose leader half was a single async block preceded by
+/// 31 anonymous `let x = x.clone();` lines. Adding one background task meant four coordinated
+/// edits — a clone in that prologue, a spawn buried in a ~200-line block, a free `run_*` fn, and
+/// often a new `AdminState` field — with nothing naming what the block actually started.
+///
+/// Now the dependencies are named fields (documented once, here) and the work is grouped by
+/// pipeline into the methods below. Adding a task is: add a field if it needs a new handle, and a
+/// spawn in the method whose pipeline it belongs to.
+///
+/// **Ownership is the interesting part.** Most fields are `Arc` clones, so `ApiState`/`AdminState`
+/// keep their own handles and both sides stay live. Four are *moved* in because they are
+/// single-owner and only the leader may have them: the two channel receivers (a second drainer
+/// would silently split the stream), the forwarding runner, and the Meraki pool name.
+struct LeaderTasks {
+    /// Cancelled on shutdown; every spawned task is cancellable on it.
+    shutdown: CancellationToken,
+    bus: Arc<NatsBus>,
+    coordinator: Arc<Coordinator<NatsBus>>,
+    notifier: Arc<Notifier>,
+    store: Arc<dyn MetricStore>,
+    repo: Arc<NodeRepo>,
+    history: Arc<AlertHistoryStore>,
+    alerts: Arc<AlertManager>,
+    scheduler_stats: Arc<scheduler::SchedulerStats>,
+    meraki_inflight: Arc<meraki::MerakiInflight>,
+    meraki_devices: Arc<meraki::MerakiDeviceRepo>,
+    meraki_orgs: Arc<meraki::MerakiOrgRepo>,
+    /// Which poller pool Meraki collection jobs are published to (moved: read once at startup).
+    meraki_pool: String,
+    creds: Arc<CredentialStore>,
+    dispatcher: Arc<scheduler::PollDispatcher>,
+    discovery: Arc<DiscoveryRunner>,
+    event_engine: Arc<events::EventEngine>,
+    events_repo: Arc<events::EventRepo>,
+    /// Passive-event persistence queue (moved — exactly one drainer).
+    persist_rx: tokio::sync::mpsc::Receiver<events::PersistRecord>,
+    /// Passive-event side-effect queue: history + notify (moved — exactly one drainer).
+    event_action_rx: tokio::sync::mpsc::Receiver<events::EventAction>,
+    logs: Option<Arc<dyn LogStore>>,
+    flows: Option<Arc<dyn FlowStore>>,
+    ipasn: ipasn::IpAsnHandle,
+    thresholds: Arc<ThresholdStore>,
+    maintenance: Arc<MaintenanceRepo>,
+    group_repo: Arc<groups::GroupRepo>,
+    classifier: Arc<classification::Classifier>,
+    classification: Arc<classification::ClassificationRepo>,
+    notifications: Arc<NotificationRepo>,
+    analysis_repo: Arc<analysis::AnalysisRepo>,
+    reports_repo: Arc<reports::ReportsRepo>,
+    reports: Arc<reports::ReportRunner>,
+    dns_checks: Arc<dns_check::DnsCheckRepo>,
+    forward_handle: forward::ForwardHandle,
+    /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
+    forward_runner: Option<forward::ForwardRunner>,
+}
+
+impl LeaderTasks {
+    /// Start every leader-only pipeline. Returns once they are all spawned (they run until the
+    /// shutdown token fires); an `Err` means a bus subscription failed, which the caller treats as
+    /// a failed promotion and restarts for.
+    ///
+    /// Order matters in one place only: the ingest pipeline creates the writer channels that the
+    /// backfill consumer clones, so those two live in the same method.
+    async fn run(mut self) -> anyhow::Result<()> {
+        self.spawn_coordinator().await?;
+        self.spawn_result_ingest().await?;
+        self.spawn_discovery_and_forwarding().await?;
+        self.spawn_event_pipeline().await?;
+        self.spawn_flow_pipeline().await?;
+        self.spawn_schedulers();
+        self.spawn_refresh_loops();
+        self.reconcile_orphaned_jobs().await;
+        Ok(())
+    }
+
+    /// Coordinator registry: poller heartbeats + working-set snapshot requests (ADR-009/020).
+    async fn spawn_coordinator(&self) -> anyhow::Result<()> {
+        let hb = Box::pin(self.bus.subscribe_heartbeats().await?);
+        spawn_cancellable(
+            &self.shutdown,
+            self.coordinator.clone().run_heartbeat_consumer(hb),
+        );
+        let sr = Box::pin(self.bus.subscribe_sync_requests().await?);
+        spawn_cancellable(
+            &self.shutdown,
+            self.coordinator.clone().run_sync_request_consumer(sr),
+        );
+        Ok(())
+    }
+
+    /// Poll-result ingestion (ADR-025): the notification worker, the async batch writers, the
+    /// single in-memory matcher, and the store-and-forward backfill consumer.
+    ///
+    /// These are one method because they share channels: the matcher hands off to the VM/PG
+    /// writers, and the backfill consumer reuses those same writers via cloned senders (it imports
+    /// metrics at their original timestamp but must NEVER run alert evaluation — replayed samples
+    /// would re-fire dwell-based alerts as a flood).
+    async fn spawn_result_ingest(&self) -> anyhow::Result<()> {
+        // Notification delivery worker (bounded queue, single ordered consumer) — fed by the
+        // matcher so a slow vendor endpoint can never stall ingest.
+        let (notify_tx, mut notify_rx) =
+            tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
+        {
+            let notifier = self.notifier.clone();
+            spawn_cancellable(&self.shutdown, async move {
+                while let Some(action) = notify_rx.recv().await {
+                    notifier.handle(action).await;
+                }
+            });
+        }
+
+        let (metrics_tx, metrics_rx) =
+            tokio::sync::mpsc::channel::<Arc<PollResult>>(RESULT_PERSIST_CHANNEL_CAP);
+        let (meta_tx, meta_rx) =
+            tokio::sync::mpsc::channel::<MetaRecord>(RESULT_PERSIST_CHANNEL_CAP);
+        let (history_tx, history_rx) =
+            tokio::sync::mpsc::channel::<HistoryRecord>(RESULT_PERSIST_CHANNEL_CAP);
+        tokio::spawn(run_vm_writer(
+            metrics_rx,
+            self.store.clone(),
+            self.shutdown.clone(),
+        ));
+        tokio::spawn(run_pg_writer(
+            meta_rx,
+            history_rx,
+            self.repo.clone(),
+            self.history.clone(),
+            self.dns_checks.clone(),
+            self.shutdown.clone(),
+        ));
+        {
+            let results = Box::pin(self.bus.subscribe_results().await?);
+            spawn_cancellable(
+                &self.shutdown,
+                consume_results(
+                    results,
+                    self.alerts.clone(),
+                    notify_tx,
+                    metrics_tx.clone(),
+                    meta_tx.clone(),
+                    history_tx,
+                    self.history.clone(),
+                    self.scheduler_stats.clone(),
+                    self.meraki_inflight.clone(),
+                    self.coordinator.clone(),
+                ),
+            );
+        }
+        {
+            let backfill = Box::pin(self.bus.subscribe_results_backfill().await?);
+            spawn_cancellable(
+                &self.shutdown,
+                consume_results_backfill(backfill, metrics_tx, meta_tx),
+            );
+        }
+        Ok(())
+    }
+
+    /// Discovery-result folding (swept devices classified back into the inventory) and the
+    /// forwarding dispatcher (ADR-034), which owns the per-destination sender tasks and reloads
+    /// them on every config change.
+    async fn spawn_discovery_and_forwarding(&mut self) -> anyhow::Result<()> {
+        let results = Box::pin(self.bus.subscribe_discovery_results().await?);
+        spawn_cancellable(&self.shutdown, self.discovery.clone().run_consumer(results));
+
+        // Taken, not cloned: the dispatcher owns the per-destination sender tasks, and a second
+        // one would double-send every relayed datagram.
+        if let Some(runner) = self.forward_runner.take() {
+            tokio::spawn(runner.run(self.shutdown.clone()));
+        }
+        Ok(())
+    }
+
+    /// Passive-event pipeline (ADR-024): the bus consumer (which tees to the forwarder before rule
+    /// matching), the TTL sweeper, and the two writers that drain the match stage's queues.
+    async fn spawn_event_pipeline(&mut self) -> anyhow::Result<()> {
+        let stream = Box::pin(self.bus.subscribe_events().await?);
+        spawn_cancellable(
+            &self.shutdown,
+            events::consume_events(
+                stream,
+                self.event_engine.clone(),
+                Some(self.forward_handle.clone()),
+            ),
+        );
+        spawn_cancellable(
+            &self.shutdown,
+            events::run_ttl_sweeper(self.event_engine.clone()),
+        );
+
+        let (persist_rx, event_action_rx) = self.take_event_queues();
+        tokio::spawn(events::run_persist_writer(
+            persist_rx,
+            self.events_repo.clone(),
+            self.logs.clone(),
+            self.shutdown.clone(),
+        ));
+        tokio::spawn(events::run_event_action_writer(
+            event_action_rx,
+            self.history.clone(),
+            self.notifier.clone(),
+            self.shutdown.clone(),
+        ));
+        Ok(())
+    }
+
+    /// Take the two single-owner event queues out of `self`. They are replaced with closed stubs:
+    /// draining a queue twice would silently split the event stream, so the receiver must not be
+    /// reachable again after this.
+    fn take_event_queues(
+        &mut self,
+    ) -> (
+        tokio::sync::mpsc::Receiver<events::PersistRecord>,
+        tokio::sync::mpsc::Receiver<events::EventAction>,
+    ) {
+        let (_, closed_persist) = tokio::sync::mpsc::channel(1);
+        let (_, closed_action) = tokio::sync::mpsc::channel(1);
+        (
+            std::mem::replace(&mut self.persist_rx, closed_persist),
+            std::mem::replace(&mut self.event_action_rx, closed_action),
+        )
+    }
+
+    /// Traffic-flow pipeline (ADR-031/034). Two independent halves:
+    ///
+    ///  - **Storage** — only when ClickHouse is configured (default-OFF). Match/persist are split
+    ///    (S27) so a slow ClickHouse cannot stall the `yagra.flows` subscription into a silent
+    ///    NATS slow-consumer drop; leader-only, so exactly one writer persists.
+    ///  - **Verbatim relay** — subscribed unconditionally, because forwarding raw flow datagrams
+    ///    is useful without a flow store, and cheap when unused (`offer_flow` returns after one
+    ///    relaxed load when no flow destination exists).
+    async fn spawn_flow_pipeline(&self) -> anyhow::Result<()> {
+        if let Some(flow_store) = self.flows.clone() {
+            ensure_flow_schema(&flow_store).await;
+            let (flow_tx, flow_rx) =
+                tokio::sync::mpsc::channel::<FlowRow>(FLOW_PERSIST_CHANNEL_CAP);
+            tokio::spawn(run_flow_writer(flow_rx, flow_store, self.shutdown.clone()));
+            let flow_stream = Box::pin(self.bus.subscribe_flows().await?);
+            spawn_cancellable(
+                &self.shutdown,
+                consume_flows(flow_stream, flow_tx, self.repo.clone(), self.ipasn.clone()),
+            );
+        }
+        let raw_flows = Box::pin(self.bus.subscribe_raw_flows().await?);
+        spawn_cancellable(
+            &self.shutdown,
+            consume_raw_flows(raw_flows, self.forward_handle.clone()),
+        );
+        Ok(())
+    }
+
+    /// The two dispatch loops: the per-node scheduler (working-set syncs + jittered dispatch) and
+    /// the Meraki collection scheduler.
+    fn spawn_schedulers(&mut self) {
+        spawn_cancellable(
+            &self.shutdown,
+            run_scheduler(
+                self.repo.clone(),
+                self.group_repo.clone(),
+                self.dispatcher.clone(),
+                self.scheduler_stats.clone(),
+                self.meraki_devices.clone(),
+                self.coordinator.clone(),
+            ),
+        );
+        spawn_cancellable(
+            &self.shutdown,
+            run_meraki_scheduler(
+                self.meraki_orgs.clone(),
+                self.meraki_devices.clone(),
+                self.creds.clone(),
+                self.bus.clone(),
+                self.meraki_inflight.clone(),
+                self.repo.clone(),
+                std::mem::take(&mut self.meraki_pool),
+            ),
+        );
+    }
+
+    /// The periodic reload loops that pick up operator config edits, plus the report schedule
+    /// firing loop.
+    fn spawn_refresh_loops(&self) {
+        spawn_cancellable(
+            &self.shutdown,
+            run_alert_config_refresh(
+                self.alerts.clone(),
+                self.repo.clone(),
+                self.thresholds.clone(),
+                self.maintenance.clone(),
+                self.group_repo.clone(),
+                self.classifier.clone(),
+                self.classification.clone(),
+                self.event_engine.clone(),
+            ),
+        );
+        spawn_cancellable(
+            &self.shutdown,
+            run_fleet_health_timeline(
+                self.repo.clone(),
+                self.alerts.clone(),
+                self.history.clone(),
+                self.events_repo.clone(),
+                self.dns_checks.clone(),
+            ),
+        );
+        spawn_cancellable(
+            &self.shutdown,
+            run_routing_refresh(
+                self.notifier.clone(),
+                self.notifications.clone(),
+                self.maintenance.clone(),
+                self.repo.clone(),
+                self.group_repo.clone(),
+            ),
+        );
+        // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
+        spawn_cancellable(&self.shutdown, run_report_scheduler(self.reports.clone()));
+    }
+
+    /// Fail analysis/report jobs a previous leader left `running`. Leader-only — a standby must
+    /// never touch the live leader's in-flight jobs. Best-effort: a failure here is logged, not
+    /// fatal, because it only affects the display state of already-dead jobs.
+    async fn reconcile_orphaned_jobs(&self) {
+        match self.analysis_repo.fail_orphans().await {
+            Ok(n) if n > 0 => tracing::warn!(
+                orphans = n,
+                "failed analysis jobs left running by a previous process"
+            ),
+            Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned analysis jobs"),
+            _ => {}
+        }
+        match self.reports_repo.fail_orphans().await {
+            Ok(n) if n > 0 => tracing::warn!(
+                orphans = n,
+                "failed report runs left running by a previous process"
+            ),
+            Err(e) => tracing::warn!(error = %e, "failed to reconcile orphaned report runs"),
+            _ => {}
+        }
+    }
 }
 
 /// Skeleton mode: serve the API over an in-memory sink seeded with one demo reading.
