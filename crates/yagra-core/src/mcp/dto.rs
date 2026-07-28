@@ -19,7 +19,7 @@ use yagra_common::{Node, NodeState};
 use crate::analysis::{AnalysisFinding, AnalysisJob};
 use crate::events::EventRow;
 use crate::history::AlertHistoryRow;
-use crate::repo::{InterfaceMeta, TopologyRow};
+use crate::repo::InterfaceMeta;
 
 /// Render an optional rolled-up state to its stable lowercase string (unobserved ⇒ `"unknown"`).
 fn state_str(state: Option<NodeState>) -> String {
@@ -188,25 +188,11 @@ pub struct NodeStatusDto {
     pub interfaces: Vec<InterfaceDto>,
 }
 
-/// One dependency-graph edge: a node and its upstream parent.
-#[derive(Debug, Clone, Serialize)]
-pub struct TopologyEdgeDto {
-    pub id: Uuid,
-    pub name: String,
-    pub parent_id: Option<Uuid>,
-}
-
-impl TopologyEdgeDto {
-    /// Build from a topology row.
-    #[must_use]
-    pub fn from_row(row: &TopologyRow) -> Self {
-        Self {
-            id: row.id,
-            name: row.name.clone(),
-            parent_id: row.parent_id,
-        }
-    }
-}
+// The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
+// same type `GET /api/v1/topology` returns. A second, thinner `TopologyEdgeDto` lived here and
+// carried only (id, name, parent) — so the AI surface, the one surface whose whole job is
+// diagnosis, was the one that could not see node state or root-cause attribution. The canary in
+// this module's tests covers the shared type; do not re-add a parallel one.
 
 /// One metric sample.
 #[derive(Debug, Clone, Serialize)]
@@ -532,12 +518,19 @@ mod tests {
         };
         assert_no_forbidden_keys(&serde_json::to_value(&alert).unwrap(), "Alert");
 
-        let topo = TopologyEdgeDto {
-            id: node.id.0,
-            name: "edge-router-1".to_owned(),
-            parent_id: None,
+        // Served straight from the REST layer's DTO — the canary follows the type, so a field
+        // added to `TopologyPage` for the WebUI is checked before it reaches an AI client too.
+        let topo = crate::api::topology::TopologyPage {
+            nodes: vec![crate::api::topology::TopologyNode {
+                id: node.id.0,
+                name: "edge-router-1".to_owned(),
+                parent_id: None,
+                state: NodeState::Ok,
+                root_cause: None,
+            }],
+            next_cursor: None,
         };
-        assert_no_forbidden_keys(&serde_json::to_value(&topo).unwrap(), "TopologyEdge");
+        assert_no_forbidden_keys(&serde_json::to_value(&topo).unwrap(), "TopologyPage");
 
         let series = MetricSeriesDto {
             node_id: node.id.0,

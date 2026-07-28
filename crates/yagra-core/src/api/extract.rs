@@ -117,11 +117,17 @@ impl RequiredPermission for ManageUsersPerm {
     const PERMISSION: Permission = Permission::ManageUsers;
 }
 
-// `Permission::ManageConfig` and `Permission::AckAlerts` have no markers yet: the domains that
-// need them still live in `mod.rs` behind the old `authorize(&st, &headers, …)` prologue. Add each
-// marker + alias in the commit that moves its first domain here — a marker with no user is dead
-// code, and hand-rolling one at a call site would defeat the point of keeping the permission
-// vocabulary in a single file.
+/// Change monitoring configuration: inventory writes, bindings, thresholds, and operator actions
+/// like an out-of-schedule poll. The broadest write permission in the vocabulary.
+pub struct ManageConfigPerm;
+impl RequiredPermission for ManageConfigPerm {
+    const PERMISSION: Permission = Permission::ManageConfig;
+}
+
+// `Permission::AckAlerts` has no marker yet: the alerts domain still lives in `mod.rs` behind the
+// old `authorize(&st, &headers, …)` prologue. Add the marker + alias in the commit that moves it —
+// a marker with no user is dead code, and hand-rolling a permission check at a call site would
+// defeat the point of keeping the vocabulary in a single file.
 
 /// A handler argument that proves the caller holds `P`. Rejects with `401` when there is no valid
 /// session and `403` when the session's role lacks the permission.
@@ -131,6 +137,8 @@ pub struct Require<P: RequiredPermission>(pub std::marker::PhantomData<P>);
 pub type RequireView = Require<ViewPerm>;
 /// Write-gated on user administration.
 pub type RequireManageUsers = Require<ManageUsersPerm>;
+/// Write-gated on monitoring configuration.
+pub type RequireManageConfig = Require<ManageConfigPerm>;
 
 #[async_trait]
 impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {

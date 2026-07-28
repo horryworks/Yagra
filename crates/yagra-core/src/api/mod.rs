@@ -30,10 +30,12 @@
 mod error;
 pub(crate) mod extract;
 mod flow;
+pub(crate) mod nodes;
 #[cfg(test)]
 mod route_table;
 #[cfg(test)]
 mod tests_support;
+pub(crate) mod topology;
 mod users;
 mod util;
 
@@ -252,7 +254,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
-        .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
+        // The manual "poll now" action, in `api/nodes.rs` (the rest of the node domain follows).
+        .merge(nodes::routes())
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         // Which pool the node effectively belongs to, and which poller currently holds it.
         .route("/api/v1/nodes/:node_id/assignment", get(node_assignment))
@@ -447,7 +450,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
         .route("/api/v1/alerts/calendar", get(alert_calendar))
         .route("/api/v1/alerts/transitions", get(alert_transitions))
-        .route("/api/v1/topology", get(get_topology))
+        // The dependency graph, in `api/topology.rs`.
+        .merge(topology::routes())
         .route("/api/v1/fleet/summary", get(fleet_summary))
         .route("/api/v1/fleet/group-summary", get(fleet_group_summary))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
@@ -1579,94 +1583,6 @@ async fn interface_delta(
     let limit = q.limit.unwrap_or(6).clamp(1, 50);
     let ranked = st.store.interface_delta(direction, window, limit).await;
     Json(build_interface_entries(&st, ranked).await).into_response()
-}
-
-/// One node in the dependency/topology graph.
-#[derive(Serialize)]
-struct TopologyNode {
-    id: Uuid,
-    name: String,
-    /// Upstream parent in the dependency graph (`null` ⇒ a root).
-    parent_id: Option<Uuid>,
-    state: NodeState,
-    /// Upstream node currently identified as the root cause of this node's alert (dependency
-    /// suppression), if any — lets the UI collapse downstream alerts under the cause.
-    root_cause: Option<Uuid>,
-}
-
-/// The dependency graph: every node with its parent edge, current state, and any active
-/// root-cause attribution. Assembled from the inventory (parent links) + the live alert engine
-/// (state + root_cause) — no new model. Admin-only data source.
-///
-/// Keyset-paginated (`?cursor=&limit=`, S7): the old handler returned one unbounded full-fleet JSON
-/// blob every 15s. It now returns bounded pages ordered by id with a `next_cursor` (same contract
-/// as `/nodes`); the client pages through once and keeps state fresh via the node-state SSE stream
-/// (S14) instead of re-fetching. `state`/`root_cause` stay in the payload so the initial page load
-/// is self-contained.
-async fn get_topology(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<NodePageQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    // Default page large (the graph views assemble the whole fleet, so fewer round-trips is better)
-    // but bounded so no single response is a multi-MB blob.
-    let limit = q.limit.unwrap_or(2000).clamp(1, 5000);
-    let mut rows = match admin.repo.list_topology_page(q.cursor, limit + 1).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "topology list nodes failed");
-            return internal("failed to load topology");
-        }
-    };
-    let has_more = rows.len() as i64 > limit;
-    if has_more {
-        rows.truncate(limit as usize);
-    }
-    let next_cursor = if has_more {
-        rows.last().map(|r| r.id.to_string())
-    } else {
-        None
-    };
-    let states = st.alerts.node_states();
-    // node → upstream root cause (from active, suppressed alerts).
-    let mut root_causes: std::collections::HashMap<NodeId, Uuid> = std::collections::HashMap::new();
-    for a in st.alerts.active_alerts() {
-        if let Some(cause) = a.root_cause {
-            root_causes.entry(a.node).or_insert_with(|| cause.as_uuid());
-        }
-    }
-    // Batch the coarse fallback probe for this page's unobserved nodes: a single TSDB query rather
-    // than one `latest()` round-trip per node (see `fresh_fallback_ids`). After a core restart
-    // (empty `states`) the per-node version fired one VM query for every node.
-    let unobserved: Vec<NodeId> = rows
-        .iter()
-        .map(|r| NodeId::from(r.id))
-        .filter(|id| !states.contains_key(id))
-        .collect();
-    let fresh_fallback = fresh_fallback_ids(&st, &unobserved).await;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in rows {
-        let nid = NodeId::from(r.id);
-        let state = match states.get(&nid) {
-            Some(s) => *s,
-            None if fresh_fallback.contains(&r.id) => NodeState::Ok,
-            None => NodeState::Unknown,
-        };
-        out.push(TopologyNode {
-            id: r.id,
-            name: r.name,
-            parent_id: r.parent_id,
-            state,
-            root_cause: root_causes.get(&nid).copied(),
-        });
-    }
-    Json(serde_json::json!({ "nodes": out, "next_cursor": next_cursor })).into_response()
 }
 
 /// A node returning no fresh data (silent failure / blind spot).
@@ -6813,42 +6729,6 @@ async fn set_meraki_polling(
     }
 }
 
-/// Trigger an immediate poll of one node (the "poll now" action): dispatches its full configured
-/// poll set (ICMP liveness + SNMP scalar/table, per its bindings) to the bus right away, bypassing
-/// the scheduler's interval/jitter. Results arrive asynchronously on the normal result path, so
-/// this just confirms how many jobs were dispatched — the UI refreshes its readings shortly after.
-/// `ManageConfig` (an operator action, like a discovery scan); audited by the mutation middleware.
-async fn poll_node_now(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let node = match admin.repo.get_node(node_id).await {
-        Ok(Some(node)) => node,
-        Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "poll-now: load node failed");
-            return internal("failed to load node");
-        }
-    };
-    // Route to the node's *effective* pool so a manual poll lands on the same pollers the sweep
-    // would use — otherwise a folder-inherited node would be poked on the default pool's subject.
-    let pool = pool_resolver(admin).await.resolve(&node).pool;
-    let dispatched = admin.poll.poll_now(&node, &pool).await;
-    tracing::info!(node = %node_id, dispatched, pool = %pool, "manual poll dispatched");
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "dispatched": dispatched })),
-    )
-        .into_response()
-}
-
 /// Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).
 #[derive(Deserialize)]
 struct NodeGroupAssignment {
@@ -11187,24 +11067,10 @@ mod tests {
         assert_eq!(body_json(resp).await["error"]["code"], "node_not_found");
     }
 
-    #[tokio::test]
-    async fn poll_now_unavailable_without_admin() {
-        // "Poll now" dispatches bus jobs via the admin-only dispatcher; skeleton has none.
-        let node = Uuid::nil();
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/nodes/{node}/poll"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
+    // `poll_now_unavailable_without_admin` moved to `api/nodes.rs` when that handler did, and
+    // split in two: it asserted only that an *anonymous* caller sees 503, which is the ordering
+    // this migration deliberately reverses. The replacements pin both halves — anonymous ⇒ 401
+    // (availability is not disclosed before authentication), authorized ⇒ 503.
 
     #[tokio::test]
     async fn interfaces_empty_array_without_admin() {

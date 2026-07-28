@@ -620,9 +620,11 @@ export const api = {
     request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** Trigger an immediate poll of a node (ICMP + its configured SNMP set), bypassing the
-   *  scheduler interval. Returns how many jobs were dispatched; results arrive asynchronously
-   *  on the normal path, so the caller refreshes its readings shortly after. */
-  pollNode: (id: string): Promise<{ dispatched: number }> =>
+   *  scheduler interval. Returns how many jobs were dispatched and the pool they went to;
+   *  results arrive asynchronously on the normal path, so the caller refreshes its readings
+   *  shortly after. `pool` is the node's *effective* pool, which may be inherited from its
+   *  folder rather than set on the node itself. */
+  pollNode: (id: string): Promise<{ dispatched: number; node_id: string; pool: string }> =>
     request(`/nodes/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
 
   /** Set or clear a node's device-profile + bound credential and its maker/model. The node-edit

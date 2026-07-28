@@ -33,13 +33,14 @@ use yagra_common::{NodeId, Permission, SeriesKey, Severity};
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
 use crate::analysis::{AnalysisTool, CreateError, JobParams, ScopeKind};
-use crate::api::ApiState;
+use crate::api::{ApiError, ApiState};
 use crate::events::EventFilter;
 use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
 use crate::mcp::dto::{
     AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
-    InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto, TopologyEdgeDto,
+    InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto,
 };
+use axum::http::StatusCode;
 
 /// Default window (seconds) for range/rate metric and flow queries when `from`/`to` are omitted.
 const DEFAULT_WINDOW_SECS: i64 = 3600;
@@ -270,9 +271,10 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "The dependency-graph edges (id, name, upstream parent) in keyset pages. \
-                       `after` is a cursor UUID (return nodes with a greater id); `limit` is 1–1000 \
-                       (default 200). Requires live mode."
+        description = "The dependency graph in keyset pages: each node with its upstream parent, \
+                       current state, and the upstream node blamed for its alert (root_cause), plus \
+                       a `next_cursor` for the following page. `after` is a cursor UUID (return \
+                       nodes with a greater id); `limit` is 1–1000 (default 200). Requires live mode."
     )]
     async fn get_topology(
         &self,
@@ -281,13 +283,13 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_topology", "topology requires live mode");
         };
+        // Same assembly as `GET /api/v1/topology`; only the page bound differs, because an AI
+        // client wants a handful of edges where the graph view wants the fleet.
         let limit = p.limit.unwrap_or(200).clamp(1, 1000);
-        let rows = match admin.repo.list_topology_page(p.after, limit).await {
-            Ok(r) => r,
-            Err(e) => return tool_error("get_topology", "load topology", &e),
-        };
-        let out: Vec<TopologyEdgeDto> = rows.iter().map(TopologyEdgeDto::from_row).collect();
-        ok_json("get_topology", &out)
+        match crate::api::topology::topology_page(&self.state, admin, p.after, limit).await {
+            Ok(page) => ok_json("get_topology", &page),
+            Err(e) => tool_api_error("get_topology", &e),
+        }
     }
 
     #[tool(
@@ -890,14 +892,13 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("poll_now", "poll requires live mode");
         };
-        let node = match admin.repo.get_node(p.node_id).await {
-            Ok(Some(n)) => n,
-            Ok(None) => return tool_unavailable("poll_now", "no node with that id"),
-            Err(e) => return tool_error("poll_now", "load node", &e),
+        // Same dispatch as `POST /api/v1/nodes/:id/poll`, including resolving the node's effective
+        // pool (own > folder > default) — a manual poll published to the wrong pool's subject has
+        // no poller listening for it, and that is not a mistake worth being able to make twice.
+        let result = match crate::api::nodes::poll_now(admin, p.node_id).await {
+            Ok(r) => r,
+            Err(e) => return tool_api_error("poll_now", &e),
         };
-        // Effective pool (node's own > folder > default), same as the REST poll-now.
-        let pool = crate::api::pool_resolver(admin).await.resolve(&node).pool;
-        let dispatched = admin.poll.poll_now(&node, &pool).await;
         record_audit(
             &self.state,
             &identity,
@@ -905,10 +906,7 @@ impl YagraMcp {
             202,
         )
         .await;
-        ok_json_value(
-            "poll_now",
-            serde_json::json!({ "dispatched": dispatched, "node_id": p.node_id }),
-        )
+        ok_json("poll_now", &result)
     }
 
     /// Resolve node ids → display names via the live repo (empty in skeleton mode). Deduplicated so a
@@ -1169,6 +1167,33 @@ fn tool_error(tool: &str, context: &str, err: &anyhow::Error) -> Result<CallTool
     record_tool(tool, "error");
     tracing::warn!(tool, error = %err, "MCP tool error while {context}");
     Err(McpError::internal_error(context.to_string(), None))
+}
+
+/// Translate a failure from a shared API service function into this surface's vocabulary.
+///
+/// The tools call the same `pub(crate)` service functions as the REST handlers, so they inherit
+/// [`ApiError`] — which is an HTTP shape. This is the single place that mapping happens; doing it
+/// per tool is how the two surfaces drifted into answering differently for the same condition.
+///
+/// "Missing" and "not configured" come back as **successful** results carrying `available: false`,
+/// deliberately: a model that receives a hard JSON-RPC error tends to retry or give up, where an
+/// explanatory body lets it say "there is no node with that id" and move on. Genuine faults stay
+/// hard errors. Forwarding `message()` is safe by construction — see [`ApiError::message`].
+fn tool_api_error(tool: &str, err: &ApiError) -> Result<CallToolResult, McpError> {
+    match err.status() {
+        StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE => {
+            tool_unavailable(tool, err.message())
+        }
+        StatusCode::BAD_REQUEST => tool_bad_params(tool, err.message()),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => tool_forbidden(tool, err.message()),
+        _ => {
+            // `from_internal` has already logged the cause at the point of conversion; the message
+            // here is the fixed operator-facing sentence, never the underlying error.
+            record_tool(tool, "error");
+            tracing::warn!(tool, code = err.code(), "MCP tool error: {}", err.message());
+            Err(McpError::internal_error(err.message().to_owned(), None))
+        }
+    }
 }
 
 /// Increment the per-tool call counter (self-observability).

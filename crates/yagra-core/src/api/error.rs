@@ -184,17 +184,31 @@ impl ApiError {
         }
     }
 
-    /// The status this error renders as. Test-only: production code renders the error rather than
-    /// inspecting it, and assertions read better against the status than against a serialized body.
-    #[cfg(test)]
+    /// The status this error renders as.
+    ///
+    /// HTTP handlers never need this — they return the error and let [`IntoResponse`] render it.
+    /// It exists for the **non-HTTP** surface: the MCP server calls the same service functions and
+    /// must translate their failures into JSON-RPC, which it does by matching on this rather than
+    /// by re-deriving the mapping per tool.
+    #[must_use]
     pub fn status(&self) -> StatusCode {
         self.status
     }
 
-    /// The stable machine-readable code clients match on. Test-only, for the same reason.
-    #[cfg(test)]
+    /// The stable machine-readable code clients match on.
+    #[must_use]
     pub fn code(&self) -> &'static str {
         self.code
+    }
+
+    /// The operator-facing message.
+    ///
+    /// Safe to forward to any client: every constructor takes it as a fixed sentence, and
+    /// [`ApiError::from_internal`] deliberately keeps the underlying error out of it (security.md).
+    /// `an_internal_error_never_leaks_the_underlying_message` is what holds that true.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
