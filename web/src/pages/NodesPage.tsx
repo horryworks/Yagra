@@ -41,11 +41,9 @@ import {
   countsTotal,
   groupOptions,
   isSelfOrDescendant,
-  subtreeGroupIds,
-  UNGROUPED,
-  visibleOpenGroupKeys,
   type StateCounts,
 } from '../lib/nodeTree';
+import { useLazyGroupMembers } from './useLazyGroupMembers';
 import {
   isAddableKind,
   monitorKind,
@@ -99,12 +97,6 @@ export function NodesPage() {
   // total + attention count without loading the inventory.
   const [groupSummary, setGroupSummary] = useState<FleetGroupSummary | null>(null);
   const [fleetSummary, setFleetSummary] = useState<FleetSummary | null>(null);
-  // Lazily-loaded direct members, keyed by group id (or UNGROUPED). Only open+visible groups load,
-  // so the initial view never pulls the whole fleet (A-3).
-  const [loadedNodes, setLoadedNodes] = useState<Record<string, NodeSummary[]>>({});
-  const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
-  const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
-  const [truncatedGroups, setTruncatedGroups] = useState<Set<string>>(new Set());
   // Filter mode full-loads the fleet once (then searches client-side); null = not yet loaded.
   const [allNodes, setAllNodes] = useState<NodeSummary[] | null>(null);
   const [allNodesLoading, setAllNodesLoading] = useState(false);
@@ -200,13 +192,23 @@ export function NodesPage() {
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
   const groupCounts = groupSummary?.groups ?? EMPTY_GROUP_COUNTS;
 
-  // The nodes the tree renders: browse mode = the union of the lazily-loaded per-group members;
-  // filter mode = the full inventory (loaded once) so the client-side name filter can search it.
+  // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
+  // owns that cache; this page only says what is currently worth having loaded.
   const filtering = filter.trim().length > 0;
-  const browseNodes = useMemo(() => Object.values(loadedNodes).flat(), [loadedNodes]);
+  const members = useLazyGroupMembers({
+    groups,
+    collapsed,
+    ready: !loading,
+    browsing: !filtering,
+    selectedGroupId: selected?.kind === 'group' ? selected.id : null,
+  });
+  const invalidateMembers = members.invalidate;
+
+  // The nodes the tree renders: browse mode = the union of the lazily-loaded per-group members;
+  // filter mode = the server search's single capped page.
   const treeNodes = useMemo(
-    () => (filtering ? allNodes ?? [] : browseNodes),
-    [filtering, allNodes, browseNodes],
+    () => (filtering ? allNodes ?? [] : members.nodes),
+    [filtering, allNodes, members.nodes],
   );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
@@ -238,67 +240,18 @@ export function NodesPage() {
       setGroupSummary(gs);
       setFleetSummary(fs);
       // Invalidate the lazily-loaded members + filter cache so open groups re-fetch fresh.
-      setLoadedNodes({});
-      setLoadedGroups(new Set());
-      setLoadingGroups(new Set());
-      setTruncatedGroups(new Set());
+      invalidateMembers();
       setAllNodes(null);
     } catch (e: unknown) {
       setError(errMsg(e, t('err.loadNodes')));
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, invalidateMembers]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
-
-  // Lazily fetch a group's (or the ungrouped bucket's) direct members, once.
-  const loadGroupMembers = useCallback((key: string) => {
-    setLoadingGroups((prev) => {
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-    api
-      .getGroupNodes(key === UNGROUPED ? null : key)
-      .then((res) => {
-        setLoadedNodes((prev) => ({ ...prev, [key]: res.nodes }));
-        setLoadedGroups((prev) => new Set(prev).add(key));
-        if (res.truncated) setTruncatedGroups((prev) => new Set(prev).add(key));
-      })
-      .catch(() => {
-        /* leave unloaded — retried when the group is next opened/selected */
-      })
-      .finally(() => {
-        setLoadingGroups((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
-        });
-      });
-  }, []);
-
-  // Browse mode: load members for every open + visible group (and the ungrouped bucket) not yet
-  // loaded. Re-runs as the user expands groups (the collapsed set changes) or after a reload.
-  useEffect(() => {
-    if (loading || filtering) return;
-    for (const key of visibleOpenGroupKeys(groups, collapsed)) {
-      if (!loadedGroups.has(key) && !loadingGroups.has(key)) loadGroupMembers(key);
-    }
-  }, [groups, collapsed, loadedGroups, loadingGroups, loading, filtering, loadGroupMembers]);
-
-  // Selecting a group loads its whole subtree so the detail pane can roll up the members. Keyed on
-  // the selection's primitive kind/id (not the object, which `parseSelection` rebuilds each render).
-  const selKind = selected?.kind;
-  const selId = selected?.id;
-  useEffect(() => {
-    if (loading || selKind !== 'group' || !selId) return;
-    for (const id of subtreeGroupIds(groups, selId)) {
-      if (!loadedGroups.has(id) && !loadingGroups.has(id)) loadGroupMembers(id);
-    }
-  }, [selKind, selId, groups, loadedGroups, loadingGroups, loading, loadGroupMembers]);
 
   // Filter mode: debounced SERVER-side name/address search — the tree searches the fleet without
   // loading it. Re-queries as the term changes; a stale response from an earlier keystroke is
@@ -552,7 +505,7 @@ export function NodesPage() {
   const attention = fleetSummary
     ? fleetSummary.states.warning + fleetSummary.states.critical + fleetSummary.states.unreachable
     : 0;
-  const anyGroupTruncated = truncatedGroups.size > 0;
+  const anyGroupTruncated = members.anyTruncated;
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
   const selectedNode =
@@ -653,7 +606,7 @@ export function NodesPage() {
             groups={groups}
             nodes={liveTreeNodes}
             groupCounts={groupCounts}
-            loadedGroups={loadedGroups}
+            loadedGroups={members.loadedGroups}
             canEdit={authed}
             loading={loading || (filtering && allNodesLoading)}
             showToolbar={false}
