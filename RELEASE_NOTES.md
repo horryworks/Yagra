@@ -1,5 +1,46 @@
 # Release Notes
 
+<!-- ## Unreleased is where a shipped behaviour change waits for a version.
+     Yagra deploys to the test server on every push to main, so changes go live long before a
+     release is tagged. Add a bullet here in the SAME commit that ships the change — anything an
+     operator or an API client could notice: response shapes, status codes, defaults, the meaning of
+     a query, removed behaviour. At release time `/docs` folds this section into the new `## v<x>`
+     heading and leaves an empty one behind. An empty Unreleased is the normal resting state; a
+     missing one means someone deleted the mechanism. -->
+
+## Unreleased
+
+### Breaking changes
+- **`GET /api/v1/thresholds` returns an envelope and is capped.** The response changed from a bare
+  `StoredThreshold[]` to `{ "items": [...], "total": <n>, "truncated": <bool> }`, and the server
+  returns at most **500** rules per request — `?limit=` can narrow that, never widen it. The WebUI
+  ships in the same image and was updated with it, so this affects **external automation only**.
+  Anonymous requests to this endpoint now answer **401** rather than 503, matching the rest of the
+  API: a caller is authenticated before the server discloses whether a subsystem is configured.
+  Reading the rules requires **ManageConfig**, not View — a threshold set describes when and whom
+  Yagra will page — so it stays closed on a public dashboard.
+
+### Improvements
+- **Event search filters and pages on when an event happened, not when Yagra ingested it.** The
+  PostgreSQL path used the ingest timestamp while the VictoriaLogs path already used the event
+  timestamp, so the same search returned different rows and a different order depending on which log
+  store was enabled. Both now agree on the event timestamp. One consequence is inherent to
+  time-ordered logs: when a remote poller reconnects and replays buffered results
+  (store-and-forward), older events can land *behind* a page you have already scrolled past — which
+  is how the VictoriaLogs path has always behaved.
+
+### Bug Fixes
+- **The poller's store-and-forward buffer can use its disk again.** The container image never
+  created the spill directory, and `/var/lib` is not writable by the non-root runtime user, so the
+  buffer fell back to memory-only after a single startup warning. A bus outage lasting longer than
+  the in-memory ring therefore dropped the oldest poll results instead of spilling them, and a
+  poller restart mid-outage lost everything it was holding. The directory is now created in the
+  image with the right ownership, and the test-server deployment gives it a named volume so the
+  spill survives container recreation.
+- **Adding a node twice.** Nothing guarded the add-monitor dialog's submit button while the request
+  was in flight, so a double-click created two nodes. The dialog also kept the previous attempt's
+  failure message, showing a stale error above a blank form when it was reopened after a cancel.
+
 ## v0.1.18
 
 **Hand your passive data onward, and see it.** Yagra already received syslog, SNMP traps and flow
