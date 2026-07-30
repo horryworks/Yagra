@@ -62,6 +62,16 @@ pub(crate) async fn audit_record(
     }
 }
 
+/// The body of an enable/disable toggle — `{"enabled": true}`.
+///
+/// Shared rather than per-domain because it already was: the maintenance module reached across for
+/// `super::EnabledBody` while it was declared inside the notifications block, which is the same
+/// cross-domain reach that keeps turning up as a migration tripwire.
+#[derive(Deserialize)]
+pub(crate) struct EnabledBody {
+    pub enabled: bool,
+}
+
 /// Rate window for interface utilization, in seconds.
 ///
 /// Matches the TSDB query-time rate() derivation (ADR-012); five minutes covers a few poll

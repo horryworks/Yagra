@@ -183,7 +183,7 @@ async fn set_maintenance_window_enabled(
     _perm: RequireManageMaintenance,
     admin: Admin,
     Path(id): Path<Uuid>,
-    Json(body): Json<super::EnabledBody>,
+    Json(body): Json<super::util::EnabledBody>,
 ) -> ApiResult<StatusCode> {
     let found = admin
         .maintenance

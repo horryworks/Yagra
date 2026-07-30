@@ -45,6 +45,7 @@ pub(crate) mod maintenance;
 pub(crate) mod metrics;
 mod mib;
 pub(crate) mod nodes;
+mod notifications;
 mod oidc;
 #[cfg(test)]
 mod route_table;
@@ -83,7 +84,7 @@ use crate::history::AlertHistoryStore;
 use crate::logstore::LogStore;
 use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
-use crate::notifications::{ChannelConfig, NotificationRepo};
+use crate::notifications::NotificationRepo;
 use crate::pollers::{PollerRepo, PollerRow};
 use crate::poolres::{PoolResolver, PoolSource};
 use crate::repo::{NodeListing, NodeRepo};
@@ -109,9 +110,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_common::{
-    is_ssrf_blocked, HostSample, NodeId, Permission, ProfileCategory, Role, Severity,
-};
+use yagra_common::{HostSample, NodeId, Permission, ProfileCategory, Role};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -384,22 +383,6 @@ pub fn router(state: ApiState) -> Router {
         // Host self-observability: current CPU/load/mem/disk of core + each poller, and the trend
         // series behind the System Health "Host resources" charts.
         .route("/api/v1/version", get(version))
-        .route(
-            "/api/v1/notification-channels",
-            get(list_notification_channels).post(create_notification_channel),
-        )
-        .route(
-            "/api/v1/notification-channels/:id",
-            put(set_notification_channel_enabled).delete(delete_notification_channel),
-        )
-        .route(
-            "/api/v1/routing-rules",
-            get(list_routing_rules).post(create_routing_rule),
-        )
-        .route(
-            "/api/v1/routing-rules/:id",
-            put(set_routing_rule_enabled).delete(delete_routing_rule),
-        )
         // Troubleshoot analysis jobs (ADR-022), in `api/analysis.rs`.
         .merge(analysis::routes())
         .route("/api/v1/reports/sections", get(list_report_sections))
@@ -473,6 +456,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(collection::routes())
         .merge(classification::routes())
         .merge(discovery::routes())
+        .merge(notifications::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -4029,323 +4013,6 @@ async fn delete_credential(
     }
 }
 
-// ── Notification channels + routing rules — ManageConfig only ────────────────
-
-/// Toggle body shared by channel/rule enable-disable PUTs.
-#[derive(Deserialize)]
-struct EnabledBody {
-    enabled: bool,
-}
-
-async fn list_notification_channels(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.notifications.list_channels().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list notification channels failed");
-            internal("failed to list notification channels")
-        }
-    }
-}
-
-/// Create-channel body: a name + the (secret) connection config (tagged by `kind`).
-#[derive(Deserialize)]
-struct CreateChannel {
-    name: String,
-    config: ChannelConfig,
-}
-
-async fn create_notification_channel(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateChannel>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_channel",
-            "name must not be empty".to_owned(),
-        );
-    }
-    if let Err(msg) = validate_channel_config(&body.config) {
-        return error_response(StatusCode::BAD_REQUEST, "invalid_channel", msg.to_owned());
-    }
-    match admin
-        .notifications
-        .create_channel(body.name.trim(), &body.config)
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create notification channel failed");
-            internal("failed to create notification channel")
-        }
-    }
-}
-
-async fn set_notification_channel_enabled(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<EnabledBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin
-        .notifications
-        .set_channel_enabled(id, body.enabled)
-        .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("channel_not_found", format!("no channel {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "update notification channel failed");
-            internal("failed to update notification channel")
-        }
-    }
-}
-
-async fn delete_notification_channel(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.notifications.delete_channel(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("channel_not_found", format!("no channel {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete notification channel failed");
-            internal("failed to delete notification channel")
-        }
-    }
-}
-
-async fn list_routing_rules(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.notifications.list_rules().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list routing rules failed");
-            internal("failed to list routing rules")
-        }
-    }
-}
-
-/// Create-rule body: a name, optional severity filter (null = any), and target channels.
-#[derive(Deserialize)]
-struct CreateRule {
-    name: String,
-    severity: Option<String>,
-    channel_ids: Vec<Uuid>,
-}
-
-async fn create_routing_rule(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateRule>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_rule",
-            "name must not be empty".to_owned(),
-        );
-    }
-    let severity = match parse_severity_opt(body.severity.as_deref()) {
-        Ok(s) => s,
-        Err(()) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_rule",
-                "severity must be critical|warning|info or null".to_owned(),
-            )
-        }
-    };
-    match admin
-        .notifications
-        .create_rule(body.name.trim(), severity, &body.channel_ids)
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create routing rule failed");
-            internal("failed to create routing rule")
-        }
-    }
-}
-
-async fn set_routing_rule_enabled(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<EnabledBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.notifications.set_rule_enabled(id, body.enabled).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("rule_not_found", format!("no rule {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "update routing rule failed");
-            internal("failed to update routing rule")
-        }
-    }
-}
-
-async fn delete_routing_rule(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.notifications.delete_rule(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("rule_not_found", format!("no rule {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete routing rule failed");
-            internal("failed to delete routing rule")
-        }
-    }
-}
-
-/// Parse an optional severity token from the API (None = any). `Err` ⇒ unknown token.
-fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
-    match s {
-        None => Ok(None),
-        Some("critical") => Ok(Some(Severity::Critical)),
-        Some("warning") => Ok(Some(Severity::Warning)),
-        Some("info") => Ok(Some(Severity::Info)),
-        Some(_) => Err(()),
-    }
-}
-
-/// Light validation of a channel's connection config at the API edge.
-fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
-    match c {
-        ChannelConfig::Webhook { url } => validate_webhook_url(url),
-        ChannelConfig::Email { host, from, to, .. }
-            if host.trim().is_empty() || from.trim().is_empty() || to.trim().is_empty() =>
-        {
-            Err("email host/from/to required")
-        }
-        ChannelConfig::PagerDuty {
-            routing_key,
-            api_url,
-        } => {
-            if routing_key.trim().is_empty() {
-                return Err("PagerDuty routing key required");
-            }
-            match api_url.as_deref() {
-                None => Ok(()),
-                Some(url) => validate_vendor_url(url, PAGERDUTY_HOSTS),
-            }
-        }
-        ChannelConfig::Jsm { api_url, api_key } => {
-            if api_key.trim().is_empty() {
-                return Err("JSM API key required");
-            }
-            validate_vendor_url(api_url, JSM_HOSTS)
-        }
-        _ => Ok(()),
-    }
-}
-
-/// Exact-host allowlists for the fixed-vendor channels. Exact match, not suffix match —
-/// suffix matching is how allowlist bypasses happen (`evil-events.pagerduty.com.attacker.io`).
-const PAGERDUTY_HOSTS: &[&str] = &["events.pagerduty.com", "events.eu.pagerduty.com"];
-const JSM_HOSTS: &[&str] = &[
-    "api.atlassian.com",
-    "api.opsgenie.com",
-    "api.eu.opsgenie.com",
-];
-
-/// Validate a fixed-vendor API URL: https only, host exactly in the vendor's allowlist.
-/// These are SaaS endpoints, so this is stricter than the generic webhook check — a
-/// `ManageConfig` user can't point the sealed credential at an arbitrary server.
-fn validate_vendor_url(url: &str, allowed_hosts: &[&str]) -> Result<(), &'static str> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("API URL required");
-    }
-    let parsed = reqwest::Url::parse(url).map_err(|_| "API URL is not a valid URL")?;
-    if parsed.scheme() != "https" {
-        return Err("API URL must be https");
-    }
-    let Some(host) = parsed.host_str() else {
-        return Err("API URL must have a host");
-    };
-    if !allowed_hosts.contains(&host) {
-        return Err("API URL host is not an allowed vendor endpoint");
-    }
-    Ok(())
-}
-
-/// Validate a notification-webhook URL at the API edge (SSRF: a `ManageConfig` user could
-/// otherwise point a channel at `http://169.254.169.254/…`, and core — which holds the DB and
-/// the KEK — would POST there on every alert). Scheme must be http/https; an IP-literal host
-/// that is loopback/link-local (incl. cloud metadata)/multicast/unspecified is refused. The
-/// runtime delivery path re-checks resolved addresses (defense in depth — see `WebhookChannel`).
-fn validate_webhook_url(url: &str) -> Result<(), &'static str> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("webhook url required");
-    }
-    let parsed = reqwest::Url::parse(url).map_err(|_| "webhook url is not a valid URL")?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("webhook url scheme must be http or https");
-    }
-    let Some(host) = parsed.host_str() else {
-        return Err("webhook url must have a host");
-    };
-    if let Some(ip) = yagra_common::host_ip(host) {
-        if is_ssrf_blocked(ip) {
-            return Err("webhook url target is not allowed (loopback / link-local / metadata)");
-        }
-    }
-    Ok(())
-}
-
 // ── Passive events: webhook ingest + sources/rules CRUD + event log + close ─────────
 
 /// Max accepted webhook ingest body (axum returns 413 beyond it).
@@ -5277,21 +4944,6 @@ mod tests {
     }
 
     #[test]
-    fn webhook_url_validation_blocks_ssrf_targets() {
-        // Allowed: public and legitimate internal (private-range) webhook endpoints.
-        assert!(validate_webhook_url("https://hooks.example.com/abc").is_ok());
-        assert!(validate_webhook_url("http://10.0.0.5:8080/notify").is_ok());
-        // Rejected: SSRF-escalation surface (loopback / cloud metadata / mapped metadata).
-        assert!(validate_webhook_url("http://169.254.169.254/latest/meta-data/").is_err());
-        assert!(validate_webhook_url("http://127.0.0.1/hook").is_err());
-        assert!(validate_webhook_url("http://[::ffff:169.254.169.254]/").is_err());
-        // Rejected: bad scheme / empty / hostless.
-        assert!(validate_webhook_url("ftp://example.com/x").is_err());
-        assert!(validate_webhook_url("   ").is_err());
-        assert!(validate_webhook_url("not a url").is_err());
-    }
-
-    #[test]
     fn oid_validation_accepts_dotted_digits_only() {
         assert!(is_valid_oid("1.3.6.1.2.1.31.1.1.1.6"));
         assert!(is_valid_oid("0"));
@@ -5962,61 +5614,6 @@ mod tests {
                 "must reject: {bad}"
             );
         }
-    }
-
-    #[test]
-    fn vendor_url_allowlist_is_exact_host_https_only() {
-        // PagerDuty: both regions pass; http and lookalike hosts fail.
-        assert!(
-            validate_vendor_url("https://events.pagerduty.com/v2/enqueue", PAGERDUTY_HOSTS).is_ok()
-        );
-        assert!(validate_vendor_url(
-            "https://events.eu.pagerduty.com/v2/enqueue",
-            PAGERDUTY_HOSTS
-        )
-        .is_ok());
-        assert!(
-            validate_vendor_url("http://events.pagerduty.com/v2/enqueue", PAGERDUTY_HOSTS).is_err()
-        );
-        // Suffix tricks must fail (exact host match, not ends_with).
-        assert!(validate_vendor_url(
-            "https://events.pagerduty.com.attacker.io/v2/enqueue",
-            PAGERDUTY_HOSTS
-        )
-        .is_err());
-        assert!(validate_vendor_url("https://evil.example/v2/enqueue", PAGERDUTY_HOSTS).is_err());
-
-        // JSM: Atlassian + Opsgenie hosts pass.
-        assert!(validate_vendor_url(
-            "https://api.atlassian.com/jsm/ops/integration/v2",
-            JSM_HOSTS
-        )
-        .is_ok());
-        assert!(validate_vendor_url("https://api.opsgenie.com/v2", JSM_HOSTS).is_ok());
-        assert!(validate_vendor_url("https://api.eu.opsgenie.com/v2", JSM_HOSTS).is_ok());
-        assert!(validate_vendor_url("https://api.atlassian.com.evil.io/v2", JSM_HOSTS).is_err());
-
-        // PD/JSM channel configs route through validate_channel_config.
-        assert!(validate_channel_config(&ChannelConfig::PagerDuty {
-            routing_key: "rk".into(),
-            api_url: None,
-        })
-        .is_ok());
-        assert!(validate_channel_config(&ChannelConfig::PagerDuty {
-            routing_key: "  ".into(),
-            api_url: None,
-        })
-        .is_err());
-        assert!(validate_channel_config(&ChannelConfig::Jsm {
-            api_url: "https://api.atlassian.com/jsm/ops/integration/v2".into(),
-            api_key: "k".into(),
-        })
-        .is_ok());
-        assert!(validate_channel_config(&ChannelConfig::Jsm {
-            api_url: "https://example.com/".into(),
-            api_key: "k".into(),
-        })
-        .is_err());
     }
 
     #[tokio::test]
