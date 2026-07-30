@@ -25,8 +25,6 @@ import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
 import { GROUP_TYPES } from '../types/api';
 import type {
-  CredentialSummary,
-  DnsRecordType,
   FleetGroupSummary,
   FleetSummary,
   GroupType,
@@ -35,7 +33,6 @@ import type {
   NodeGroup,
   NodeSummary,
   PoolOption,
-  ProfileSummary,
 } from '../types/api';
 import {
   countsTotal,
@@ -44,13 +41,6 @@ import {
   type StateCounts,
 } from '../lib/nodeTree';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
-import {
-  isAddableKind,
-  monitorKind,
-  MONITOR_KINDS,
-  targetFilled,
-  type AddableKind,
-} from './monitorKinds';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
 import { inheritedGroupPool, isValidPoolName } from '../lib/pool';
@@ -60,7 +50,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
-import { NodePicker } from '../components/NodePicker/NodePicker';
+import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
 import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
@@ -148,30 +138,6 @@ export function NodesPage() {
   /** Folder the new node lands in (group_id): set from the right-clicked group/node; `null` = top
    *  level. createNode itself takes no group_id, so on success we follow up with setNodeGroup. */
   const [addGroupId, setAddGroupId] = useState<string | null>(null);
-  /** Which kind of monitor to add: an SNMP/ICMP device, a URL/HTTP(S) endpoint, or a DNS name. */
-  const [monType, setMonType] = useState<AddableKind>('device');
-  const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
-  const [profileId, setProfileId] = useState('');
-  const [credentialId, setCredentialId] = useState('');
-  const [parentId, setParentId] = useState('');
-  const [parentName, setParentName] = useState('');
-  const [vendor, setVendor] = useState('');
-  const [model, setModel] = useState('');
-  /** Poll-pool for the new node ('' ⇒ inherit from its folder, else the default pool). */
-  const [addPool, setAddPool] = useState('');
-  // URL-monitor fields (used when monType === 'url').
-  const [url, setUrl] = useState('');
-  const [urlMethod, setUrlMethod] = useState<'GET' | 'HEAD' | 'POST'>('GET');
-  const [verifyTls, setVerifyTls] = useState(true);
-  // DNS-monitor fields (used when monType === 'dns'). A blank resolver means the poller's system
-  // resolver, so it is sent as undefined rather than an empty string.
-  const [dnsName, setDnsName] = useState('');
-  const [dnsRecordType, setDnsRecordType] = useState<DnsRecordType>('A');
-  const [dnsResolver, setDnsResolver] = useState('');
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
-  const [addError, setAddError] = useState<string | null>(null);
 
   // Group + move modals.
   const [groupModal, setGroupModal] = useState<GroupModalState | null>(null);
@@ -379,92 +345,10 @@ export function NodesPage() {
     setSearchParams(params, { replace: true });
   }, [loading, groups, searchParams, setSearchParams]);
 
-  // Load the binding options (profiles + SNMP credentials) when the add-node modal opens.
-  useEffect(() => {
-    if (!adding) return;
-    api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
-    api
-      .listCredentials()
-      .then((c) => setCredentials(c.filter((cr) => cr.kind === 'snmp_v2c')))
-      .catch(() => setCredentials([]));
-  }, [adding]);
-
-  const resetAddForm = () => {
+  /** Close the add dialog. Its fields live in the dialog, so closing it is the reset. */
+  const closeAdd = () => {
     setAdding(false);
     setAddGroupId(null);
-    setMonType('device');
-    setName('');
-    setAddress('');
-    setProfileId('');
-    setCredentialId('');
-    setParentId('');
-    setParentName('');
-    setVendor('');
-    setModel('');
-    setAddPool('');
-    setUrl('');
-    setUrlMethod('GET');
-    setVerifyTls(true);
-    setDnsName('');
-    setDnsRecordType('A');
-    setDnsResolver('');
-  };
-
-  // Per-kind strings and the required-target rule come from the `MONITOR_KINDS` registry, so a
-  // fourth kind is one entry there rather than four more ternary chains in this file.
-  const kindSpec = monitorKind(monType);
-  /** The error message for whichever monitor kind is being added. */
-  const addErrorKey = () => t(kindSpec.errorKey);
-  /** Modal title + primary-button label, per monitor kind. */
-  const addTitle = t(kindSpec.titleKey);
-  /** Whether the kind-specific target field is filled (the name is checked separately). */
-  const addTargetFilled = targetFilled(monType, { address, url, dnsName });
-
-  const submitAdd = () => {
-    setAddError(null);
-    // Blank ⇒ omitted, so the node inherits from the folder it lands in (or the default pool).
-    const pool = addPool.trim() || undefined;
-    const created =
-      monType === 'url'
-        ? api.createUrlMonitor({
-            name,
-            url,
-            method: urlMethod,
-            verify_tls: verifyTls,
-            parent_id: parentId || undefined,
-            pool,
-          })
-        : monType === 'dns'
-        ? api.createDnsMonitor({
-            name,
-            dns_name: dnsName,
-            record_type: dnsRecordType,
-            // Blank ⇒ the poller's system resolver.
-            resolver: dnsResolver.trim() || undefined,
-            parent_id: parentId || undefined,
-            pool,
-          })
-        : api.createNode({
-            name,
-            address,
-            profile_id: profileId || undefined,
-            credential_id: credentialId || undefined,
-            parent_id: parentId || undefined,
-            vendor: vendor.trim() || undefined,
-            model: model.trim() || undefined,
-            pool,
-          });
-    // createNode/createUrlMonitor take no group_id, so a node lands Ungrouped; if the add was
-    // launched from a folder's right-click, place it there with the canonical setNodeGroup op
-    // (same as drag-drop). A placement failure is soft — the node still exists, just at top level.
-    const groupId = addGroupId;
-    created
-      .then(({ id }) => (groupId ? api.setNodeGroup(id, groupId) : undefined))
-      .then(() => {
-        resetAddForm();
-        void reload();
-      })
-      .catch((e: unknown) => setAddError(errMsg(e, addErrorKey())));
   };
 
   // Direct moves (drag-drop): assign immediately and refresh.
@@ -686,208 +570,15 @@ export function NodesPage() {
       </div>
 
       {adding && (
-        <Modal
-          title={addTitle}
-          onClose={resetAddForm}
-          footer={
-            <>
-              <Button onClick={resetAddForm}>{t('common:actions.cancel')}</Button>
-              <Button variant="primary" onClick={submitAdd} disabled={!name || !addTargetFilled}>
-                {addTitle}
-              </Button>
-            </>
-          }
-        >
-          <div className="form-stack">
-            <p className="form-note">
-              <Trans
-                t={t}
-                i18nKey="add.addingTo"
-                values={{ target: groups.find((g) => g.id === addGroupId)?.name ?? t('add.topLevel') }}
-                components={{ b: <strong /> }}
-              />
-            </p>
-            <label className="form-label">
-              {t('add.monitoringType')}
-              <Select
-                value={monType}
-                onChange={(e) => {
-                  // Narrowed, not cast: the value arrives as a string, and casting it would admit
-                  // a kind with no create endpoint into the form state.
-                  if (isAddableKind(e.target.value)) setMonType(e.target.value);
-                }}
-              >
-                {MONITOR_KINDS.map((k) => (
-                  <option key={k.kind} value={k.kind}>
-                    {t(k.optionKey)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="form-label">
-              <span>
-                {t('field.name')} <RequiredMark />
-              </span>
-              <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-            </label>
-            {monType === 'url' ? (
-              <>
-                <label className="form-label">
-                  <span>
-                    {t('field.url')} <RequiredMark />
-                  </span>
-                  <TextInput
-                    className="mono"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://api.example.com/health"
-                  />
-                </label>
-                <div className="form-row">
-                  <label className="form-label">
-                    {t('add.method')}
-                    <Select
-                      value={urlMethod}
-                      onChange={(e) => setUrlMethod(e.target.value as 'GET' | 'HEAD' | 'POST')}
-                    >
-                      <option value="GET">GET</option>
-                      <option value="HEAD">HEAD</option>
-                      <option value="POST">POST</option>
-                    </Select>
-                  </label>
-                  <label className="form-label form-check">
-                    <input
-                      type="checkbox"
-                      checked={verifyTls}
-                      onChange={(e) => setVerifyTls(e.target.checked)}
-                    />
-                    <span>{t('add.verifyTls')}</span>
-                  </label>
-                </div>
-              </>
-            ) : monType === 'dns' ? (
-              <>
-                <label className="form-label">
-                  <span>
-                    {t('field.dnsName')} <RequiredMark />
-                  </span>
-                  <TextInput
-                    className="mono"
-                    value={dnsName}
-                    onChange={(e) => setDnsName(e.target.value)}
-                    placeholder={t('add.dnsNamePlaceholder')}
-                  />
-                </label>
-                <div className="form-row">
-                  <label className="form-label">
-                    {t('field.recordType')}
-                    <Select
-                      value={dnsRecordType}
-                      onChange={(e) => setDnsRecordType(e.target.value as DnsRecordType)}
-                    >
-                      <option value="A">A</option>
-                      <option value="AAAA">AAAA</option>
-                      <option value="CNAME">CNAME</option>
-                    </Select>
-                  </label>
-                  <label className="form-label">
-                    {t('add.resolverOptional')}
-                    <TextInput
-                      className="mono"
-                      value={dnsResolver}
-                      onChange={(e) => setDnsResolver(e.target.value)}
-                      placeholder={t('add.resolverPlaceholder')}
-                    />
-                  </label>
-                </div>
-              </>
-            ) : (
-              <>
-                <label className="form-label">
-                  <span>
-                    {t('field.ipAddress')} <RequiredMark />
-                  </span>
-                  <TextInput
-                    className="mono"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    placeholder={t('add.addressPlaceholder')}
-                  />
-                </label>
-                <label className="form-label">
-                  {t('add.deviceProfileOptional')}
-                  <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-                    <option value="">{t('add.none')}</option>
-                    {profiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label className="form-label">
-                  {t('add.snmpCredentialOptional')}
-                  <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-                    <option value="">{t('add.none')}</option>
-                    {credentials.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-              </>
-            )}
-            <label className="form-label">
-              {t('add.parentNodeOptional')}
-              {/* Server-side typeahead (A-2) — the parent can be any node in the fleet, not just the
-                  lazily-loaded ones, so this never needs the whole inventory in the browser. */}
-              <NodePicker
-                value={parentId || null}
-                valueLabel={parentName || undefined}
-                onChange={(n) => {
-                  setParentId(n?.id ?? '');
-                  setParentName(n?.name ?? '');
-                }}
-                placeholder={t('add.none')}
-              />
-            </label>
-            {monType === 'device' && (
-              <div className="form-row">
-                <label className="form-label">
-                  {t('add.makerOptional')}
-                  <TextInput
-                    value={vendor}
-                    onChange={(e) => setVendor(e.target.value)}
-                    placeholder={t('field.makerPlaceholder')}
-                  />
-                </label>
-                <label className="form-label">
-                  {t('add.modelOptional')}
-                  <TextInput
-                    className="mono"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder={t('field.modelPlaceholder')}
-                  />
-                </label>
-              </div>
-            )}
-            <label className="form-label">
-              {t('add.poolOptional')}
-              <TextInput
-                className="mono"
-                value={addPool}
-                onChange={(e) => setAddPool(e.target.value)}
-                placeholder={t('add.poolPlaceholder')}
-              />
-              <span className={`form-hint${isValidPoolName(addPool) ? '' : ' form-hint-error'}`}>
-                {isValidPoolName(addPool) ? t('add.poolHint') : t('field.poolInvalid')}
-              </span>
-            </label>
-            {addError && <p className="form-error">{addError}</p>}
-          </div>
-        </Modal>
+        <AddNodeModal
+          groups={groups}
+          groupId={addGroupId}
+          onClose={closeAdd}
+          onCreated={() => {
+            closeAdd();
+            void reload();
+          }}
+        />
       )}
 
       {groupModal && (
