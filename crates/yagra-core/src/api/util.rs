@@ -42,6 +42,30 @@ pub(crate) struct ListQuery {
     pub limit: Option<i64>,
 }
 
+/// Whether `oid` is a dotted numeric OID (`1.3.6.1.2.1.1.1.0`).
+///
+/// Structural only — it does not claim the OID exists. The point is that an operator-supplied OID
+/// reaches SNMP and the collection tables as a string, so anything that is not digits-and-dots is
+/// rejected at the edge rather than carried inward (security.md).
+///
+/// Hoisted here because the MIB catalog validated with it while it was declared inside the
+/// collection-sets block — the same cross-domain reach that made `not_found` a migration tripwire.
+pub(crate) fn is_valid_oid(oid: &str) -> bool {
+    !oid.is_empty()
+        && oid
+            .split('.')
+            .all(|arc| !arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether `s` is a valid OID *prefix* — an OID, optionally written with a trailing dot
+/// (`1.3.6.1.4.1.9.` reads as "everything under Cisco").
+///
+/// Defined in terms of [`is_valid_oid`] rather than beside it: the two were separate copies of the
+/// same digits-and-dots loop, differing only in that one tolerated the trailing dot.
+pub(crate) fn is_valid_oid_prefix(s: &str) -> bool {
+    is_valid_oid(s.strip_suffix('.').unwrap_or(s))
+}
+
 /// Parse an RFC 3339 timestamp from the API edge into UTC.
 ///
 /// `None` on anything unparseable: callers reject the request rather than substituting a default,
