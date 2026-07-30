@@ -44,6 +44,7 @@ mod mib;
 pub(crate) mod nodes;
 #[cfg(test)]
 mod route_table;
+mod session;
 #[cfg(test)]
 mod tests_support;
 pub(crate) mod thresholds;
@@ -57,7 +58,7 @@ pub(crate) use extract::{authorize, bearer, current_username, require_leader, re
 // Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 use nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
-pub(crate) use util::{is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
+pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
 
 use crate::ack::AckRepo;
 use crate::alerts::AlertManager;
@@ -85,7 +86,7 @@ use crate::store::{MetricPoint, MetricStore};
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -377,9 +378,6 @@ pub fn router(state: ApiState) -> Router {
             post(test_forward_destination),
         )
         .route("/api/v1/forwarding/status", get(forwarding_status))
-        .route("/api/v1/auth/login", post(login))
-        .route("/api/v1/auth/logout", post(logout))
-        .route("/api/v1/auth/me", get(auth_me))
         // OIDC login (external IdP, ADR-010 Phase 3). Both are unauthenticated (pre-session), guarded
         // by the CSRF `state` + PKCE + nonce in the flow itself.
         .route("/api/v1/auth/oidc/authorize", get(oidc_authorize))
@@ -523,6 +521,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(dashboard::routes())
         .merge(mib::routes())
         .merge(api_tokens::routes())
+        .merge(session::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -535,12 +534,6 @@ const AUDIT_ANONYMOUS: &str = "(unauthenticated)";
 
 /// Record one audit entry, best-effort: auditing must never take the API down, so
 /// failures are logged and swallowed.
-async fn audit_record(audit: &AuditRepo, username: &str, action: &str, status: u16) {
-    if let Err(e) = audit.record(username, action, status).await {
-        tracing::warn!(error = %e, %action, "audit record failed");
-    }
-}
-
 /// Middleware: append an audit row for every mutating `/api/v1` request. Auth endpoints
 /// are excluded here — login is recorded by its handler (with the attempted username,
 /// never the credential). Reads are not audited.
@@ -2222,86 +2215,6 @@ async fn stream_report_runs(State(st): State<ApiState>, headers: HeaderMap) -> R
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
-}
-
-// ── Admin (write) handlers — live mode only ──────────────────────────────────
-
-/// Login request body.
-#[derive(Deserialize)]
-struct LoginBody {
-    username: String,
-    password: String,
-}
-
-async fn login(State(st): State<ApiState>, Json(body): Json<LoginBody>) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    // Brute-force guard: refuse (without touching Argon2) if this account is locked out or the
-    // global attempt-rate cap is spent. Audited so a guessing run is visible.
-    if let Err(reject) = st.login_throttle.check(&body.username) {
-        audit_record(&admin.audit, &body.username, "auth.login", 429).await;
-        let mut resp = error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_attempts",
-            format!(
-                "too many login attempts; retry in {} seconds",
-                reject.retry_after_secs
-            ),
-        );
-        if let Ok(v) = HeaderValue::from_str(&reject.retry_after_secs.to_string()) {
-            resp.headers_mut().insert(header::RETRY_AFTER, v);
-        }
-        return resp;
-    }
-    match admin.users.verify(&body.username, &body.password).await {
-        Ok(Some((user_id, principal))) => {
-            st.login_throttle.record_success(&body.username);
-            let role = principal.role;
-            let token = st.sessions.issue(user_id, principal, &body.username);
-            // Auth events are audited with the username only — never the credential.
-            audit_record(&admin.audit, &body.username, "auth.login", 200).await;
-            Json(serde_json::json!({ "token": token, "role": role })).into_response()
-        }
-        Ok(None) => {
-            st.login_throttle.record_failure(&body.username);
-            audit_record(&admin.audit, &body.username, "auth.login", 401).await;
-            error_response(
-                StatusCode::UNAUTHORIZED,
-                "invalid_credentials",
-                "incorrect username or password".to_owned(),
-            )
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "login failed");
-            internal("login failed")
-        }
-    }
-}
-
-/// Server-side logout: revoke the caller's bearer token so it can't be reused. Idempotent — an
-/// absent or already-revoked token still returns 204.
-async fn logout(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(token) = bearer(&headers) {
-        st.sessions.revoke_token(token);
-    }
-    StatusCode::NO_CONTENT.into_response()
-}
-
-async fn auth_me(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    // `View` is granted to every role, so this just checks for a valid token.
-    match st.sessions.authorize(bearer(&headers), Permission::View) {
-        Ok(session) => Json(serde_json::json!({
-            "role": session.principal.role,
-            "username": session.username,
-        }))
-        .into_response(),
-        Err(_) => error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "not authenticated".to_owned(),
-        ),
-    }
 }
 
 // ── Forwarding destinations (the passive-data tee, ADR-034) ─────────────────────────────────────

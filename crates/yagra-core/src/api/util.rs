@@ -42,6 +42,26 @@ pub(crate) struct ListQuery {
     pub limit: Option<i64>,
 }
 
+/// Append one audit row, logging rather than failing if the write does not land.
+///
+/// A best-effort record on purpose: refusing a login because the audit table is unreachable would
+/// turn a logging fault into an outage. The failure is logged, so it is visible.
+///
+/// Here rather than beside the handlers because both authentication paths write these — password
+/// login and the OIDC callback — plus the audit middleware itself. `audit_mw` covers mutating
+/// `/api/v1` requests generically, but the auth endpoints are excluded from it and record their own
+/// rows, with the attempted **username only and never the credential** (security.md).
+pub(crate) async fn audit_record(
+    audit: &crate::audit::AuditRepo,
+    username: &str,
+    action: &str,
+    status: u16,
+) {
+    if let Err(e) = audit.record(username, action, status).await {
+        tracing::warn!(error = %e, %action, "audit record failed");
+    }
+}
+
 /// Whether `oid` is a dotted numeric OID (`1.3.6.1.2.1.1.1.0`).
 ///
 /// Structural only — it does not claim the OID exists. The point is that an operator-supplied OID

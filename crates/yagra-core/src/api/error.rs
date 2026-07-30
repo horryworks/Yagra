@@ -95,6 +95,8 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    /// Seconds for a `Retry-After` header, when the refusal is a timed one.
+    retry_after_secs: Option<u64>,
 }
 
 impl ApiError {
@@ -139,6 +141,12 @@ impl ApiError {
             "unauthorized",
             "a valid bearer token is required",
         )
+    }
+
+    /// `401` with a caller-chosen code. For the login path, which must distinguish "you sent no
+    /// token" from "those credentials are wrong" — the UI shows different things for each.
+    pub fn unauthorized_with(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, code, message)
     }
 
     /// `403` — authenticated, but the role does not carry the required permission.
@@ -194,7 +202,18 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            retry_after_secs: None,
         }
+    }
+
+    /// Attach a `Retry-After` header to a timed refusal.
+    ///
+    /// The machine-readable half of a 429: without it a client that is being throttled has to guess
+    /// how long to wait, and guessing wrong is what turns a rate limit into a hot loop against it.
+    #[must_use]
+    pub fn retry_after(mut self, secs: u64) -> Self {
+        self.retry_after_secs = Some(secs);
+        self
     }
 
     /// The status this error renders as.
@@ -227,7 +246,14 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        error_response(self.status, self.code, self.message)
+        let mut resp = error_response(self.status, self.code, self.message);
+        if let Some(secs) = self.retry_after_secs {
+            if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                resp.headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, v);
+            }
+        }
+        resp
     }
 }
 
