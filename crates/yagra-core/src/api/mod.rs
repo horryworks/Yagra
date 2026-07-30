@@ -42,6 +42,7 @@ pub(crate) mod maintenance;
 pub(crate) mod metrics;
 mod mib;
 pub(crate) mod nodes;
+mod oidc;
 #[cfg(test)]
 mod route_table;
 mod session;
@@ -380,17 +381,6 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/forwarding/status", get(forwarding_status))
         // OIDC login (external IdP, ADR-010 Phase 3). Both are unauthenticated (pre-session), guarded
         // by the CSRF `state` + PKCE + nonce in the flow itself.
-        .route("/api/v1/auth/oidc/authorize", get(oidc_authorize))
-        .route("/api/v1/auth/oidc/callback", post(oidc_callback))
-        // Provider config (admin-only). client_secret is write-only (never returned).
-        .route(
-            "/api/v1/settings/oidc",
-            get(list_oidc_providers).post(create_oidc_provider),
-        )
-        .route(
-            "/api/v1/settings/oidc/:id",
-            put(update_oidc_provider).delete(delete_oidc_provider),
-        )
         // AI-assisted RCA (ADR-029). Provider config is admin-only and its credential is
         // write-only; generation is `AckAlerts` (the people who actually work incidents) plus the
         // orchestrator's own rate + concurrency caps, and reading a stored report is `View`.
@@ -522,6 +512,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(mib::routes())
         .merge(api_tokens::routes())
         .merge(session::routes())
+        .merge(oidc::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -2713,186 +2704,6 @@ async fn forwarding_status(State(st): State<ApiState>, headers: HeaderMap) -> Re
         "sending": st.is_leader.load(std::sync::atomic::Ordering::Acquire),
     }))
     .into_response()
-}
-
-// ── OIDC login (external IdP, ADR-010 Phase 3) ──────────────────────────────────────────────────
-
-/// Begin an OIDC login: return the IdP authorization URL the browser should be sent to. The CSRF
-/// `state`, `nonce`, and PKCE verifier are stashed server-side (in-memory flight). Unauthenticated
-/// (pre-session). `503` when no provider is configured/enabled.
-async fn oidc_authorize(State(st): State<ApiState>) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    let config = match oidc.enabled_config().await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "sso_disabled",
-                "no OIDC provider is enabled".to_owned(),
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "load OIDC provider failed");
-            return internal("failed to load the OIDC provider");
-        }
-    };
-    match crate::oidc::begin_authorize(&config, &st.oidc_flight).await {
-        Ok(url) => Json(serde_json::json!({ "authorize_url": url })).into_response(),
-        Err(e) => {
-            // Discovery / config problems: don't leak provider internals to the browser.
-            tracing::error!(error = %e, "OIDC authorize failed");
-            error_response(
-                StatusCode::BAD_GATEWAY,
-                "oidc_error",
-                "could not start the SSO login (check the provider configuration)".to_owned(),
-            )
-        }
-    }
-}
-
-/// OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect.
-#[derive(Deserialize)]
-struct OidcCallbackBody {
-    code: String,
-    state: String,
-}
-
-/// Complete an OIDC login: exchange the code, validate the ID token, map the IdP groups to a role,
-/// JIT-provision the account, and issue a Yagra session — returning `{ token, role }` exactly like
-/// local login. Unauthenticated (this mints the session); protected by the `state`/PKCE/nonce.
-async fn oidc_callback(State(st): State<ApiState>, Json(body): Json<OidcCallbackBody>) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    let config = match oidc.enabled_config().await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "sso_disabled",
-                "no OIDC provider is enabled".to_owned(),
-            )
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "load OIDC provider failed");
-            return internal("failed to load the OIDC provider");
-        }
-    };
-    let login =
-        match crate::oidc::complete_callback(&config, &st.oidc_flight, &body.code, &body.state)
-            .await
-        {
-            Ok(login) => login,
-            Err(e) => {
-                // Covers bad/expired state, code exchange failure, ID-token validation failure, and
-                // "no group maps to a role". Audited as a failed OIDC login; the reason stays server-side.
-                tracing::warn!(error = %e, "OIDC login rejected");
-                audit_record(&admin.audit, "(oidc)", "auth.oidc", 401).await;
-                return error_response(
-                    StatusCode::UNAUTHORIZED,
-                    "oidc_denied",
-                    "SSO login could not be completed".to_owned(),
-                );
-            }
-        };
-    match admin
-        .users
-        .upsert_oidc_user(config.id, &login.subject, &login.username, login.role)
-        .await
-    {
-        Ok((user_id, principal)) => {
-            let role = principal.role;
-            let token = st.sessions.issue(user_id, principal, &login.username);
-            audit_record(&admin.audit, &login.username, "auth.oidc", 200).await;
-            Json(serde_json::json!({ "token": token, "role": role })).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "OIDC user provisioning failed");
-            internal("failed to provision the SSO account")
-        }
-    }
-}
-
-/// List configured OIDC providers (metadata only — never the client_secret). `ManageUsers`.
-async fn list_oidc_providers(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match oidc.list().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list OIDC providers failed");
-            internal("failed to list OIDC providers")
-        }
-    }
-}
-
-/// Create an OIDC provider. `ManageUsers`. Audited by the mutating-request middleware.
-async fn create_oidc_provider(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(input): Json<crate::oidc::OidcProviderInput>,
-) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match oidc.create(&input).await {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, "invalid_provider", e.to_string()),
-    }
-}
-
-/// Update an OIDC provider (client_secret omitted keeps the stored value). `ManageUsers`.
-async fn update_oidc_provider(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(input): Json<crate::oidc::OidcProviderInput>,
-) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match oidc.update(id, &input).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("provider_not_found", format!("no OIDC provider {id}")),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, "invalid_provider", e.to_string()),
-    }
-}
-
-/// Delete an OIDC provider. `ManageUsers`.
-async fn delete_oidc_provider(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageUsers) {
-        return resp;
-    }
-    match oidc.delete(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("provider_not_found", format!("no OIDC provider {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete OIDC provider failed");
-            internal("failed to delete the OIDC provider")
-        }
-    }
 }
 
 // ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────────

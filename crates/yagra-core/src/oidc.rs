@@ -413,7 +413,13 @@ impl OidcRepo {
         Ok(n > 0)
     }
 
-    fn validate(input: &OidcProviderInput) -> anyhow::Result<()> {
+    /// Check the parts of a provider definition the caller can get wrong.
+    ///
+    /// Public because the API edge calls it *before* [`Self::create`] / [`Self::update`], to keep
+    /// the two kinds of failure apart. Everything this returns is about the submitted input and is
+    /// safe to show; everything the write path returns afterwards (sealing the secret, the DB) is a
+    /// fault the caller cannot act on and must not see (security.md).
+    pub fn validate(input: &OidcProviderInput) -> anyhow::Result<()> {
         // Fail fast on inputs the flow needs to be well-formed (validated at the API edge).
         IssuerUrl::new(input.issuer.clone()).map_err(|e| anyhow::anyhow!("invalid issuer: {e}"))?;
         RedirectUrl::new(input.redirect_uri.clone())

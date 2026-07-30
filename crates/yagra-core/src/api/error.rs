@@ -121,6 +121,12 @@ impl ApiError {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, code, message)
     }
 
+    /// `502` — an upstream this endpoint depends on (an IdP, a cloud API) misbehaved. Distinct from
+    /// `500`: the fault is outside Yagra, so the operator's next move is to check that system.
+    pub fn bad_gateway(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, code, message)
+    }
+
     /// `429` — refused for capacity or rate, and **retryable**. Distinct from `503` (a subsystem
     /// this deployment does not have) and from `500` (a fault): a client that cannot tell the
     /// three apart either hammers a full queue or gives up on a transient refusal.

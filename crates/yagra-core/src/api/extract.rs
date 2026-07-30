@@ -231,6 +231,32 @@ impl std::ops::Deref for Admin {
     }
 }
 
+/// The OIDC provider store — present only when this deployment persists SSO configuration.
+///
+/// Its own extractor rather than a field read inside each handler, for the same reason as [`Admin`]:
+/// six handlers each opened with the identical `let Some(oidc) = st.oidc.as_ref() else { … }`, and
+/// the one that forgets it does not fail to compile.
+pub struct Oidc(pub Arc<crate::oidc::OidcRepo>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Oidc {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.oidc
+            .as_ref()
+            .map(|o| Self(o.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for Oidc {
+    type Target = crate::oidc::OidcRepo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 // A `Leader` extractor (the ADR-016 standby guard) is not here yet either: the two handlers that
 // need it still call `require_leader(&st)` in `mod.rs`. It arrives with the events domain,
 // alongside the `AckAlerts` marker — same reasoning, an extractor with no user is dead code.
