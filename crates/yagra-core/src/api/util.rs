@@ -62,6 +62,14 @@ pub(crate) async fn audit_record(
     }
 }
 
+/// Rate window for interface utilization, in seconds.
+///
+/// Matches the TSDB query-time rate() derivation (ADR-012); five minutes covers a few poll
+/// intervals so one missed poll does not blank the rate. Shared because the metrics domain and the
+/// interface list must ask the same question of the same counters — two windows would make the
+/// node Overview and the Interfaces tab disagree about the same link.
+pub(crate) const DEFAULT_RATE_LOOKBACK_SECS: u64 = 300;
+
 /// Whether `oid` is a dotted numeric OID (`1.3.6.1.2.1.1.1.0`).
 ///
 /// Structural only — it does not claim the OID exists. The point is that an operator-supplied OID

@@ -32,6 +32,7 @@ pub(crate) mod analysis;
 mod api_tokens;
 mod audit;
 pub(crate) mod checks;
+mod collection;
 mod dashboard;
 mod error;
 pub(crate) mod eventlog;
@@ -60,7 +61,10 @@ pub(crate) use extract::{authorize, bearer, current_username, require_leader, re
 // Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 use nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
-pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
+pub(crate) use util::{
+    audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339,
+    DEFAULT_RATE_LOOKBACK_SECS,
+};
 
 use crate::ack::AckRepo;
 use crate::alerts::AlertManager;
@@ -68,7 +72,7 @@ use crate::analysis::AnalysisRunner;
 use crate::audit::AuditRepo;
 use crate::auth::{LoginThrottle, SessionStore, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
-use crate::collection::{CollectionRepo, CreateTemplateOutcome};
+use crate::collection::CollectionRepo;
 use crate::coordinator::{Coordinator, PollerView};
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
@@ -105,8 +109,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, HostSample, NodeId, Permission, ProfileCategory, Role,
-    Severity,
+    is_ssrf_blocked, HostSample, NodeId, Permission, ProfileCategory, Role, Severity,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -326,40 +329,8 @@ pub fn router(state: ApiState) -> Router {
         )
         // Threshold rules — the one config table that grows with the fleet, so its list is capped.
         .merge(thresholds::routes())
-        .route(
-            "/api/v1/nodes/:node_id/collection",
-            get(list_node_collection).post(create_node_collection),
-        )
-        .route(
-            "/api/v1/collection/:item_id",
-            delete(delete_collection_item),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/interfaces",
-            get(list_node_interfaces),
-        )
         // Flow analysis (ADR-031) — the twelve `/flow/*` endpoints, in `api/flow.rs`.
         .merge(flow::routes())
-        .route(
-            "/api/v1/collection-templates",
-            get(list_collection_templates).post(create_collection_template),
-        )
-        .route(
-            "/api/v1/collection-templates/:id",
-            delete(delete_collection_template),
-        )
-        .route(
-            "/api/v1/collection-templates/:id/items",
-            get(list_template_items).post(create_template_item),
-        )
-        .route(
-            "/api/v1/collection-templates/:id/items/:item_id",
-            delete(delete_template_item),
-        )
-        .route(
-            "/api/v1/profiles/:id/templates",
-            get(list_profile_templates).put(set_profile_templates),
-        )
         // Local user accounts + roles (admin-only), in `api/users.rs`.
         .merge(users::routes())
         // API tokens (PATs) for non-browser clients / the MCP tool surface (ADR-028). Admin-only;
@@ -510,6 +481,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(session::routes())
         .merge(oidc::routes())
         .merge(system::routes())
+        .merge(collection::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -5441,464 +5413,6 @@ async fn reload_event_engine(st: &ApiState, admin: &AdminState) {
     }
 }
 
-// ── Collection sets (what to poll, per profile/node) — ManageConfig only ─────
-
-/// Rate-window for interface utilization (seconds). Matches the TSDB query-time rate()
-/// derivation (ADR-012); 5 min covers a few poll intervals so a single missed poll doesn't
-/// blank the rate.
-const DEFAULT_RATE_LOOKBACK_SECS: u64 = 300;
-/// An interface not refreshed within this window is flagged stale (its metadata is old).
-const INTERFACE_STALE_SECS: i64 = 900;
-
-/// A dotted numeric OID, e.g. `1.3.6.1.2.1.1.3.0`. Validated at the edge so an OID can't be
-/// interpolated into an SNMP request as anything but digits and dots (security.md).
-/// Create/update body for a collection item.
-#[derive(Deserialize)]
-struct CreateCollectionItem {
-    metric_name: String,
-    oid: String,
-    collection: String,
-    metric_kind: String,
-    enabled: Option<bool>,
-}
-
-/// Query for the node collection list: `?resolved=true` returns the effective set.
-#[derive(Deserialize)]
-struct CollectionQuery {
-    resolved: Option<bool>,
-}
-
-/// One interface row for the node-detail Interfaces tab: stored metadata joined with
-/// query-time rate()/latest() metrics. Utilization is derived here (never stored, ADR-012).
-#[derive(Serialize)]
-struct InterfaceRow {
-    ifindex: u32,
-    if_name: Option<String>,
-    if_alias: Option<String>,
-    if_speed_bps: Option<i64>,
-    oper_status: Option<f64>,
-    in_bps: Option<f64>,
-    out_bps: Option<f64>,
-    in_util_pct: Option<f64>,
-    out_util_pct: Option<f64>,
-    last_seen_unix: Option<i64>,
-    stale: bool,
-}
-
-async fn list_node_collection(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Query(q): Query<CollectionQuery>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if q.resolved.unwrap_or(false) {
-        // Effective set: profile defaults overridden by node-level items.
-        let profile = match admin.repo.get_node(node_id).await {
-            Ok(Some(node)) => node.profile.map(|p| p.0),
-            Ok(None) => return not_found("node_not_found", format!("no node {node_id}")),
-            Err(e) => {
-                tracing::error!(error = %e, "get node failed");
-                return internal("failed to load node");
-            }
-        };
-        match admin.collection.list_items_for_node(node_id, profile).await {
-            Ok(scoped) => Json(resolve_collection_set(&scoped)).into_response(),
-            Err(e) => {
-                tracing::error!(error = %e, "resolve collection failed");
-                internal("failed to resolve collection set")
-            }
-        }
-    } else {
-        match admin.collection.list_items("node", node_id).await {
-            Ok(list) => Json(list).into_response(),
-            Err(e) => {
-                tracing::error!(error = %e, "list node collection failed");
-                internal("failed to list collection set")
-            }
-        }
-    }
-}
-
-async fn create_node_collection(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-    Json(body): Json<CreateCollectionItem>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    create_collection_item(admin, "node", node_id, body).await
-}
-
-/// Validate a collection-item body at the API edge; `Some(resp)` short-circuits with 400.
-fn validate_collection_item(body: &CreateCollectionItem) -> Option<Response> {
-    if !is_valid_metric_name(&body.metric_name) {
-        return Some(error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_metric_name",
-            "metric_name must be a valid identifier".to_owned(),
-        ));
-    }
-    if !is_valid_oid(&body.oid) {
-        return Some(error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_oid",
-            "oid must be a dotted numeric OID".to_owned(),
-        ));
-    }
-    if !matches!(body.collection.as_str(), "scalar" | "table")
-        || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
-    {
-        return Some(error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_collection_item",
-            "collection must be scalar|table and metric_kind gauge|counter".to_owned(),
-        ));
-    }
-    None
-}
-
-/// Validate + create a node-scope collection item (the only direct-scope create now).
-async fn create_collection_item(
-    admin: &AdminState,
-    scope_level: &str,
-    scope_id: Uuid,
-    body: CreateCollectionItem,
-) -> Response {
-    if let Some(resp) = validate_collection_item(&body) {
-        return resp;
-    }
-    match admin
-        .collection
-        .create_item(
-            scope_level,
-            scope_id,
-            &body.metric_name,
-            &body.oid,
-            &body.collection,
-            &body.metric_kind,
-            body.enabled.unwrap_or(true),
-        )
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create collection item failed");
-            internal("failed to create collection item")
-        }
-    }
-}
-
-// ── Collection templates (reusable metric bundles) — ManageConfig only ───────
-
-/// Create-template body.
-#[derive(Deserialize)]
-struct CreateTemplate {
-    name: String,
-    description: Option<String>,
-}
-
-/// Replace-all body for a profile's attached templates.
-#[derive(Deserialize)]
-struct SetProfileTemplates {
-    template_ids: Vec<Uuid>,
-}
-
-async fn list_collection_templates(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.list_templates().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list templates failed");
-            internal("failed to list collection templates")
-        }
-    }
-}
-
-async fn create_collection_template(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateTemplate>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.name.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_name",
-            "template name must not be empty".to_owned(),
-        );
-    }
-    match admin
-        .collection
-        .create_template(body.name.trim(), body.description.as_deref())
-        .await
-    {
-        Ok(CreateTemplateOutcome::Created(id)) => {
-            (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
-        }
-        Ok(CreateTemplateOutcome::NameTaken) => error_response(
-            StatusCode::CONFLICT,
-            "template_name_taken",
-            "a template with that name already exists".to_owned(),
-        ),
-        Err(e) => {
-            tracing::error!(error = %e, "create template failed");
-            internal("failed to create collection template")
-        }
-    }
-}
-
-async fn delete_collection_template(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.delete_template(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("template_not_found", format!("no template {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete template failed");
-            internal("failed to delete collection template")
-        }
-    }
-}
-
-async fn list_template_items(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.list_template_items(id).await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list template items failed");
-            internal("failed to list template items")
-        }
-    }
-}
-
-async fn create_template_item(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<CreateCollectionItem>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if let Some(resp) = validate_collection_item(&body) {
-        return resp;
-    }
-    match admin
-        .collection
-        .create_template_item(
-            id,
-            &body.metric_name,
-            &body.oid,
-            &body.collection,
-            &body.metric_kind,
-            body.enabled.unwrap_or(true),
-        )
-        .await
-    {
-        Ok(item_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "id": item_id })),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create template item failed");
-            internal("failed to create template item")
-        }
-    }
-}
-
-async fn delete_template_item(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path((id, item_id)): Path<(Uuid, Uuid)>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.delete_template_item(id, item_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(
-            "template_item_not_found",
-            format!("no item {item_id} in template {id}"),
-        ),
-        Err(e) => {
-            tracing::error!(error = %e, "delete template item failed");
-            internal("failed to delete template item")
-        }
-    }
-}
-
-async fn list_profile_templates(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.list_profile_templates(id).await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list profile templates failed");
-            internal("failed to list profile templates")
-        }
-    }
-}
-
-async fn set_profile_templates(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<SetProfileTemplates>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin
-        .collection
-        .set_profile_templates(id, &body.template_ids)
-        .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "set profile templates failed");
-            internal("failed to set profile templates")
-        }
-    }
-}
-
-async fn delete_collection_item(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(item_id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.collection.delete_item(item_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(
-            "collection_item_not_found",
-            format!("no collection item {item_id}"),
-        ),
-        Err(e) => {
-            tracing::error!(error = %e, "delete collection item failed");
-            internal("failed to delete collection item")
-        }
-    }
-}
-
-/// Interfaces discovered on a node, with query-time utilization. Read endpoint; empty in
-/// skeleton mode (interface inventory is PostgreSQL-only).
-async fn list_node_interfaces(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(node_id): Path<Uuid>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return Json(Vec::<InterfaceRow>::new()).into_response();
-    };
-    let metas = match admin.repo.list_interfaces(node_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!(error = %e, "list interfaces failed");
-            return internal("failed to list interfaces");
-        }
-    };
-    let now = now_unix_s();
-    // One batched fetch for the whole node (3 TSDB round-trips), not 3 queries per interface — a
-    // 48-port switch refreshing for every open client would otherwise be ~150 sequential queries.
-    let live = st
-        .store
-        .node_interface_live(node_id, DEFAULT_RATE_LOOKBACK_SECS)
-        .await;
-    let mut out = Vec::with_capacity(metas.len());
-    for m in metas {
-        let ifindex = u32::try_from(m.ifindex).unwrap_or(0);
-        let l = live.get(&m.ifindex).copied().unwrap_or_default();
-        // Octet counters are bytes/sec via rate(); ×8 ⇒ bits/sec.
-        let in_bps = l.in_bps.map(|r| r * 8.0);
-        let out_bps = l.out_bps.map(|r| r * 8.0);
-        let oper_status = l.oper_status;
-        let speed = m.if_speed.filter(|s| *s > 0);
-        let util = |bps: Option<f64>| match (bps, speed) {
-            (Some(b), Some(s)) => Some(b / s as f64 * 100.0),
-            _ => None,
-        };
-        let stale = m.last_seen_s.is_none_or(|s| now - s > INTERFACE_STALE_SECS);
-        out.push(InterfaceRow {
-            ifindex,
-            if_name: m.if_name,
-            if_alias: m.if_alias,
-            if_speed_bps: m.if_speed,
-            oper_status,
-            in_bps,
-            out_bps,
-            in_util_pct: util(in_bps),
-            out_util_pct: util(out_bps),
-            last_seen_unix: m.last_seen_s,
-            stale,
-        });
-    }
-    Json(out).into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6323,27 +5837,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn collection_create_unavailable_without_admin() {
-        let node = Uuid::nil();
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/v1/nodes/{node}/collection"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"metric_name":"if_hc_in_octets","oid":"1.3.6.1.2.1.31.1.1.1.6","collection":"table","metric_kind":"counter"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
     async fn node_names_batch_resolves_and_is_bounded() {
         // Route registers (no collision with /nodes/:node_id), the JSON body parses, and the
         // read gate is open in public-dashboard mode. Without an admin repo no names resolve, so
@@ -6363,59 +5856,6 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(body_json(resp).await.as_array().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn collection_templates_list_unavailable_without_admin() {
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/collection-templates")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn create_template_unavailable_without_admin() {
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/collection-templates")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"My template"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn set_profile_templates_unavailable_without_admin() {
-        let id = Uuid::nil();
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(format!("/api/v1/profiles/{id}/templates"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"template_ids":[]}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]
