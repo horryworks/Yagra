@@ -46,6 +46,7 @@ mod oidc;
 #[cfg(test)]
 mod route_table;
 mod session;
+mod system;
 #[cfg(test)]
 mod tests_support;
 pub(crate) mod thresholds;
@@ -83,7 +84,7 @@ use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{self, ReportRunner, ScheduleInput};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
-use crate::store::{MetricPoint, MetricStore};
+use crate::store::MetricStore;
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
@@ -104,8 +105,8 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_common::{
-    is_ssrf_blocked, resolve_collection_set, DiskUsage, HostSample, NodeId, Permission,
-    ProfileCategory, Role, Severity,
+    is_ssrf_blocked, resolve_collection_set, HostSample, NodeId, Permission, ProfileCategory, Role,
+    Severity,
 };
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
@@ -410,11 +411,6 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/system-health", get(system_health))
         // Host self-observability: current CPU/load/mem/disk of core + each poller, and the trend
         // series behind the System Health "Host resources" charts.
-        .route("/api/v1/system/hosts", get(system_hosts))
-        .route(
-            "/api/v1/system/hosts/:instance/metrics/range",
-            get(host_metric_range),
-        )
         .route("/api/v1/version", get(version))
         .route(
             "/api/v1/notification-channels",
@@ -513,6 +509,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(api_tokens::routes())
         .merge(session::routes())
         .merge(oidc::routes())
+        .merge(system::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -1392,211 +1389,6 @@ async fn system_health(State(st): State<ApiState>, headers: HeaderMap) -> Respon
         logs,
         flow,
         bus,
-    })
-    .into_response()
-}
-
-// ── Host self-observability: CPU/load/mem/disk of core + each poller ──────────
-
-/// One self-monitored host in `GET /api/v1/system/hosts`: current resource values for the core
-/// process's host (`role="core"`) or a poller's host (`role="poller"`). Secret-free — an
-/// `instance` is `core` or an already-sanitized poller id, and `mount` labels are configured
-/// aliases, never raw device paths.
-#[derive(Serialize)]
-struct HostInfo {
-    /// `core` or the poller id.
-    instance: String,
-    /// `"core"` or `"poller"`.
-    role: &'static str,
-    /// Pool the poller serves; `null` for core.
-    pool: Option<String>,
-    /// Whether the source is currently reporting (core is always online; a poller within its
-    /// heartbeat window).
-    online: bool,
-    /// Current CPU utilization % (0–100); `null` when no sample yet.
-    cpu_pct: Option<f64>,
-    /// Current 1-minute load average; `null` when no sample / unavailable on the platform.
-    load1: Option<f64>,
-    /// Memory in use, bytes; `null` when no sample.
-    mem_used_bytes: Option<u64>,
-    /// Total physical memory, bytes; `null` when no sample.
-    mem_total_bytes: Option<u64>,
-    /// Memory-used %, derived; `null` when total is unknown.
-    mem_used_pct: Option<f64>,
-    /// Highest watched-filesystem used %, for at-a-glance columns; `null` when none has a capacity.
-    disk_used_pct: Option<f64>,
-    /// Current per-watched-filesystem usage.
-    disks: Vec<DiskUsage>,
-}
-
-/// The `GET /api/v1/system/hosts` body: core plus every poller that reports host telemetry.
-#[derive(Serialize)]
-struct SystemHostsResponse {
-    hosts: Vec<HostInfo>,
-}
-
-/// Build a [`HostInfo`] from an optional sample (absent ⇒ all-`null` metrics but the row still
-/// lists, so the instance selector shows the host even before its first sample).
-fn host_info(
-    instance: &str,
-    role: &'static str,
-    pool: Option<String>,
-    online: bool,
-    s: Option<&HostSample>,
-) -> HostInfo {
-    HostInfo {
-        instance: instance.to_owned(),
-        role,
-        pool,
-        online,
-        cpu_pct: s.map(|s| s.cpu_pct),
-        load1: s.map(|s| s.load1),
-        mem_used_bytes: s.map(|s| s.mem_used_bytes),
-        mem_total_bytes: s.map(|s| s.mem_total_bytes),
-        mem_used_pct: s.and_then(HostSample::mem_used_pct),
-        disk_used_pct: s.and_then(HostSample::primary_disk_used_pct),
-        disks: s.map(|s| s.disks.clone()).unwrap_or_default(),
-    }
-}
-
-/// `GET /api/v1/system/hosts` — current host resources for core and every poller reporting
-/// telemetry. `View`-gated and secret-free (like the other fleet views). Always returns core (it is
-/// answering the request); pollers come from the live registry, so skeleton mode returns just core.
-async fn system_hosts(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let mut hosts = Vec::new();
-    let core = st.host_sample.lock().ok().and_then(|g| g.clone());
-    hosts.push(host_info("core", "core", None, true, core.as_ref()));
-    if let Some(admin) = st.admin.as_ref() {
-        for v in admin.coordinator.poller_views(Instant::now()) {
-            if let Some(h) = v.host.as_ref() {
-                hosts.push(host_info(
-                    &v.id,
-                    "poller",
-                    Some(v.pool.clone()),
-                    v.online,
-                    Some(h),
-                ));
-            }
-        }
-    }
-    Json(SystemHostsResponse { hosts }).into_response()
-}
-
-/// The watched-filesystem mounts for one instance, or `None` if the instance is unknown (⇒ 404).
-/// `core` is always valid (empty mounts until its first sample); a poller is valid iff it is in the
-/// live registry. Bounds the `instance`/`mount` values that reach a PromQL selector to known ones.
-fn host_disk_mounts(st: &ApiState, instance: &str) -> Option<Vec<String>> {
-    if instance == "core" {
-        let mounts = st
-            .host_sample
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-            .map(|s| s.disks.iter().map(|d| d.mount.clone()).collect())
-            .unwrap_or_default();
-        return Some(mounts);
-    }
-    let admin = st.admin.as_ref()?;
-    let view = admin
-        .coordinator
-        .poller_views(Instant::now())
-        .into_iter()
-        .find(|v| v.id == instance)?;
-    Some(
-        view.host
-            .map(|h| h.disks.into_iter().map(|d| d.mount).collect())
-            .unwrap_or_default(),
-    )
-}
-
-/// Query params for the host-metrics range endpoint (all optional; same defaults as node ranges).
-#[derive(Deserialize)]
-struct HostRangeQuery {
-    from: Option<i64>,
-    to: Option<i64>,
-    step: Option<u64>,
-}
-
-/// A per-mount filesystem trend: used vs. size over the window (the frontend derives % or shows a
-/// bare-bytes trend when `size` is all zero, e.g. the `database` size proxy).
-#[derive(Serialize)]
-struct HostDiskRange {
-    mount: String,
-    used_bytes: Vec<MetricPoint>,
-    size_bytes: Vec<MetricPoint>,
-}
-
-/// The `GET /api/v1/system/hosts/:instance/metrics/range` body — the scalar host trends plus a
-/// per-mount filesystem trend, all over one window. One round trip per instance/range change.
-#[derive(Serialize)]
-struct HostMetricRange {
-    instance: String,
-    cpu_pct: Vec<MetricPoint>,
-    load1: Vec<MetricPoint>,
-    load5: Vec<MetricPoint>,
-    load15: Vec<MetricPoint>,
-    mem_used_bytes: Vec<MetricPoint>,
-    mem_total_bytes: Vec<MetricPoint>,
-    disks: Vec<HostDiskRange>,
-}
-
-/// `GET /api/v1/system/hosts/:instance/metrics/range` — host CPU/load/mem/disk trends for one
-/// instance (`core` or a poller id) over `[from,to]` at `step`. `View`-gated; the `instance` is
-/// validated against the known set before any selector is built.
-async fn host_metric_range(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(instance): Path<String>,
-    Query(q): Query<HostRangeQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(mounts) = host_disk_mounts(&st, &instance) else {
-        return not_found("host_not_found", format!("unknown instance {instance:?}"));
-    };
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
-    let store = &st.store;
-    // The six scalar host series and each mount's two disk series are all independent range
-    // queries — fan them all out concurrently (this backs the 15s System Health refresh).
-    let (cpu_pct, load1, load5, load15, mem_used_bytes, mem_total_bytes) = tokio::join!(
-        store.host_metric_range(&instance, "cpu_pct", from, to, step),
-        store.host_metric_range(&instance, "load1", from, to, step),
-        store.host_metric_range(&instance, "load5", from, to, step),
-        store.host_metric_range(&instance, "load15", from, to, step),
-        store.host_metric_range(&instance, "mem_used_bytes", from, to, step),
-        store.host_metric_range(&instance, "mem_total_bytes", from, to, step),
-    );
-    let disks = futures::future::join_all(mounts.into_iter().map(|mount| {
-        let store = &st.store;
-        let instance = &instance;
-        async move {
-            let (used_bytes, size_bytes) = tokio::join!(
-                store.host_disk_range(instance, "fs_used_bytes", &mount, from, to, step),
-                store.host_disk_range(instance, "fs_size_bytes", &mount, from, to, step),
-            );
-            HostDiskRange {
-                mount,
-                used_bytes,
-                size_bytes,
-            }
-        }
-    }))
-    .await;
-    Json(HostMetricRange {
-        instance,
-        cpu_pct,
-        load1,
-        load5,
-        load15,
-        mem_used_bytes,
-        mem_total_bytes,
-        disks,
     })
     .into_response()
 }
@@ -6116,6 +5908,7 @@ mod tests {
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt; // for `oneshot`
     use yagra_bus::{CheckOutcome, PollResult, Sample};
+    use yagra_common::DiskUsage;
 
     fn state_with(store: Arc<dyn MetricStore>) -> ApiState {
         // Public-dashboard mode: read endpoints are open (no token required).
