@@ -35,6 +35,7 @@ pub(crate) mod checks;
 mod classification;
 mod collection;
 mod dashboard;
+mod discovery;
 mod error;
 pub(crate) mod eventlog;
 pub(crate) mod extract;
@@ -105,7 +106,6 @@ use axum::{
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -400,10 +400,6 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
         )
-        .route("/api/v1/discovery/scan", post(start_discovery_scan))
-        .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
-        .route("/api/v1/discovery/import", post(import_discovered))
-        .route("/api/v1/discovery/candidates", get(discovery_candidates))
         // Troubleshoot analysis jobs (ADR-022), in `api/analysis.rs`.
         .merge(analysis::routes())
         .route("/api/v1/reports/sections", get(list_report_sections))
@@ -476,6 +472,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(system::routes())
         .merge(collection::routes())
         .merge(classification::routes())
+        .merge(discovery::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -657,29 +654,6 @@ pub(crate) fn is_valid_metric_name(metric: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-}
-
-/// Query for the standing discovery-candidates view.
-#[derive(Deserialize)]
-struct CandidatesQuery {
-    limit: Option<usize>,
-}
-
-/// Recent discovered (unclassified) devices across in-memory scans — the dashboard "discovery
-/// queue". Read-only; empty in skeleton mode (no discovery runner).
-async fn discovery_candidates(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<CandidatesQuery>,
-) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return Json(Vec::<serde_json::Value>::new()).into_response();
-    };
-    let limit = q.limit.unwrap_or(10).clamp(1, 50);
-    Json(admin.discovery.recent_candidates(limit)).into_response()
 }
 
 /// Poll-loop self-monitoring: last sweep time, jobs dispatched last round, total results consumed.
@@ -4370,269 +4344,6 @@ fn validate_webhook_url(url: &str) -> Result<(), &'static str> {
         }
     }
     Ok(())
-}
-
-// ── Discovery (subnet sweep → review → import) — ManageConfig only ───────────
-
-/// Most targets a single scan may sweep (keeps the sweep bounded).
-const MAX_SCAN_TARGETS: usize = 1024;
-
-/// Start-scan body: explicit target IPs (the WebUI expands a CIDR), candidate stored
-/// credentials (by id — resolved server-side, ADR-018/020), and ad-hoc communities.
-#[derive(Deserialize)]
-struct StartScan {
-    targets: Vec<String>,
-    #[serde(default)]
-    communities: Vec<String>,
-    #[serde(default)]
-    credential_ids: Vec<String>,
-    /// Poll-pool to run the sweep in (ADR-009/020). Absent/empty = legacy global discovery
-    /// (compat). When it names a pool with a live poller, the sweep is routed to that pool's own
-    /// discovery subject so a remote-site poller scans its own network; otherwise it falls back to
-    /// the global subject (so an operator can't accidentally aim a scan at a pool no poller serves).
-    #[serde(default)]
-    pool: Option<String>,
-}
-
-/// Resolve a scan's stored credential ids into inline candidates for the sweep job.
-/// `Err` carries a client-safe message (ids and static reasons only — never any secret
-/// content, security.md).
-async fn resolve_scan_credentials(
-    creds: &CredentialStore,
-    ids: &[String],
-) -> Result<Vec<yagra_bus::DiscoveryCredential>, Response> {
-    let mut out = Vec::with_capacity(ids.len());
-    for raw in ids {
-        let Ok(id) = raw.parse::<Uuid>() else {
-            return Err(error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_credential",
-                format!("'{raw}' is not a valid credential id"),
-            ));
-        };
-        let opened = match creds.open(id).await {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::error!(error = %e, credential = %id, "open scan credential failed");
-                return Err(internal("failed to resolve a scan credential"));
-            }
-        };
-        let Some((kind, secret)) = opened else {
-            return Err(error_response(
-                StatusCode::BAD_REQUEST,
-                "credential_not_found",
-                format!("no credential {id}"),
-            ));
-        };
-        if kind == crate::secrets::KIND_SNMP_V3 {
-            match crate::secrets::SnmpV3Secret::parse(&secret) {
-                Ok(v3) => out.push(yagra_bus::DiscoveryCredential {
-                    cred_ref: id,
-                    community: None,
-                    v3: Some(yagra_bus::DiscoveryV3 {
-                        user: v3.user,
-                        security_level: v3.security_level,
-                        auth_protocol: v3.auth_protocol,
-                        auth_key: v3.auth_key,
-                        priv_protocol: v3.priv_protocol,
-                        priv_key: v3.priv_key,
-                    }),
-                }),
-                Err(reason) => {
-                    return Err(error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_credential",
-                        format!("credential {id} is not usable: {reason}"),
-                    ))
-                }
-            }
-        } else {
-            match String::from_utf8(secret) {
-                Ok(community) => out.push(yagra_bus::DiscoveryCredential {
-                    cred_ref: id,
-                    community: Some(community),
-                    v3: None,
-                }),
-                Err(_) => {
-                    return Err(error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_credential",
-                        format!("credential {id} is not usable as an SNMP community"),
-                    ))
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-async fn start_discovery_scan(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<StartScan>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.targets.is_empty() || body.targets.len() > MAX_SCAN_TARGETS {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_scan",
-            format!("targets must be 1..={MAX_SCAN_TARGETS} addresses"),
-        );
-    }
-    let mut targets = Vec::with_capacity(body.targets.len());
-    for t in &body.targets {
-        match t.parse::<IpAddr>() {
-            Ok(ip) => targets.push(ip),
-            Err(_) => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_address",
-                    format!("'{t}' is not a valid IP address"),
-                )
-            }
-        }
-    }
-    let credentials = match resolve_scan_credentials(&admin.creds, &body.credential_ids).await {
-        Ok(c) => c,
-        Err(resp) => return resp,
-    };
-    // Route the sweep to a pool's own discovery subject only when that pool has a live poller (one
-    // subscribed to it); otherwise fall back to the legacy global subject for N/N-1 compatibility
-    // (an old wildcard poller still absorbs it, and a typo'd pool name never black-holes the scan).
-    let requested_pool = body
-        .pool
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty());
-    let pool_route = match requested_pool {
-        Some(p) if admin.coordinator.live_pools(Instant::now()).contains(p) => Some(p),
-        _ => None,
-    };
-    match admin
-        .discovery
-        .start(targets, body.communities, credentials, pool_route)
-        .await
-    {
-        Ok(scan_id) => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({ "scan_id": scan_id })),
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "start discovery scan failed");
-            internal("failed to start discovery scan")
-        }
-    }
-}
-
-async fn get_discovery_scan(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.discovery.get(id) {
-        Some(status) => Json(status).into_response(),
-        None => not_found("scan_not_found", format!("no scan {id}")),
-    }
-}
-
-/// One discovered device the operator chose to add.
-#[derive(Deserialize)]
-struct ImportNode {
-    address: String,
-    name: String,
-    profile_id: Option<String>,
-    credential_id: Option<String>,
-    /// Maker/model pre-filled from discovery's sysDescr classification (editable before import).
-    #[serde(default)]
-    vendor: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-}
-
-/// Import body: the selected devices to create as nodes.
-#[derive(Deserialize)]
-struct ImportDiscovered {
-    nodes: Vec<ImportNode>,
-}
-
-async fn import_discovered(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<ImportDiscovered>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
-        match s {
-            None => Ok(None),
-            Some(v) => v.parse::<Uuid>().map(Some).map_err(|_| ()),
-        }
-    };
-    // Validate every node up front, then insert the whole batch in one transaction so a failure
-    // partway can't leave a partial import (atomicity — see NodeRepo::import_nodes).
-    let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
-    for n in &body.nodes {
-        let Ok(addr) = n.address.parse::<IpAddr>() else {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_address",
-                format!("'{}' is not a valid IP address", n.address),
-            );
-        };
-        let name = n.name.trim();
-        if name.is_empty() {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_node",
-                "name must not be empty".to_owned(),
-            );
-        }
-        let (Ok(profile), Ok(credential)) =
-            (parse_uuid(&n.profile_id), parse_uuid(&n.credential_id))
-        else {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_binding",
-                "profile_id/credential_id must be UUIDs".to_owned(),
-            );
-        };
-        prepared.push(crate::repo::NewNode {
-            name,
-            address: addr,
-            profile,
-            credential,
-            vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-            model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        });
-    }
-    let created = match admin.repo.import_nodes(&prepared).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "import discovered nodes failed");
-            return internal("failed to import discovered nodes");
-        }
-    };
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "created": created })),
-    )
-        .into_response()
 }
 
 // ── Passive events: webhook ingest + sources/rules CRUD + event log + close ─────────
