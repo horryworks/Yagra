@@ -42,6 +42,7 @@ pub(crate) mod extract;
 pub(crate) mod fleet;
 mod flow;
 mod forwarding;
+mod groups;
 pub(crate) mod maintenance;
 pub(crate) mod metrics;
 mod mib;
@@ -65,7 +66,6 @@ pub use error::{ApiError, ApiResult};
 pub(crate) use extract::{authorize, bearer, current_username, require_leader, require_view};
 // Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
-use nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
 pub(crate) use util::{
     audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339,
     DEFAULT_RATE_LOOKBACK_SECS,
@@ -81,7 +81,7 @@ use crate::collection::CollectionRepo;
 use crate::coordinator::{Coordinator, PollerView};
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
-use crate::groups::{placement_order, would_create_cycle, GroupRepo, GroupType};
+use crate::groups::GroupRepo;
 use crate::history::AlertHistoryStore;
 use crate::logstore::LogStore;
 use crate::maintenance::MaintenanceRepo;
@@ -303,17 +303,6 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/meraki/polling",
             get(get_meraki_polling).put(set_meraki_polling),
         )
-        .route(
-            "/api/v1/node-groups",
-            get(list_node_groups).post(create_node_group),
-        )
-        .route(
-            "/api/v1/node-groups/:id",
-            put(update_node_group).delete(delete_node_group),
-        )
-        .route("/api/v1/node-groups/:id/placement", put(place_group))
-        .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
-        .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
         .route("/api/v1/profiles", get(list_profiles).post(create_profile))
         .route(
             "/api/v1/profiles/:id",
@@ -440,6 +429,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(notifications::routes())
         .merge(rca::routes())
         .merge(forwarding::routes())
+        .merge(groups::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -2609,312 +2599,6 @@ async fn set_meraki_polling(
 
 /// `PUT /api/v1/node-groups/:id/pool` — set just the folder's pool. Every node beneath it that
 /// has no pool of its own follows on the next sweep (see `poolres`).
-async fn set_node_group_pool(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<PoolAssignment>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let pool = match validate_pool_create(body.pool) {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-    match admin.groups.set_pool(id, pool.as_deref()).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("group_not_found", format!("no group {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set group pool failed");
-            internal("failed to set group pool")
-        }
-    }
-}
-
-// ── Node groups (the inventory folder tree) — ManageConfig writes, View reads ─
-
-async fn list_node_groups(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    match admin.groups.list().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list node groups failed");
-            internal("failed to list node groups")
-        }
-    }
-}
-
-/// Create/update body for a group. `group_type` is a validated [`GroupType`] key.
-#[derive(Deserialize)]
-struct GroupBody {
-    name: String,
-    group_type: String,
-    #[serde(default)]
-    parent_id: Option<Uuid>,
-    /// Poll-pool this folder assigns to its nodes (ADR-009/020). Same three-state contract as
-    /// [`NodeBindings::pool`]: **absent** leaves it unchanged, `""` clears it (inherit from the
-    /// nearest ancestor, else the default pool), otherwise it moves the folder's nodes to that
-    /// pool. See [`validate_pool_update`].
-    #[serde(default)]
-    pool: Option<String>,
-}
-
-/// Validate the request: non-empty name + a known group type. Returns the parsed type, or a
-/// client-safe message for a 400 (kept as a `String` so the `Err` stays small).
-fn parse_group_body(body: &GroupBody) -> Result<GroupType, String> {
-    if body.name.trim().is_empty() {
-        return Err("group name must not be empty".to_owned());
-    }
-    GroupType::from_key(body.group_type.trim())
-        .ok_or_else(|| format!("unknown group type {:?}", body.group_type))
-}
-
-async fn create_node_group(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<GroupBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let group_type = match parse_group_body(&body) {
-        Ok(t) => t,
-        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
-    };
-    let pool = match validate_pool_create(body.pool) {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-    match admin
-        .groups
-        .create(
-            body.name.trim(),
-            group_type,
-            body.parent_id,
-            pool.as_deref(),
-        )
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create node group failed");
-            internal("failed to create group")
-        }
-    }
-}
-
-async fn update_node_group(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<GroupBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let group_type = match parse_group_body(&body) {
-        Ok(t) => t,
-        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_group", msg),
-    };
-    let pool_update = match validate_pool_update(body.pool) {
-        Ok(u) => u,
-        Err(e) => return e.into_response(),
-    };
-    // Reject a re-parent that would create a cycle (a group can't be its own ancestor).
-    if body.parent_id.is_some() {
-        match admin.groups.edges().await {
-            Ok(edges) => {
-                if would_create_cycle(&edges, id, body.parent_id) {
-                    return error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_group",
-                        "that move would nest the group inside itself".to_owned(),
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "load group edges failed");
-                return internal("failed to update group");
-            }
-        }
-    }
-    match admin
-        .groups
-        .update(
-            id,
-            body.name.trim(),
-            group_type,
-            body.parent_id,
-            pool_update.as_ref().map(|inner| inner.as_deref()),
-        )
-        .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("group_not_found", format!("no group {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "update node group failed");
-            internal("failed to update group")
-        }
-    }
-}
-
-/// Drag-reorder a group, re-parenting it under `parent_id` (`null` ⇒ top level) and positioning
-/// it relative to a sibling group. `before`/`after` name the sibling (both omitted ⇒ append).
-/// Refuses a move that would nest the group inside its own subtree (cycle guard).
-#[derive(Deserialize)]
-struct GroupPlacement {
-    #[serde(default)]
-    parent_id: Option<Uuid>,
-    #[serde(default)]
-    before: Option<Uuid>,
-    #[serde(default)]
-    after: Option<Uuid>,
-}
-
-async fn place_group(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<GroupPlacement>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    if body.before.is_some() && body.after.is_some() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_placement",
-            "specify at most one of before/after".to_owned(),
-        );
-    }
-    let edges = match admin.groups.edges().await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::error!(error = %e, "load group edges failed");
-            return internal("failed to move group");
-        }
-    };
-    if would_create_cycle(&edges, id, body.parent_id) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_group",
-            "that move would nest the group inside itself".to_owned(),
-        );
-    }
-    let siblings = match admin.groups.ordered_siblings(body.parent_id).await {
-        Ok(s) => s
-            .into_iter()
-            .filter(|(sid, _)| *sid != id)
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            tracing::error!(error = %e, "load group siblings failed");
-            return internal("failed to move group");
-        }
-    };
-    let order = placement_order(&siblings, body.before, body.after);
-    match admin.groups.place(id, body.parent_id, order).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("group_not_found", format!("no group {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "place group failed");
-            internal("failed to move group")
-        }
-    }
-}
-
-/// Set/clear a group's geo coordinates (both or neither). Body: `{ latitude, longitude }` —
-/// `null` for both clears the pin.
-#[derive(Deserialize)]
-struct GroupGeo {
-    latitude: Option<f64>,
-    longitude: Option<f64>,
-}
-
-async fn set_node_group_geo(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<GroupGeo>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    // Both or neither, and within valid coordinate ranges.
-    match (body.latitude, body.longitude) {
-        (Some(lat), Some(lon)) => {
-            if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_coordinates",
-                    "latitude must be -90..90 and longitude -180..180".to_owned(),
-                );
-            }
-        }
-        (None, None) => {}
-        _ => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_coordinates",
-                "provide both latitude and longitude, or neither (to clear)".to_owned(),
-            )
-        }
-    }
-    match admin
-        .groups
-        .set_geo(id, body.latitude, body.longitude)
-        .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("group_not_found", format!("no group {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "set group geo failed");
-            internal("failed to set group coordinates")
-        }
-    }
-}
-
-async fn delete_node_group(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.groups.delete(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("group_not_found", format!("no group {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete node group failed");
-            internal("failed to delete group")
-        }
-    }
-}
-
 async fn list_profiles(State(st): State<ApiState>, headers: HeaderMap) -> Response {
     let Some(admin) = st.admin.as_ref() else {
         return unavailable();
@@ -4499,46 +4183,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_node_group_unavailable_without_admin() {
-        // The route is wired; in skeleton mode (admin: None) group management is 503.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/node-groups")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"Tokyo","group_type":"site"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn placement_routes_unavailable_without_admin() {
-        // The *group* drag-reorder route is still here and still availability-first. Its node
-        // sibling moved to `api/nodes.rs`, where the guard runs first — so it answers 401 to this
-        // anonymous request. `nodes::tests` pins both sides of that.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let group_resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/node-groups/00000000-0000-0000-0000-000000000000/placement")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"parent_id":null}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(group_resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[tokio::test]
     async fn healthz_returns_ok() {
         let app = router(state_with(Arc::new(InMemorySink::default())));
         let resp = app
@@ -4876,28 +4520,6 @@ mod tests {
     }
 
     // ── Distributed poller pool (ADR-009/020) — Pollers API ───────────────────
-
-    #[tokio::test]
-    async fn the_folder_pool_write_is_unavailable_without_admin() {
-        // Skeleton mode has no metadata store, so the write reports the standard 503 rather than
-        // pretending to have moved anything. The sibling `/nodes/:id/pool` route has moved to
-        // `api/nodes.rs` and is guard-first now, so it answers 401 here instead — see
-        // `nodes::tests::every_inventory_write_is_authenticated_before_anything_else`.
-        let uri = format!("/api/v1/node-groups/{}/pool", Uuid::nil());
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri(&uri)
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"pool":"tokyo"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
-    }
 
     #[test]
     fn polled_by_states_cover_every_answer() {
