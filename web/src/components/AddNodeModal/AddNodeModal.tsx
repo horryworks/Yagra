@@ -55,6 +55,9 @@ export function AddNodeModal({
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** In flight. Creation is not idempotent, so an unguarded second click makes a second node —
+   *  and the operator only finds out when a duplicate appears in the tree. */
+  const [busy, setBusy] = useState(false);
 
   const set = <K extends keyof AddNodeForm>(key: K, value: AddNodeForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -76,14 +79,20 @@ export function AddNodeModal({
     targetFilled(kind, { address: form.address, url: form.url, dnsName: form.dnsName });
 
   const submit = () => {
+    setBusy(true);
     setError(null);
     sendCreate(createRequest(kind, form))
       // The create endpoints take no group_id, so a node lands Ungrouped; when the add was launched
       // from a folder's right-click, place it there with the canonical op (same as drag-drop). A
       // placement failure is soft — the node still exists, just at top level.
       .then(({ id }) => (groupId ? api.setNodeGroup(id, groupId) : undefined))
+      // No `setBusy(false)` here: success unmounts the dialog, and re-enabling it first would open
+      // a window where the button is live again with the node already created.
       .then(onCreated)
-      .catch((e: unknown) => setError(errMsg(e, t(spec.errorKey))));
+      .catch((e: unknown) => {
+        setError(errMsg(e, t(spec.errorKey)));
+        setBusy(false);
+      });
   };
 
   // Keyed by kind rather than chained on it, so the compiler demands an entry for a fourth kind
@@ -240,8 +249,10 @@ export function AddNodeModal({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>{t('common:actions.cancel')}</Button>
-          <Button variant="primary" onClick={submit} disabled={!canSubmit}>
+          <Button onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!canSubmit || busy}>
             {title}
           </Button>
         </>

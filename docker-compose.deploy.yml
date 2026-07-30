@@ -167,6 +167,11 @@ services:
       - "${YAGRA_SFLOW_PORT:-6343}:6343/udp"   # sFlow intake (ADR-031 Increment 2; bind via YAGRA_SFLOW_BIND)
     # NOTE: event→node correlation keys on the datagram source IP. If Docker's bridge
     # networking rewrites it on this host, switch the poller to `network_mode: host`.
+    volumes:
+      # Store-and-forward disk spill (Phase 3). Without it the buffer is memory-only, so a bus
+      # outage longer than the in-memory ring drops the oldest results, and a poller restart
+      # mid-outage loses everything it was holding.
+      - pollerbuf:/var/lib/yagra/buffer
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     restart: unless-stopped
@@ -316,3 +321,4 @@ volumes:
   ipasndata:  # offline IP→ASN dataset (ADR-031) — written by ipasn-updater, read by core
   chdata:    # ClickHouse flow store (ADR-031)
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts
+  pollerbuf: # store-and-forward result buffer (Phase 3) — survives poller restarts

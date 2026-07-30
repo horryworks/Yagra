@@ -80,10 +80,17 @@ ENTRYPOINT ["/usr/local/bin/yagra-core"]
 # capabilities on the uid switch. We grant the capability to the binary itself via a file capability
 # (`setcap cap_net_raw+ep`), so only this one program (still non-root) can open raw ICMP sockets.
 FROM debian:bookworm-slim AS poller
+# The `install -d` below creates the store-and-forward spill directory (Phase 3) owned by the
+# runtime user. /var/lib is root-owned, so without it the non-root poller cannot create the
+# directory and the buffer degrades to memory-only after one startup WARN — invisible until a bus
+# outage outlasts the in-memory ring and the oldest poll results are dropped. It also fixes the
+# mounted case: Docker seeds an empty named volume from the image path, ownership included, whereas
+# a mount point it has to invent itself is root-owned.
 RUN useradd -r -u 10002 yagra \
  && apt-get update \
  && apt-get install -y --no-install-recommends libcap2-bin \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
 COPY --from=build /app/yagra-poller /usr/local/bin/yagra-poller
 # File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
 RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller
