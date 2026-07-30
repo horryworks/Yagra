@@ -262,6 +262,8 @@ async fn set_node_group_geo(
     }
 }
 
+/// Set just the folder's pool. Every node beneath it that has no pool of its own follows on the
+/// next sweep (see `poolres`).
 async fn set_node_group_pool(
     _guard: RequireManageConfig,
     admin: Admin,

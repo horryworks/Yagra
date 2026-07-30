@@ -137,6 +137,16 @@ impl RequiredPermission for ManageMaintenancePerm {
     const PERMISSION: Permission = Permission::ManageMaintenance;
 }
 
+/// Create, edit or remove stored monitoring credentials.
+///
+/// Its own permission rather than `ManageConfig`: these are the SNMP communities, SNMPv3 USM
+/// documents and device logins the whole fleet is polled with, so holding them is a strictly
+/// larger power than editing what gets polled.
+pub struct ManageCredentialsPerm;
+impl RequiredPermission for ManageCredentialsPerm {
+    const PERMISSION: Permission = Permission::ManageCredentials;
+}
+
 /// Read the audit log — who did what, across the whole system, including actions taken in domains
 /// the caller cannot otherwise see. Its own permission rather than `ManageConfig` for that reason.
 pub struct ViewAuditPerm;
@@ -158,6 +168,8 @@ pub type RequireManageConfig = Require<ManageConfigPerm>;
 pub type RequireAckAlerts = Require<AckAlertsPerm>;
 /// Gated on maintenance-window management.
 pub type RequireManageMaintenance = Require<ManageMaintenancePerm>;
+/// Gated on managing stored monitoring credentials.
+pub type RequireManageCredentials = Require<ManageCredentialsPerm>;
 /// Gated on reading the audit log.
 pub type RequireViewAudit = Require<ViewAuditPerm>;
 

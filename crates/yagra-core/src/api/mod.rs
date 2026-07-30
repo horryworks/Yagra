@@ -34,6 +34,7 @@ mod audit;
 pub(crate) mod checks;
 mod classification;
 mod collection;
+mod credentials;
 mod dashboard;
 mod discovery;
 mod error;
@@ -49,6 +50,7 @@ mod mib;
 pub(crate) mod nodes;
 mod notifications;
 mod oidc;
+mod profiles;
 mod rca;
 #[cfg(test)]
 mod route_table;
@@ -112,7 +114,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_common::{HostSample, NodeId, Permission, ProfileCategory};
+use yagra_common::{HostSample, NodeId, Permission};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -303,21 +305,8 @@ pub fn router(state: ApiState) -> Router {
             "/api/v1/meraki/polling",
             get(get_meraki_polling).put(set_meraki_polling),
         )
-        .route("/api/v1/profiles", get(list_profiles).post(create_profile))
-        .route(
-            "/api/v1/profiles/:id",
-            put(update_profile).delete(delete_profile),
-        )
         // Metric reads + fleet Top-N rankings, in `api/metrics.rs`.
         .merge(metrics::routes())
-        .route(
-            "/api/v1/credentials",
-            get(list_credentials).post(create_credential),
-        )
-        .route(
-            "/api/v1/credentials/:id",
-            put(update_credential).delete(delete_credential),
-        )
         // Threshold rules — the one config table that grows with the fleet, so its list is capped.
         .merge(thresholds::routes())
         // Flow analysis (ADR-031) — the twelve `/flow/*` endpoints, in `api/flow.rs`.
@@ -430,6 +419,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(rca::routes())
         .merge(forwarding::routes())
         .merge(groups::routes())
+        .merge(profiles::routes())
+        .merge(credentials::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -2593,345 +2584,6 @@ async fn set_meraki_polling(
         Err(e) => {
             tracing::error!(error = %e, "set meraki polling switch failed");
             internal("failed to update meraki polling switch")
-        }
-    }
-}
-
-/// `PUT /api/v1/node-groups/:id/pool` — set just the folder's pool. Every node beneath it that
-/// has no pool of its own follows on the next sweep (see `poolres`).
-async fn list_profiles(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.repo.list_profiles().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list profiles failed");
-            internal("failed to list profiles")
-        }
-    }
-}
-
-/// Create/update-profile request body. `category` is optional on create (defaults to
-/// generic-snmp); when present it must be a valid `ProfileCategory` token.
-#[derive(Deserialize)]
-struct ProfileBody {
-    name: String,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    vendor: Option<String>,
-    /// Optional per-profile polling-interval override (seconds). Omitted/`null` ⇒ inherit the
-    /// global default; when present it must fall within `[MIN, MAX]`.
-    #[serde(default)]
-    poll_interval_secs: Option<u32>,
-}
-
-/// Validated profile fields ready for the repo: name, category token, vendor, and the optional
-/// interval override (as `i32` for the INTEGER column; `None` ⇒ inherit the global default).
-struct ParsedProfile {
-    name: String,
-    category: &'static str,
-    vendor: Option<String>,
-    poll_interval_secs: Option<i32>,
-}
-
-/// Validate the body into [`ParsedProfile`] or `(error_code, message)` for a 400. Returns the
-/// small error tuple (not a `Response`) so the helper stays cheap to return.
-fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, (&'static str, String)> {
-    let name = body.name.trim();
-    if name.is_empty() {
-        return Err(("invalid_name", "profile name must not be empty".to_owned()));
-    }
-    let category = match body.category.as_deref().map(str::trim) {
-        None | Some("") => ProfileCategory::default(),
-        Some(tok) => ProfileCategory::from_token(tok).ok_or_else(|| {
-            (
-                "invalid_category",
-                format!("unknown profile category {tok:?}"),
-            )
-        })?,
-    };
-    let vendor = body
-        .vendor
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
-    let poll_interval_secs = match body.poll_interval_secs {
-        None => None,
-        Some(n) => {
-            if !crate::config::interval_in_bounds(n) {
-                return Err((
-                    "invalid_poll_interval",
-                    format!(
-                        "poll interval must be {}-{} seconds",
-                        crate::config::MIN_POLL_INTERVAL_SECS,
-                        crate::config::MAX_POLL_INTERVAL_SECS
-                    ),
-                ));
-            }
-            Some(n as i32)
-        }
-    };
-    Ok(ParsedProfile {
-        name: name.to_owned(),
-        category: category.as_str(),
-        vendor,
-        poll_interval_secs,
-    })
-}
-
-async fn create_profile(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<ProfileBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let p = match parse_profile_body(&body) {
-        Ok(v) => v,
-        Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
-    };
-    match admin
-        .repo
-        .create_profile(
-            &p.name,
-            p.category,
-            p.vendor.as_deref(),
-            p.poll_interval_secs,
-        )
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create profile failed");
-            internal("failed to create profile")
-        }
-    }
-}
-
-async fn update_profile(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<ProfileBody>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let p = match parse_profile_body(&body) {
-        Ok(v) => v,
-        Err((code, msg)) => return error_response(StatusCode::BAD_REQUEST, code, msg),
-    };
-    match admin
-        .repo
-        .update_profile(
-            id,
-            &p.name,
-            p.category,
-            p.vendor.as_deref(),
-            p.poll_interval_secs,
-        )
-        .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("profile_not_found", format!("no profile {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "update profile failed");
-            internal("failed to update profile")
-        }
-    }
-}
-
-async fn delete_profile(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    match admin.repo.delete_profile(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("profile_not_found", format!("no profile {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete profile failed");
-            internal("failed to delete profile")
-        }
-    }
-}
-
-/// Create-credential request body. `secret` is encrypted before storage and never logged.
-#[derive(Deserialize)]
-struct CreateCredential {
-    name: String,
-    kind: String,
-    secret: String,
-}
-
-async fn create_credential(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<CreateCredential>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
-        return resp;
-    }
-    if body.name.trim().is_empty() || body.kind.trim().is_empty() || body.secret.is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential",
-            "name, kind, and secret are required".to_owned(),
-        );
-    }
-    // An snmp_v3 secret must be a structurally valid USM document — reject at the edge so
-    // a malformed one can't silently break polling later. The reason is static text only
-    // (never any field content).
-    if body.kind.trim() == crate::secrets::KIND_SNMP_V3 {
-        if let Err(reason) = crate::secrets::SnmpV3Secret::parse(body.secret.as_bytes()) {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_credential",
-                format!("invalid SNMPv3 credential: {reason}"),
-            );
-        }
-    }
-    match admin
-        .creds
-        .create(body.name.trim(), body.kind.trim(), body.secret.as_bytes())
-        .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create credential failed");
-            internal("failed to store credential")
-        }
-    }
-}
-
-async fn list_credentials(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
-        return resp;
-    }
-    match admin.creds.list().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list credentials failed");
-            internal("failed to list credentials")
-        }
-    }
-}
-
-/// Update-credential request body. `name` is required; `secret` is optional — when present the
-/// secret is re-sealed and `kind` must accompany it (the secret format is kind-specific). With no
-/// `secret` only the name changes (rename) and the stored secret is left intact. `secret` is
-/// encrypted before storage and never logged.
-#[derive(Deserialize)]
-struct UpdateCredential {
-    name: String,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    secret: Option<String>,
-}
-
-async fn update_credential(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-    Json(body): Json<UpdateCredential>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
-        return resp;
-    }
-    let name = body.name.trim();
-    if name.is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential",
-            "name is required".to_owned(),
-        );
-    }
-    // Resolve the optional re-seal. A non-empty secret replaces the stored one and must carry a
-    // kind (the secret format is kind-specific); a missing/blank secret is a rename only.
-    let secret = body.secret.as_deref().filter(|s| !s.is_empty());
-    let reseal = match secret {
-        Some(secret) => {
-            let Some(kind) = body
-                .kind
-                .as_deref()
-                .map(str::trim)
-                .filter(|k| !k.is_empty())
-            else {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_credential",
-                    "kind is required when changing the secret".to_owned(),
-                );
-            };
-            if kind == crate::secrets::KIND_SNMP_V3 {
-                if let Err(reason) = crate::secrets::SnmpV3Secret::parse(secret.as_bytes()) {
-                    return error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_credential",
-                        format!("invalid SNMPv3 credential: {reason}"),
-                    );
-                }
-            }
-            Some((kind, secret.as_bytes()))
-        }
-        None => None,
-    };
-    match admin.creds.update(id, name, reseal).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("credential_not_found", format!("no credential {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "update credential failed");
-            internal("failed to update credential")
-        }
-    }
-}
-
-async fn delete_credential(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Path(id): Path<Uuid>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageCredentials) {
-        return resp;
-    }
-    match admin.creds.delete(id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found("credential_not_found", format!("no credential {id}")),
-        Err(e) => {
-            tracing::error!(error = %e, "delete credential failed");
-            internal("failed to delete credential")
         }
     }
 }
