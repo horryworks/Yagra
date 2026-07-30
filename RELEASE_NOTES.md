@@ -21,6 +21,10 @@
   Yagra will page — so it stays closed on a public dashboard.
 
 ### Improvements
+- **The app icon now matches the one on the Yagra website.** The browser-tab favicon and the mark in
+  the top bar, the mobile top bar and the sign-in panel are the topology fork that also reads as a
+  "Y" — one root node branching to two — replacing the older double-ring mark. The orange seal, the
+  colors and the sizes are unchanged; a hard refresh may be needed for the tab icon.
 - **Event search filters and pages on when an event happened, not when Yagra ingested it.** The
   PostgreSQL path used the ingest timestamp while the VictoriaLogs path already used the event
   timestamp, so the same search returned different rows and a different order depending on which log

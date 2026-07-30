@@ -1,7 +1,16 @@
-<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect x="1" y="1" width="46" height="46" rx="11" fill="#e95d08"/>
-  <circle cx="24" cy="24" r="15.5" stroke="#faf7f3" stroke-width="1.6"/>
-  <circle cx="24" cy="24" r="11" stroke="#faf7f3" stroke-width="1" opacity="0.85"/>
-  <path d="M15 29 L24 19 L33 29" stroke="#faf7f3" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
-  <path d="M18 32 L24 25.5 L30 32" stroke="#faf7f3" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Yagra">
+  <rect x="1" y="1" width="62" height="62" rx="13" fill="#e95d08"/>
+  <!-- Topology fork that also reads as a "Y": one root node branching to two. This is a static
+       file and cannot import the geometry, so web/src/components/shell/brandMark.test.ts pins it
+       to brandMark.ts — edit both together. Drawn at the bolder of the two weights (16px tab). -->
+  <g stroke="#faf7f3" stroke-width="5" stroke-linecap="round" fill="none">
+    <path d="M32 46 V33"/>
+    <path d="M32 33 L20 20"/>
+    <path d="M32 33 L44 20"/>
+  </g>
+  <g fill="#faf7f3">
+    <circle cx="32" cy="48.5" r="5.5"/>
+    <circle cx="19" cy="18.5" r="5.5"/>
+    <circle cx="45" cy="18.5" r="5.5"/>
+  </g>
 </svg>
