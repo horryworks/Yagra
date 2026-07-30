@@ -14,7 +14,7 @@
 //! The store also refuses to remove, demote or disable the **last admin** — a lock-out guard that
 //! surfaces as `409 last_admin`.
 
-use super::extract::{Admin, RequireManageUsers};
+use super::extract::{Admin, RequireManageUsers, RequireView};
 use super::{ApiError, ApiResult, ApiState};
 use crate::auth::{UserCreateOutcome, UserMutation};
 use axum::{
@@ -23,8 +23,9 @@ use axum::{
     routing::{delete, get, put},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use yagra_common::{Permission, Role};
 
 /// Minimum password length accepted for a new account or a reset.
 const MIN_PASSWORD_LEN: usize = 8;
@@ -37,6 +38,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/users/:id/role", put(set_user_role))
         .route("/api/v1/users/:id/enabled", put(set_user_status))
         .route("/api/v1/users/:id/password", put(set_user_password))
+        .route("/api/v1/roles", get(list_roles))
 }
 
 /// Validate a role string against `yagra_common::Role` (snake_case), returning the `400` a bad one
@@ -240,6 +242,64 @@ async fn set_user_password(
     // attacker's stolen token survives the reset.
     st.sessions.revoke_user(id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// One permission in the role/privilege matrix.
+#[derive(Debug, Serialize)]
+pub(crate) struct PermissionInfo {
+    key: &'static str,
+    label: &'static str,
+    description: &'static str,
+}
+
+/// One role in the matrix: its metadata and the permission keys it grants.
+#[derive(Debug, Serialize)]
+pub(crate) struct RoleInfo {
+    key: &'static str,
+    label: &'static str,
+    description: &'static str,
+    /// Built-in roles are fixed (custom roles are not configurable yet).
+    builtin: bool,
+    /// The keys of the permissions this role grants.
+    permissions: Vec<&'static str>,
+}
+
+/// The permission catalogue plus, for each role, what it grants.
+///
+/// Only `View`, unlike the rest of this module: it is the *shape* of the permission model, not
+/// anyone's account. Derived from `Permission::ALL` and `Role::ALL` rather than listed here, so a
+/// new permission appears in the matrix without anyone remembering to add it.
+async fn list_roles(_guard: RequireView) -> ApiResult<Json<RolesMatrix>> {
+    let permissions = Permission::ALL
+        .into_iter()
+        .map(|p| PermissionInfo {
+            key: p.key(),
+            label: p.label(),
+            description: p.description(),
+        })
+        .collect();
+    let roles = Role::ALL
+        .into_iter()
+        .map(|r| RoleInfo {
+            key: r.key(),
+            label: r.label(),
+            description: r.description(),
+            builtin: true,
+            permissions: Permission::ALL
+                .into_iter()
+                .filter(|p| r.grants(*p))
+                .map(Permission::key)
+                .collect(),
+        })
+        .collect();
+    Ok(Json(RolesMatrix { permissions, roles }))
+}
+
+/// The role-vs-privilege matrix.
+#[derive(Debug, Serialize)]
+pub(crate) struct RolesMatrix {
+    permissions: Vec<PermissionInfo>,
+    roles: Vec<RoleInfo>,
 }
 
 #[cfg(test)]

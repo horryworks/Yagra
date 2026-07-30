@@ -47,6 +47,7 @@ mod mib;
 pub(crate) mod nodes;
 mod notifications;
 mod oidc;
+mod rca;
 #[cfg(test)]
 mod route_table;
 mod session;
@@ -95,7 +96,7 @@ use crate::store::MetricStore;
 use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -110,7 +111,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use yagra_common::{HostSample, NodeId, Permission, ProfileCategory, Role};
+use yagra_common::{HostSample, NodeId, Permission, ProfileCategory};
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -356,14 +357,6 @@ pub fn router(state: ApiState) -> Router {
         // AI-assisted RCA (ADR-029). Provider config is admin-only and its credential is
         // write-only; generation is `AckAlerts` (the people who actually work incidents) plus the
         // orchestrator's own rate + concurrency caps, and reading a stored report is `View`.
-        .route(
-            "/api/v1/llm/config",
-            get(get_llm_config).put(put_llm_config),
-        )
-        .route("/api/v1/llm/test", post(test_llm_provider))
-        .route("/api/v1/rca", post(create_rca))
-        .route("/api/v1/rca/:id", get(get_rca))
-        .route("/api/v1/roles", get(list_roles))
         // Alerts: active list, history + aggregations, inbound ack, and the two SSE streams,
         // in `api/alerts.rs`.
         .merge(alerts::routes())
@@ -457,6 +450,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(classification::routes())
         .merge(discovery::routes())
         .merge(notifications::routes())
+        .merge(rca::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
@@ -2420,252 +2414,6 @@ async fn forwarding_status(State(st): State<ApiState>, headers: HeaderMap) -> Re
         "sending": st.is_leader.load(std::sync::atomic::Ordering::Acquire),
     }))
     .into_response()
-}
-
-// ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────────
-//
-// Five endpoints across two audiences. Provider configuration is an admin concern — it picks which
-// cloud the operator's incident data may cross into, and it holds a billable credential — so it is
-// `ManageConfig` and its secret is write-only. Generation is an *operator* concern: the people
-// carrying the pager are exactly who needs the explanation, and gating it behind `ManageConfig`
-// would put the feature out of reach of its users. What bounds abuse there is the orchestrator's
-// rate and concurrency caps, not the role (the conclusion ADR-028 WS-A reached about expensive
-// reads). Reading a report back is `View`, so a viewer can be shown an explanation an operator
-// generated without being able to spend money themselves.
-
-/// The `POST /api/v1/rca` body.
-#[derive(Deserialize)]
-struct RcaBody {
-    /// The alerting node. May be a symptom of an upstream failure — the context builder follows
-    /// `root_cause` to the incident before assembling anything.
-    node: Uuid,
-    check: Uuid,
-    /// Timeline window in seconds; clamped by the orchestrator. Defaults to an hour.
-    #[serde(default)]
-    window_secs: Option<i64>,
-    /// UI language tag (`ja`, `en-GB`, …). The instructions stay English; the answer follows the
-    /// reader. Unknown tags fall back to English rather than failing.
-    #[serde(default)]
-    language: Option<String>,
-    /// Regenerate instead of serving a cached report. Still rate-limited.
-    #[serde(default)]
-    force: bool,
-}
-
-/// Map an orchestrator refusal onto a status. Each is a distinct operator action: fix the
-/// configuration, wait, look at a different alert, or check the vendor.
-fn rca_error_response(e: &crate::rca::orchestrator::RcaError) -> Response {
-    use crate::rca::orchestrator::RcaError;
-    match e {
-        RcaError::NotConfigured => error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "rca_not_configured",
-            e.to_string(),
-        ),
-        // Also 503, but a distinct code: the form has been filled in and something in it is wrong,
-        // which is a different next step from "nobody has set this up".
-        RcaError::Misconfigured(msg) => error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "rca_misconfigured",
-            msg.clone(),
-        ),
-        // `Retry-After: 60` matches the rate window; a client that honors it comes back exactly
-        // when a slot is guaranteed to have freed.
-        RcaError::TooManyConcurrent(_) | RcaError::RateLimited(_) => {
-            let mut resp =
-                error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", e.to_string());
-            resp.headers_mut().insert(
-                axum::http::header::RETRY_AFTER,
-                HeaderValue::from_static("60"),
-            );
-            resp
-        }
-        RcaError::NoIncident(msg) => not_found("no_incident", msg.clone()),
-        // 502, not 500: the failure is the upstream vendor's, and the text is the typed error —
-        // never a raw body, which can echo the prompt (and therefore device output) back.
-        RcaError::Provider(inner) => error_response(
-            StatusCode::BAD_GATEWAY,
-            match inner {
-                crate::rca::provider::LlmError::Refused(_) => "model_refused",
-                _ => "provider_error",
-            },
-            inner.to_string(),
-        ),
-        RcaError::Internal(err) => {
-            tracing::error!(error = %err, "RCA generation failed");
-            internal("failed to generate the analysis")
-        }
-    }
-}
-
-/// Generate (or serve from cache) an explanation of one incident. `AckAlerts`; audited by the
-/// mutating-request middleware.
-async fn create_rca(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<RcaBody>,
-) -> Response {
-    // Authorization first, availability second — the reverse of the older admin handlers, and
-    // deliberately so here. Whether an operator has wired up an LLM, and which vendor they chose,
-    // is not something an unauthenticated prober should be able to infer from a 503-vs-403; and
-    // checking the permission first means the AckAlerts/ManageConfig split holds regardless of
-    // deployment state rather than only once a provider exists.
-    if let Some(resp) = authorize(&st, &headers, Permission::AckAlerts) {
-        return resp;
-    }
-    let Some(rca) = st.rca.as_ref() else {
-        return unavailable();
-    };
-    let req = crate::rca::orchestrator::RcaRequest {
-        node: yagra_common::NodeId::from(body.node),
-        check: yagra_common::CheckId::from(body.check),
-        window_secs: body.window_secs,
-        language: crate::rca::prompt::Language::from_tag(body.language.as_deref().unwrap_or("en")),
-        force: body.force,
-        username: current_username(&st, &headers).unwrap_or_else(|| "(unknown)".to_owned()),
-    };
-    match rca.explain(&req).await {
-        Ok(report) => Json(report).into_response(),
-        Err(e) => rca_error_response(&e),
-    }
-}
-
-/// Read a stored report. `View` — the explanation is display-only text, so showing it to everyone
-/// who can see the alert costs nothing and keeps the incident channel on one shared account.
-async fn get_rca(State(st): State<ApiState>, headers: HeaderMap, Path(id): Path<Uuid>) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let Some(rca) = st.rca.as_ref() else {
-        return unavailable();
-    };
-    match rca.get(id).await {
-        Ok(Some(report)) => Json(report).into_response(),
-        Ok(None) => not_found("not_found", format!("no analysis {id}")),
-        Err(e) => rca_error_response(&e),
-    }
-}
-
-/// The active LLM provider's configuration. `ManageConfig`. Never includes the credential.
-async fn get_llm_config(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    match admin.llm.view().await {
-        // `config: null` rather than 404: "not configured yet" is the normal state, and the form
-        // wants to render its empty self, not an error. `providers` ships the choices with their
-        // placeholders and — importantly — their egress warning, so the UI reads the boundary
-        // classification off the same code the adapters obey instead of restating it.
-        Ok(view) => Json(serde_json::json!({
-            "config": view,
-            "providers": crate::rca::provider_choices(),
-        }))
-        .into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "read LLM config failed");
-            internal("failed to read the AI provider configuration")
-        }
-    }
-}
-
-/// Create or replace the provider configuration. `ManageConfig`; audited by the middleware.
-async fn put_llm_config(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<crate::rca::store::LlmConfigInput>,
-) -> Response {
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    match admin.llm.save(&body).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        // `save` validates first, so a bad field is the caller's — a 400 naming it beats a 500.
-        Err(e) => error_response(StatusCode::BAD_REQUEST, "invalid_llm_config", e.to_string()),
-    }
-}
-
-/// Send one minimal prompt to the configured provider. `ManageConfig`; audited.
-///
-/// Deliberately ignores `enabled` — validating a provider before switching it on is the whole point
-/// of the button (the same reasoning as the forwarding-destination test).
-async fn test_llm_provider(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    let Some(rca) = st.rca.as_ref() else {
-        return unavailable();
-    };
-    match rca.test().await {
-        Ok((latency_ms, reply)) => Json(serde_json::json!({
-            "ok": true,
-            "latency_ms": latency_ms,
-            // Bounded: this is model output rendered in a toast, and a model that ignores "reply
-            // with ok" should not be able to paste an essay into the settings page.
-            "reply": reply.chars().take(200).collect::<String>(),
-        }))
-        .into_response(),
-        // Not a 5xx: the provider configuration is the caller's, and the typed error is what tells
-        // them which part of it is wrong.
-        Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })).into_response(),
-    }
-}
-
-/// One permission in the role/privilege matrix (`GET /api/v1/roles`).
-#[derive(Serialize)]
-struct PermissionInfo {
-    key: &'static str,
-    label: &'static str,
-    description: &'static str,
-}
-
-/// One role in the matrix: its metadata and the permission keys it grants.
-#[derive(Serialize)]
-struct RoleInfo {
-    key: &'static str,
-    label: &'static str,
-    description: &'static str,
-    /// Built-in roles are fixed (custom roles are not configurable yet).
-    builtin: bool,
-    /// The keys of the permissions this role grants.
-    permissions: Vec<&'static str>,
-}
-
-/// The role-vs-privilege matrix: the permission catalogue plus, for each role, the permissions
-/// it grants. Read-only and informational (no secrets), so it only needs `View`. Roles are the
-/// fixed built-ins today; the shape is forward-compatible with future custom roles.
-async fn list_roles(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    let permissions: Vec<PermissionInfo> = Permission::ALL
-        .into_iter()
-        .map(|p| PermissionInfo {
-            key: p.key(),
-            label: p.label(),
-            description: p.description(),
-        })
-        .collect();
-    let roles: Vec<RoleInfo> = Role::ALL
-        .into_iter()
-        .map(|r| RoleInfo {
-            key: r.key(),
-            label: r.label(),
-            description: r.description(),
-            builtin: true,
-            permissions: Permission::ALL
-                .into_iter()
-                .filter(|p| r.grants(*p))
-                .map(Permission::key)
-                .collect(),
-        })
-        .collect();
-    Json(serde_json::json!({ "permissions": permissions, "roles": roles })).into_response()
 }
 
 // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────────────
@@ -6166,72 +5914,5 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body_json(resp).await["rca_enabled"], false);
-    }
-
-    #[test]
-    fn every_rca_refusal_maps_to_a_distinct_actionable_status() {
-        // Each of these asks the operator for a different thing — fix the config, wait, look
-        // elsewhere, chase the vendor — so collapsing any two into one status would lose that.
-        use crate::rca::orchestrator::RcaError;
-        use crate::rca::provider::LlmError;
-        let cases = [
-            (RcaError::NotConfigured, StatusCode::SERVICE_UNAVAILABLE),
-            (
-                RcaError::Misconfigured("an API key is required".to_owned()),
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            (RcaError::RateLimited(10), StatusCode::TOO_MANY_REQUESTS),
-            (
-                RcaError::TooManyConcurrent(2),
-                StatusCode::TOO_MANY_REQUESTS,
-            ),
-            (
-                RcaError::NoIncident("gone".to_owned()),
-                StatusCode::NOT_FOUND,
-            ),
-            (
-                RcaError::Provider(LlmError::Timeout),
-                StatusCode::BAD_GATEWAY,
-            ),
-            (
-                RcaError::Provider(LlmError::Refused(None)),
-                StatusCode::BAD_GATEWAY,
-            ),
-        ];
-        for (err, want) in cases {
-            let resp = rca_error_response(&err);
-            assert_eq!(resp.status(), want, "{err:?}");
-            // A rate refusal must say when to come back, or a UI retry loop just hammers the
-            // window it is already saturating.
-            if want == StatusCode::TOO_MANY_REQUESTS {
-                assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn a_model_refusal_never_reads_as_an_outage() {
-        // The model declining is a different outcome from the vendor being broken: nobody should
-        // go page a cloud provider over a safety filter.
-        use crate::rca::orchestrator::RcaError;
-        use crate::rca::provider::LlmError;
-        let resp = rca_error_response(&RcaError::Provider(LlmError::Refused(None)));
-        assert_eq!(body_json(resp).await["error"]["code"], "model_refused");
-    }
-
-    #[tokio::test]
-    async fn an_incomplete_configuration_says_what_is_missing() {
-        // "Not set up" and "set up wrong" are both 503, but they are different jobs for the
-        // operator, so they carry different codes and the second carries the reason.
-        use crate::rca::orchestrator::RcaError;
-        let resp = rca_error_response(&RcaError::Misconfigured(
-            "an Anthropic API key is required".to_owned(),
-        ));
-        let json = body_json(resp).await;
-        assert_eq!(json["error"]["code"], "rca_misconfigured");
-        assert!(json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("API key"));
     }
 }
