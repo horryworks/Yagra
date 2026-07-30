@@ -23,34 +23,27 @@ import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
-import { GROUP_TYPES } from '../types/api';
 import type {
   FleetGroupSummary,
   FleetSummary,
-  GroupType,
   MaintenanceWindow,
   Mute,
   NodeGroup,
   NodeSummary,
   PoolOption,
 } from '../types/api';
-import {
-  countsTotal,
-  groupOptions,
-  isSelfOrDescendant,
-  type StateCounts,
-} from '../lib/nodeTree';
+import { countsTotal, type StateCounts } from '../lib/nodeTree';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
-import { inheritedGroupPool, isValidPoolName } from '../lib/pool';
+import { inheritedGroupPool } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
-import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { TextInput } from '../components/ui/Field';
 import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
+import { GroupModal, type GroupModalState } from '../components/GroupModal/GroupModal';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
 import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
@@ -69,13 +62,6 @@ const FILTER_DEBOUNCE_MS = 200;
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
-
-/** Add/edit a group: name, type, and parent (parent doubles as "move"). */
-interface GroupModalState {
-  mode: 'add' | 'edit';
-  group?: NodeGroup;
-  parentId: string | null;
-}
 
 export function NodesPage() {
   const { t } = useTranslation('nodes');
@@ -699,121 +685,4 @@ function groupDeletionImpact(
     subgroups: t('count.subgroup', { count: subs }),
     members: t('count.memberNode', { count: members }),
   });
-}
-
-/** Add or edit a group (name + type + parent). Editing the parent moves the group; self and
- *  descendants are excluded from the parent options so a move can't create a cycle. */
-function GroupModal({
-  state,
-  groups,
-  onClose,
-  onSaved,
-}: {
-  state: GroupModalState;
-  groups: NodeGroup[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { t } = useTranslation('nodes');
-  const editing = state.mode === 'edit';
-  const [name, setName] = useState(state.group?.name ?? '');
-  const [type, setType] = useState<GroupType>(state.group?.group_type ?? 'generic');
-  const [parent, setParent] = useState<string>(
-    (editing ? state.group?.parent_id : state.parentId) ?? '',
-  );
-  /** The folder's own pool ('' ⇒ inherit from an ancestor, else the default pool). */
-  const [pool, setPool] = useState(state.group?.pool ?? '');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const poolInvalid = !isValidPoolName(pool);
-  // What this folder would inherit if its own pool is cleared. Preview only — the authority on what
-  // actually polls a node is the server (`getNodeAssignment`), never this walk.
-  const inherited = inheritedGroupPool(groups, parent || null);
-
-  // For an edit, a group cannot be parented under itself or any of its descendants.
-  const parentChoices = groupOptions(groups).filter(
-    (o) => !(editing && state.group && isSelfOrDescendant(groups, state.group.id, o.id)),
-  );
-
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    // `pool` is always sent: '' clears it back to inherited (a JSON-absent field would mean
-    // "unchanged" server-side and silently drop the edit).
-    const body = {
-      name: name.trim(),
-      group_type: type,
-      parent_id: parent || null,
-      pool: pool.trim(),
-    };
-    const call = editing
-      ? api.updateNodeGroup(state.group!.id, body)
-      : api.createNodeGroup(body).then(() => undefined);
-    call
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.saveGroup')));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title={editing ? t('group.edit') : t('group.add')}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={!name.trim() || busy || poolInvalid}>
-            {t('common:actions.save')}
-          </Button>
-        </>
-      }
-    >
-      <div className="form-stack">
-        <label className="form-label">
-          <span>
-            {t('field.name')} <RequiredMark />
-          </span>
-          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </label>
-        <label className="form-label">
-          {t('group.type')}
-          <Select value={type} onChange={(e) => setType(e.target.value as GroupType)}>
-            {GROUP_TYPES.map((gt) => (
-              <option key={gt} value={gt}>
-                {t(`groupType.${gt}`)}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="form-label">
-          {t('group.parentGroup')}
-          <Select value={parent} onChange={(e) => setParent(e.target.value)}>
-            <option value="">{t('group.topLevelOption')}</option>
-            {parentChoices.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="form-label">
-          {t('group.pool')}
-          <TextInput
-            className="mono"
-            value={pool}
-            onChange={(e) => setPool(e.target.value)}
-            placeholder={inherited ? t('field.poolInheritPlaceholder', { pool: inherited }) : ''}
-          />
-          <span className={`form-hint${poolInvalid ? ' form-hint-error' : ''}`}>
-            {poolInvalid ? t('field.poolInvalid') : t('group.poolHint')}
-          </span>
-        </label>
-        {error && <p className="form-error">{error}</p>}
-      </div>
-    </Modal>
-  );
 }
