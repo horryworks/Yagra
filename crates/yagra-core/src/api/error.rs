@@ -113,6 +113,12 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, code, message)
     }
 
+    /// `413` — the body is too large for an edge cap. Its own status rather than a 400 so the UI
+    /// can tell "this document is too big" (shrink it) from "this document is malformed" (fix it).
+    pub fn payload_too_large(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, code, message)
+    }
+
     /// `429` — refused for capacity or rate, and **retryable**. Distinct from `503` (a subsystem
     /// this deployment does not have) and from `500` (a fault): a client that cannot tell the
     /// three apart either hammers a full queue or gives up on a transient refusal.

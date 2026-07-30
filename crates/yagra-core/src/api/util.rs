@@ -13,6 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// Edge cap on an **opaque operator-authored JSON document** — a dashboard layout, a report spec.
+///
+/// These are bodies the backend stores without interpreting, so nothing downstream will reject an
+/// absurd one; the only defence is a size check before the DB. One constant because it is one
+/// policy, not a coincidence: the reports block already wrote
+/// `const MAX_REPORT_SPEC_BYTES = MAX_DASHBOARD_BYTES`, reaching into the dashboard block for it,
+/// which would have become a compile error the moment either domain moved out.
+pub(crate) const MAX_JSON_DOC_BYTES: usize = 262_144;
+
 /// The id of a freshly created resource — the whole body of a `201`.
 ///
 /// Deliberately one shape for every creator. The `json!({"id": …})` literal it replaces was written

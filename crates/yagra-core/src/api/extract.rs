@@ -137,6 +137,13 @@ impl RequiredPermission for ManageMaintenancePerm {
     const PERMISSION: Permission = Permission::ManageMaintenance;
 }
 
+/// Read the audit log — who did what, across the whole system, including actions taken in domains
+/// the caller cannot otherwise see. Its own permission rather than `ManageConfig` for that reason.
+pub struct ViewAuditPerm;
+impl RequiredPermission for ViewAuditPerm {
+    const PERMISSION: Permission = Permission::ViewAudit;
+}
+
 /// A handler argument that proves the caller holds `P`. Rejects with `401` when there is no valid
 /// session and `403` when the session's role lacks the permission.
 pub struct Require<P: RequiredPermission>(pub std::marker::PhantomData<P>);
@@ -151,6 +158,8 @@ pub type RequireManageConfig = Require<ManageConfigPerm>;
 pub type RequireAckAlerts = Require<AckAlertsPerm>;
 /// Gated on maintenance-window management.
 pub type RequireManageMaintenance = Require<ManageMaintenancePerm>;
+/// Gated on reading the audit log.
+pub type RequireViewAudit = Require<ViewAuditPerm>;
 
 #[async_trait]
 impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
@@ -162,6 +171,33 @@ impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
         }
         match st.sessions.authorize(bearer(&parts.headers), P::PERMISSION) {
             Ok(_) => Ok(Self(std::marker::PhantomData)),
+            Err(crate::auth::AuthError::Forbidden) => Err(ApiError::forbidden()),
+            Err(_) => Err(ApiError::unauthorized()),
+        }
+    }
+}
+
+/// The caller's authenticated session — for handlers that need *who* is asking, not merely whether
+/// they may.
+///
+/// Deliberately **not** open in public-dashboard mode, unlike [`RequireView`]: an endpoint scoped to
+/// "this account" (My Dashboard) has no meaning without an account, and an anonymous public-mode
+/// visitor would otherwise share one nameless layout with every other visitor.
+///
+/// It demands only [`Permission::View`], so a handler needing a stronger permission *and* the
+/// username lists its `Require*` guard first and this second.
+pub struct Caller(pub crate::auth::Session);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Caller {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        match st
+            .sessions
+            .authorize(bearer(&parts.headers), Permission::View)
+        {
+            Ok(session) => Ok(Self(session)),
             Err(crate::auth::AuthError::Forbidden) => Err(ApiError::forbidden()),
             Err(_) => Err(ApiError::unauthorized()),
         }
@@ -267,6 +303,31 @@ mod tests {
             .err()
             .expect("a viewer must not pass ManageUsers");
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn caller_demands_a_real_session_even_on_a_public_dashboard() {
+        // Ported from `require_session_gates_on_a_real_token`, which this extractor replaced.
+        // "My Dashboard" is per-account, so unlike `RequireView` it stays closed in public mode —
+        // otherwise every anonymous visitor would read and write one shared, nameless layout.
+        let public = public_state();
+        let err = Caller::from_request_parts(&mut parts_with(None), &public)
+            .await
+            .err()
+            .expect("an account-scoped endpoint has no meaning without an account");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+
+        // A valid bearer yields the session, which is what scopes the layout to a username.
+        let st = private_state();
+        let token = st.sessions.issue(
+            uuid::Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
+        let caller = Caller::from_request_parts(&mut parts_with(Some(&token)), &st)
+            .await
+            .expect("a valid token authorizes");
+        assert_eq!(caller.0.username, "viewer1");
     }
 
     #[tokio::test]

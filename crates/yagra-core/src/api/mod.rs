@@ -29,7 +29,9 @@
 
 pub(crate) mod alerts;
 pub(crate) mod analysis;
+mod audit;
 pub(crate) mod checks;
+mod dashboard;
 mod error;
 pub(crate) mod eventlog;
 pub(crate) mod extract;
@@ -525,13 +527,9 @@ pub fn router(state: ApiState) -> Router {
         )
         // The event-log read surface (list + stats), in `api/eventlog.rs`.
         .merge(eventlog::routes())
+        .merge(audit::routes())
+        .merge(dashboard::routes())
         .route("/api/v1/events/alerts/close", post(close_event_alert))
-        .route("/api/v1/audit", get(list_audit))
-        .route("/api/v1/dashboard", get(get_dashboard).put(put_dashboard))
-        .route(
-            "/api/v1/shared-dashboard",
-            get(get_shared_dashboard).put(put_shared_dashboard),
-        )
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
         .layer(middleware::from_fn_with_state(state.clone(), audit_mw))
@@ -1631,8 +1629,10 @@ async fn host_metric_range(
 // Dashboard. Definitions are reusable templates (opaque `spec`); schedules fire them on a preset
 // cadence; runs are saved generated reports. Generation runs in core as a background task.
 
-/// Max bytes for a report definition `spec` (shares the dashboard cap).
-const MAX_REPORT_SPEC_BYTES: usize = MAX_DASHBOARD_BYTES;
+/// Max bytes for a report definition `spec` — the shared cap on an opaque operator-authored JSON
+/// document (see [`util::MAX_JSON_DOC_BYTES`]). This used to read `= MAX_DASHBOARD_BYTES`, reaching
+/// into the dashboard block for it, which became a compile error the moment that block moved out.
+const MAX_REPORT_SPEC_BYTES: usize = util::MAX_JSON_DOC_BYTES;
 
 /// The section catalog (drives the builder). Open-read; static, so it works in skeleton mode too.
 async fn list_report_sections(State(st): State<ApiState>, headers: HeaderMap) -> Response {
@@ -6661,224 +6661,6 @@ async fn list_node_interfaces(
     Json(out).into_response()
 }
 
-// ── Audit log ────────────────────────────────────────────────────────────────
-
-/// Audit listing query: page size + a keyset cursor (rows strictly older than `before`).
-#[derive(Deserialize)]
-struct AuditQuery {
-    limit: Option<i64>,
-    before: Option<String>,
-}
-
-async fn list_audit(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Query(q): Query<AuditQuery>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    // Admin-only: the audit log exposes who did what across the whole system.
-    if let Some(resp) = authorize(&st, &headers, Permission::ViewAudit) {
-        return resp;
-    }
-    let before = match q.before.as_deref() {
-        Some(s) => match parse_rfc3339(s) {
-            Some(t) => Some(t),
-            None => {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_cursor",
-                    "before must be an RFC 3339 timestamp".to_owned(),
-                )
-            }
-        },
-        None => None,
-    };
-    match admin
-        .audit
-        .list(q.limit.unwrap_or(crate::audit::DEFAULT_LIMIT), before)
-        .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "list audit log failed");
-            internal("failed to list the audit log")
-        }
-    }
-}
-
-// ── My Dashboard (per-user widget layout) ────────────────────────────────────
-
-/// Max accepted size of a saved dashboard layout (serialized JSON). A single board is a few KB;
-/// the My Dashboard / Shared Dashboard documents now hold multiple boards, so this allows several
-/// while still capping abuse. Enforced at the edge before the DB.
-const MAX_DASHBOARD_BYTES: usize = 262_144;
-
-/// Resolve the caller's session (a *real* authenticated user — public-dashboard mode does not
-/// apply here, since "My Dashboard" is inherently per-account). Returns the session or a boxed
-/// error response to short-circuit with (boxed so the `Ok` path stays cheap — `clippy::result_large_err`).
-fn require_session(
-    st: &ApiState,
-    headers: &HeaderMap,
-) -> Result<crate::auth::Session, Box<Response>> {
-    st.sessions
-        .authorize(bearer(headers), Permission::View)
-        .map_err(|e| {
-            Box::new(match e {
-                AuthError::Forbidden => error_response(
-                    StatusCode::FORBIDDEN,
-                    "forbidden",
-                    "your role does not permit this action".to_owned(),
-                ),
-                _ => error_response(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    "a valid bearer token is required".to_owned(),
-                ),
-            })
-        })
-}
-
-/// The caller's saved dashboard layout, or `null` when they have never saved one (the WebUI
-/// then renders its default layout). Always scoped to the authenticated caller.
-async fn get_dashboard(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    let session = match require_session(&st, &headers) {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
-    match admin.dashboards.get_for_user(&session.username).await {
-        // No saved layout ⇒ explicit JSON null so the client falls back to its default.
-        Ok(layout) => Json(layout.unwrap_or(serde_json::Value::Null)).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "get dashboard failed");
-            internal("failed to load the dashboard layout")
-        }
-    }
-}
-
-/// Save (replace) the caller's dashboard layout. The body is an opaque JSON object — the
-/// backend never interprets widget types (the WebUI owns and migrates the shape). Mutating, so
-/// the audit middleware records it automatically.
-async fn put_dashboard(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
-) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    let session = match require_session(&st, &headers) {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
-    // Must be a JSON object (the layout document), and within the size cap.
-    if !body.is_object() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_layout",
-            "dashboard layout must be a JSON object".to_owned(),
-        );
-    }
-    if serde_json::to_vec(&body).map_or(usize::MAX, |v| v.len()) > MAX_DASHBOARD_BYTES {
-        return error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "layout_too_large",
-            format!("dashboard layout exceeds {MAX_DASHBOARD_BYTES} bytes"),
-        );
-    }
-    match admin
-        .dashboards
-        .upsert_for_user(&session.username, &body)
-        .await
-    {
-        Ok(true) => Json(serde_json::json!({ "ok": true })).into_response(),
-        // A valid session whose account vanished mid-request — treat as gone.
-        Ok(false) => not_found("user_not_found", "no such user account".to_owned()),
-        Err(e) => {
-            tracing::error!(error = %e, "save dashboard failed");
-            internal("failed to save the dashboard layout")
-        }
-    }
-}
-
-// ── Shared Dashboard (one global widget layout, admin-edited) ─────────────────
-
-/// The saved global Shared Dashboard layout, or `null` when no admin has saved one (the WebUI then
-/// renders its default). Open-read (like the other dashboard reads) so it works in public-dashboard
-/// mode; the *write* side is admin-only.
-async fn get_shared_dashboard(State(st): State<ApiState>, headers: HeaderMap) -> Response {
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    if let Some(resp) = require_view(&st, &headers) {
-        return resp;
-    }
-    match admin.shared_dashboard.get_shared().await {
-        // No saved layout ⇒ explicit JSON null so the client falls back to its default.
-        Ok(layout) => Json(layout.unwrap_or(serde_json::Value::Null)).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "get shared dashboard failed");
-            internal("failed to load the shared dashboard layout")
-        }
-    }
-}
-
-/// Save (replace) the global Shared Dashboard layout — **admin only**: the change applies to every
-/// user. The body is an opaque JSON object (the WebUI owns and migrates the shape). Mutating, so the
-/// audit middleware records it automatically.
-///
-/// Authorization is checked **first** (before the `admin`/503 fallback) so the RBAC decision is
-/// testable without a DB and a forbidden caller never learns whether the admin backend is
-/// configured — a deliberate divergence from `put_dashboard`'s order.
-async fn put_shared_dashboard(
-    State(st): State<ApiState>,
-    headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
-) -> Response {
-    // Admin-only: ManageConfig is granted to the Admin role alone (rbac.rs).
-    if let Some(resp) = authorize(&st, &headers, Permission::ManageConfig) {
-        return resp;
-    }
-    // Recover the caller's username for attribution (it just passed `authorize`, so this succeeds).
-    let session = match require_session(&st, &headers) {
-        Ok(s) => s,
-        Err(resp) => return *resp,
-    };
-    let Some(admin) = st.admin.as_ref() else {
-        return unavailable();
-    };
-    // Must be a JSON object (the layout document), and within the size cap.
-    if !body.is_object() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_layout",
-            "dashboard layout must be a JSON object".to_owned(),
-        );
-    }
-    if serde_json::to_vec(&body).map_or(usize::MAX, |v| v.len()) > MAX_DASHBOARD_BYTES {
-        return error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "layout_too_large",
-            format!("dashboard layout exceeds {MAX_DASHBOARD_BYTES} bytes"),
-        );
-    }
-    match admin
-        .shared_dashboard
-        .upsert_shared(&body, &session.username)
-        .await
-    {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "save shared dashboard failed");
-            internal("failed to save the shared dashboard layout")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7783,107 +7565,6 @@ mod tests {
         // Never-swept ⇒ never fresh, regardless of interval.
         assert!(!bus_sweep_is_fresh(None, 30, now));
     }
-    #[tokio::test]
-    async fn dashboard_unavailable_without_admin() {
-        // Skeleton has no user store; "My Dashboard" persistence needs the admin/DB side.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/dashboard")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    #[test]
-    fn require_session_gates_on_a_real_token() {
-        // "My Dashboard" is per-account, so its handlers demand a real session even in
-        // public-dashboard mode — unlike `require_view`, which is open then.
-        let (state, token) = private_state_with(Arc::new(InMemorySink::default()));
-
-        // No bearer ⇒ 401.
-        let empty = HeaderMap::new();
-        let denied = require_session(&state, &empty).expect_err("no token must be rejected");
-        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED); // Box<Response> derefs for .status()
-
-        // Valid bearer ⇒ the caller's session (scopes the layout to this username).
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
-        let session = require_session(&state, &headers).expect("valid token authorizes");
-        assert_eq!(session.username, "viewer1");
-    }
-
-    #[tokio::test]
-    async fn shared_dashboard_unavailable_without_admin() {
-        // Skeleton has no DB; the global Shared Dashboard persistence needs the admin side.
-        let app = router(state_with(Arc::new(InMemorySink::default())));
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/shared-dashboard")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
-    #[tokio::test]
-    async fn put_shared_dashboard_forbidden_for_non_admin() {
-        use yagra_common::Role;
-        // Viewer and Operator both lack ManageConfig ⇒ 403, decided before any DB/admin work
-        // (authorize-first ordering), so a forbidden caller can't even probe whether admin exists.
-        for role in [Role::Viewer, Role::Operator] {
-            let (state, token) = state_with_role_token(role);
-            let resp = router(state)
-                .oneshot(
-                    Request::builder()
-                        .method("PUT")
-                        .uri("/api/v1/shared-dashboard")
-                        .header(AUTHORIZATION, format!("Bearer {token}"))
-                        .header("content-type", "application/json")
-                        .body(Body::from(r#"{"version":2,"boards":[]}"#))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::FORBIDDEN,
-                "role {role:?} must be forbidden"
-            );
-            assert_eq!(body_json(resp).await["error"]["code"], "forbidden");
-        }
-    }
-
-    #[tokio::test]
-    async fn put_shared_dashboard_admin_passes_authorization() {
-        // Admin clears the RBAC gate; with no DB wired it then hits the admin/503 fallback — so an
-        // admin sees 503 (auth passed), not 403. Proves ManageConfig admits the Admin role.
-        let (state, token) = state_with_role_token(yagra_common::Role::Admin);
-        let resp = router(state)
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/v1/shared-dashboard")
-                    .header(AUTHORIZATION, format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"version":2,"boards":[]}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body_json(resp).await["error"]["code"], "admin_unavailable");
-    }
-
     #[tokio::test]
     async fn report_sections_catalog_is_open_read() {
         // The section catalog is static — served even in skeleton mode — and drives the builder.
