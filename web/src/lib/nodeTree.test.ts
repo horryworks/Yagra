@@ -8,7 +8,10 @@ import {
   groupOptions,
   groupPath,
   isSelfOrDescendant,
+  subtreeGroupIds,
   tallyStates,
+  UNGROUPED,
+  visibleOpenGroupKeys,
 } from './nodeTree';
 import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
 
@@ -278,5 +281,67 @@ describe('isSelfOrDescendant', () => {
   it('allows moves that do not nest a group inside its own subtree', () => {
     expect(isSelfOrDescendant(groups, 'c', 'a')).toBe(false); // a is not under c
     expect(isSelfOrDescendant(groups, 'b', 'a')).toBe(false);
+  });
+});
+
+describe('visibleOpenGroupKeys', () => {
+  //   a ── a1 ── a11
+  //   b
+  const groups = [
+    group('a', 'A'),
+    group('a1', 'A1', 'a'),
+    group('a11', 'A11', 'a1'),
+    group('b', 'B'),
+  ];
+
+  it('always includes the ungrouped bucket', () => {
+    // It has no row to expand, so nothing else would ever ask for it — but it is always on screen.
+    expect(visibleOpenGroupKeys([], {})).toEqual([UNGROUPED]);
+    expect(visibleOpenGroupKeys(groups, { a: true, b: true })).toEqual([UNGROUPED]);
+  });
+
+  it('includes every open group when nothing is collapsed', () => {
+    expect(visibleOpenGroupKeys(groups, {}).sort()).toEqual(
+      [UNGROUPED, 'a', 'a1', 'a11', 'b'].sort(),
+    );
+  });
+
+  it('skips a collapsed group and everything beneath it', () => {
+    // a1/a11 are still "open" in the prefs, but they are inside a collapsed parent — nothing of
+    // theirs is on screen, so fetching their members would be a request for nothing.
+    expect(visibleOpenGroupKeys(groups, { a: true }).sort()).toEqual([UNGROUPED, 'b'].sort());
+  });
+
+  it('skips a nested collapsed group but keeps its open ancestors', () => {
+    expect(visibleOpenGroupKeys(groups, { a1: true }).sort()).toEqual(
+      [UNGROUPED, 'a', 'b'].sort(),
+    );
+  });
+});
+
+describe('subtreeGroupIds', () => {
+  it('returns the group and every descendant', () => {
+    const groups = [
+      group('a', 'A'),
+      group('a1', 'A1', 'a'),
+      group('a2', 'A2', 'a'),
+      group('a11', 'A11', 'a1'),
+      group('b', 'B'),
+    ];
+    expect(subtreeGroupIds(groups, 'a').sort()).toEqual(['a', 'a1', 'a11', 'a2'].sort());
+    expect(subtreeGroupIds(groups, 'a1').sort()).toEqual(['a1', 'a11'].sort());
+    expect(subtreeGroupIds(groups, 'b')).toEqual(['b']);
+  });
+
+  it('returns just the id for a group that is not in the list', () => {
+    // A stale selection from the URL: it must not throw, and it must not walk the whole fleet.
+    expect(subtreeGroupIds([group('a', 'A')], 'gone')).toEqual(['gone']);
+  });
+
+  it('terminates on cyclic parent links', () => {
+    // This walks the raw parent_id edges as the API returned them, not the built tree, so a cycle
+    // the server let through would otherwise spin here and hang the page rather than fail loudly.
+    const cyclic = [group('a', 'A', 'b'), group('b', 'B', 'a')];
+    expect(subtreeGroupIds(cyclic, 'a').sort()).toEqual(['a', 'b'].sort());
   });
 });

@@ -284,6 +284,60 @@ export function groupOptions(groups: NodeGroup[]): { id: string; label: string }
   return out;
 }
 
+/** Sentinel key for the ungrouped bucket in the per-group member cache and the `/nodes/by-group`
+ *  call (which takes `null` for it). A sentinel rather than `null` so the cache can stay a plain
+ *  `Record<string, …>` keyed the same way for both. */
+export const UNGROUPED = '__ungrouped__';
+
+/** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
+ *  every group that is open AND visible — i.e. every one of its ancestors is also open, so its
+ *  expanded content is actually on screen (A-3 lazy load).
+ *
+ *  The ancestor condition is the whole point. A group the operator once expanded stays open in the
+ *  collapse prefs forever, so "open" alone is a set that only grows; without the visibility test
+ *  the first render of a deep tree would fetch members for every group ever expanded — the fleet
+ *  load this lazy path exists to avoid, and invisible from the screen it produces. */
+export function visibleOpenGroupKeys(
+  groups: NodeGroup[],
+  collapsed: Record<string, boolean>,
+): string[] {
+  const childrenOf = new Map<string | null, NodeGroup[]>();
+  for (const g of groups) {
+    const k = g.parent_id;
+    childrenOf.set(k, [...(childrenOf.get(k) ?? []), g]);
+  }
+  const out: string[] = [UNGROUPED];
+  const walk = (parentId: string | null, ancestorsOpen: boolean) => {
+    for (const g of childrenOf.get(parentId) ?? []) {
+      const open = !collapsed[g.id];
+      if (ancestorsOpen && open) out.push(g.id);
+      walk(g.id, ancestorsOpen && open);
+    }
+  };
+  walk(null, true);
+  return out;
+}
+
+/** A group id plus every descendant group id (its whole subtree). Used to lazily load a selected
+ *  group's subtree so the detail pane can roll up its members. Cycle-guarded by the visited set —
+ *  this walks the raw `parent_id` edges from the API, not the built (acyclic) tree. */
+export function subtreeGroupIds(groups: NodeGroup[], rootId: string): string[] {
+  const childrenOf = new Map<string, NodeGroup[]>();
+  for (const g of groups) {
+    if (g.parent_id) childrenOf.set(g.parent_id, [...(childrenOf.get(g.parent_id) ?? []), g]);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+    for (const c of childrenOf.get(id) ?? []) walk(c.id);
+  };
+  walk(rootId);
+  return out;
+}
+
 /** Whether `candidateId` is `ancestorId` itself or sits anywhere below it in the group tree.
  *  Used to forbid moving a group into its own subtree (which would create a cycle). Bounded by
  *  the group count so malformed (already-cyclic) data can't loop forever. */

@@ -41,6 +41,9 @@ import {
   countsTotal,
   groupOptions,
   isSelfOrDescendant,
+  subtreeGroupIds,
+  UNGROUPED,
+  visibleOpenGroupKeys,
   type StateCounts,
 } from '../lib/nodeTree';
 import {
@@ -76,55 +79,8 @@ const FILTER_SEARCH_LIMIT = 500;
 /** Debounce for the filter-mode server search so a fast typist fires one request, not one per key. */
 const FILTER_DEBOUNCE_MS = 200;
 
-/** Sentinel key for the ungrouped bucket in the lazy per-group member cache (A-3). */
-const UNGROUPED = '__ungrouped__';
-
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
-
-
-/** The group keys whose direct members should be loaded now: the ungrouped bucket (always) plus
- *  every group that is open AND visible (all its ancestors open) — i.e. its expanded content is
- *  actually on screen (A-3 lazy load). Collapsed or hidden groups are skipped entirely. */
-function visibleOpenGroupKeys(
-  groups: NodeGroup[],
-  collapsed: Record<string, boolean>,
-): string[] {
-  const childrenOf = new Map<string | null, NodeGroup[]>();
-  for (const g of groups) {
-    const k = g.parent_id;
-    childrenOf.set(k, [...(childrenOf.get(k) ?? []), g]);
-  }
-  const out: string[] = [UNGROUPED];
-  const walk = (parentId: string | null, ancestorsOpen: boolean) => {
-    for (const g of childrenOf.get(parentId) ?? []) {
-      const open = !collapsed[g.id];
-      if (ancestorsOpen && open) out.push(g.id);
-      walk(g.id, ancestorsOpen && open);
-    }
-  };
-  walk(null, true);
-  return out;
-}
-
-/** A group id plus every descendant group id (its whole subtree). Used to lazily load a selected
- *  group's subtree so the detail pane can roll up its members. Cycle-guarded by the visited set. */
-function subtreeGroupIds(groups: NodeGroup[], rootId: string): string[] {
-  const childrenOf = new Map<string, NodeGroup[]>();
-  for (const g of groups) {
-    if (g.parent_id) childrenOf.set(g.parent_id, [...(childrenOf.get(g.parent_id) ?? []), g]);
-  }
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const walk = (id: string) => {
-    if (seen.has(id)) return;
-    seen.add(id);
-    out.push(id);
-    for (const c of childrenOf.get(id) ?? []) walk(c.id);
-  };
-  walk(rootId);
-  return out;
-}
 
 /** Add/edit a group: name, type, and parent (parent doubles as "move"). */
 interface GroupModalState {
