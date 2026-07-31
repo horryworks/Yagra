@@ -468,7 +468,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the monitoring-configuration permission",
+            "description": "Role below Operator",
             "content": {
               "application/json": {
                 "schema": {
@@ -604,7 +604,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the monitoring-configuration permission",
+            "description": "Role below Operator",
             "content": {
               "application/json": {
                 "schema": {

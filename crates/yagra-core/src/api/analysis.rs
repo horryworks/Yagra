@@ -7,13 +7,23 @@
 //! rather than a default: the MCP surface must always pass `false`, and a default would let that
 //! invariant be lost by omission.
 //!
+//! **Launching is `AckAlerts` (Operator and up) on both surfaces.** It used to be `ManageConfig`
+//! here and `View` over MCP, which meant an on-call operator was refused in the WebUI while the
+//! same person could run the identical analysis through an AI client — the sort of split that
+//! teaches people to route around the product. `ManageConfig` was never about configuration: it
+//! stood in for a rate limit, throttling an expensive TSDB read by restricting it to admins. Real
+//! admission control (`YAGRA_ANALYSIS_MAX_CONCURRENT`, `YAGRA_ANALYSIS_RATE_PER_MIN`) does that job
+//! now, so the permission is free to say what the endpoint *is*: incident-response work, the same
+//! bracket as acknowledging an alert. A Viewer gets neither surface — running an analysis is not
+//! reading, even though what it reads is already visible to them.
+//!
 //! [`job_params`] is the seam. Launching a run means validating a tool token, validating a scope,
 //! requiring a scope id for group/node, and clamping four numeric knobs — and all of that existed
 //! twice, once per surface, with the clamps written out separately in each. Two copies of a
 //! *validation* rule is the worst kind to keep, because when they drift the looser one is the
 //! security boundary.
 
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireAckAlerts, RequireView};
 use super::util::ListQuery;
 use super::{ApiError, ApiResult, ApiState};
 use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
@@ -339,13 +349,13 @@ pub(super) struct CreateAnalysisJob {
         (status = 200, description = "The queued job row; it progresses over `/api/v1/stream/analysis`", body = AnalysisJob),
         (status = 400, description = "Unknown tool, unknown scope kind, or a group/node scope with no `scope_id`", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the monitoring-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator", body = super::error::ErrorBody),
         (status = 429, description = "The runner is at its concurrency or rate limit — retryable", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
     ),
 )]
 async fn create_analysis_job(
-    _perm: RequireManageConfig,
+    _perm: RequireAckAlerts,
     admin: Admin,
     State(st): State<ApiState>,
     headers: axum::http::HeaderMap,
@@ -382,13 +392,13 @@ pub(super) struct Cancelled {
     responses(
         (status = 200, description = "The run was flagged for cancellation", body = Cancelled),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the monitoring-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator", body = super::error::ErrorBody),
         (status = 404, description = "No job by that id is currently running", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
     ),
 )]
 async fn cancel_analysis_job(
-    _perm: RequireManageConfig,
+    _perm: RequireAckAlerts,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Cancelled>> {
@@ -585,6 +595,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(launch.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn an_operator_may_launch_a_run() {
+        // The boundary is Operator, not Admin. This used to be `ManageConfig`, which refused the
+        // on-call operator in the WebUI while the same person could run the identical analysis
+        // through MCP — so this test is what stops the gate drifting back up to admin-only.
+        // 503 is the positive control: past RBAC, into skeleton mode's "no runner here".
+        for (role, who) in [(Role::Operator, "op1"), (Role::Admin, "admin1")] {
+            let st = private_state();
+            let token = st
+                .sessions
+                .issue(Uuid::new_v4(), Principal::new(role, Scope::All), who);
+            let resp = router(st)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/analysis/jobs")
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"tool":"anomaly","scope_kind":"all","scope_label":"All nodes","window_secs":3600}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{role:?} should clear the permission gate"
+            );
+        }
     }
 
     #[tokio::test]

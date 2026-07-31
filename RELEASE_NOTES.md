@@ -33,6 +33,15 @@
   it was pointed. The WebUI never offered the field, so this affects API clients only. Group scoping
   will be accepted again when the read paths actually filter by it.
 
+- **Running a Troubleshoot analysis is now an Operator action on both surfaces.** It required
+  **Admin** over the REST API and merely **Viewer** over MCP, so the on-call operator was refused in
+  the WebUI while the same person could run the identical analysis through an AI client. Both now
+  ask for the acknowledge-alerts permission (Operator and up), which is also what cancelling a run
+  takes. An analysis changes no configuration — the admin requirement was standing in for a rate
+  limit, and real admission control has done that job since it was added. Reading past runs and
+  their findings is unchanged and still open to Viewers. **Viewer-scoped API tokens can no longer
+  launch analyses over `/mcp`.**
+
 ### New Features
 - **The API now publishes its own OpenAPI 3.1 document, at `GET /api/v1/openapi.json`.** It is
   generated from the handlers themselves — every path, query parameter, request body, response shape

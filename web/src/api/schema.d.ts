@@ -6258,7 +6258,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the monitoring-configuration permission */
+            /** @description Role below Operator */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6367,7 +6367,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the monitoring-configuration permission */
+            /** @description Role below Operator */
             403: {
                 headers: {
                     [name: string]: unknown;

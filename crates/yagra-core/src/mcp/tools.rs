@@ -372,9 +372,11 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Run an on-demand Troubleshoot analysis and wait for its findings (read-only: it \
-                       reads metric/event/flow history and returns findings, and never notifies or \
-                       changes device configuration). `tool` is one of: metric — anomaly, correlation, \
+        description = "Run an on-demand Troubleshoot analysis and wait for its findings. Requires \
+                       ack-alerts permission (Operator and up) — it reads metric/event/flow history \
+                       and never notifies or changes device configuration, but a run is expensive, \
+                       so launching one is gated like other incident-response actions. `tool` is one \
+                       of: metric — anomaly, correlation, \
                        capacity, flap; passive events — event_storm, event_flap, severity_shift, \
                        rule_gap, auth_probe; flow — traffic_anomaly, talker_shift, new_destination, \
                        flow_scan; cross-store — saturation, incident_correlate. (flow_* need the flow \
@@ -388,7 +390,15 @@ impl YagraMcp {
     async fn run_analysis(
         &self,
         Parameters(p): Parameters<RunAnalysisParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Operator and up, matching `POST /api/v1/analysis/jobs`. An analysis reads what a Viewer
+        // could already query, so this gate is not about disclosure — it is that launching one is
+        // incident-response work with a real compute cost, and the two surfaces must agree on who
+        // may do it. They did not: this was `View` while REST was admin-only.
+        if authed_for(&ctx, Permission::AckAlerts).is_none() {
+            return tool_forbidden("run_analysis", "this token lacks ack-alerts permission");
+        }
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("run_analysis", "analysis requires live mode");
         };

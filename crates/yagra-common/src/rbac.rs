@@ -84,8 +84,8 @@ impl Role {
         match self {
             Role::Viewer => "Read-only: inventory, metrics, and alerts within scope.",
             Role::Operator => {
-                "Viewer plus operational actions: acknowledge/mute alerts and \
-                               manage maintenance windows."
+                "Viewer plus incident response: acknowledge/mute alerts, run Troubleshoot \
+                 analyses and AI root-cause explanations, and manage maintenance windows."
             }
             Role::Admin => "Full control: configuration, credentials, users, and the audit log.",
         }
@@ -136,7 +136,7 @@ impl Permission {
     pub const fn label(self) -> &'static str {
         match self {
             Permission::View => "View",
-            Permission::AckAlerts => "Acknowledge alerts",
+            Permission::AckAlerts => "Respond to incidents",
             Permission::ManageMaintenance => "Manage maintenance",
             Permission::ManageConfig => "Manage configuration",
             Permission::ManageCredentials => "Manage credentials",
@@ -150,7 +150,15 @@ impl Permission {
     pub const fn description(self) -> &'static str {
         match self {
             Permission::View => "View inventory, metrics, and alerts within scope.",
-            Permission::AckAlerts => "Acknowledge, mute, or snooze alerts.",
+            // Naming this one for the *acts* it covers rather than for one of them: it also gates
+            // launching a Troubleshoot analysis and asking for an AI root-cause explanation, and a
+            // matrix that lists only "acknowledge" leaves an admin unable to see why an operator
+            // can run those. Keep this in step with every `RequireAckAlerts` / `Permission::AckAlerts`
+            // call site — the privilege matrix renders this string verbatim.
+            Permission::AckAlerts => {
+                "Acknowledge or mute alerts, close event alerts, run Troubleshoot analyses, \
+                 and request AI root-cause explanations."
+            }
             Permission::ManageMaintenance => "Open or close maintenance windows.",
             Permission::ManageConfig => {
                 "Create and edit nodes, profiles, thresholds, and collection."

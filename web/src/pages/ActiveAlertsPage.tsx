@@ -14,7 +14,6 @@ import { useAlertStream } from '../hooks/useAlertStream';
 import { useAlertStore, useAuthStore } from '../store';
 import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { RcaModal } from '../components/Rca/RcaModal';
 import { AlertRows } from '../widgets/AlertRows';
@@ -51,40 +50,40 @@ export function ActiveAlertsPage() {
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.active') }]}
         note={t('active.note', { count })}
       />
-      <Card title={t('active.card')}>
-        <AlertRows
-          actions={(a) => (
-            <>
-              {canExplain && (
-                <Button
-                  variant="ghost"
-                  aria-label={t('rca:actionHint')}
-                  title={t('rca:actionHint')}
-                  onClick={() => setExplaining({ node: a.node, check: a.check })}
-                >
-                  {t('rca:action')}
-                </Button>
-              )}
+      {/* No `Card` around the list: the data-table standard is header → toolbar → rows, and this
+          was the one list screen still wrapping its rows in a titled panel (§4.1). */}
+      <AlertRows
+        actions={(a) => (
+          <>
+            {canExplain && (
               <Button
                 variant="ghost"
-                disabled
-                aria-label={t('active.muteHint')}
-                title={t('active.muteHint')}
+                aria-label={t('rca:actionHint')}
+                title={t('rca:actionHint')}
+                onClick={() => setExplaining({ node: a.node, check: a.check })}
               >
-                {t('active.mute')}
+                {t('rca:action')}
               </Button>
-              <Button
-                variant="ghost"
-                disabled
-                aria-label={t('active.openExternalHint')}
-                title={t('active.openExternalHint')}
-              >
-                {t('active.openExternal')}
-              </Button>
-            </>
-          )}
-        />
-      </Card>
+            )}
+            <Button
+              variant="ghost"
+              disabled
+              aria-label={t('active.muteHint')}
+              title={t('active.muteHint')}
+            >
+              {t('active.mute')}
+            </Button>
+            <Button
+              variant="ghost"
+              disabled
+              aria-label={t('active.openExternalHint')}
+              title={t('active.openExternalHint')}
+            >
+              {t('active.openExternal')}
+            </Button>
+          </>
+        )}
+      />
       {explaining && (
         <RcaModal
           node={explaining.node}
