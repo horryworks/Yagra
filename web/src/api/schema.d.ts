@@ -4877,6 +4877,15 @@ export interface components {
             vendor?: string | null;
         };
         /**
+         * @description The two shapes `GET /nodes/:id/collection` answers with, as one type.
+         *
+         *     `#[serde(untagged)]`, so the bytes are the same bare array either arm always sent — the union
+         *     exists because the response shape depends on a *query parameter*, which OpenAPI cannot express,
+         *     and an undescribed body pushed the difference onto the client to guess. The stored view carries
+         *     item ids and scope; the resolved view is the poller's effective set and has neither.
+         */
+        NodeCollection: components["schemas"]["StoredCollectionItem"][] | components["schemas"]["CollectionItem"][];
+        /**
          * @description One node's configuration detail, including its bindings (profile/credential/parent) so the
          *     node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
          */
@@ -5620,6 +5629,15 @@ export interface components {
         StartedScan: {
             /** Format: uuid */
             scan_id: string;
+        };
+        /** @description A stored collection item with its id and scope, for the API (the scheduler ignores id). */
+        StoredCollectionItem: components["schemas"]["CollectionItem"] & {
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            scope_id: string;
+            scope_level: components["schemas"]["ScopeLevel"];
         };
         /** @description A stored event rule (API shape; the engine compiles enabled ones). */
         StoredEventRule: {
@@ -12543,7 +12561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["NodeCollection"];
                 };
             };
             /** @description No valid bearer token */

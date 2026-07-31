@@ -8502,7 +8502,9 @@
             "description": "The node's own stored items, or — with `?resolved=true` — the effective set the poller sees, which carries no item ids",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/NodeCollection"
+                }
               }
             }
           },
@@ -19893,6 +19895,25 @@
           }
         }
       },
+      "NodeCollection": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredCollectionItem"
+            },
+            "description": "Default: the node's own overrides, each with its id and scope."
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionItem"
+            },
+            "description": "`?resolved=true`: the effective set after profile defaults, as the poller sees it."
+          }
+        ],
+        "description": "The two shapes `GET /nodes/:id/collection` answers with, as one type.\n\n`#[serde(untagged)]`, so the bytes are the same bare array either arm always sent — the union\nexists because the response shape depends on a *query parameter*, which OpenAPI cannot express,\nand an undescribed body pushed the difference onto the client to guess. The stored view carries\nitem ids and scope; the resolved view is the poller's effective set and has neither."
+      },
       "NodeDetail": {
         "type": "object",
         "description": "One node's configuration detail, including its bindings (profile/credential/parent) so the\nnode-detail page can show and edit them. Live mode only (PostgreSQL inventory).",
@@ -21708,6 +21729,39 @@
             "format": "uuid"
           }
         }
+      },
+      "StoredCollectionItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CollectionItem"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "scope_level",
+              "scope_id",
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "scope_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "scope_level": {
+                "$ref": "#/components/schemas/ScopeLevel"
+              }
+            }
+          }
+        ],
+        "description": "A stored collection item with its id and scope, for the API (the scheduler ignores id)."
       },
       "StoredEventRule": {
         "type": "object",

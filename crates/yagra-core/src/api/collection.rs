@@ -26,7 +26,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 use yagra_common::resolve_collection_set;
 
@@ -135,13 +134,28 @@ pub(super) struct CollectionQuery {
     resolved: Option<bool>,
 }
 
+/// The two shapes `GET /nodes/:id/collection` answers with, as one type.
+///
+/// `#[serde(untagged)]`, so the bytes are the same bare array either arm always sent — the union
+/// exists because the response shape depends on a *query parameter*, which OpenAPI cannot express,
+/// and an undescribed body pushed the difference onto the client to guess. The stored view carries
+/// item ids and scope; the resolved view is the poller's effective set and has neither.
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub(super) enum NodeCollection {
+    /// Default: the node's own overrides, each with its id and scope.
+    Stored(Vec<crate::collection::StoredCollectionItem>),
+    /// `?resolved=true`: the effective set after profile defaults, as the poller sees it.
+    Resolved(Vec<yagra_common::CollectionItem>),
+}
+
 /// A node's collection items: its own overrides, or — with `?resolved=true` — the effective set
 /// after the profile's defaults are overridden by them. The resolved view is what the poller sees.
 #[utoipa::path(
     get, path = "/api/v1/nodes/{node_id}/collection", tag = "collection",
     params(("node_id" = Uuid, Path, description = "Node id"), CollectionQuery),
     responses(
-        (status = 200, description = "The node's own stored items, or — with `?resolved=true` — the effective set the poller sees, which carries no item ids", body = serde_json::Value),
+        (status = 200, description = "The node's own stored items, or — with `?resolved=true` — the effective set the poller sees, which carries no item ids", body = NodeCollection),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node (resolved view only)", body = super::error::ErrorBody),
@@ -153,7 +167,7 @@ async fn list_node_collection(
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Query(q): Query<CollectionQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<NodeCollection>> {
     if !q.resolved.unwrap_or(false) {
         let list = admin
             .collection
@@ -166,7 +180,7 @@ async fn list_node_collection(
                     "failed to list collection set",
                 )
             })?;
-        return Ok(Json(serde_json::to_value(list).unwrap_or(Value::Null)));
+        return Ok(Json(NodeCollection::Stored(list)));
     }
     let node = admin
         .repo
@@ -188,8 +202,9 @@ async fn list_node_collection(
                 "failed to resolve collection set",
             )
         })?;
-    let resolved = resolve_collection_set(&scoped);
-    Ok(Json(serde_json::to_value(resolved).unwrap_or(Value::Null)))
+    Ok(Json(NodeCollection::Resolved(resolve_collection_set(
+        &scoped,
+    ))))
 }
 
 #[utoipa::path(

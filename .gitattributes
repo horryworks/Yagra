@@ -2,6 +2,13 @@
 # files must stay LF regardless of the checkout OS.
 * text=auto eol=lf
 
+# Generated and committed (ADR-035): the OpenAPI document comes from the Rust handlers, and the
+# TypeScript schema comes from the document. Both are checked in because the `web` CI job has no
+# Rust toolchain, and both are regenerated — never edited — so collapse them in review rather than
+# inviting someone to "fix" 17k lines of derived types by hand.
+web/src/api/openapi.json linguist-generated=true
+web/src/api/schema.d.ts linguist-generated=true
+
 # Binary files Git must not touch.
 *.png binary
 *.jpg binary
