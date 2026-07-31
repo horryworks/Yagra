@@ -23,8 +23,10 @@ use uuid::Uuid;
 use yagra_common::trap_oid_name;
 
 use crate::events::{
-    EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket, PersistRecord,
+    EventAction, EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket,
+    PersistRecord,
 };
+use yagra_bus::EventKind;
 
 /// Format a Unix-millis instant as the canonical LogsQL/`_time` literal (UTC, millisecond
 /// precision, `Z` suffix — no numeric offset, so it interpolates cleanly into a query).
@@ -409,7 +411,13 @@ fn parse_ndjson_row(line: &str) -> Option<EventRow> {
         .unwrap_or_else(Utc::now);
     Some(EventRow {
         id,
-        kind: get("kind").unwrap_or_default(),
+        // Was `unwrap_or_default()`, i.e. the empty string — a kind no reader has a case for, and
+        // one PostgreSQL could never produce. Syslog is the honest guess for a log-store row whose
+        // `kind` field went missing, and it is at least a value the UI can render.
+        kind: get("kind")
+            .as_deref()
+            .and_then(EventKind::from_token)
+            .unwrap_or(EventKind::Syslog),
         at_unix_ms: get("at_unix_ms").and_then(|s| s.parse().ok()).unwrap_or(0),
         recorded_at,
         source_ip: get("source_ip"),
@@ -428,7 +436,9 @@ fn parse_ndjson_row(line: &str) -> Option<EventRow> {
         varbinds: get("varbinds").and_then(|s| serde_json::from_str(&s).ok()),
         message,
         matched_rule_id: get("matched_rule_id").and_then(|s| Uuid::parse_str(&s).ok()),
-        action: get("action").unwrap_or_else(|| "none".to_owned()),
+        action: get("action")
+            .as_deref()
+            .map_or(EventAction::None, EventAction::from_stored),
     })
 }
 
@@ -528,7 +538,7 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
         (!m.varbinds.is_empty()).then(|| serde_json::to_value(&m.varbinds).unwrap_or(Value::Null));
     EventRow {
         id: m.event_id,
-        kind: m.kind.as_str().to_owned(),
+        kind: m.kind,
         at_unix_ms: m.at_unix_ms,
         recorded_at: DateTime::<Utc>::from_timestamp_millis(m.at_unix_ms).unwrap_or_else(Utc::now),
         source_ip: m.source_ip.map(|ip| ip.to_string()),
@@ -686,7 +696,7 @@ impl LogStore for InMemoryLogStore {
             let m = &r.msg;
             let (key, label, node): (String, Option<String>, Option<Uuid>) = match group {
                 EventStatGroup::Kind => (m.kind.as_str().to_owned(), None, None),
-                EventStatGroup::Action => (r.action.to_owned(), None, None),
+                EventStatGroup::Action => (r.action.as_str().to_owned(), None, None),
                 EventStatGroup::Trap => match &m.trap_oid {
                     Some(oid) => (oid.clone(), trap_oid_name(oid).map(str::to_owned), None),
                     None => continue, // trap grouping drops non-traps (mirrors `trap_oid:*`)
@@ -764,12 +774,12 @@ mod tests {
         }
     }
 
-    fn record(id: Uuid, message: &str, at_unix_ms: i64, action: &'static str) -> PersistRecord {
+    fn record(id: Uuid, message: &str, at_unix_ms: i64, action: EventAction) -> PersistRecord {
         PersistRecord {
             msg: msg(id, message, at_unix_ms),
             node_id: Some(Uuid::from_u128(1)),
             source_id: None,
-            matched_rule_id: (action != "none").then(Uuid::new_v4),
+            matched_rule_id: (action != EventAction::None).then(Uuid::new_v4),
             action,
         }
     }
@@ -979,9 +989,9 @@ mod tests {
         let store = InMemoryLogStore::default();
         store
             .ingest_batch(&[
-                record(Uuid::from_u128(1), "link down", 1_000, "fired"),
-                record(Uuid::from_u128(2), "link up", 2_000, "cleared"),
-                record(Uuid::from_u128(3), "noise", 3_000, "none"),
+                record(Uuid::from_u128(1), "link down", 1_000, EventAction::Fired),
+                record(Uuid::from_u128(2), "link up", 2_000, EventAction::Cleared),
+                record(Uuid::from_u128(3), "noise", 3_000, EventAction::None),
             ])
             .await;
         // By kind: all three are syslog (the test `msg()` helper).
@@ -1021,7 +1031,12 @@ mod tests {
     #[test]
     fn record_json_round_trips_through_ndjson_parse() {
         let id = Uuid::from_u128(42);
-        let rec = record(id, "%LINEPROTO-5-UPDOWN", 1_700_000_000_000, "fired");
+        let rec = record(
+            id,
+            "%LINEPROTO-5-UPDOWN",
+            1_700_000_000_000,
+            EventAction::Fired,
+        );
         let line = serde_json::to_string(&record_to_json(&rec)).unwrap();
         // VL renames `message`→`_msg`; simulate that so parse mirrors the query response.
         let mut v: Value = serde_json::from_str(&line).unwrap();
@@ -1030,14 +1045,14 @@ mod tests {
         obj.insert("_msg".into(), m);
         let row = parse_ndjson_row(&serde_json::to_string(&v).unwrap()).unwrap();
         assert_eq!(row.id, id);
-        assert_eq!(row.kind, "syslog");
+        assert_eq!(row.kind, EventKind::Syslog);
         assert_eq!(row.message, "%LINEPROTO-5-UPDOWN");
         assert_eq!(row.at_unix_ms, 1_700_000_000_000);
         assert_eq!(row.source_ip.as_deref(), Some("10.0.0.1"));
         assert_eq!(row.pool.as_deref(), Some("tokyo"));
         assert_eq!(row.facility, Some(3));
         assert_eq!(row.syslog_severity, Some(5));
-        assert_eq!(row.action, "fired");
+        assert_eq!(row.action, EventAction::Fired);
         assert!(row.matched_rule_id.is_some());
     }
 
@@ -1047,9 +1062,24 @@ mod tests {
         assert!(store.is_empty());
         store
             .ingest_batch(&[
-                record(Uuid::from_u128(1), "link down ge-0/0/1", 1_000, "fired"),
-                record(Uuid::from_u128(2), "config changed", 2_000, "none"),
-                record(Uuid::from_u128(3), "link up ge-0/0/1", 3_000, "cleared"),
+                record(
+                    Uuid::from_u128(1),
+                    "link down ge-0/0/1",
+                    1_000,
+                    EventAction::Fired,
+                ),
+                record(
+                    Uuid::from_u128(2),
+                    "config changed",
+                    2_000,
+                    EventAction::None,
+                ),
+                record(
+                    Uuid::from_u128(3),
+                    "link up ge-0/0/1",
+                    3_000,
+                    EventAction::Cleared,
+                ),
             ])
             .await;
         assert_eq!(store.len(), 3);
@@ -1083,7 +1113,12 @@ mod tests {
     async fn in_memory_search_by_resolved_node_name() {
         let store = InMemoryLogStore::default();
         store
-            .ingest_batch(&[record(Uuid::from_u128(1), "opaque body", 1_000, "none")])
+            .ingest_batch(&[record(
+                Uuid::from_u128(1),
+                "opaque body",
+                1_000,
+                EventAction::None,
+            )])
             .await;
         // The term hits neither the message nor the IP, but the node id was resolved from a name.
         let f = EventFilter {
@@ -1106,9 +1141,9 @@ mod tests {
         let store = InMemoryLogStore::default();
         store
             .ingest_batch(&[
-                record(Uuid::from_u128(1), "first", 1_000, "none"),
-                record(Uuid::from_u128(2), "second", 2_000, "none"),
-                record(Uuid::from_u128(3), "third", 3_000, "none"),
+                record(Uuid::from_u128(1), "first", 1_000, EventAction::None),
+                record(Uuid::from_u128(2), "second", 2_000, EventAction::None),
+                record(Uuid::from_u128(3), "third", 3_000, EventAction::None),
             ])
             .await;
         let at = |ms: i64| DateTime::<Utc>::from_timestamp_millis(ms).unwrap();
@@ -1143,9 +1178,24 @@ mod tests {
         let store = InMemoryLogStore::default();
         store
             .ingest_batch(&[
-                record(Uuid::from_u128(1), "link down ge-0/0/1", 1_000, "fired"),
-                record(Uuid::from_u128(2), "config changed", 2_000, "none"),
-                record(Uuid::from_u128(3), "link up ge-0/0/1", 3_000, "cleared"),
+                record(
+                    Uuid::from_u128(1),
+                    "link down ge-0/0/1",
+                    1_000,
+                    EventAction::Fired,
+                ),
+                record(
+                    Uuid::from_u128(2),
+                    "config changed",
+                    2_000,
+                    EventAction::None,
+                ),
+                record(
+                    Uuid::from_u128(3),
+                    "link up ge-0/0/1",
+                    3_000,
+                    EventAction::Cleared,
+                ),
             ])
             .await;
         let f = EventFilter {

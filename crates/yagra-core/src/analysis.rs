@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, Semaphore};
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
-use crate::events::{EventFilter, EventRepo, EventRow, EventSeverityCount};
+use crate::events::{EventAction, EventFilter, EventRepo, EventRow, EventSeverityCount};
 use crate::flowstore::{AsDir, FlowQuery, FlowSeriesQuery, FlowStore};
 use crate::groups::{group_subtree, GroupRepo};
 use crate::ipasn::IpAsnHandle;
@@ -2003,7 +2003,7 @@ impl AnalysisRunner {
         for e in events.iter().take(INCIDENT_EVENT_CAP) {
             signals.push(IncidentSignal {
                 at_s: e.at_unix_ms / 1000,
-                severity: event_signal_severity(&e.action, e.syslog_severity),
+                severity: event_signal_severity(e.action, e.syslog_severity),
                 kind: "event",
                 label: incident_event_label(e),
             });
@@ -2612,12 +2612,14 @@ fn human_bytes(b: f64) -> String {
 
 /// Severity weight for a passive event on an incident timeline: a fired alert is strongest, else
 /// scale by syslog severity.
-fn event_signal_severity(action: &str, syslog_severity: Option<i16>) -> f64 {
+fn event_signal_severity(action: EventAction, syslog_severity: Option<i16>) -> f64 {
     match action {
-        "fired" => 85.0,
-        "refreshed" => 70.0,
-        "cleared" => 60.0,
-        _ => match syslog_severity {
+        EventAction::Fired => 85.0,
+        EventAction::Refreshed => 70.0,
+        EventAction::Cleared => 60.0,
+        // An event that raised no alert is scored by what the device itself called it. Listed
+        // rather than left to a wildcard so a new outcome has to choose a side.
+        EventAction::Suppressed | EventAction::Info | EventAction::None => match syslog_severity {
             Some(s) if s <= 2 => 80.0,
             Some(3) => 65.0,
             Some(4) => 50.0,
@@ -2632,7 +2634,7 @@ fn incident_event_label(e: &EventRow) -> String {
         .trap_name
         .clone()
         .or_else(|| e.app_name.clone())
-        .unwrap_or_else(|| e.kind.clone());
+        .unwrap_or_else(|| e.kind.as_str().to_owned());
     let msg: String = e.message.chars().take(60).collect();
     format!("{head}: {msg}")
 }
@@ -2928,9 +2930,13 @@ mod tests {
 
     #[test]
     fn event_signal_severity_ranks_fired_highest() {
-        assert!(event_signal_severity("fired", None) > event_signal_severity("cleared", None));
         assert!(
-            event_signal_severity("none", Some(0)) > event_signal_severity("none", Some(6)),
+            event_signal_severity(EventAction::Fired, None)
+                > event_signal_severity(EventAction::Cleared, None)
+        );
+        assert!(
+            event_signal_severity(EventAction::None, Some(0))
+                > event_signal_severity(EventAction::None, Some(6)),
             "emergency syslog outweighs debug"
         );
     }

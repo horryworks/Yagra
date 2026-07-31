@@ -53,6 +53,9 @@ const schemaEnumPins: {
   ReportRunState: AssertEqual<ReportRunState, components['schemas']['ReportRunState']>;
   ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
   ReportFrequency: AssertEqual<ReportFrequency, components['schemas']['ReportFrequency']>;
+  EventKind: AssertEqual<EventKind, components['schemas']['EventKind']>;
+  EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
+  EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
 } = {
   Severity: true,
   Role: true,
@@ -64,6 +67,9 @@ const schemaEnumPins: {
   ReportRunState: true,
   ReportTrigger: true,
   ReportFrequency: true,
+  EventKind: true,
+  EventAction: true,
+  EventMatchKind: true,
 };
 void schemaEnumPins;
 
@@ -844,12 +850,25 @@ export type ReportRunState = (typeof REPORT_RUN_STATES)[number];
 export const REPORT_TRIGGERS = ['manual', 'scheduled', 'unknown'] as const;
 export type ReportTrigger = (typeof REPORT_TRIGGERS)[number];
 
-/** What kind of passive event a source produces. Rust: `yagra_bus::EventKind`, flattened to a
- *  `String` on `EventRow.kind` / `EventSourceView.kind`. */
-export type EventKind = 'syslog' | 'trap' | 'webhook';
+/** What kind of passive event a source produces. */
+export const EVENT_KINDS = ['syslog', 'trap', 'webhook'] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
 
-/** The categorical event `action` outcomes (pipeline result). Rust: `EventRow.action`, a `String`. */
-export type EventAction = 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
+/** What the pipeline did with an event, least → most consequential (the order the backend's
+ *  derived `Ord` uses to pick a winner when several rules match one event). */
+export const EVENT_ACTIONS = [
+  'none',
+  'info',
+  'suppressed',
+  'cleared',
+  'refreshed',
+  'fired',
+] as const;
+export type EventAction = (typeof EVENT_ACTIONS)[number];
+
+/** How a rule's pattern is matched. `unknown` is a storage degradation, not a selectable option. */
+export const EVENT_MATCH_KINDS = ['substring', 'regex', 'unknown'] as const;
+export type EventMatchKind = (typeof EVENT_MATCH_KINDS)[number];
 
 /** A stored collection item with its id/scope/enabled flag.
  *

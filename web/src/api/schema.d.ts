@@ -3925,9 +3925,29 @@ export interface components {
             /** @description Operator-facing sentence. Safe to display; never carries an internal error's own text. */
             message: string;
         };
+        /**
+         * @description What the pipeline did with an event.
+         *
+         *     Variants are declared least → most consequential so the derived `Ord` ranks them: when several
+         *     rules match one event, the row records the strongest outcome. That ordering *was* a hand-written
+         *     `action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new
+         *     variant would have silently ranked below "nothing happened".
+         * @enum {string}
+         */
+        EventAction: "none" | "info" | "suppressed" | "cleared" | "refreshed" | "fired";
+        /**
+         * @description What kind of passive event a poller (or core, for webhooks) received.
+         * @enum {string}
+         */
+        EventKind: "syslog" | "trap" | "webhook";
+        /**
+         * @description How a rule's pattern is matched against the event text.
+         * @enum {string}
+         */
+        EventMatchKind: "substring" | "regex" | "unknown";
         /** @description One received event, as served by `GET /api/v1/events`. */
         EventRow: {
-            action: string;
+            action: components["schemas"]["EventAction"];
             app_name?: string | null;
             /** Format: int64 */
             at_unix_ms: number;
@@ -3936,7 +3956,7 @@ export interface components {
             hostname?: string | null;
             /** Format: uuid */
             id: string;
-            kind: string;
+            kind: components["schemas"]["EventKind"];
             /** Format: uuid */
             matched_rule_id?: string | null;
             message: string;
@@ -3991,7 +4011,7 @@ export interface components {
             enabled: boolean;
             /** Format: uuid */
             id: string;
-            kind: string;
+            kind: components["schemas"]["EventKind"];
             name: string;
             /** Format: uuid */
             node_id?: string | null;
@@ -5822,7 +5842,7 @@ export interface components {
             enabled: boolean;
             /** Format: uuid */
             id: string;
-            match_kind: string;
+            match_kind: components["schemas"]["EventMatchKind"];
             /** Format: int32 */
             min_count: number;
             name: string;

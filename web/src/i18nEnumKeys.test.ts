@@ -23,6 +23,8 @@ import {
   REPORT_FREQUENCIES,
   REPORT_RUN_STATES,
   REPORT_TRIGGERS,
+  EVENT_ACTIONS,
+  EVENT_MATCH_KINDS,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -41,6 +43,10 @@ import enMonitoring from './locales/en/monitoring.json';
 import jaMonitoring from './locales/ja/monitoring.json';
 import enReports from './locales/en/reports.json';
 import jaReports from './locales/ja/reports.json';
+import enAlerts from './locales/en/alerts.json';
+import jaAlerts from './locales/ja/alerts.json';
+import enDashboard from './locales/en/dashboard.json';
+import jaDashboard from './locales/ja/dashboard.json';
 import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
@@ -141,6 +147,25 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('cadence', locales, '', cadenceKeys);
     // The schedule form's option labels, for the subset an operator may pick.
     expectKeys('freq option', locales, 'schedule.freq.', SELECTABLE_FREQUENCIES);
+  });
+
+  it('every event action and match kind has a label', () => {
+    // Two surfaces render the same set from different namespaces, so both are checked. The event
+    // log short-circuits `none` to "—" today, but the key exists so a future render of it — or a
+    // sixth action — is not a raw key in the operator's face.
+    expectKeys('event action', { en: enAlerts, ja: jaAlerts }, 'eventLog.action.', EVENT_ACTIONS);
+    expectKeys(
+      'event triage action',
+      { en: enDashboard, ja: jaDashboard },
+      'widgets.eventTriage.action.',
+      EVENT_ACTIONS,
+    );
+    expectKeys(
+      'match kind',
+      { en: enAlertsConfig, ja: jaAlertsConfig },
+      'eventRules.matchKind.',
+      EVENT_MATCH_KINDS,
+    );
   });
 
   it('every addable monitor kind has its three strings (nodes:add.*/err.*)', () => {

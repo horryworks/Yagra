@@ -169,7 +169,8 @@
     "clear": "clear",
     "matchKind": {
       "substring": "substring",
-      "regex": "regex"
+      "regex": "regex",
+      "unknown": "unknown"
     },
     "enable": "Enable rule",
     "disable": "Disable rule",

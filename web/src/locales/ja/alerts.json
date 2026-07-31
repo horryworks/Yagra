@@ -71,7 +71,8 @@
       "refreshed": "更新",
       "cleared": "解消",
       "suppressed": "抑制",
-      "info": "情報"
+      "info": "情報",
+      "none": "未マッチ"
     }
   }
 }

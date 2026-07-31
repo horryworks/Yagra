@@ -167,7 +167,8 @@
     "clear": "clear",
     "matchKind": {
       "substring": "部分一致",
-      "regex": "正規表現"
+      "regex": "正規表現",
+      "unknown": "不明"
     },
     "enable": "ルールを有効化",
     "disable": "ルールを無効化",

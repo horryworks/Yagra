@@ -21,6 +21,9 @@ tokio = { workspace = true }
 data-encoding = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
+# `EventKind` is stored and served on the event log's read surface, so it carries its own JSON
+# Schema for the OpenAPI document (ADR-035) — same reason yagra-forward has this. Derive-only.
+utoipa = { workspace = true }
 # Live NATS bus adapter (ADR-007). Gated so unit tests / lib-only consumers don't
 # pull the TLS stack; the binaries (yagra-core/yagra-poller) enable it.
 async-nats = { workspace = true, optional = true }

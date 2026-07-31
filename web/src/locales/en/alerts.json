@@ -71,7 +71,8 @@
       "refreshed": "refreshed",
       "cleared": "cleared",
       "suppressed": "suppressed",
-      "info": "info"
+      "info": "info",
+      "none": "unmatched"
     }
   }
 }

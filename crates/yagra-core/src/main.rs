@@ -399,7 +399,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // path (S10) so an event storm doesn't serialize DB round-trips / vendor delivery on the single
     // matcher. Unlike the persist queue this never sheds (audit trail + FIFO fire→resolve order).
     let (event_action_tx, event_action_rx) =
-        tokio::sync::mpsc::channel::<events::EventAction>(events::ACTION_CHANNEL_CAP);
+        tokio::sync::mpsc::channel::<events::QueuedAction>(events::ACTION_CHANNEL_CAP);
     let event_engine = Arc::new(events::EventEngine::new(
         events_repo.clone(),
         alerts.clone(),
@@ -801,7 +801,7 @@ struct LeaderTasks {
     /// Passive-event persistence queue (moved — exactly one drainer).
     persist_rx: tokio::sync::mpsc::Receiver<events::PersistRecord>,
     /// Passive-event side-effect queue: history + notify (moved — exactly one drainer).
-    event_action_rx: tokio::sync::mpsc::Receiver<events::EventAction>,
+    event_action_rx: tokio::sync::mpsc::Receiver<events::QueuedAction>,
     logs: Option<Arc<dyn LogStore>>,
     flows: Option<Arc<dyn FlowStore>>,
     ipasn: ipasn::IpAsnHandle,
@@ -977,7 +977,7 @@ impl LeaderTasks {
         &mut self,
     ) -> (
         tokio::sync::mpsc::Receiver<events::PersistRecord>,
-        tokio::sync::mpsc::Receiver<events::EventAction>,
+        tokio::sync::mpsc::Receiver<events::QueuedAction>,
     ) {
         let (_, closed_persist) = tokio::sync::mpsc::channel(1);
         let (_, closed_action) = tokio::sync::mpsc::channel(1);

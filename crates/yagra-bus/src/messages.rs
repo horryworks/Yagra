@@ -1093,7 +1093,7 @@ const fn default_true() -> bool {
 // ── Passive events (Phase 2) — edge-received syslog / SNMP traps / webhooks ─────────
 
 /// What kind of passive event a poller (or core, for webhooks) received.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     /// A syslog datagram (RFC 5424 / RFC 3164 / raw fallback).

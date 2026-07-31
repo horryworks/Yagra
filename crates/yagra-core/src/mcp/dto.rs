@@ -380,7 +380,7 @@ impl EventDto {
     pub fn from_row(row: &EventRow, node_name: Option<String>) -> Self {
         Self {
             id: row.id,
-            kind: row.kind.clone(),
+            kind: row.kind.as_str().to_owned(),
             at: unix_ms_to_rfc3339(row.at_unix_ms),
             node_id: row.node_id,
             node_name,
@@ -391,7 +391,7 @@ impl EventDto {
             trap_name: row.trap_name.clone(),
             message: row.message.clone(),
             matched_rule_id: row.matched_rule_id,
-            action: row.action.clone(),
+            action: row.action.as_str().to_owned(),
         }
     }
 }
@@ -598,7 +598,7 @@ mod tests {
         // EventRow carries `pool` (a forbidden key) — the DTO must drop it.
         let event = EventRow {
             id: node.id.0,
-            kind: "trap".to_owned(),
+            kind: yagra_bus::EventKind::Trap,
             at_unix_ms: 0,
             recorded_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             source_ip: Some("10.0.0.1".to_owned()),
@@ -614,7 +614,9 @@ mod tests {
             varbinds: None,
             message: "link down on Gi0/1".to_owned(),
             matched_rule_id: None,
-            action: "raised".to_owned(),
+            // Was "raised", which the pipeline has never produced — the String field let the
+            // fixture name an outcome that does not exist.
+            action: crate::events::EventAction::Fired,
         };
         let event_json =
             serde_json::to_value(EventDto::from_row(&event, Some("edge-router-1".to_owned())))

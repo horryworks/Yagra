@@ -17496,6 +17496,36 @@
           }
         }
       },
+      "EventAction": {
+        "type": "string",
+        "description": "What the pipeline did with an event.\n\nVariants are declared least → most consequential so the derived `Ord` ranks them: when several\nrules match one event, the row records the strongest outcome. That ordering *was* a hand-written\n`action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new\nvariant would have silently ranked below \"nothing happened\".",
+        "enum": [
+          "none",
+          "info",
+          "suppressed",
+          "cleared",
+          "refreshed",
+          "fired"
+        ]
+      },
+      "EventKind": {
+        "type": "string",
+        "description": "What kind of passive event a poller (or core, for webhooks) received.",
+        "enum": [
+          "syslog",
+          "trap",
+          "webhook"
+        ]
+      },
+      "EventMatchKind": {
+        "type": "string",
+        "description": "How a rule's pattern is matched against the event text.",
+        "enum": [
+          "substring",
+          "regex",
+          "unknown"
+        ]
+      },
       "EventRow": {
         "type": "object",
         "description": "One received event, as served by `GET /api/v1/events`.",
@@ -17509,7 +17539,7 @@
         ],
         "properties": {
           "action": {
-            "type": "string"
+            "$ref": "#/components/schemas/EventAction"
           },
           "app_name": {
             "type": [
@@ -17539,7 +17569,7 @@
             "format": "uuid"
           },
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/EventKind"
           },
           "matched_rule_id": {
             "type": [
@@ -17726,7 +17756,7 @@
             "format": "uuid"
           },
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/EventKind"
           },
           "name": {
             "type": "string"
@@ -22158,7 +22188,7 @@
             "format": "uuid"
           },
           "match_kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/EventMatchKind"
           },
           "min_count": {
             "type": "integer",

@@ -92,7 +92,7 @@ fn now_unix_ms() -> i64 {
 pub struct EventSourceView {
     pub id: Uuid,
     pub name: String,
-    pub kind: String,
+    pub kind: EventKind,
     pub enabled: bool,
     pub node_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -107,7 +107,7 @@ pub struct StoredEventRule {
     pub source_kind: Option<String>,
     pub source_id: Option<Uuid>,
     pub node_id: Option<Uuid>,
-    pub match_kind: String,
+    pub match_kind: EventMatchKind,
     pub pattern: String,
     pub clear_pattern: Option<String>,
     pub severity: Severity,
@@ -134,11 +134,129 @@ pub struct RuleParams<'a> {
     pub window_secs: i32,
 }
 
+/// What the pipeline did with an event.
+///
+/// Variants are declared least → most consequential so the derived `Ord` ranks them: when several
+/// rules match one event, the row records the strongest outcome. That ordering *was* a hand-written
+/// `action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new
+/// variant would have silently ranked below "nothing happened".
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EventAction {
+    /// Matched no rule (or none that fired) — stored for search, not linked to an alert.
+    #[default]
+    None,
+    /// Matched an informational rule, or a rule whose count/window gate has not yet passed.
+    Info,
+    /// Would have fired, but the node is in a maintenance window.
+    Suppressed,
+    /// Resolved an alert this rule had raised.
+    Cleared,
+    /// Re-armed an alert that was already active.
+    Refreshed,
+    /// Raised an alert.
+    Fired,
+}
+
+/// How a rule's pattern is matched against the event text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EventMatchKind {
+    /// Case-insensitive substring.
+    Substring,
+    /// Regular expression.
+    Regex,
+    /// A match kind this build does not know — a newer core wrote the row. Deliberately not
+    /// treated as `Substring`: that would take a rule which is currently *inert* and start
+    /// matching it literally, which is a behaviour change with alerting consequences.
+    Unknown,
+}
+
+impl EventAction {
+    /// Every action, least → most consequential.
+    pub const ALL: [EventAction; 6] = [
+        Self::None,
+        Self::Info,
+        Self::Suppressed,
+        Self::Cleared,
+        Self::Refreshed,
+        Self::Fired,
+    ];
+
+    /// Stable token — the `events.action` column value and the JSON tag.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Info => "info",
+            Self::Suppressed => "suppressed",
+            Self::Cleared => "cleared",
+            Self::Refreshed => "refreshed",
+            Self::Fired => "fired",
+        }
+    }
+
+    /// Parse a stored token, degrading to `None` — which is what an unreadable outcome honestly is
+    /// from this build's point of view, and is already what the log-store path returns when the
+    /// field is absent.
+    #[must_use]
+    pub fn from_stored(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .unwrap_or(Self::None)
+    }
+
+    /// Whether this outcome ties the row to an alert, which is what makes it survive in PostgreSQL
+    /// (the log store keeps the whole firehose; PostgreSQL keeps the alert-linked rows — ADR-024).
+    #[must_use]
+    pub const fn is_alert_linked(self) -> bool {
+        match self {
+            Self::Fired | Self::Refreshed | Self::Cleared | Self::Suppressed => true,
+            Self::None | Self::Info => false,
+        }
+    }
+}
+
+/// Read a stored `kind`. Both the `events` and `event_sources` columns carry an exact CHECK, so
+/// under expand-contract a widened CHECK and a new variant ship together and the fallback is
+/// unreachable — the `warn!` is there so that if it ever *is* reached, it says so rather than
+/// quietly filing traps under syslog.
+fn event_kind_from_stored(s: &str) -> EventKind {
+    EventKind::from_token(s).unwrap_or_else(|| {
+        tracing::warn!(token = %s, "unrecognised event kind in the database; reading it as syslog");
+        EventKind::Syslog
+    })
+}
+
+impl EventMatchKind {
+    pub const ALL: [EventMatchKind; 3] = [Self::Substring, Self::Regex, Self::Unknown];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Substring => "substring",
+            Self::Regex => "regex",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[must_use]
+    pub fn from_stored(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .unwrap_or(Self::Unknown)
+    }
+}
+
 /// One received event, as served by `GET /api/v1/events`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EventRow {
     pub id: Uuid,
-    pub kind: String,
+    pub kind: EventKind,
     pub at_unix_ms: i64,
     pub recorded_at: DateTime<Utc>,
     pub source_ip: Option<String>,
@@ -156,7 +274,7 @@ pub struct EventRow {
     pub varbinds: Option<serde_json::Value>,
     pub message: String,
     pub matched_rule_id: Option<Uuid>,
-    pub action: String,
+    pub action: EventAction,
 }
 
 /// Per-node event count in one time bucket — the input to the Troubleshoot `event_storm` analysis.
@@ -269,7 +387,7 @@ pub struct PersistRecord {
     pub node_id: Option<Uuid>,
     pub source_id: Option<Uuid>,
     pub matched_rule_id: Option<Uuid>,
-    pub action: &'static str,
+    pub action: EventAction,
 }
 
 impl PersistRecord {
@@ -278,17 +396,14 @@ impl PersistRecord {
     /// store only.
     #[must_use]
     fn is_alert_linked(&self) -> bool {
-        matches!(
-            self.action,
-            "fired" | "refreshed" | "cleared" | "suppressed"
-        )
+        self.action.is_alert_linked()
     }
 }
 
 /// One planned alert side effect queued for the async action writer (S10): a fire/resolve/suppress
 /// to record in history and forward to the notifier, off the matcher's hot path. `reason` labels a
 /// resolve (`"clear"`/`"ttl"`/`"manual"`) for the resolved-total counter.
-pub struct EventAction {
+pub struct QueuedAction {
     pub action: NotifyAction,
     pub reason: &'static str,
 }
@@ -482,7 +597,7 @@ impl EventRepo {
                 Ok(EventSourceView {
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
-                    kind: row.try_get("kind")?,
+                    kind: event_kind_from_stored(row.try_get("kind")?),
                     enabled: row.try_get("enabled")?,
                     node_id: row.try_get("node_id")?,
                     created_at: row.try_get("created_at")?,
@@ -602,7 +717,7 @@ impl EventRepo {
                     source_kind: row.try_get("source_kind")?,
                     source_id: row.try_get("source_id")?,
                     node_id: row.try_get("node_id")?,
-                    match_kind: row.try_get("match_kind")?,
+                    match_kind: EventMatchKind::from_stored(row.try_get("match_kind")?),
                     pattern: row.try_get("pattern")?,
                     clear_pattern: row.try_get("clear_pattern")?,
                     severity: parse_severity(row.try_get("severity")?),
@@ -708,7 +823,7 @@ impl EventRepo {
                 .push_bind(varbinds)
                 .push_bind(m.message.clone())
                 .push_bind(r.matched_rule_id)
-                .push_bind(r.action);
+                .push_bind(r.action.as_str());
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
@@ -742,7 +857,7 @@ impl EventRepo {
                     .map(str::to_owned);
                 Ok(EventRow {
                     id: row.try_get("id")?,
-                    kind: row.try_get("kind")?,
+                    kind: event_kind_from_stored(row.try_get("kind")?),
                     at_unix_ms: row.try_get("at_unix_ms")?,
                     recorded_at: row.try_get("recorded_at")?,
                     source_ip: row.try_get("source_ip")?,
@@ -758,7 +873,7 @@ impl EventRepo {
                     varbinds: row.try_get("varbinds")?,
                     message: row.try_get("message")?,
                     matched_rule_id: row.try_get("matched_rule_id")?,
-                    action: row.try_get("action")?,
+                    action: EventAction::from_stored(row.try_get("action")?),
                 })
             })
             .collect()
@@ -1148,9 +1263,9 @@ fn compile_rule(stored: &StoredEventRule) -> Option<CompiledRule> {
     if !stored.enabled {
         return None;
     }
-    let matcher = compile_matcher(&stored.match_kind, &stored.pattern).ok()?;
+    let matcher = compile_matcher(stored.match_kind.as_str(), &stored.pattern).ok()?;
     let clear_matcher = match stored.clear_pattern.as_deref() {
-        Some(p) => Some(compile_matcher(&stored.match_kind, p).ok()?),
+        Some(p) => Some(compile_matcher(stored.match_kind.as_str(), p).ok()?),
         None => None,
     };
     // A null `source_kind` means "any kind" — see `applies`. So an unparseable *non-null* one must
@@ -1263,23 +1378,12 @@ impl Runtime {
 /// each tagged with the metric reason for a resolve ("clear"; ignored for a fire).
 #[derive(Default)]
 struct Planned {
-    row_action: &'static str,
+    row_action: EventAction,
     matched_rule: Option<Uuid>,
     actions: Vec<(NotifyAction, &'static str)>,
 }
 
 /// Row-action precedence: the strongest outcome describes the event.
-fn action_rank(action: &str) -> u8 {
-    match action {
-        "fired" => 5,
-        "refreshed" => 4,
-        "cleared" => 3,
-        "suppressed" => 2,
-        "info" => 1,
-        _ => 0,
-    }
-}
-
 /// The webhook source binding the ingest endpoint resolved (token already verified).
 pub struct SourceBinding {
     pub source_id: Uuid,
@@ -1306,7 +1410,7 @@ pub struct EventEngine {
     /// Blocking handoff to the async action writer (S10): alert-history + notification I/O for
     /// planned fire/resolve actions runs off the matcher's hot path. `None` falls back to inline
     /// execution (unit tests / skeleton) so behavior is unchanged there.
-    action_tx: Option<tokio::sync::mpsc::Sender<EventAction>>,
+    action_tx: Option<tokio::sync::mpsc::Sender<QueuedAction>>,
 }
 
 impl EventEngine {
@@ -1317,7 +1421,7 @@ impl EventEngine {
         notifier: Arc<Notifier>,
         history: Arc<AlertHistoryStore>,
         persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
-        action_tx: Option<tokio::sync::mpsc::Sender<EventAction>>,
+        action_tx: Option<tokio::sync::mpsc::Sender<QueuedAction>>,
     ) -> Self {
         Self {
             repo,
@@ -1420,10 +1524,7 @@ impl EventEngine {
         // Plan under short locks, then execute the I/O.
         let planned = match node_id {
             Some(node) => self.plan(&msg, source.as_ref().map(|s| s.source_id), node, now_ms),
-            None => Planned {
-                row_action: "none",
-                ..Planned::default()
-            },
+            None => Planned::default(),
         };
 
         // Hand the raise/resolve side effects (history write + notification) to the async action
@@ -1439,17 +1540,12 @@ impl EventEngine {
         // ADR-024). Non-blocking: under sustained overload we shed the newest event rather than
         // block the matcher — alerts already fired above, so a dropped persist never loses an alert.
         if let Some(tx) = &self.persist_tx {
-            let action = if planned.row_action.is_empty() {
-                "none"
-            } else {
-                planned.row_action
-            };
             let record = PersistRecord {
                 msg,
                 node_id,
                 source_id: source.as_ref().map(|s| s.source_id),
                 matched_rule_id: planned.matched_rule,
-                action,
+                action: planned.row_action,
             };
             match tx.try_send(record) {
                 Ok(()) => metrics::counter!("yagra_events_persist_enqueued_total").increment(1),
@@ -1472,12 +1568,11 @@ impl EventEngine {
         let in_maintenance = self.alerts.in_maintenance(node_id);
         let snap = self.snapshot.read().expect("snapshot rwlock poisoned");
         let mut runtime = self.runtime.lock().expect("runtime mutex poisoned");
-        let mut planned = Planned {
-            row_action: "none",
-            ..Planned::default()
-        };
-        let bump = |planned: &mut Planned, action: &'static str, rule: Uuid| {
-            if action_rank(action) > action_rank(planned.row_action) {
+        let mut planned = Planned::default();
+        // The strongest outcome wins when several rules match one event — a plain  now that
+        // EventAction derives Ord from its declaration order.
+        let bump = |planned: &mut Planned, action: EventAction, rule: Uuid| {
+            if action > planned.row_action {
                 planned.row_action = action;
                 planned.matched_rule = Some(rule);
             }
@@ -1509,7 +1604,7 @@ impl EventEngine {
 
             // Maintenance window: record the match, raise nothing (ADR-015 quality gate).
             if in_maintenance {
-                bump(&mut planned, "suppressed", rule.id);
+                bump(&mut planned, EventAction::Suppressed, rule.id);
                 continue;
             }
 
@@ -1524,19 +1619,19 @@ impl EventEngine {
                         planned.actions.push((action, "clear"));
                     }
                 }
-                bump(&mut planned, "cleared", rule.id);
+                bump(&mut planned, EventAction::Cleared, rule.id);
                 continue;
             }
 
             // Info severity = record only; the alert engine has no Info state.
             if rule.severity == Severity::Info {
-                bump(&mut planned, "info", rule.id);
+                bump(&mut planned, EventAction::Info, rule.id);
                 continue;
             }
 
             if !runtime.gate_passes(rule, node, now_ms) {
                 // Counted toward the gate but below min-count — matched, not fired.
-                bump(&mut planned, "info", rule.id);
+                bump(&mut planned, EventAction::Info, rule.id);
                 continue;
             }
 
@@ -1544,7 +1639,7 @@ impl EventEngine {
             if let Some(active) = runtime.active.get_mut(&check) {
                 // Already alerting: extend the TTL, no re-notification.
                 active.expires_at_ms = deadline;
-                bump(&mut planned, "refreshed", rule.id);
+                bump(&mut planned, EventAction::Refreshed, rule.id);
                 continue;
             }
             let state = match rule.severity {
@@ -1575,7 +1670,7 @@ impl EventEngine {
                         },
                     );
                     planned.actions.push((action, "fire"));
-                    bump(&mut planned, "fired", rule.id);
+                    bump(&mut planned, EventAction::Fired, rule.id);
                 }
                 None => {
                     // Manager already had this alert active at the same severity (its dedup
@@ -1586,7 +1681,7 @@ impl EventEngine {
                             expires_at_ms: deadline,
                         },
                     );
-                    bump(&mut planned, "refreshed", rule.id);
+                    bump(&mut planned, EventAction::Refreshed, rule.id);
                 }
             }
         }
@@ -1626,8 +1721,8 @@ impl EventEngine {
     async fn dispatch_action(&self, action: NotifyAction, reason: &'static str) {
         match &self.action_tx {
             Some(tx) => {
-                if let Err(err) = tx.send(EventAction { action, reason }).await {
-                    let EventAction { action, reason } = err.0;
+                if let Err(err) = tx.send(QueuedAction { action, reason }).await {
+                    let QueuedAction { action, reason } = err.0;
                     self.run_action(action, reason).await;
                 } else {
                     metrics::counter!("yagra_event_actions_enqueued_total").increment(1);
@@ -1820,7 +1915,7 @@ pub async fn run_persist_writer(
 /// Map a drained action batch to the `alert_history` rows to insert: a fire records `resolved=false`,
 /// a resolve `resolved=true`, and a suppress records nothing (event alerts are never
 /// dependency-suppressed, but the variant is handled for exhaustiveness). Pure — unit-tested.
-fn history_rows(actions: &[EventAction]) -> Vec<(Alert, bool)> {
+fn history_rows(actions: &[QueuedAction]) -> Vec<(Alert, bool)> {
     actions
         .iter()
         .filter_map(|ea| match &ea.action {
@@ -1839,7 +1934,7 @@ fn history_rows(actions: &[EventAction]) -> Vec<(Alert, bool)> {
 async fn flush_actions(
     history: &AlertHistoryStore,
     notifier: &Notifier,
-    buf: &mut Vec<EventAction>,
+    buf: &mut Vec<QueuedAction>,
 ) {
     if buf.is_empty() {
         return;
@@ -1869,12 +1964,12 @@ async fn flush_actions(
 /// serialize a PG round-trip per action on the matcher. Delivers notifications in FIFO order so a
 /// fire always precedes its later resolve. On shutdown it drains and flushes what's queued.
 pub async fn run_event_action_writer(
-    mut rx: tokio::sync::mpsc::Receiver<EventAction>,
+    mut rx: tokio::sync::mpsc::Receiver<QueuedAction>,
     history: Arc<AlertHistoryStore>,
     notifier: Arc<Notifier>,
     shutdown: CancellationToken,
 ) {
-    let mut buf: Vec<EventAction> = Vec::with_capacity(ACTION_BATCH_MAX);
+    let mut buf: Vec<QueuedAction> = Vec::with_capacity(ACTION_BATCH_MAX);
     loop {
         tokio::select! {
             biased;
@@ -2006,7 +2101,7 @@ mod tests {
             source_kind: None,
             source_id: None,
             node_id: None,
-            match_kind: "substring".into(),
+            match_kind: EventMatchKind::Substring,
             pattern: pattern.into(),
             clear_pattern: None,
             // Still takes the token, so the callers below read as the stored rows they stand for.
@@ -2068,7 +2163,7 @@ mod tests {
         assert!(compile_rule(&stored).is_none());
 
         let mut stored = stored_rule("(bad", "warning");
-        stored.match_kind = "regex".into();
+        stored.match_kind = EventMatchKind::Regex;
         assert!(compile_rule(&stored).is_none());
     }
 
@@ -2121,11 +2216,31 @@ mod tests {
 
     #[test]
     fn action_precedence_orders_outcomes() {
-        assert!(action_rank("fired") > action_rank("refreshed"));
-        assert!(action_rank("refreshed") > action_rank("cleared"));
-        assert!(action_rank("cleared") > action_rank("suppressed"));
-        assert!(action_rank("suppressed") > action_rank("info"));
-        assert!(action_rank("info") > action_rank("none"));
+        // The ordering is now the enum's declaration order (derived `Ord`), which is what `bump`
+        // compares. ALL is declared least → most consequential, so it must be sorted.
+        assert!(EventAction::ALL.is_sorted());
+        assert!(EventAction::Fired > EventAction::Refreshed);
+        assert!(EventAction::Refreshed > EventAction::Cleared);
+        assert!(EventAction::Cleared > EventAction::Suppressed);
+        assert!(EventAction::Suppressed > EventAction::Info);
+        assert!(EventAction::Info > EventAction::None);
+    }
+
+    #[test]
+    fn every_action_round_trips_through_its_token() {
+        // `as_str` writes the `events.action` column and serde's `rename_all` writes the JSON tag;
+        // nothing makes the two agree, and the log-store path reads back what it wrote.
+        for a in EventAction::ALL {
+            assert_eq!(EventAction::from_stored(a.as_str()), a);
+            assert_eq!(
+                serde_json::to_string(&a).unwrap(),
+                format!("\"{}\"", a.as_str())
+            );
+        }
+        // A token this build does not know reads as "nothing happened" — the only honest answer,
+        // and it keeps the row out of the alert-linked set rather than inventing a link.
+        assert_eq!(EventAction::from_stored("escalated"), EventAction::None);
+        assert!(!EventAction::from_stored("escalated").is_alert_linked());
     }
 
     #[test]
@@ -2164,12 +2279,12 @@ mod tests {
         )
     }
 
-    fn persist_record(action: &'static str) -> PersistRecord {
+    fn persist_record(action: EventAction) -> PersistRecord {
         PersistRecord {
             msg: syslog_msg("some event body"),
             node_id: Some(Uuid::new_v4()),
             source_id: None,
-            matched_rule_id: (action != "none").then(Uuid::new_v4),
+            matched_rule_id: (action != EventAction::None).then(Uuid::new_v4),
             action,
         }
     }
@@ -2183,18 +2298,22 @@ mod tests {
 
     #[test]
     fn alert_linked_classification() {
-        for a in ["fired", "refreshed", "cleared", "suppressed"] {
+        use EventAction::{Cleared, Fired, Info, None, Refreshed, Suppressed};
+        for a in [Fired, Refreshed, Cleared, Suppressed] {
             assert!(
                 persist_record(a).is_alert_linked(),
-                "{a} should be alert-linked"
+                "{a:?} should be alert-linked"
             );
         }
-        for a in ["info", "none"] {
+        for a in [Info, None] {
             assert!(
                 !persist_record(a).is_alert_linked(),
-                "{a} should not be alert-linked"
+                "{a:?} should not be alert-linked"
             );
         }
+        // Every variant is classified: the partition above must cover ALL, so a new outcome cannot
+        // be added without deciding whether its rows survive in PostgreSQL (ADR-024).
+        assert_eq!(EventAction::ALL.len(), 6);
     }
 
     #[tokio::test]
@@ -2207,8 +2326,8 @@ mod tests {
         let token = CancellationToken::new();
         let handle = tokio::spawn(run_persist_writer(rx, lazy_repo(), logs, token));
 
-        tx.send(persist_record("none")).await.unwrap();
-        tx.send(persist_record("info")).await.unwrap();
+        tx.send(persist_record(EventAction::None)).await.unwrap();
+        tx.send(persist_record(EventAction::Info)).await.unwrap();
         drop(tx); // close the channel → writer drains, flushes, returns
         handle.await.unwrap();
 
@@ -2223,7 +2342,7 @@ mod tests {
         let token = CancellationToken::new();
         let handle = tokio::spawn(run_persist_writer(rx, lazy_repo(), logs, token.clone()));
 
-        tx.send(persist_record("none")).await.unwrap();
+        tx.send(persist_record(EventAction::None)).await.unwrap();
         // Give the writer a moment to drain the one message, then cancel; the buffer is already
         // flushed, and the cancel arm's final flush is a no-op.
         token.cancel();
@@ -2259,15 +2378,15 @@ mod tests {
     fn history_rows_map_fire_and_resolve_and_skip_suppress() {
         let node = Uuid::new_v4();
         let batch = vec![
-            EventAction {
+            QueuedAction {
                 action: NotifyAction::Fire(test_alert(node, Severity::Critical)),
                 reason: "fire",
             },
-            EventAction {
+            QueuedAction {
                 action: NotifyAction::Resolve(test_alert(node, Severity::Critical)),
                 reason: "clear",
             },
-            EventAction {
+            QueuedAction {
                 action: NotifyAction::Suppress(test_alert(node, Severity::Warning)),
                 reason: "fire",
             },
@@ -2284,7 +2403,7 @@ mod tests {
         // Suppress actions record no history (no DB touched) and the env notifier has no channels,
         // so this exercises the writer's batch-drain + FIFO delivery + clean shutdown without a
         // live database or notifier. History mapping is covered purely above.
-        let (tx, rx) = tokio::sync::mpsc::channel::<EventAction>(16);
+        let (tx, rx) = tokio::sync::mpsc::channel::<QueuedAction>(16);
         let token = CancellationToken::new();
         let handle = tokio::spawn(run_event_action_writer(
             rx,
@@ -2293,7 +2412,7 @@ mod tests {
             token,
         ));
         for _ in 0..3 {
-            tx.send(EventAction {
+            tx.send(QueuedAction {
                 action: NotifyAction::Suppress(test_alert(Uuid::new_v4(), Severity::Warning)),
                 reason: "fire",
             })
@@ -2306,7 +2425,7 @@ mod tests {
 
     #[tokio::test]
     async fn action_writer_final_flush_on_shutdown() {
-        let (tx, rx) = tokio::sync::mpsc::channel::<EventAction>(16);
+        let (tx, rx) = tokio::sync::mpsc::channel::<QueuedAction>(16);
         let token = CancellationToken::new();
         let handle = tokio::spawn(run_event_action_writer(
             rx,
@@ -2314,7 +2433,7 @@ mod tests {
             Arc::new(Notifier::from_env()),
             token.clone(),
         ));
-        tx.send(EventAction {
+        tx.send(QueuedAction {
             action: NotifyAction::Suppress(test_alert(Uuid::new_v4(), Severity::Warning)),
             reason: "fire",
         })
@@ -2398,7 +2517,7 @@ mod tests {
 
         // First match fires (and the manager now holds the active alert).
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 1_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(p.matched_rule, Some(rule_id));
         let f = fires(&p);
         assert_eq!(f.len(), 1);
@@ -2410,18 +2529,18 @@ mod tests {
 
         // Repeat match refreshes (extends TTL), no second fire.
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 2_000);
-        assert_eq!(p.row_action, "refreshed");
+        assert_eq!(p.row_action, EventAction::Refreshed);
         assert!(fires(&p).is_empty());
 
         // Clear pattern resolves in both active sets.
         let p = engine.plan(&syslog_msg("link up on ge-0/0/1"), None, node, 3_000);
-        assert_eq!(p.row_action, "cleared");
+        assert_eq!(p.row_action, EventAction::Cleared);
         assert_eq!(resolves(&p), 1);
         assert!(engine.alerts.active_alerts().is_empty());
 
         // After the clear, a new match fires again.
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 4_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(fires(&p).len(), 1);
     }
 
@@ -2440,13 +2559,13 @@ mod tests {
         let down = trap_msg("1.3.6.1.6.3.1.1.5.3");
         assert!(!down.message.contains("linkDown"));
         let p = engine.plan(&down, None, node, 1_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(fires(&p).len(), 1);
         assert_eq!(engine.alerts.active_alerts().len(), 1);
 
         // The linkUp trap (a different OID) resolves via the clear pattern's resolved name.
         let p = engine.plan(&trap_msg("1.3.6.1.6.3.1.1.5.4"), None, node, 2_000);
-        assert_eq!(p.row_action, "cleared");
+        assert_eq!(p.row_action, EventAction::Cleared);
         assert_eq!(resolves(&p), 1);
         assert!(engine.alerts.active_alerts().is_empty());
     }
@@ -2460,7 +2579,7 @@ mod tests {
         let stored = stored_rule("1.3.6.1.4.1.9.9.43.2.0.1", "warning");
         set_rules(&engine, vec![compile_rule(&stored).unwrap()]);
         let p = engine.plan(&trap_msg("1.3.6.1.4.1.9.9.43.2.0.1"), None, node, 1_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
     }
 
     #[tokio::test]
@@ -2473,11 +2592,11 @@ mod tests {
 
         // Fire first so there's something active.
         let p = engine.plan(&syslog_msg("link failed"), None, node, 1_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         // "link recovered" matches BOTH the fire pattern ("link") and the clear pattern —
         // clear must win or the alert would flap.
         let p = engine.plan(&syslog_msg("link recovered"), None, node, 2_000);
-        assert_eq!(p.row_action, "cleared");
+        assert_eq!(p.row_action, EventAction::Cleared);
         assert!(fires(&p).is_empty());
     }
 
@@ -2490,7 +2609,7 @@ mod tests {
             vec![compile_rule(&stored_rule("config changed", "info")).unwrap()],
         );
         let p = engine.plan(&syslog_msg("config changed by admin"), None, node, 1_000);
-        assert_eq!(p.row_action, "info");
+        assert_eq!(p.row_action, EventAction::Info);
         assert!(p.actions.is_empty());
         assert!(p.matched_rule.is_some());
     }
@@ -2505,11 +2624,11 @@ mod tests {
         set_rules(&engine, vec![compile_rule(&stored).unwrap()]);
 
         let p = engine.plan(&syslog_msg("auth failure for admin"), None, node, 1_000);
-        assert_eq!(p.row_action, "info"); // matched, gated
+        assert_eq!(p.row_action, EventAction::Info); // matched, gated
         let p = engine.plan(&syslog_msg("auth failure for admin"), None, node, 2_000);
-        assert_eq!(p.row_action, "info");
+        assert_eq!(p.row_action, EventAction::Info);
         let p = engine.plan(&syslog_msg("auth failure for admin"), None, node, 3_000);
-        assert_eq!(p.row_action, "fired"); // 3rd match inside the window
+        assert_eq!(p.row_action, EventAction::Fired); // 3rd match inside the window
         assert_eq!(fires(&p).len(), 1);
     }
 
@@ -2529,7 +2648,7 @@ mod tests {
         );
 
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 1_000);
-        assert_eq!(p.row_action, "suppressed");
+        assert_eq!(p.row_action, EventAction::Suppressed);
         assert!(p.actions.is_empty());
     }
 
@@ -2544,7 +2663,7 @@ mod tests {
         let p = engine.plan(&syslog_msg("link down on ge-0/0/1"), None, node, 1_000);
         // Both rules matched and both fired independently.
         assert_eq!(fires(&p).len(), 2);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
     }
 
     #[tokio::test]
@@ -2561,14 +2680,14 @@ mod tests {
 
         // Fire, then expire it via the sweeper (both sets cleared together).
         let p = engine.plan(&syslog_msg("link down"), None, node, 0);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(engine.alerts.active_alerts().len(), 1);
         engine.sweep(1_000_000).await; // well past the 60s TTL
         assert!(engine.alerts.active_alerts().is_empty());
 
         // A new matching event must fire again (not silently refresh a closed alert).
         let p = engine.plan(&syslog_msg("link down"), None, node, 1_001_000);
-        assert_eq!(p.row_action, "fired");
+        assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(fires(&p).len(), 1);
         assert_eq!(engine.alerts.active_alerts().len(), 1);
     }
