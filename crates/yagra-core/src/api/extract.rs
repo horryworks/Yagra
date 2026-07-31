@@ -17,12 +17,11 @@
 //! **authenticate first, then report availability.** An unauthenticated caller learns only that it
 //! is unauthenticated — never which subsystems this deployment happens to have configured.
 
-use super::{error_response, ApiError, ApiState};
+use super::{ApiError, ApiState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
-    http::{request::Parts, HeaderMap, StatusCode},
-    response::Response,
+    http::{request::Parts, HeaderMap},
 };
 use std::sync::Arc;
 use yagra_common::Permission;
@@ -41,48 +40,6 @@ pub(crate) fn current_username(st: &ApiState, headers: &HeaderMap) -> Option<Str
     bearer(headers)
         .and_then(|t| st.sessions.lookup(t))
         .map(|s| s.username)
-}
-
-// ── Legacy prologue guards for the domains still in `mod.rs` ─────────────────
-//
-// The `Option<Response>` shape below is what the extractors above replace: the caller must
-// remember to write `if let Some(resp) = authorize(…) { return resp; }`, so forgetting it is a
-// silent authorization hole. They live here rather than in `mod.rs` because they are shared by
-// every domain — leaving them among the handlers would make each domain move break the rest.
-//
-// Do not add call sites: a new or moved handler takes a `Require*` extractor instead.
-
-/// Require a valid token with `perm`. Returns `Some(error response)` to short-circuit the
-/// handler on failure (401/403), or `None` when authorized.
-pub(crate) fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) -> Option<Response> {
-    match st.sessions.authorize(bearer(headers), perm) {
-        Ok(_) => None,
-        Err(crate::auth::AuthError::Forbidden) => Some(error_response(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "your role does not permit this action".to_owned(),
-        )),
-        Err(_) => Some(error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "a valid bearer token is required".to_owned(),
-        )),
-    }
-}
-
-/// Guard for handlers that touch leader-only in-memory pipelines (ADR-016): `Some(503)` on a
-/// standby, `None` on the leader (and always `None` when HA is off / this core is always leader).
-/// Mirrors [`authorize`]'s `Option<Response>` shape so call sites read the same.
-pub(crate) fn require_leader(st: &ApiState) -> Option<Response> {
-    if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
-        None
-    } else {
-        Some(error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "not_leader",
-            "this core is a standby; the request must be routed to the leader".to_owned(),
-        ))
-    }
 }
 
 /// The permission a [`Require`] guard demands. Implemented by the marker types below so the
@@ -262,6 +219,55 @@ impl std::ops::Deref for Oidc {
 // A `Leader` extractor (the ADR-016 standby guard) is not here yet either: the two handlers that
 // need it still call `require_leader(&st)` in `mod.rs`. It arrives with the events domain,
 // alongside the `AckAlerts` marker — same reasoning, an extractor with no user is dead code.
+
+/// The passive-event engine — present only when event ingestion is configured.
+///
+/// Its own extractor for the same reason as [`Admin`]: four handlers opened with the identical
+/// `let Some(engine) = st.events.as_ref() else { … }`.
+pub struct Events(pub Arc<crate::events::EventEngine>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Events {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.events
+            .as_ref()
+            .map(|e| Self(e.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for Events {
+    type Target = crate::events::EventEngine;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Proof that this core currently holds HA leadership (ADR-016).
+///
+/// Some pipelines exist only in the leader process: the event engine's persist and action channels
+/// are drained by leader-only writers, and its active-alert map is fed by the leader-only event
+/// pipeline. Serving those on a standby is not merely useless — ingesting there enqueues to a
+/// channel nobody drains, which eventually blocks, and closing there acts on an empty map and
+/// reports success. So the guard is a correctness requirement, not an optimization.
+///
+/// Answers `503 not_leader`, which `/readyz` lets a load balancer resolve to the right core.
+pub struct Leader;
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Leader {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
+            Ok(Self)
+        } else {
+            Err(ApiError::not_leader())
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -118,6 +118,7 @@ pub struct StoredEventRule {
 }
 
 /// Rule create/update parameters (validated at the API edge).
+#[derive(Debug)]
 pub struct RuleParams<'a> {
     pub name: &'a str,
     pub enabled: bool,

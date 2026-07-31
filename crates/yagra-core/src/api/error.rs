@@ -49,44 +49,6 @@ pub(crate) fn error_response(status: StatusCode, code: &str, message: String) ->
         .into_response()
 }
 
-// ── Legacy constructors for the domains still in `mod.rs` ────────────────────
-//
-// These are the pre-`ApiError` shorthands, and they are here rather than in `mod.rs` for one
-// reason: they were declared *inside* a domain's banner-delimited block while being used from
-// every other domain. `not_found` sat in the nodes block yet had 81 callers across 28 domains, so
-// moving nodes out of `mod.rs` would have broken every one of them. A shared helper that lives
-// inside the thing it is shared by is a migration tripwire — hoisting them is what makes a domain
-// extractable at all.
-//
-// Do not add call sites. Each is the `ApiError` constructor of the same name spelled as an eager
-// `Response`, and disappears as its callers migrate.
-
-/// `404` with the ADR-019 envelope. Legacy shim — new handlers return [`ApiError::not_found`].
-pub(crate) fn not_found(code: &str, message: String) -> Response {
-    error_response(StatusCode::NOT_FOUND, code, message)
-}
-
-/// `503` for skeleton mode (no write side). Legacy shim — new handlers take the `Admin` extractor,
-/// which produces [`ApiError::admin_unavailable`] before the body runs.
-pub(crate) fn unavailable() -> Response {
-    error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "admin_unavailable",
-        "inventory/credential management is not available in skeleton mode".to_owned(),
-    )
-}
-
-/// `500` carrying only the operator-facing sentence. Legacy shim — new handlers use
-/// [`ApiError::from_internal`], which also logs the cause. **`what` must never contain the
-/// underlying error** (security.md); callers log it themselves at the conversion point.
-pub(crate) fn internal(what: &str) -> Response {
-    error_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal_error",
-        what.to_owned(),
-    )
-}
-
 /// A northbound API failure: a status, a stable machine-readable code, and an operator-facing
 /// message. Construct with the helpers below rather than by hand so the status↔code pairing stays
 /// consistent across domains.
@@ -173,8 +135,18 @@ impl ApiError {
         )
     }
 
-    // A `not_leader()` constructor lands with the events domain: the two handlers that answer
-    // `503 not_leader` today still build it through `require_leader(&st)` in `mod.rs`.
+    /// `503` — this core is an HA standby (ADR-016).
+    ///
+    /// Distinct from [`Self::admin_unavailable`]: the deployment is fine, this *instance* is not the
+    /// one that can serve the request. A client should retry against the leader, which `/readyz`
+    /// identifies, rather than concluding the subsystem is missing.
+    pub fn not_leader() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_leader",
+            "this core is a standby; the request must be routed to the leader",
+        )
+    }
 
     /// `500` — an internal failure. `what` is the operator-facing sentence ("failed to list
     /// thresholds"); the underlying error is **not** included, and must be logged by the caller
