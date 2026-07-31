@@ -74,6 +74,10 @@
   API contract (`queued`/`running`/`succeeded`/`failed`/`unknown` and so on), the badge is a
   per-state map with no catch-all, and a genuinely unrecognised state renders neutrally as "Unknown
   state" rather than as a failure. **No wire change** — the same strings, now described.
+- **A DNS monitor's failure reason was shown as a raw internal token.** Node ▸ DNS rendered
+  `nx_domain`, `serv_fail`, `depth_exceeded` and six others verbatim, untranslated — so a Japanese
+  operator got English snake_case in the resolution column. All nine now read as sentences in both
+  languages ("No such name (NXDOMAIN)", "名前が存在しない（NXDOMAIN）").
 - **An alerting rule scoped to one event stream could silently widen to all of them.** An event rule
   naming a source kind this build did not recognise parsed to "no kind filter", which the matcher
   reads as *any* kind — so the rule fired on syslog, traps and webhooks alike, rather than the one
