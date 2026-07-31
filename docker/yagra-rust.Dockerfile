@@ -30,6 +30,28 @@ ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 # target/<name>, so the copy path is parameterized by the profile name.
 ARG CARGO_PROFILE=release
 
+# Cache-bust the source copy and the compile, every commit.
+#
+# On 2026-07-31 CI shipped a binary built from the *previous* commit's source, with all six jobs
+# green: BuildKit reported `COPY . .` as CACHED even though the context had changed, so the changed
+# files never entered the image, cargo saw an unchanged tree, and the `cp` below carried the stale
+# binary out of the cache mount. `gh run rerun` reproduced it exactly. Nothing downstream could
+# catch it — the deploy pulled the right digest, the container restarted, and `/api/v1/config`
+# answered 200 while the API served the old contract.
+#
+# So the Docker layer cache no longer gets a vote on whether the Rust build is fresh. Cargo decides
+# that, and it still can: `target/` and the registry are `--mount=type=cache`, which is **not** part
+# of the layer cache and survives this bust — so a one-line change still recompiles one crate, not
+# the world. What is thrown away is only the layer cache's *opinion*, which is the thing that was
+# wrong.
+#
+# The ref is written into the image because an unused ARG does not affect the cache at all (Docker
+# invalidates at an ARG's first *use*, not its definition). Recording it also makes the failure this
+# prevents diagnosable in one command:
+#     docker exec yagra-core-1 cat /etc/yagra-source-ref
+ARG SOURCE_REF=unknown
+RUN echo "${SOURCE_REF}" > /etc/yagra-source-ref
+
 COPY . .
 # Reuse compiled deps + cargo registry across builds via BuildKit cache mounts. On the persistent
 # self-hosted CI runner these survive between runs, so a one-line source change recompiles only the
@@ -65,6 +87,7 @@ RUN apt-get update \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -u 10001 yagra
+COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=build /app/yagra-core /usr/local/bin/yagra-core
 USER yagra
 EXPOSE 8080
@@ -91,6 +114,7 @@ RUN useradd -r -u 10002 yagra \
  && apt-get install -y --no-install-recommends libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
+COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=build /app/yagra-poller /usr/local/bin/yagra-poller
 # File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
 RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller
