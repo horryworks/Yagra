@@ -2,14 +2,15 @@
 //! The endpoints that describe Yagra itself: build version, client bootstrap config, the global
 //! polling default, and self-health.
 //!
-//! **Three of these are deliberately unauthenticated**, which is unusual enough to state:
-//! `/version` and `/config` carry no secrets and the WebUI needs them *before* it can decide
-//! whether to show a login screen at all. Gating them would mean the login page could not render.
-//! The one write here — the global poll interval — is `ManageConfig` like any other config change.
+//! **Two of these are deliberately unauthenticated**, which is unusual enough to state: `/version`
+//! and `/config` carry no secrets and the WebUI needs them *before* it can decide whether to show a
+//! login screen at all. Gating them would mean the login page could not render.
 //!
-//! `/system-health` degrades to a `"degraded"` body rather than answering 503 in skeleton mode. It
-//! is the page an operator opens when something is wrong, so it must always render; "PostgreSQL not
-//! configured" is an answer, and a 503 is not.
+//! The other two are gated normally — `/system-health` on `View`, and the one write here (the global
+//! poll interval) on `ManageConfig`. What is unusual about `/system-health` is not its guard but its
+//! failure mode: past the guard it degrades to a `"degraded"` body rather than answering 503 in
+//! skeleton mode. It is the page an operator opens when something is already wrong, so it must
+//! always render; "PostgreSQL not configured" is an answer, and a 503 is not.
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView};
@@ -298,6 +299,14 @@ mod tests {
                 "{path}"
             );
         }
+        // And the set stops there — `/system-health` is `View`-gated like any other read. Pinned
+        // because "unauthenticated" is a property that spreads by copy-paste if nothing checks it.
+        assert_eq!(
+            send(private_state(), "GET", "/api/v1/system-health", None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED,
+        );
     }
 
     #[tokio::test]
