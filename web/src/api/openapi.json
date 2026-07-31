@@ -21321,6 +21321,16 @@
           "spec": {}
         }
       },
+      "ReportFrequency": {
+        "type": "string",
+        "description": "How often a schedule fires.",
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly",
+          "unknown"
+        ]
+      },
       "ReportRun": {
         "type": "object",
         "description": "A run row for the saved-reports list (without the heavy `result_*` payloads).",
@@ -21401,10 +21411,10 @@
             "format": "int64"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/ReportRunState"
           },
           "trigger": {
-            "type": "string"
+            "$ref": "#/components/schemas/ReportRunTrigger"
           }
         }
       },
@@ -21427,6 +21437,26 @@
           }
         ],
         "description": "A run plus its rendered result (the viewer / export endpoints)."
+      },
+      "ReportRunState": {
+        "type": "string",
+        "description": "Lifecycle of one report run.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "unknown"
+        ]
+      },
+      "ReportRunTrigger": {
+        "type": "string",
+        "description": "What started a run.",
+        "enum": [
+          "manual",
+          "scheduled",
+          "unknown"
+        ]
       },
       "ReportSchedule": {
         "type": "object",
@@ -21475,7 +21505,7 @@
             "type": "boolean"
           },
           "frequency": {
-            "type": "string"
+            "$ref": "#/components/schemas/ReportFrequency"
           },
           "id": {
             "type": "string",
@@ -21489,9 +21519,13 @@
             "format": "int64"
           },
           "last_status": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReportScheduleStatus"
+              }
             ]
           },
           "next_run_ms": {
@@ -21546,6 +21580,16 @@
             "type": "string"
           }
         }
+      },
+      "ReportScheduleStatus": {
+        "type": "string",
+        "description": "Outcome of a schedule's most recent firing.",
+        "enum": [
+          "queued",
+          "missing-definition",
+          "error",
+          "unknown"
+        ]
       },
       "Role": {
         "type": "string",

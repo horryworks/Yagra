@@ -13,14 +13,16 @@
   },
   "trigger": {
     "manual": "手動",
-    "scheduled": "スケジュール"
+    "scheduled": "スケジュール",
+    "unknown": "不明"
   },
   "run": {
     "status": {
       "generating": "生成中 {{pct}}%",
       "queued": "待機中",
       "ready": "準備完了",
-      "failed": "失敗"
+      "failed": "失敗",
+      "unknown": "不明な状態"
     }
   },
   "runs": {
@@ -117,7 +119,8 @@
     "freq": {
       "daily": "毎日",
       "weekly": "毎週",
-      "monthly": "毎月"
+      "monthly": "毎月",
+      "unknown": "不明"
     },
     "err": {
       "chooseReport": "レポートを選択してください。",
@@ -137,6 +140,7 @@
   "cadence": {
     "daily": "毎日 · {{time}}",
     "weekly": "毎週 · {{day}} {{time}}",
-    "monthly": "毎月 · {{day}}日 {{time}}"
+    "monthly": "毎月 · {{day}}日 {{time}}",
+    "unknown": "不明な周期 · {{time}}"
   }
 }

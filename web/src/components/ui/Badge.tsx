@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import './Badge.css';
 
-type Tone = 'neutral' | 'critical' | 'warning' | 'up' | 'info';
+export type Tone = 'neutral' | 'critical' | 'warning' | 'up' | 'info';
 
 export function Badge({
   tone = 'neutral',

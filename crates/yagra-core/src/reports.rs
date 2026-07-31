@@ -48,6 +48,136 @@ fn now_s() -> i64 {
     now_ms() / 1000
 }
 
+// ── Closed sets ───────────────────────────────────────────────────────────────────────
+//
+// These four were `String` on the wire, so the generated contract said "string" and the WebUI
+// could not be made to handle every case. It didn't: the run-status badge ended in a `default:`
+// arm painting anything unrecognised as a red "Failed", which is the worst possible reading of a
+// state we simply hadn't taught it about. Naming the sets puts them in the OpenAPI document as
+// enums, which makes the TypeScript a union, which lets the badge be an exhaustive map.
+//
+// Each carries an `Unknown` variant on purpose. A token this build does not recognise means the
+// row was written by a newer core, and the alternative — mapping it onto a real state — would have
+// the API assert something the database never said.
+
+/// Lifecycle of one report run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportRunState {
+    /// Accepted but not started. The current backend never writes this — [`Repo::insert_run`]
+    /// inserts `running` directly — but [`Repo::fail_orphans`] sweeps it, so it stays named.
+    Queued,
+    /// Generating; `pct` is meaningful.
+    Running,
+    /// Finished; the rendered result is available.
+    Succeeded,
+    /// Gave up; `error` says why.
+    Failed,
+    /// A state this build does not know — a newer core wrote it.
+    Unknown,
+}
+
+/// What started a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportRunTrigger {
+    /// An operator pressed Generate.
+    Manual,
+    /// A schedule fired it.
+    Scheduled,
+    /// A trigger this build does not know — a newer core wrote it.
+    Unknown,
+}
+
+/// How often a schedule fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+    /// A cadence this build does not know — a newer core wrote it. Treated as daily when
+    /// computing the next run, which is what the old wildcard arm did.
+    Unknown,
+}
+
+/// Outcome of a schedule's most recent firing.
+//  kebab-case, not snake: `missing-definition` is the token already in the column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportScheduleStatus {
+    /// A run was queued.
+    Queued,
+    /// The schedule outlived the definition it pointed at.
+    MissingDefinition,
+    /// Queuing the run failed.
+    Error,
+    /// A status this build does not know — a newer core wrote it.
+    Unknown,
+}
+
+/// Give a fieldless enum its token list once: `ALL`, `as_str`, and a lenient `from_stored`.
+///
+/// The tokens listed here must match what `#[serde(rename_all = …)]` produces — the column and the
+/// JSON tag are the same string, written by two different mechanisms. `token_and_serde_agree`
+/// pins that.
+macro_rules! token_enum {
+    ($t:ty, $unknown:ident, $col:literal, [$($v:ident => $s:literal),+ $(,)?]) => {
+        impl $t {
+            /// Every variant, so anything that must present all of them reads one list.
+            pub const ALL: &'static [$t] = &[$(Self::$v),+];
+
+            /// Stable token — the DB column value and the JSON tag.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$v => $s),+ }
+            }
+
+            /// Parse a stored token, degrading to `Unknown` rather than failing the read: a value
+            /// this build does not recognise came from a newer core, and a report that cannot be
+            /// listed at all is a worse answer than one whose state reads "unknown".
+            #[must_use]
+            pub fn from_stored(s: &str) -> Self {
+                match Self::ALL.iter().copied().find(|v| v.as_str() == s) {
+                    Some(v) => v,
+                    None => {
+                        tracing::warn!(
+                            token = %s, column = $col,
+                            "unrecognised token; a newer core wrote this row"
+                        );
+                        Self::$unknown
+                    }
+                }
+            }
+        }
+    };
+}
+
+token_enum!(ReportRunState, Unknown, "report_runs.state", [
+    Queued => "queued",
+    Running => "running",
+    Succeeded => "succeeded",
+    Failed => "failed",
+    Unknown => "unknown",
+]);
+token_enum!(ReportRunTrigger, Unknown, "report_runs.trigger", [
+    Manual => "manual",
+    Scheduled => "scheduled",
+    Unknown => "unknown",
+]);
+token_enum!(ReportFrequency, Unknown, "report_schedules.frequency", [
+    Daily => "daily",
+    Weekly => "weekly",
+    Monthly => "monthly",
+    Unknown => "unknown",
+]);
+token_enum!(ReportScheduleStatus, Unknown, "report_schedules.last_status", [
+    Queued => "queued",
+    MissingDefinition => "missing-definition",
+    Error => "error",
+    Unknown => "unknown",
+]);
+
 // ── Persisted shapes ──────────────────────────────────────────────────────────────────
 
 /// A report definition (reusable template), as served to the API.
@@ -68,7 +198,7 @@ pub struct ReportSchedule {
     pub id: Uuid,
     pub definition_id: Uuid,
     pub definition_name: String,
-    pub frequency: String,
+    pub frequency: ReportFrequency,
     pub day_of_week: Option<i16>,
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
@@ -76,7 +206,7 @@ pub struct ReportSchedule {
     pub enabled: bool,
     pub next_run_ms: i64,
     pub last_run_ms: Option<i64>,
-    pub last_status: Option<String>,
+    pub last_status: Option<ReportScheduleStatus>,
 }
 
 /// A run row for the saved-reports list (without the heavy `result_*` payloads).
@@ -85,8 +215,8 @@ pub struct ReportRun {
     pub id: Uuid,
     pub definition_id: Option<Uuid>,
     pub name: String,
-    pub trigger: String,
-    pub state: String,
+    pub trigger: ReportRunTrigger,
+    pub state: ReportRunState,
     pub pct: i32,
     pub error: Option<String>,
     pub range_from_ms: Option<i64>,
@@ -698,8 +828,8 @@ fn run_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportRun> {
         id: row.try_get("id")?,
         definition_id: row.try_get("definition_id")?,
         name: row.try_get("name")?,
-        trigger: row.try_get("trigger")?,
-        state: row.try_get("state")?,
+        trigger: ReportRunTrigger::from_stored(row.try_get("trigger")?),
+        state: ReportRunState::from_stored(row.try_get("state")?),
         pct: row.try_get("pct")?,
         error: row.try_get("error")?,
         range_from_ms: row.try_get("range_from_ms")?,
@@ -717,7 +847,7 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
         id: row.try_get("id")?,
         definition_id: row.try_get("definition_id")?,
         definition_name: row.try_get("definition_name")?,
-        frequency: row.try_get("frequency")?,
+        frequency: ReportFrequency::from_stored(row.try_get("frequency")?),
         day_of_week: row.try_get("day_of_week")?,
         day_of_month: row.try_get("day_of_month")?,
         at_hour: row.try_get("at_hour")?,
@@ -725,7 +855,10 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
         enabled: row.try_get("enabled")?,
         next_run_ms: row.try_get("next_run_ms")?,
         last_run_ms: row.try_get("last_run_ms")?,
-        last_status: row.try_get("last_status")?,
+        last_status: row
+            .try_get::<Option<String>, _>("last_status")?
+            .as_deref()
+            .map(ReportScheduleStatus::from_stored),
     })
 }
 
@@ -733,7 +866,7 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
 #[derive(Debug, Clone)]
 pub struct ScheduleInput {
     pub definition_id: Uuid,
-    pub frequency: String,
+    pub frequency: ReportFrequency,
     pub day_of_week: Option<i16>,
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
@@ -852,7 +985,7 @@ impl ReportsRepo {
         )
         .bind(id)
         .bind(input.definition_id)
-        .bind(&input.frequency)
+        .bind(input.frequency.as_str())
         .bind(input.day_of_week)
         .bind(input.day_of_month)
         .bind(input.at_hour)
@@ -879,7 +1012,7 @@ impl ReportsRepo {
         )
         .bind(id)
         .bind(input.definition_id)
-        .bind(&input.frequency)
+        .bind(input.frequency.as_str())
         .bind(input.day_of_week)
         .bind(input.day_of_month)
         .bind(input.at_hour)
@@ -916,7 +1049,7 @@ impl ReportsRepo {
     pub async fn mark_fired(
         &self,
         id: Uuid,
-        status: &str,
+        status: ReportScheduleStatus,
         next_run_at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
         sqlx::query(
@@ -924,7 +1057,7 @@ impl ReportsRepo {
              WHERE id = $1",
         )
         .bind(id)
-        .bind(status)
+        .bind(status.as_str())
         .bind(next_run_at)
         .execute(&self.pool)
         .await?;
@@ -986,7 +1119,7 @@ impl ReportsRepo {
         &self,
         definition_id: Option<Uuid>,
         name: &str,
-        trigger: &str,
+        trigger: ReportRunTrigger,
         from_s: i64,
         to_s: i64,
         section_count: i32,
@@ -998,14 +1131,15 @@ impl ReportsRepo {
             "INSERT INTO report_runs \
              (id, definition_id, name, trigger, state, pct, range_from, range_to, \
               section_count, spec_snapshot, created_by, started_at) \
-             VALUES ($1, $2, $3, $4, 'running', 0, to_timestamp($5), to_timestamp($6), \
+             VALUES ($1, $2, $3, $4, '{running}', 0, to_timestamp($5), to_timestamp($6), \
                      $7, $8, $9, now()) \
-             RETURNING {RUN_COLS}"
+             RETURNING {RUN_COLS}",
+            running = ReportRunState::Running.as_str(),
         ))
         .bind(id)
         .bind(definition_id)
         .bind(name)
-        .bind(trigger)
+        .bind(trigger.as_str())
         .bind(from_s)
         .bind(to_s)
         .bind(section_count)
@@ -1017,11 +1151,14 @@ impl ReportsRepo {
     }
 
     async fn set_run_progress(&self, id: Uuid, pct: i32) -> anyhow::Result<()> {
-        sqlx::query("UPDATE report_runs SET pct = $2 WHERE id = $1 AND state = 'running'")
-            .bind(id)
-            .bind(pct.clamp(0, 100))
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(&format!(
+            "UPDATE report_runs SET pct = $2 WHERE id = $1 AND state = '{}'",
+            ReportRunState::Running.as_str()
+        ))
+        .bind(id)
+        .bind(pct.clamp(0, 100))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1031,10 +1168,11 @@ impl ReportsRepo {
         result_json: &serde_json::Value,
         result_html: &str,
     ) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE report_runs SET state = 'succeeded', pct = 100, result_json = $2, \
+        sqlx::query(&format!(
+            "UPDATE report_runs SET state = '{}', pct = 100, result_json = $2, \
              result_html = $3, finished_at = now() WHERE id = $1",
-        )
+            ReportRunState::Succeeded.as_str()
+        ))
         .bind(id)
         .bind(result_json)
         .bind(result_html)
@@ -1044,9 +1182,10 @@ impl ReportsRepo {
     }
 
     async fn fail_run(&self, id: Uuid, error: &str) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE report_runs SET state = 'failed', error = $2, finished_at = now() WHERE id = $1",
-        )
+        sqlx::query(&format!(
+            "UPDATE report_runs SET state = '{}', error = $2, finished_at = now() WHERE id = $1",
+            ReportRunState::Failed.as_str()
+        ))
         .bind(id)
         .bind(error)
         .execute(&self.pool)
@@ -1056,11 +1195,14 @@ impl ReportsRepo {
 
     /// On startup, fail any run left `running`/`queued` by a previous process (it can't resume).
     pub async fn fail_orphans(&self) -> anyhow::Result<u64> {
-        let res = sqlx::query(
-            "UPDATE report_runs SET state = 'failed', \
+        let res = sqlx::query(&format!(
+            "UPDATE report_runs SET state = '{failed}', \
              error = 'core restarted while running', finished_at = now() \
-             WHERE state IN ('queued', 'running')",
-        )
+             WHERE state IN ('{queued}', '{running}')",
+            failed = ReportRunState::Failed.as_str(),
+            queued = ReportRunState::Queued.as_str(),
+            running = ReportRunState::Running.as_str(),
+        ))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -1084,7 +1226,7 @@ impl ReportsRepo {
 /// falls back to daily. Pure (testable).
 #[must_use]
 pub fn compute_next_run(
-    frequency: &str,
+    frequency: ReportFrequency,
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     at_hour: i16,
@@ -1100,7 +1242,7 @@ pub fn compute_next_run(
         Utc.from_utc_datetime(&naive)
     };
     match frequency {
-        "weekly" => {
+        ReportFrequency::Weekly => {
             // 0=Sun..6=Sat; chrono's num_days_from_sunday matches.
             let target = day_of_week.unwrap_or(0).clamp(0, 6) as i64;
             let current = i64::from(now.weekday().num_days_from_sunday());
@@ -1112,7 +1254,7 @@ pub fn compute_next_run(
             }
             candidate
         }
-        "monthly" => {
+        ReportFrequency::Monthly => {
             // Clamp to 28 so every month has the day.
             let dom = day_of_month.unwrap_or(1).clamp(1, 28) as u32;
             let (mut y, mut m) = (now.year(), now.month());
@@ -1133,8 +1275,9 @@ pub fn compute_next_run(
                 .unwrap_or_else(|| now.date_naive() + ChronoDuration::days(28));
             at_time(date)
         }
-        // "daily" and any unknown frequency.
-        _ => {
+        // An Unknown cadence falls to daily, which is exactly what the old wildcard arm did —
+        // named now, so a fifth cadence has to choose rather than inherit this by accident.
+        ReportFrequency::Daily | ReportFrequency::Unknown => {
             let candidate = at_time(now.date_naive());
             if candidate > now {
                 candidate
@@ -1201,7 +1344,7 @@ impl ReportRunner {
     pub async fn run_now(
         self: &Arc<Self>,
         definition_id: Uuid,
-        trigger: &str,
+        trigger: ReportRunTrigger,
         created_by: Option<String>,
     ) -> anyhow::Result<Option<ReportRun>> {
         let Some(def) = self.repo.get_definition(definition_id).await? else {
@@ -1606,6 +1749,67 @@ fn fmt_minute(s: i64) -> String {
 mod tests {
     use super::*;
 
+    /// The token an enum writes to its column and the tag serde puts on the wire are the same
+    /// string produced two different ways (`as_str` vs `rename_all`). Nothing makes them agree, and
+    /// a disagreement would mean rows this build writes are rows it cannot read back.
+    #[test]
+    fn token_and_serde_agree_for_every_report_enum() {
+        macro_rules! check {
+            ($t:ty) => {
+                for v in <$t>::ALL.iter().copied() {
+                    assert_eq!(
+                        serde_json::to_string(&v).unwrap(),
+                        format!("\"{}\"", v.as_str()),
+                        "{:?} serializes differently from its token",
+                        v
+                    );
+                    assert_eq!(<$t>::from_stored(v.as_str()), v);
+                }
+            };
+        }
+        check!(ReportRunState);
+        check!(ReportRunTrigger);
+        check!(ReportFrequency);
+        check!(ReportScheduleStatus);
+
+        // The kebab-case outlier, spelled out so nobody "tidies" it to snake_case: this token is
+        // already in the column.
+        assert_eq!(
+            ReportScheduleStatus::MissingDefinition.as_str(),
+            "missing-definition"
+        );
+        // An unrecognised token degrades rather than failing the read.
+        assert_eq!(
+            ReportRunState::from_stored("cancelled"),
+            ReportRunState::Unknown
+        );
+    }
+
+    /// `report_runs.state` is written by SQL literals, not by a bind, so `as_str` is not on the
+    /// write path — it is interpolated into the statement. This pins that it still is: if someone
+    /// re-hardcodes a literal, the enum stops being the single source and the two can drift into a
+    /// run that is written `succeeded` and read as `Unknown`.
+    #[test]
+    fn the_run_state_sql_is_built_from_the_enum() {
+        let src = include_str!("reports.rs");
+        // Built at runtime, not written as literals: this test reads its own file, so a literal
+        // needle here would match itself and fail forever.
+        for state in [
+            ReportRunState::Running,
+            ReportRunState::Succeeded,
+            ReportRunState::Failed,
+            ReportRunState::Queued,
+        ] {
+            let bad = format!("'{}'", state.as_str());
+            assert!(
+                !src.contains(&bad),
+                "{bad} is hardcoded in SQL again; interpolate ReportRunState::…as_str() instead"
+            );
+        }
+        assert!(src.contains("ReportRunState::Succeeded.as_str()"));
+        assert!(src.contains("ReportRunState::Queued.as_str()"));
+    }
+
     #[test]
     fn escape_html_neutralizes_markup() {
         assert_eq!(esc("<b>&\"'"), "&lt;b&gt;&amp;&quot;&#39;");
@@ -1679,14 +1883,14 @@ mod tests {
     fn next_run_daily_rolls_to_tomorrow_when_past() {
         // now = 2026-06-20 10:00 UTC; daily at 09:00 → next is 2026-06-21 09:00.
         let now = Utc.with_ymd_and_hms(2026, 6, 20, 10, 0, 0).unwrap();
-        let next = compute_next_run("daily", None, None, 9, 0, now);
+        let next = compute_next_run(ReportFrequency::Daily, None, None, 9, 0, now);
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 21, 9, 0, 0).unwrap());
     }
 
     #[test]
     fn next_run_daily_today_when_future() {
         let now = Utc.with_ymd_and_hms(2026, 6, 20, 6, 0, 0).unwrap();
-        let next = compute_next_run("daily", None, None, 9, 30, now);
+        let next = compute_next_run(ReportFrequency::Daily, None, None, 9, 30, now);
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 20, 9, 30, 0).unwrap());
     }
 
@@ -1694,7 +1898,7 @@ mod tests {
     fn next_run_weekly_finds_target_weekday() {
         // 2026-06-20 is a Saturday (dow=6). Target Monday (dow=1) at 08:00 → 2026-06-22 08:00.
         let now = Utc.with_ymd_and_hms(2026, 6, 20, 12, 0, 0).unwrap();
-        let next = compute_next_run("weekly", Some(1), None, 8, 0, now);
+        let next = compute_next_run(ReportFrequency::Weekly, Some(1), None, 8, 0, now);
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 22, 8, 0, 0).unwrap());
     }
 
@@ -1703,11 +1907,11 @@ mod tests {
         // Saturday now 06:00; weekly Saturday(6) at 09:00 → today; at 03:00 → next week.
         let now = Utc.with_ymd_and_hms(2026, 6, 20, 6, 0, 0).unwrap();
         assert_eq!(
-            compute_next_run("weekly", Some(6), None, 9, 0, now),
+            compute_next_run(ReportFrequency::Weekly, Some(6), None, 9, 0, now),
             Utc.with_ymd_and_hms(2026, 6, 20, 9, 0, 0).unwrap()
         );
         assert_eq!(
-            compute_next_run("weekly", Some(6), None, 3, 0, now),
+            compute_next_run(ReportFrequency::Weekly, Some(6), None, 3, 0, now),
             Utc.with_ymd_and_hms(2026, 6, 27, 3, 0, 0).unwrap()
         );
     }
@@ -1716,11 +1920,11 @@ mod tests {
     fn next_run_monthly_rolls_to_next_month() {
         // now 2026-06-20; monthly on the 1st → 2026-07-01.
         let now = Utc.with_ymd_and_hms(2026, 6, 20, 12, 0, 0).unwrap();
-        let next = compute_next_run("monthly", None, Some(1), 0, 0, now);
+        let next = compute_next_run(ReportFrequency::Monthly, None, Some(1), 0, 0, now);
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap());
         // Year rollover from December.
         let dec = Utc.with_ymd_and_hms(2026, 12, 15, 12, 0, 0).unwrap();
-        let jan = compute_next_run("monthly", None, Some(5), 6, 0, dec);
+        let jan = compute_next_run(ReportFrequency::Monthly, None, Some(5), 6, 0, dec);
         assert_eq!(jan, Utc.with_ymd_and_hms(2027, 1, 5, 6, 0, 0).unwrap());
     }
 

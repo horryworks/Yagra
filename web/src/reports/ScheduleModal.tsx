@@ -9,7 +9,8 @@ import { Button } from '../components/ui/Button';
 import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { api, ApiError } from '../services/api';
 import type { ReportDefinition, ReportFrequency, ReportSchedule } from '../types/api';
-import { WEEKDAY_OPTIONS, isReportFrequency } from './types';
+import { WEEKDAY_OPTIONS } from './types';
+import { SELECTABLE_FREQUENCIES } from './runStatus';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -28,9 +29,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
   const [definitionId, setDefinitionId] = useState(
     schedule?.definition_id ?? definitions[0]?.id ?? '',
   );
+  // A stored `unknown` cadence (written by a newer core) is not offerable, so the form opens on
+  // daily rather than preselecting an option the operator cannot have meant.
   const stored = schedule?.frequency;
   const [frequency, setFrequency] = useState<ReportFrequency>(
-    isReportFrequency(stored) ? stored : 'daily',
+    stored && stored !== 'unknown' ? stored : 'daily',
   );
   const [dayOfWeek, setDayOfWeek] = useState<number>(schedule?.day_of_week ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState<number>(schedule?.day_of_month ?? 1);
@@ -107,9 +110,13 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
             value={frequency}
             onChange={(e) => setFrequency(e.target.value as ReportFrequency)}
           >
-            <option value="daily">{t('schedule.freq.daily')}</option>
-            <option value="weekly">{t('schedule.freq.weekly')}</option>
-            <option value="monthly">{t('schedule.freq.monthly')}</option>
+            {/* Iterated from the deliberate subset, so a cadence added to the backend either
+                appears here or is consciously excluded — never silently missing. */}
+            {SELECTABLE_FREQUENCIES.map((f) => (
+              <option key={f} value={f}>
+                {t(`schedule.freq.${f}`)}
+              </option>
+            ))}
           </Select>
         </label>
 

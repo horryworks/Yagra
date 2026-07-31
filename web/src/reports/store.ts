@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import type { ReportRun } from '../types/api';
+import { isRunInFlight } from './runStatus';
 
 interface ReportRunsStore {
   runs: ReportRun[];
@@ -35,5 +36,5 @@ export const useReportRunsStore = create<ReportRunsStore>((set) => ({
 
 /** Runs currently generating (drives any badge/intro stat). */
 export function generatingCount(runs: ReportRun[]): number {
-  return runs.filter((r) => r.state === 'running' || r.state === 'queued').length;
+  return runs.filter((r) => isRunInFlight(r.state)).length;
 }

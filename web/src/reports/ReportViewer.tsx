@@ -13,6 +13,7 @@ import { Modal } from '../components/ui/Modal';
 import { api, ApiError } from '../services/api';
 import { formatTimestamp } from '../lib/format';
 import type { ReportRunDetail } from '../types/api';
+import { isRunInFlight } from './runStatus';
 import './reports.css';
 
 interface Props {
@@ -37,7 +38,7 @@ export function ReportViewer({ runId, onClose }: Props) {
           if (!alive) return;
           setDetail(d);
           // Still generating → poll until it reaches a terminal state.
-          if (d.state === 'running' || d.state === 'queued') {
+          if (isRunInFlight(d.state)) {
             timer = setTimeout(load, 2500);
           }
         })
@@ -116,7 +117,7 @@ export function ReportViewer({ runId, onClose }: Props) {
       {error && <div className="rp-viewer-error">{error}</div>}
       <div className="rp-viewer-body">
         {!detail && !error && <div className="rp-viewer-state">{t('common:loading')}</div>}
-        {detail && (detail.state === 'running' || detail.state === 'queued') && (
+        {detail && isRunInFlight(detail.state) && (
           <div className="rp-viewer-state">
             <div className="rp-progress">
               <div className="rp-progress-bar" style={{ width: `${detail.pct}%` }} />

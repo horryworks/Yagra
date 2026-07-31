@@ -26,7 +26,8 @@ import type {
   ReportSpec,
 } from '../types/api';
 import { useReportRunsStore } from './store';
-import { cadenceLabel, isReportFrequency } from './types';
+import { cadenceLabel } from './types';
+import { RUN_STATUS } from './runStatus';
 import { ReportBuilder } from './ReportBuilder';
 import { ReportViewer } from './ReportViewer';
 import { ScheduleModal } from './ScheduleModal';
@@ -34,12 +35,11 @@ import './reports.css';
 
 type Tab = 'saved' | 'templates' | 'schedules';
 
-/** `cadenceLabel` reads the closed cadence set and both day fields; a stored schedule types the
- *  cadence as a bare string and may omit the day that its cadence doesn't use. An unrecognised
- *  cadence reads as daily, which is what `cadenceLabel` already does with one. */
+/** `cadenceLabel` reads both day fields; a stored schedule may omit the one its cadence doesn't
+ *  use. The cadence itself is now typed, so there is nothing left to narrow. */
 function scheduleCadence(t: TFunction, s: ReportSchedule): string {
   return cadenceLabel(t, {
-    frequency: isReportFrequency(s.frequency) ? s.frequency : 'daily',
+    frequency: s.frequency,
     day_of_week: s.day_of_week ?? null,
     day_of_month: s.day_of_month ?? null,
     at_hour: s.at_hour,
@@ -47,19 +47,16 @@ function scheduleCadence(t: TFunction, s: ReportSchedule): string {
   });
 }
 
-/** Status chip for a run (live progress while generating). */
+/** Status chip for a run (live progress while generating). Read from the registry rather than a
+ *  switch, so a state added to the backend cannot fall through to "failed" — see `runStatus.ts`. */
 function RunStatus({ run }: { run: ReportRun }) {
   const { t } = useTranslation('reports');
-  switch (run.state) {
-    case 'running':
-      return <Badge tone="info">{t('run.status.generating', { pct: run.pct })}</Badge>;
-    case 'queued':
-      return <Badge tone="info">{t('run.status.queued')}</Badge>;
-    case 'succeeded':
-      return <Badge tone="up">{t('run.status.ready')}</Badge>;
-    default:
-      return <Badge tone="critical">{t('run.status.failed')}</Badge>;
-  }
+  const spec = RUN_STATUS[run.state];
+  return (
+    <Badge tone={spec.tone}>
+      {spec.showsPct ? t(spec.labelKey, { pct: run.pct }) : t(spec.labelKey)}
+    </Badge>
+  );
 }
 
 export function ReportsPage() {

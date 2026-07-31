@@ -10,6 +10,7 @@
 
 import type { Alert, AnalysisJob, NodeState, ReportRun } from '../types/api';
 import { isNodeState } from '../lib/nodeState';
+import { isRunState } from '../reports/runStatus';
 import { getToken, notifyAuthFailure } from './api';
 
 // Origin prefix, empty by default — the same meaning `services/api.ts` gives it, with `/api/v1`
@@ -73,11 +74,13 @@ export function parseNodeStateEvent(data: string): NodeStateEvent | null {
   }
 }
 
-/** Parse one report-run SSE payload, or null if malformed. */
+/** Parse one report-run SSE payload, or null if malformed. Narrows `state` against the real set
+ *  rather than accepting any string, matching `parseNodeStateEvent` above — a payload carrying a
+ *  state this build cannot render would otherwise reach a `Record` lookup and read as undefined. */
 export function parseReportRun(data: string): ReportRun | null {
   try {
     const obj = JSON.parse(data) as Partial<ReportRun>;
-    if (typeof obj.id === 'string' && typeof obj.state === 'string') {
+    if (typeof obj.id === 'string' && isRunState(obj.state)) {
       return obj as ReportRun;
     }
     return null;

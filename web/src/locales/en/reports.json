@@ -15,14 +15,16 @@
   },
   "trigger": {
     "manual": "Manual",
-    "scheduled": "Scheduled"
+    "scheduled": "Scheduled",
+    "unknown": "Unknown"
   },
   "run": {
     "status": {
       "generating": "Generating {{pct}}%",
       "queued": "Queued",
       "ready": "Ready",
-      "failed": "Failed"
+      "failed": "Failed",
+      "unknown": "Unknown state"
     }
   },
   "runs": {
@@ -120,7 +122,8 @@
     "freq": {
       "daily": "Daily",
       "weekly": "Weekly",
-      "monthly": "Monthly"
+      "monthly": "Monthly",
+      "unknown": "Unknown"
     },
     "err": {
       "chooseReport": "Choose a report.",
@@ -140,6 +143,7 @@
   "cadence": {
     "daily": "Daily · {{time}}",
     "weekly": "Weekly · {{day}} {{time}}",
-    "monthly": "Monthly · day {{day}} {{time}}"
+    "monthly": "Monthly · day {{day}} {{time}}",
+    "unknown": "Unknown cadence · {{time}}"
   }
 }

@@ -5528,6 +5528,11 @@ export interface components {
             name: string;
             spec: unknown;
         };
+        /**
+         * @description How often a schedule fires.
+         * @enum {string}
+         */
+        ReportFrequency: "daily" | "weekly" | "monthly" | "unknown";
         /** @description A run row for the saved-reports list (without the heavy `result_*` payloads). */
         ReportRun: {
             created_by?: string | null;
@@ -5551,14 +5556,24 @@ export interface components {
             section_count: number;
             /** Format: int64 */
             started_ms?: number | null;
-            state: string;
-            trigger: string;
+            state: components["schemas"]["ReportRunState"];
+            trigger: components["schemas"]["ReportRunTrigger"];
         };
         /** @description A run plus its rendered result (the viewer / export endpoints). */
         ReportRunDetail: components["schemas"]["ReportRun"] & {
             result_html?: string | null;
             result_json?: unknown;
         };
+        /**
+         * @description Lifecycle of one report run.
+         * @enum {string}
+         */
+        ReportRunState: "queued" | "running" | "succeeded" | "failed" | "unknown";
+        /**
+         * @description What started a run.
+         * @enum {string}
+         */
+        ReportRunTrigger: "manual" | "scheduled" | "unknown";
         /** @description A schedule row (joined with its definition's name for display). */
         ReportSchedule: {
             /** Format: int32 */
@@ -5573,12 +5588,12 @@ export interface components {
             definition_id: string;
             definition_name: string;
             enabled: boolean;
-            frequency: string;
+            frequency: components["schemas"]["ReportFrequency"];
             /** Format: uuid */
             id: string;
             /** Format: int64 */
             last_run_ms?: number | null;
-            last_status?: string | null;
+            last_status?: null | components["schemas"]["ReportScheduleStatus"];
             /** Format: int64 */
             next_run_ms: number;
         };
@@ -5597,6 +5612,11 @@ export interface components {
             enabled?: boolean | null;
             frequency: string;
         };
+        /**
+         * @description Outcome of a schedule's most recent firing.
+         * @enum {string}
+         */
+        ReportScheduleStatus: "queued" | "missing-definition" | "error" | "unknown";
         /**
          * @description Predefined roles, ordered least → most privileged.
          * @enum {string}

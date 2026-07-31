@@ -402,7 +402,7 @@ async fn run_report_definition(
     let user = current_username(&st, &headers);
     admin
         .reports
-        .run_now(id, "manual", user)
+        .run_now(id, reports::ReportRunTrigger::Manual, user)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -686,25 +686,30 @@ pub(super) struct ReportScheduleBody {
 fn parse_schedule_body(
     body: ReportScheduleBody,
 ) -> Result<(ScheduleInput, chrono::DateTime<chrono::Utc>), ApiError> {
-    if !matches!(body.frequency.as_str(), "daily" | "weekly" | "monthly") {
-        return Err(ApiError::bad_request(
-            "invalid_frequency",
-            "frequency must be daily|weekly|monthly",
-        ));
-    }
-    let day_of_week = if body.frequency == "weekly" {
+    // `Unknown` is a *storage* degradation, never something an operator may pick — accepting it
+    // here would let a client write a cadence the scheduler then silently treats as daily.
+    let frequency = match reports::ReportFrequency::from_stored(&body.frequency) {
+        f if f != reports::ReportFrequency::Unknown => f,
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_frequency",
+                "frequency must be daily|weekly|monthly",
+            ))
+        }
+    };
+    let day_of_week = if frequency == reports::ReportFrequency::Weekly {
         Some(body.day_of_week.unwrap_or(0).clamp(0, 6))
     } else {
         None
     };
-    let day_of_month = if body.frequency == "monthly" {
+    let day_of_month = if frequency == reports::ReportFrequency::Monthly {
         Some(body.day_of_month.unwrap_or(1).clamp(1, 28))
     } else {
         None
     };
     let input = ScheduleInput {
         definition_id: body.definition_id,
-        frequency: body.frequency,
+        frequency,
         day_of_week,
         day_of_month,
         at_hour: body.at_hour.clamp(0, 23),
@@ -712,7 +717,7 @@ fn parse_schedule_body(
         enabled: body.enabled.unwrap_or(true),
     };
     let next = reports::compute_next_run(
-        &input.frequency,
+        input.frequency,
         input.day_of_week,
         input.day_of_month,
         input.at_hour,

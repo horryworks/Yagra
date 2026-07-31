@@ -2510,7 +2510,7 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
             Ok(due) => {
                 for sched in due {
                     let next = reports::compute_next_run(
-                        &sched.frequency,
+                        sched.frequency,
                         sched.day_of_week,
                         sched.day_of_month,
                         sched.at_hour,
@@ -2518,14 +2518,18 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
                         Utc::now(),
                     );
                     let status = match reports
-                        .run_now(sched.definition_id, "scheduled", None)
+                        .run_now(
+                            sched.definition_id,
+                            reports::ReportRunTrigger::Scheduled,
+                            None,
+                        )
                         .await
                     {
-                        Ok(Some(_)) => "queued",
-                        Ok(None) => "missing-definition",
+                        Ok(Some(_)) => reports::ReportScheduleStatus::Queued,
+                        Ok(None) => reports::ReportScheduleStatus::MissingDefinition,
                         Err(e) => {
                             tracing::warn!(error = %e, schedule = %sched.id, "scheduled report failed to start");
-                            "error"
+                            reports::ReportScheduleStatus::Error
                         }
                     };
                     if let Err(e) = repo.mark_fired(sched.id, status, next).await {

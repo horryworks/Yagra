@@ -3,6 +3,7 @@
 // WebUI owns the shape (same contract as the dashboard layout) — these helpers build/sanitize it.
 
 import type { TFunction } from 'i18next';
+import { CADENCE } from './runStatus';
 import type {
   ReportFrequency,
   ReportSchedule,
@@ -10,12 +11,6 @@ import type {
   ReportSectionInstance,
   ReportSpec,
 } from '../types/api';
-
-/** Narrow a stored schedule's cadence. Rust types `ReportSchedule.frequency` as a bare `String`, so
- *  the closed set exists only on this side. */
-export function isReportFrequency(v: string | undefined): v is ReportFrequency {
-  return v === 'daily' || v === 'weekly' || v === 'monthly';
-}
 
 /** Time-range presets for a report window. `labelKey` resolves in the reports namespace (this is a
  *  non-component module, so it stores i18n keys instead of resolving them at module load). */
@@ -100,13 +95,16 @@ export function cadenceLabel(
   },
 ): string {
   const time = `${String(s.at_hour).padStart(2, '0')}:${String(s.at_minute).padStart(2, '0')} UTC`;
-  switch (s.frequency) {
-    case 'weekly':
-      return t('reports:cadence.weekly', { day: weekdayName(t, s.day_of_week ?? 0), time });
-    case 'monthly':
-      return t('reports:cadence.monthly', { day: s.day_of_month ?? 1, time });
-    default:
-      return t('reports:cadence.daily', { time });
+  // Registry-driven, not a switch: the `default:` this replaces rendered an unrecognised cadence as
+  // "Daily", which is a claim about when the report fires rather than an admission of ignorance.
+  const spec = CADENCE[s.frequency];
+  switch (spec.part) {
+    case 'day':
+      return t(spec.labelKey, { day: weekdayName(t, s.day_of_week ?? 0), time });
+    case 'dom':
+      return t(spec.labelKey, { day: s.day_of_month ?? 1, time });
+    case 'none':
+      return t(spec.labelKey, { time });
   }
 }
 

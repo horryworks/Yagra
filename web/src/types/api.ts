@@ -50,6 +50,9 @@ const schemaEnumPins: {
   ForwardSourceKind: AssertEqual<ForwardSourceKind, components['schemas']['SourceKind']>;
   ForwardDestKind: AssertEqual<ForwardDestKind, components['schemas']['DestKind']>;
   NodeKind: AssertEqual<NodeKind, components['schemas']['NodeKind']>;
+  ReportRunState: AssertEqual<ReportRunState, components['schemas']['ReportRunState']>;
+  ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
+  ReportFrequency: AssertEqual<ReportFrequency, components['schemas']['ReportFrequency']>;
 } = {
   Severity: true,
   Role: true,
@@ -58,6 +61,9 @@ const schemaEnumPins: {
   ForwardSourceKind: true,
   ForwardDestKind: true,
   NodeKind: true,
+  ReportRunState: true,
+  ReportTrigger: true,
+  ReportFrequency: true,
 };
 void schemaEnumPins;
 
@@ -818,11 +824,25 @@ export type AnalysisToolKey =
   | 'saturation'
   | 'incident_correlate';
 
-/** Schedule cadence preset. Rust: `ReportSchedule.frequency`, a `String`. */
-export type ReportFrequency = 'daily' | 'weekly' | 'monthly';
+/** Schedule cadence presets. `unknown` is a *storage* degradation the backend emits when a row was
+ *  written by a newer core — never something an operator may pick, which is why the schedule form
+ *  offers a deliberate subset (see `reports/runStatus.ts`). */
+export const REPORT_FREQUENCIES = ['daily', 'weekly', 'monthly', 'unknown'] as const;
+export type ReportFrequency = (typeof REPORT_FREQUENCIES)[number];
 
-/** Lifecycle of a generated report run. Rust: `ReportRun.state`, a `String`. */
-export type ReportRunState = 'queued' | 'running' | 'succeeded' | 'failed';
+/** Lifecycle of a generated report run. */
+export const REPORT_RUN_STATES = [
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'unknown',
+] as const;
+export type ReportRunState = (typeof REPORT_RUN_STATES)[number];
+
+/** What started a run. */
+export const REPORT_TRIGGERS = ['manual', 'scheduled', 'unknown'] as const;
+export type ReportTrigger = (typeof REPORT_TRIGGERS)[number];
 
 /** What kind of passive event a source produces. Rust: `yagra_bus::EventKind`, flattened to a
  *  `String` on `EventRow.kind` / `EventSourceView.kind`. */

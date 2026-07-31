@@ -66,6 +66,20 @@
   OpenAPI client generator at it. The WebUI's own types and API client are now generated from this
   same document, which removes 3,340 lines of hand-transcribed TypeScript that nothing was checking.
 
+### Bug Fixes
+- **A report run in a state the WebUI didn't recognise was shown as "Failed".** The status badge
+  ended in a catch-all that painted anything unfamiliar critical-red, so a run that had actually
+  succeeded could read as broken — most visibly during a rolling upgrade, where an older WebUI sees
+  rows written by a newer core. Run state, trigger and schedule cadence are now closed sets in the
+  API contract (`queued`/`running`/`succeeded`/`failed`/`unknown` and so on), the badge is a
+  per-state map with no catch-all, and a genuinely unrecognised state renders neutrally as "Unknown
+  state" rather than as a failure. **No wire change** — the same strings, now described.
+- **An alerting rule scoped to one event stream could silently widen to all of them.** An event rule
+  naming a source kind this build did not recognise parsed to "no kind filter", which the matcher
+  reads as *any* kind — so the rule fired on syslog, traps and webhooks alike, rather than the one
+  stream it was written for. Such a rule is now left out of the engine and logged until the core
+  understands it.
+
 ### Improvements
 - **Active alerts now say which device and what broke, instead of two UUIDs.** A triage row read
   `● 550e8400-… 7c9e6679-… 2m ago`. The node resolves to its name (the id is on hover, as everywhere

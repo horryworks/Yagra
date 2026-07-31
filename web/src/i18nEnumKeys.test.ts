@@ -20,12 +20,16 @@ import {
   ROLES,
   SCOPE_LEVELS,
   SEVERITIES,
+  REPORT_FREQUENCIES,
+  REPORT_RUN_STATES,
+  REPORT_TRIGGERS,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
+import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES } from './reports/runStatus';
 
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -35,6 +39,8 @@ import enNodes from './locales/en/nodes.json';
 import jaNodes from './locales/ja/nodes.json';
 import enMonitoring from './locales/en/monitoring.json';
 import jaMonitoring from './locales/ja/monitoring.json';
+import enReports from './locales/en/reports.json';
+import jaReports from './locales/ja/reports.json';
 import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
@@ -116,6 +122,25 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // without its strings renders the raw key ("overview.gpuLoad") in both languages.
     const keys = METRIC_CARDS.map((c) => c.labelKey);
     expectKeys('metric card', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every report run state has a badge label (reports:run.status.*)', () => {
+    // RUN_STATUS holds namespace-relative keys (the METRIC_CARDS shape), so read them from the
+    // registry rather than rebuilding the prefix here.
+    const keys = REPORT_RUN_STATES.map((s) => RUN_STATUS[s].labelKey);
+    expectKeys('run status', { en: enReports, ja: jaReports }, '', keys);
+  });
+
+  it('every report trigger and cadence has a label (reports)', () => {
+    const locales = { en: enReports, ja: jaReports };
+    expectKeys('trigger', locales, 'trigger.', REPORT_TRIGGERS);
+    // CADENCE keys are fully qualified (`reports:cadence.x`) — strip the namespace.
+    const cadenceKeys = REPORT_FREQUENCIES.map((f) =>
+      CADENCE[f].labelKey.replace(/^reports:/, ''),
+    );
+    expectKeys('cadence', locales, '', cadenceKeys);
+    // The schedule form's option labels, for the subset an operator may pick.
+    expectKeys('freq option', locales, 'schedule.freq.', SELECTABLE_FREQUENCIES);
   });
 
   it('every addable monitor kind has its three strings (nodes:add.*/err.*)', () => {
