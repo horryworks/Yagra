@@ -72,6 +72,24 @@ pub(crate) struct EnabledBody {
     pub enabled: bool,
 }
 
+/// Build a [`PoolResolver`](crate::poolres::PoolResolver) from the folder tree.
+///
+/// A read error degrades to "no folder inheritance" with a warning, deliberately: every caller is a
+/// read-only view, where missing inheritance is a display inaccuracy rather than a polling decision.
+/// The scheduler does **not** use this — it builds its own resolver and holds the last known one, so
+/// a folder-read blip can never misroute an actual poll.
+///
+/// Shared by the nodes and poller-pool domains, so it lives here rather than in either.
+pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::PoolResolver {
+    match admin.groups.pool_rows().await {
+        Ok(rows) => crate::poolres::PoolResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "loading folder pools failed; resolving without inheritance");
+            crate::poolres::PoolResolver::empty()
+        }
+    }
+}
+
 /// Rate window for interface utilization, in seconds.
 ///
 /// Matches the TSDB query-time rate() derivation (ADR-012); five minutes covers a few poll
