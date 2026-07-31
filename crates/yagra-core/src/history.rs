@@ -10,15 +10,6 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::Severity;
-
-fn severity_str(s: Severity) -> &'static str {
-    match s {
-        Severity::Info => "info",
-        Severity::Warning => "warning",
-        Severity::Critical => "critical",
-    }
-}
 
 /// One alert-history row for the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -72,7 +63,7 @@ impl AlertHistoryStore {
         .bind(Uuid::new_v4())
         .bind(alert.node.as_uuid())
         .bind(alert.check.as_uuid())
-        .bind(severity_str(alert.severity))
+        .bind(alert.severity.as_str())
         .bind(alert.state.as_str())
         .bind(alert.at_unix_ms)
         .bind(resolved)
@@ -107,7 +98,7 @@ impl AlertHistoryStore {
             b.push_bind(Uuid::new_v4())
                 .push_bind(alert.node.as_uuid())
                 .push_bind(alert.check.as_uuid())
-                .push_bind(severity_str(alert.severity))
+                .push_bind(alert.severity.as_str())
                 .push_bind(alert.state.as_str())
                 .push_bind(alert.at_unix_ms)
                 .push_bind(*resolved)

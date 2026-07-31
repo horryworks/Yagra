@@ -35,6 +35,9 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// Every severity, low → high.
+    pub const ALL: [Severity; 3] = [Severity::Info, Severity::Warning, Severity::Critical];
+
     /// Stable lowercase string for labels, API payloads, and logs.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
@@ -43,6 +46,17 @@ impl Severity {
             Severity::Warning => "warning",
             Severity::Critical => "critical",
         }
+    }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`.
+    ///
+    /// Callers differ in what an unrecognised token means — a stored value degrades, an operator's
+    /// input is rejected — so this answers only "is it one of ours" and leaves that decision where
+    /// it belongs. What it removes is the *token list* being written out again at each of those
+    /// sites, which is the part that drifts.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
     }
 }
 
@@ -76,5 +90,21 @@ mod tests {
             "\"critical\""
         );
         assert_eq!(Severity::Warning.to_string(), "warning");
+    }
+
+    #[test]
+    fn every_variant_round_trips_through_its_token_and_through_serde() {
+        // `as_str` and serde's `rename_all` are two spellings of the same tokens; the DB columns
+        // and the API payloads use one each, so they have to agree.
+        for s in Severity::ALL {
+            assert_eq!(Severity::from_token(s.as_str()), Some(s));
+            assert_eq!(
+                serde_json::to_string(&s).unwrap(),
+                format!("\"{}\"", s.as_str())
+            );
+        }
+        assert_eq!(Severity::from_token("nope"), None);
+        // Exact match only — normalizing is the caller's decision, not this function's.
+        assert_eq!(Severity::from_token("Critical"), None);
     }
 }

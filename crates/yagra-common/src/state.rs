@@ -73,6 +73,13 @@ impl NodeState {
         )
     }
 
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`. See
+    /// [`crate::severity::Severity::from_token`] for why this does not decide what a miss means.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+
     /// The alert severity implied by this state, if any.
     ///
     /// `Unreachable` maps to `Critical` (the node is down). States that do not

@@ -138,12 +138,7 @@ fn severity_str(s: Severity) -> &'static str {
 
 /// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
 fn parse_severity(s: Option<String>) -> Option<Severity> {
-    match s.as_deref() {
-        Some("info") => Some(Severity::Info),
-        Some("warning") => Some(Severity::Warning),
-        Some("critical") => Some(Severity::Critical),
-        _ => None,
-    }
+    s.as_deref().and_then(Severity::from_token)
 }
 
 /// PostgreSQL-backed store for notification channels + routing rules.

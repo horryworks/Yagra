@@ -1166,12 +1166,9 @@ async fn record_audit(state: &ApiState, identity: &McpIdentity, action: &str, st
 
 /// Parse a severity string (info|warning|critical) into the enum. `None` on anything else.
 fn parse_severity(s: &str) -> Option<Severity> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "info" => Some(Severity::Info),
-        "warning" => Some(Severity::Warning),
-        "critical" => Some(Severity::Critical),
-        _ => None,
-    }
+    // An LLM wrote this argument, so normalize the shape before matching — unlike the REST edge,
+    // where the value came from a form and "Critical" is a client bug worth surfacing.
+    Severity::from_token(s.trim().to_ascii_lowercase().as_str())
 }
 
 // This surface no longer parses timestamps of its own: `parse_rfc3339_ok`/`parse_opt_rfc3339`

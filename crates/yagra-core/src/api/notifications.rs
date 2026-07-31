@@ -157,10 +157,9 @@ fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
 fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
     match s {
         None => Ok(None),
-        Some("critical") => Ok(Some(Severity::Critical)),
-        Some("warning") => Ok(Some(Severity::Warning)),
-        Some("info") => Ok(Some(Severity::Info)),
-        Some(_) => Err(()),
+        // Operator input: an unrecognised value is a rejection, never a silent default — a routing
+        // rule that quietly matched a different severity than the one typed is a missed page.
+        Some(raw) => Severity::from_token(raw).map(Some).ok_or(()),
     }
 }
 

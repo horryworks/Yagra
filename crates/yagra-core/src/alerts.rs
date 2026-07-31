@@ -183,14 +183,6 @@ struct CheckSpec<'a> {
     eval: Option<ThresholdEval>,
 }
 
-/// Stable text form of a breach direction for the history log / wire shape.
-fn direction_str(d: Direction) -> &'static str {
-    match d {
-        Direction::Above => "above",
-        Direction::Below => "below",
-    }
-}
-
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
 /// stable dedup identity across restarts. Also used by the event pipeline (`events.rs`)
 /// with `event:<rule-id>` names, keeping event alerts in the same identity space.
@@ -543,7 +535,7 @@ impl AlertManager {
                     alert.breach = Some(Breach {
                         value: ev.value,
                         threshold,
-                        direction: direction_str(ev.direction).to_string(),
+                        direction: ev.direction.as_str().to_string(),
                     });
                 }
                 self.active

@@ -1105,6 +1105,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    /// Every kind. The enumeration for anything that must present all three — a filter's accepted
+    /// values, a per-kind tally — so a fourth source cannot be added to some of them and not others.
+    pub const ALL: [EventKind; 3] = [Self::Syslog, Self::Trap, Self::Webhook];
+
     /// Stable string form (matches the serde tag and the `events.kind` DB column).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -1113,6 +1117,12 @@ impl EventKind {
             Self::Trap => "trap",
             Self::Webhook => "webhook",
         }
+    }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
     }
 }
 

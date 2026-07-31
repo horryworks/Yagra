@@ -35,6 +35,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use yagra_bus::EventKind;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -54,9 +55,14 @@ const SEARCH_TERM_MAX_CHARS: usize = 200;
 /// How many node ids a name search may resolve to. A term matching half the fleet would otherwise
 /// build an unbounded `IN (…)`.
 const NAME_SEARCH_NODE_LIMIT: i64 = 50;
-/// The event kinds a filter may name. Rejecting an unknown kind rather than ignoring it keeps a
-/// typo from silently widening the search to everything.
-const EVENT_KINDS: [&str; 3] = ["syslog", "trap", "webhook"];
+
+/// The event kinds a filter may name, for the rejection message. Rejecting an unknown kind rather
+/// than ignoring it keeps a typo from silently widening the search to everything — and reading the
+/// list off [`EventKind::ALL`] means a fourth source cannot be accepted here but missing from the
+/// message, or the reverse.
+fn kind_list() -> String {
+    EventKind::ALL.map(EventKind::as_str).join(", ")
+}
 
 /// The raw, unvalidated filter fields, as either surface receives them.
 #[derive(Default)]
@@ -102,10 +108,10 @@ pub(crate) fn parse_event_filter(input: EventFilterInput<'_>) -> Result<EventFil
     let until = ts(input.end, "end", "invalid_filter")?;
 
     if let Some(k) = input.kind.as_deref() {
-        if !EVENT_KINDS.contains(&k) {
+        if EventKind::from_token(k).is_none() {
             return Err(ApiError::bad_request(
                 "invalid_filter",
-                format!("kind must be {}", EVENT_KINDS.join(", ")),
+                format!("kind must be {}", kind_list()),
             ));
         }
     }
@@ -425,7 +431,7 @@ mod tests {
         .expect_err("an unknown kind must reject");
         assert_eq!(err.code(), "invalid_filter");
         assert!(err.message().contains("syslog"), "{}", err.message());
-        for k in EVENT_KINDS {
+        for k in EventKind::ALL.map(EventKind::as_str) {
             assert!(parse_event_filter(EventFilterInput {
                 kind: Some(k.to_owned()),
                 ..Default::default()

@@ -22,6 +22,25 @@ pub enum Direction {
 }
 
 impl Direction {
+    /// Both directions.
+    pub const ALL: [Direction; 2] = [Direction::Above, Direction::Below];
+
+    /// Stable lowercase string for API payloads, DB columns, and logs.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Direction::Above => "above",
+            Direction::Below => "below",
+        }
+    }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`. See
+    /// [`crate::severity::Severity::from_token`] for why this does not decide what a miss means.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+
     /// Of two bounds, the more restrictive one (the one that trips earlier).
     ///
     /// For `Above`, the lower bound is stricter; for `Below`, the higher bound is.

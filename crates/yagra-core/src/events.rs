@@ -1111,21 +1111,10 @@ pub fn compile_matcher(match_kind: &str, pattern: &str) -> Result<Matcher, Strin
     }
 }
 
+/// The stored `severity` of a rule. The column has a CHECK, so an unrecognised value means the row
+/// was written by a newer build; the rule still compiles, at the least alarming level.
 fn parse_severity(s: &str) -> Severity {
-    match s {
-        "critical" => Severity::Critical,
-        "warning" => Severity::Warning,
-        _ => Severity::Info,
-    }
-}
-
-fn parse_kind(s: &str) -> Option<EventKind> {
-    match s {
-        "syslog" => Some(EventKind::Syslog),
-        "trap" => Some(EventKind::Trap),
-        "webhook" => Some(EventKind::Webhook),
-        _ => None,
-    }
+    Severity::from_token(s).unwrap_or(Severity::Info)
 }
 
 /// A rule compiled for the hot path.
@@ -1164,10 +1153,28 @@ fn compile_rule(stored: &StoredEventRule) -> Option<CompiledRule> {
         Some(p) => Some(compile_matcher(&stored.match_kind, p).ok()?),
         None => None,
     };
+    // A null `source_kind` means "any kind" — see `applies`. So an unparseable *non-null* one must
+    // drop the rule, not fall through to `None`: that would silently widen a rule scoped to one
+    // stream into one that matches every event, which is the opposite of what the operator asked
+    // for and would fire on traffic they never intended it to see.
+    let source_kind = match stored.source_kind.as_deref() {
+        None => None,
+        Some(raw) => match EventKind::from_token(raw) {
+            Some(k) => Some(k),
+            None => {
+                tracing::warn!(
+                    rule = %stored.id,
+                    source_kind = %raw,
+                    "event rule names an unknown source kind; dropping it rather than widening it to every stream"
+                );
+                return None;
+            }
+        },
+    };
     Some(CompiledRule {
         id: stored.id,
         name: stored.name.clone(),
-        source_kind: stored.source_kind.as_deref().and_then(parse_kind),
+        source_kind,
         source_id: stored.source_id,
         node_id: stored.node_id,
         matcher,
@@ -2062,6 +2069,26 @@ mod tests {
         let mut stored = stored_rule("(bad", "warning");
         stored.match_kind = "regex".into();
         assert!(compile_rule(&stored).is_none());
+    }
+
+    #[test]
+    fn an_unknown_source_kind_drops_the_rule_rather_than_widening_it() {
+        // `source_kind: None` means "any kind" (see `applies`), so parsing an unrecognised token
+        // *to* None would turn a rule the operator scoped to one stream into one that matches every
+        // event — a rule firing on traffic nobody pointed it at. A newer core writing a fourth kind
+        // is the case that produces this, so the rule sits out until this core is upgraded too.
+        let mut stored = stored_rule("x", "warning");
+        stored.source_kind = Some("kafka".into());
+        assert!(compile_rule(&stored).is_none());
+
+        // A genuinely absent kind still means "any", which is the operator's own choice.
+        let mut stored = stored_rule("x", "warning");
+        stored.source_kind = None;
+        let rule = compile_rule(&stored).expect("a kind-less rule still compiles");
+        let node = Uuid::new_v4();
+        for kind in EventKind::ALL {
+            assert!(rule.applies(kind, None, node));
+        }
     }
 
     #[test]
