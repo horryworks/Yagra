@@ -25,7 +25,7 @@ services:
       # written to VictoriaLogs; PostgreSQL then keeps only alert-linked rows. Unset this to keep
       # events entirely in PostgreSQL (backward-compatible).
       YAGRA_LOGS_URL: http://victorialogs:9428
-      # Flow store (ADR-031, the 4th store — traffic-flow tier). ClickHouse holds edge-aggregated
+      # Flow store (ADR-031, the 5th store — traffic-flow tier). ClickHouse holds edge-aggregated
       # NetFlow/IPFIX flow records (1-month TTL, loss-tolerant). Unset this to disable flow
       # monitoring entirely — the flow API then returns 503 and existing features are unaffected.
       YAGRA_CLICKHOUSE_URL: http://clickhouse:8123
@@ -88,9 +88,10 @@ services:
       YAGRA_TRAP_BIND: 0.0.0.0:1162
       # Optional: drop traps whose community doesn't match (never logged).
       # YAGRA_TRAP_COMMUNITY: "public"
-      # Rate limits (events/sec): per source IP and across all sources.
-      # YAGRA_EVENT_RATE_PER_SOURCE: "50"
-      # YAGRA_EVENT_RATE_GLOBAL: "500"
+      # Rate limits (events/sec): per source IP and across all sources. These are the built-in
+      # defaults spelled out — raised from 50/500 once S8 measured the edge (scalability audit).
+      # YAGRA_EVENT_RATE_PER_SOURCE: "200"
+      # YAGRA_EVENT_RATE_GLOBAL: "5000"
       # Flow collector (ADR-031): receive NetFlow v5/v9 / IPFIX exports, edge-aggregate to top-N per
       # bucket, and publish to core (which writes ClickHouse). Unset = disabled. Point your devices'
       # flow export at this poller's :2055. Tunables: bucket width / top-N / flow rate caps.
@@ -194,7 +195,7 @@ services:
       - vldata:/victoria-logs-data
     restart: unless-stopped
 
-  # Flow store — ClickHouse (ADR-031, the 4th store). Column-oriented store for edge-aggregated
+  # Flow store — ClickHouse (ADR-031, the 5th store). Column-oriented store for edge-aggregated
   # NetFlow/IPFIX flow records: high-cardinality tuples the TSDB can't hold, kept with a 1-month
   # TTL (loss-tolerant tier). core creates the schema/rollup MV on startup and writes over HTTP
   # (:8123). Internal only (no host mapping). ClickHouse is I/O + page-cache heavy — split it onto

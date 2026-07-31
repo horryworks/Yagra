@@ -45,6 +45,7 @@ export function MobileTopBar({ onOpenMenu }: Props) {
       <div className="mtopbar-right">
         <button
           className="mtopbar-bell"
+          onClick={() => navigate('/alerts')}
           title={t('shell.activeAlerts', { count: alertCount })}
           aria-label={t('shell.alerts')}
         >

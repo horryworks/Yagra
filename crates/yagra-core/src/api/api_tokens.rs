@@ -49,7 +49,9 @@ pub(super) struct CreateApiTokenBody {
     name: String,
     /// The role the token grants (`viewer` is the right default for a read-only MCP client).
     role: Role,
-    /// Visibility scope (`"All"` or `{"Groups":[…]}`); defaults to `All` when omitted.
+    /// Visibility scope; defaults to `All` when omitted. Only `"All"` is accepted today — a
+    /// group scope is rejected with `400 unsupported_scope` rather than stored, because nothing
+    /// enforces it yet.
     scope: Option<yagra_common::Scope>,
 }
 
@@ -67,12 +69,42 @@ pub(crate) struct CreatedApiToken {
     token: String,
 }
 
+/// Check the request fields that need no store, returning the trimmed name and resolved scope.
+///
+/// Split out of the handler because the handler's body is only reachable past the `Admin`
+/// extractor, so a skeleton-mode test answers `503` and can never see these rules. Keeping the
+/// judgement in a plain function is what makes them testable at all.
+fn validate_create(body: &CreateApiTokenBody) -> Result<(&str, yagra_common::Scope), ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() || name.chars().count() > MAX_TOKEN_NAME_CHARS {
+        return Err(ApiError::bad_request(
+            "invalid_name",
+            "token name must be 1–128 characters",
+        ));
+    }
+    // Absent scope means the whole fleet, matching what the UI offers by default.
+    let scope = body.scope.clone().unwrap_or(yagra_common::Scope::All);
+    // A group-scoped token would be a credential that works nowhere. `/mcp` refuses a non-`All`
+    // principal outright (fail-closed, because its read tools return unfiltered data), and the REST
+    // handlers never consult `Scope` at all — `Principal::can_see` has no caller under `api/`. So
+    // storing one hands an admin a credential they believe is least-privileged while it is in fact
+    // either rejected or unrestricted, depending on which surface they point it at. Refuse it until
+    // scope filtering lands (ADR-014 / ADR-028 WS-F), applying the rule the MCP gate already does.
+    if scope != yagra_common::Scope::All {
+        return Err(ApiError::bad_request(
+            "unsupported_scope",
+            "group-scoped tokens are not supported yet — omit `scope` or send \"All\"",
+        ));
+    }
+    Ok((name, scope))
+}
+
 #[utoipa::path(
     post, path = "/api/v1/api-tokens", tag = "api-tokens",
     request_body = CreateApiTokenBody,
     responses(
         (status = 201, description = "Token minted; `token` is the raw bearer and is returned only here", body = CreatedApiToken),
-        (status = 400, description = "The token name is empty or longer than 128 characters", body = super::error::ErrorBody),
+        (status = 400, description = "The token name is empty or over 128 characters, or the scope is not `All`", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 409, description = "An API token with that name already exists", body = super::error::ErrorBody),
@@ -85,15 +117,7 @@ async fn create_api_token(
     admin: Admin,
     Json(body): Json<CreateApiTokenBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedApiToken>)> {
-    let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > MAX_TOKEN_NAME_CHARS {
-        return Err(ApiError::bad_request(
-            "invalid_name",
-            "token name must be 1–128 characters",
-        ));
-    }
-    // Absent scope means the whole fleet, matching what the UI offers by default.
-    let scope = body.scope.unwrap_or(yagra_common::Scope::All);
+    let (name, scope) = validate_create(&body)?;
     let (id, raw) = admin
         .api_tokens
         .create(name, body.role, &scope, &caller.0.username)
@@ -242,6 +266,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn body(name: &str, scope: Option<Scope>) -> CreateApiTokenBody {
+        CreateApiTokenBody {
+            name: name.to_owned(),
+            role: Role::Viewer,
+            scope,
+        }
+    }
+
+    #[test]
+    fn a_group_scoped_token_is_refused_rather_than_minted() {
+        // It would authenticate nowhere: `/mcp` rejects a non-`All` principal (fail-closed) and the
+        // REST edge never reads `Scope`. Minting one looks like least privilege and is not.
+        let err = validate_create(&body("ro", Some(Scope::groups(["tokyo"])))).unwrap_err();
+        assert_eq!(err.code(), "unsupported_scope");
+    }
+
+    #[test]
+    fn an_absent_or_explicit_all_scope_is_accepted() {
+        // Both spellings must survive: the WebUI omits the field, an API client may send "All".
+        for scope in [None, Some(Scope::All)] {
+            let req = body("  ro  ", scope);
+            let (name, resolved) = validate_create(&req).unwrap();
+            assert_eq!(name, "ro", "the name is trimmed");
+            assert_eq!(resolved, Scope::All);
+        }
+    }
+
+    #[test]
+    fn a_blank_or_oversized_name_is_refused() {
+        for name in ["", "   ", &"x".repeat(MAX_TOKEN_NAME_CHARS + 1)] {
+            assert_eq!(
+                validate_create(&body(name, None)).unwrap_err().code(),
+                "invalid_name"
+            );
+        }
+        // The boundary itself is allowed, and counts characters rather than bytes.
+        assert!(validate_create(&body(&"あ".repeat(MAX_TOKEN_NAME_CHARS), None)).is_ok());
     }
 
     #[tokio::test]

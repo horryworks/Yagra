@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { FOCUSABLE_SELECTOR, trapTarget } from '../../lib/focusTrap';
 import { NAV, sectionForPath, sidebarGroups } from '../../nav';
 import { usePrefsStore } from '../../prefs';
 import './MobileNavDrawer.css';
@@ -42,18 +43,16 @@ export function MobileNavDrawer({ open, onClose }: Props) {
         return;
       }
       if (e.key !== 'Tab' || !panel) return;
-      const focusables = panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+      const active = document.activeElement;
+      const target = trapTarget(
+        focusables,
+        active instanceof HTMLElement ? active : null,
+        e.shiftKey,
       );
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      if (target) {
         e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+        target.focus();
       }
     };
     document.addEventListener('keydown', onKey);

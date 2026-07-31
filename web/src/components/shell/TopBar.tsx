@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Top bar (§2.1, decision log §6): logo (=home) at the left, text-only section tabs (active
-// tab = 朱 underline), and the always-present right cluster: global search, notification
-// bell, user menu. 朱 (accent) appears only on the active tab / focus (§1.1).
+// tab = accent underline), and the always-present right cluster: global search, notification
+// bell, user menu. The accent (orange) appears only on the active tab / focus (§1.1).
 
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -52,8 +52,12 @@ export function TopBar() {
           title={t('shell.searchUnavailable')}
           aria-label={t('shell.globalSearch')}
         />
+        {/* The bell is a shortcut to Active alerts, not a popover: the count it carries is the
+            same set that page lists, so a menu would be a second rendering of one list. Unlike
+            search above it is wired, so it must not look disabled. */}
         <button
           className="topbar-bell"
+          onClick={() => navigate('/alerts')}
           title={t('shell.activeAlerts', { count: alertCount })}
           aria-label={t('shell.alerts')}
         >

@@ -53,8 +53,10 @@ impl Modify for SecurityAddon {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "A session token from `POST /api/v1/auth/login`, or a personal access \
-                         token (`yat_…`) from Settings ▸ API tokens.",
+                        "A session token from `POST /api/v1/auth/login`. Personal access tokens \
+                         (`yat_…`, Settings ▸ API tokens) authenticate the MCP surface at `/mcp` \
+                         only — this REST API rejects them (401), because its auth edge accepts \
+                         session tokens alone.",
                     ))
                     .build(),
             ),

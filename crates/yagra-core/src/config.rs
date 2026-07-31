@@ -60,7 +60,7 @@ pub struct Config {
     /// from and written to VictoriaLogs (PostgreSQL then keeps only alert-linked rows); when unset,
     /// events stay entirely in PostgreSQL (backward-compatible). Consumed by `run_live`.
     pub logs_url: Option<String>,
-    /// ClickHouse HTTP base URL for the flow store (ADR-031, the 4th store — traffic-flow tier).
+    /// ClickHouse HTTP base URL for the flow store (ADR-031, the 5th store — traffic-flow tier).
     /// Optional and **independent of the live/skeleton decision**, additive/default-OFF: when set,
     /// core subscribes to `yagra.flows`, ensures the ClickHouse schema, and serves the flow-query
     /// API; when unset, the flow receiver is disabled and the API returns `service_unavailable`

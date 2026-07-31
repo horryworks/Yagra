@@ -7,6 +7,7 @@
 import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { FOCUSABLE_SELECTOR, trapTarget } from '../../lib/focusTrap';
 import './Modal.css';
 
 interface Props {
@@ -25,9 +26,31 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // Escape closes; Tab is contained. Without the containment a dialog is modal only visually —
+  // `aria-modal` promises assistive tech that the rest of the page is inert, and tabbing into the
+  // form behind an overlay that swallows clicks leaves the keyboard operator editing controls they
+  // cannot see. `trapTarget` holds the wrap rules (and is unit-tested); this half is the DOM.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      // Only the frontmost dialog traps. Two mounted at once (a confirmation raised from an
+      // editing dialog) would otherwise each yank focus back into itself on every Tab, which is
+      // worse than no trap at all — the keyboard stops working. Document order is mount order.
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (dialogs.length > 1 && dialogs[dialogs.length - 1] !== dialog) return;
+      const focusables = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+      const active = document.activeElement;
+      const target = trapTarget(focusables, active instanceof HTMLElement ? active : null, e.shiftKey);
+      if (target) {
+        e.preventDefault();
+        target.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

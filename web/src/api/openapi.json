@@ -771,7 +771,7 @@
             }
           },
           "400": {
-            "description": "The token name is empty or longer than 128 characters",
+            "description": "The token name is empty or over 128 characters, or the scope is not `All`",
             "content": {
               "application/json": {
                 "schema": {
@@ -16168,7 +16168,7 @@
               },
               {
                 "$ref": "#/components/schemas/Scope",
-                "description": "Visibility scope (`\"All\"` or `{\"Groups\":[…]}`); defaults to `All` when omitted."
+                "description": "Visibility scope; defaults to `All` when omitted. Only `\"All\"` is accepted today — a\ngroup scope is rejected with `400 unsupported_scope` rather than stored, because nothing\nenforces it yet."
               }
             ]
           }
@@ -22431,7 +22431,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A session token from `POST /api/v1/auth/login`, or a personal access token (`yat_…`) from Settings ▸ API tokens."
+        "description": "A session token from `POST /api/v1/auth/login`. Personal access tokens (`yat_…`, Settings ▸ API tokens) authenticate the MCP surface at `/mcp` only — this REST API rejects them (401), because its auth edge accepts session tokens alone."
       }
     }
   },

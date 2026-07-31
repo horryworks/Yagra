@@ -191,7 +191,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         tracing::info!("VictoriaLogs event log store enabled");
     }
 
-    // Flow store (ADR-031, the 4th store — traffic-flow tier). Optional/default-OFF: when a
+    // Flow store (ADR-031, the 5th store — traffic-flow tier). Optional/default-OFF: when a
     // ClickHouse URL is set, core subscribes to `yagra.flows`, writes flow records, and serves the
     // flow-query API; when unset the flow receiver is disabled and the API returns 503. On the read
     // side this client is on `ApiState` for all cores; the writer runs leader-only (in `leader_work`).

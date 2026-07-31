@@ -111,10 +111,6 @@
   --text-secondary: #57534c;
   --text-tertiary: #8c867c;
   --overlay: rgba(35, 35, 35, 0.4);
-  /* Faint per-column wash for data tables (§ tables): a translucent ink so it reads correctly
-     over whatever surface the table sits on, in either theme. Kept subtle — column separation,
-     not stripes that fight the data. */
-  --table-col-tint: rgba(35, 35, 35, 0.04);
   /* Ink that sits on the fixed orange brand surface (login panel / seal). */
   --on-brand: var(--brand-mark);
   /* Ink that sits on a filled status surface (e.g. white-on-critical danger button / badge).
@@ -132,7 +128,6 @@
   --text-secondary: #a7aebb;
   --text-tertiary: #757e8c;
   --overlay: rgba(0, 0, 0, 0.55);
-  --table-col-tint: rgba(255, 255, 255, 0.04);
 
   /* Brand nudged brighter for dark readability (§1.5). Seal/login stay --brand-fixed. */
   --brand: #f26a12;
@@ -144,7 +139,13 @@
   --status-unknown: #8a93a3;
   --status-maintenance: #6e8fd6;
 
+  /* All six lift by the same amount — the extension colours are not chart-only decoration: the
+     dashboard event/capacity widgets and most Troubleshoot report bodies key off 4–6, so leaving
+     them at their light values put mid-tone ink on the dark surface in a third of the UI. */
   --series-1: #5b9bdb;
   --series-2: #ab91de;
   --series-3: #5bc0ab;
+  --series-4: #e59b56;
+  --series-5: #bf6d98;
+  --series-6: #8bac56;
 }

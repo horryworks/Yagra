@@ -3,7 +3,8 @@
 //!
 //! [`FlowStore`] abstracts flow storage so the bus consumer/writer and the flow API don't care
 //! whether they talk to ClickHouse ([`ChStore`], live) or an in-memory fake ([`InMemoryFlowStore`],
-//! tests). ClickHouse is the **4th store** added to ADR-004's split — a *loss-tolerant* tier
+//! tests). ClickHouse is the **5th store** added to ADR-004's split (after VictoriaLogs, ADR-024's
+//! 4th data class) — a *loss-tolerant* tier
 //! (ADR-017): 1-month TTL, single-node MVP, no must-never-lose guarantee. It exists because the flow
 //! tuple `(src ip × dst ip × src port × dst port × proto)` is extreme cardinality and must never
 //! reach VictoriaMetrics (CLAUDE.md §7.1); ClickHouse's column store + TTL + materialized-view

@@ -216,10 +216,6 @@ impl std::ops::Deref for Oidc {
     }
 }
 
-// A `Leader` extractor (the ADR-016 standby guard) is not here yet either: the two handlers that
-// need it still call `require_leader(&st)` in `mod.rs`. It arrives with the events domain,
-// alongside the `AckAlerts` marker — same reasoning, an extractor with no user is dead code.
-
 /// The passive-event engine — present only when event ingestion is configured.
 ///
 /// Its own extractor for the same reason as [`Admin`]: four handlers opened with the identical

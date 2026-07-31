@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Left sidebar (§2.1, decision 4): the selected section's sub-features, split into labeled groups
 // so read/monitor screens sit apart from configuration screens. Collapsible to an icon-only rail.
-// Active item = 朱 left border + secondary background. Items whose backend isn't built yet are
+// Active item = accent (orange) left border + tertiary background. Items whose backend isn't built yet are
 // gathered into a trailing "Coming soon" group (dimmed, each marked with a small dot) so the IA
 // stays complete without cluttering the working items.
 

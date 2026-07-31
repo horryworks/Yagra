@@ -6,26 +6,28 @@
 //! come from the [`MetricStore`] (VictoriaMetrics live, in-memory for the skeleton) and
 //! the inventory from a [`NodeListing`]. A node's display state and the alert endpoints are
 //! served from the live [`AlertManager`] (committed liveness + threshold roll-up + active
-//! alerts). Cursor pagination is in; RBAC scoping lands as the API grows.
+//! alerts). Cursor pagination is in; RBAC scoping is **not** — `Principal::can_see` has no caller
+//! here yet, so a group scope restricts nothing on this surface (ADR-014 / ADR-028 WS-F).
 //!
 //! ## Layout
 //!
 //! This module was a single 13.7k-line file holding 28 unrelated domains separated only by comment
 //! banners, with one 393-line `router()` expression registering all ~200 method/path pairs — so
-//! every feature branch edited the same two places and conflicted. It is being split per domain:
-//! each `api/<domain>.rs` owns its handlers, its DTOs and its own [`axum::Router`], and
-//! [`router`] merges them.
+//! every feature branch edited the same two places and conflicted. **That split is finished**
+//! (2026-07-31): every handler lives in an `api/<domain>.rs` that owns its handlers, its DTOs, its
+//! `#[utoipa::path]` fragment and its own [`axum::Router`], and [`router`] merges them. What is
+//! left here is what belongs to no domain — the state structs, [`router`], [`audit_mw`], and the
+//! two unauthenticated probes.
 //!
 //! Cross-cutting pieces live beside it:
-//!  - [`error`] — the typed [`ApiError`] and the ADR-019 envelope. New handlers return
-//!    `ApiResult<T>` and propagate with `?`.
+//!  - [`error`] — the typed [`ApiError`] and the ADR-019 envelope. Handlers return `ApiResult<T>`
+//!    and propagate with `?`; there is no hand-built-`Response` path left.
 //!  - [`extract`] — auth/availability guards as extractors, so a missing guard is a compile error
 //!    rather than a silent hole.
-//!  - [`route_table`] — the full method/path inventory, pinned by a test, so moving a domain out
-//!    cannot quietly drop an endpoint.
-//!
-//! Handlers not yet moved still return a bare `Response` and use the `error_response`/`internal`
-//! helpers; both styles are supported during the migration. New endpoints should use the new one.
+//!  - [`route_table`] — the full method/path inventory, pinned in both directions against the
+//!    router *and* the OpenAPI document, so moving a domain out cannot quietly drop an endpoint
+//!    (which would still compile) nor leave the published contract describing it.
+//!  - [`openapi`] — the generated document (ADR-035); the WebUI's types come from it.
 
 pub(crate) mod alerts;
 pub(crate) mod analysis;

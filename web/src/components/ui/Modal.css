@@ -128,6 +128,7 @@ html[data-viewport='mobile'] .modal-overlay {
 html[data-viewport='mobile'] .modal {
   width: 100vw;
   max-width: 100vw;
+  max-height: 90vh; /* fallback for browsers without dvh */
   max-height: 90dvh;
   border: none;
   border-top: var(--border-width) solid var(--border-color);

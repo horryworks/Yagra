@@ -25,6 +25,13 @@
   API: a caller is authenticated before the server discloses whether a subsystem is configured.
   Reading the rules requires **ManageConfig**, not View — a threshold set describes when and whom
   Yagra will page — so it stays closed on a public dashboard.
+- **`POST /api/v1/api-tokens` rejects a group scope.** Sending `{"scope": {"Groups": [...]}}` now
+  answers **400 `unsupported_scope`** instead of minting the token; omit `scope` or send `"All"`.
+  Nothing enforced a group scope on either surface — `/mcp` refuses a group-scoped token outright
+  and the REST endpoints never consulted the scope at all — so what was issued was a credential
+  that looked least-privileged and was in fact either unusable or unrestricted, depending on where
+  it was pointed. The WebUI never offered the field, so this affects API clients only. Group scoping
+  will be accepted again when the read paths actually filter by it.
 
 ### New Features
 - **The API now publishes its own OpenAPI 3.1 document, at `GET /api/v1/openapi.json`.** It is
@@ -59,6 +66,20 @@
 - **Adding a node twice.** Nothing guarded the add-monitor dialog's submit button while the request
   was in flight, so a double-click created two nodes. The dialog also kept the previous attempt's
   failure message, showing a stale error above a blank form when it was reopened after a cancel.
+- **The OpenAPI document said personal access tokens work on the REST API. They do not.** The
+  published `bearer` scheme offered a `yat_…` token as an alternative to a session token, but this
+  API's auth edge accepts session tokens only, so a client following the contract got 401 on every
+  call. The description now says what is true: personal access tokens authenticate the MCP surface
+  at `/mcp`; the REST API wants a token from `POST /api/v1/auth/login`.
+- **Dialogs keep the keyboard inside them.** Tab used to walk straight out of an open dialog into
+  the page behind it, so a keyboard or screen-reader user could end up editing controls hidden
+  under the overlay while `aria-modal` promised the opposite. Tab and Shift+Tab now cycle within
+  the dialog, and only the frontmost one traps.
+- **The notification bell does something.** It showed the active-alert count but ignored clicks; it
+  now opens Active alerts, on both the desktop and mobile top bars.
+- **Three chart colors were unreadable in dark mode.** The palette's fourth, fifth and sixth
+  entries kept their light-theme values on the dark surface — which covered most Troubleshoot
+  report bodies and the passive-event and capacity dashboard widgets, not just charts.
 
 ## v0.1.18
 

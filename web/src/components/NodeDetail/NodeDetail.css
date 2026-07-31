@@ -1133,6 +1133,7 @@ html[data-viewport='mobile'] .nd-if-cell.right {
    charts (taller here) are actually readable; its charts already stack (auto-fit). The × still
    closes it to get the full list back. Let the head wrap rather than overflow. */
 html[data-viewport='mobile'] .nd-if-dock {
+  max-height: 60vh; /* fallback for browsers without dvh */
   max-height: 60dvh;
   overflow-y: auto;
 }

@@ -52,7 +52,7 @@ services:
       # Event log store (ADR-024): passive events searched from + written to VictoriaLogs;
       # PostgreSQL keeps only alert-linked rows. Unset to keep events entirely in PostgreSQL.
       YAGRA_LOGS_URL: http://victorialogs:9428
-      # Flow store (ADR-031, the 4th store — traffic-flow tier). ClickHouse holds edge-aggregated
+      # Flow store (ADR-031, the 5th store — traffic-flow tier). ClickHouse holds edge-aggregated
       # NetFlow/IPFIX records (1-month TTL, loss-tolerant). Set YAGRA_CLICKHOUSE_URL empty in .env
       # to disable flow monitoring (the flow API then 503s; nothing else is affected).
       YAGRA_CLICKHOUSE_URL: ${YAGRA_CLICKHOUSE_URL-http://clickhouse:8123}
@@ -270,7 +270,7 @@ services:
       - vldata:/victoria-logs-data
     restart: unless-stopped
 
-  # Flow store — ClickHouse (ADR-031, the 4th store). Edge-aggregated NetFlow/IPFIX records with a
+  # Flow store — ClickHouse (ADR-031, the 5th store). Edge-aggregated NetFlow/IPFIX records with a
   # 1-month TTL (loss-tolerant tier). core creates the schema on startup and writes over HTTP :8123.
   # Internal only. I/O + page-cache heavy — split onto a dedicated node at scale (URL change only).
   clickhouse:

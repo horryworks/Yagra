@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Login (§3.6): split card — 藍 brand panel (家紋) on the left, sign-in on the right. SSO is
-// the intended primary path but no IdP backend exists yet, so it's shown disabled (primary
-// affordance, inert) above the local form (secondary). 朱 appears only on focus. Errors are
-// color-split: danger = hard failure (bad credentials / unavailable), warning = recoverable.
-// MFA is a backend gap, so no MFA step here yet.
+// Login (§3.6): split card — brand panel (the seal mark) on the left, sign-in on the right. SSO is
+// the intended primary path and sits above the local form; the OIDC backend exists (ADR-010), so
+// the button is live whenever `config.sso_enabled` says a provider is configured and inert with a
+// reason when it is not. The accent colour appears only on focus. Errors are color-split: danger =
+// hard failure (bad credentials / unavailable), warning = recoverable. MFA is a backend gap, so no
+// MFA step here yet.
 
 import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';

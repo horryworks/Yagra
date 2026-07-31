@@ -6506,7 +6506,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedApiToken"];
                 };
             };
-            /** @description The token name is empty or longer than 128 characters */
+            /** @description The token name is empty or over 128 characters, or the scope is not `All` */
             400: {
                 headers: {
                     [name: string]: unknown;
