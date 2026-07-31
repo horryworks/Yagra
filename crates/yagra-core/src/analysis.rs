@@ -2428,7 +2428,7 @@ fn traffic_detail(peak_bytes: f64, baseline_mean_bytes: f64, peak_at: i64) -> se
 /// `Serialize` because an RCA report stores the timeline it was grounded in alongside the answer:
 /// the UI shows the two together so a reader can check the explanation against its evidence rather
 /// than taking it on faith (ADR-029).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct IncidentSignal {
     pub(crate) at_s: i64,
     pub(crate) severity: f64,

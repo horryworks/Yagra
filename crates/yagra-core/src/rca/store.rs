@@ -75,7 +75,8 @@ pub struct LlmConfigInput {
     pub api_key: Option<String>,
 }
 
-/// A stored report. `body` is the full [`ReportBody`]; `summary` is lifted out for list views.
+/// A stored report. `body` carries the answer and its evidence; `summary` is lifted out of it so a
+/// list view does not have to fetch the whole thing.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RcaReport {
     pub id: Uuid,
@@ -84,6 +85,15 @@ pub struct RcaReport {
     pub provider: String,
     pub model: String,
     pub summary: String,
+    /// The answer and the evidence it was grounded in.
+    //  Held as `Value` and *declared* as `ReportBody` — the deliberate split. The column stays
+    //  loose so a row written by an older build still reads back (typing it would turn a missing
+    //  field into an unreadable report, which is data loss by the upgrade policy), while the
+    //  published contract describes the shape the writer always produces. Everything that writes
+    //  this column serializes a real `ReportBody`, so the declaration is true by construction.
+    //  Kept as a plain comment, not a doc comment: doc text on a documented field is published
+    //  verbatim to API clients, and none of this is their business.
+    #[schema(value_type = ReportBody)]
     pub body: serde_json::Value,
     pub generated_at: String,
     pub created_by: String,
@@ -98,10 +108,12 @@ pub struct RcaReport {
 /// Storing both is the point. An explanation without its evidence is an assertion, and ADR-029's
 /// display rule — never show a claim the reader cannot check — needs the timeline to still be there
 /// when the modal is reopened tomorrow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ReportBody {
     pub answer: RcaAnswer,
-    /// The serialized [`super::context::IncidentContext`].
+    /// Everything the model was told, exactly as it saw it.
+    //  Same loose-storage / declared-shape split as `RcaReport::body` above.
+    #[schema(value_type = super::context::IncidentContext)]
     pub evidence: serde_json::Value,
     /// Which language the answer was requested in (`en` / `ja`).
     pub language: String,

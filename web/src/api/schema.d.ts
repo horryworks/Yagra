@@ -3007,6 +3007,26 @@ export interface components {
             /** @description The committed state that triggered the alert. */
             state: components["schemas"]["NodeState"];
         };
+        /** @description The alert being explained. */
+        AlertFacts: {
+            /**
+             * @description Set when the operator clicked a *symptom* and the context hopped to its cause. Naming the
+             *     node they clicked keeps the answer connected to what they were looking at.
+             */
+            asked_about?: string | null;
+            /** Format: int64 */
+            at_unix_ms: number;
+            breach?: null | components["schemas"]["BreachFacts"];
+            /**
+             * @description Whether the engine is damping this check as flapping. Worth telling the model: a flapping
+             *     link and a hard failure have different causes and different next steps.
+             */
+            flapping: boolean;
+            /** @description What the check measured — `icmp_rtt_ms`, or the liveness sentinel. */
+            metric: string;
+            severity: string;
+            state: string;
+        };
         /** @description One alert-history row for the API. */
         AlertHistoryRow: {
             /** Format: int64 */
@@ -3177,6 +3197,13 @@ export interface components {
              */
             value: number;
         };
+        BreachFacts: {
+            direction: string;
+            /** Format: double */
+            threshold?: number | null;
+            /** Format: double */
+            value: number;
+        };
         /** @description One weekday×hour heatmap cell. */
         CalendarBucket: {
             /** Format: int64 */
@@ -3226,6 +3253,15 @@ export interface components {
              *     node's descriptive metadata so the imported node displays "name (addr) (vendor) (model)".
              */
             vendor?: string | null;
+        };
+        /** @description One audited configuration change. */
+        ChangeFacts: {
+            /** @description `"{METHOD} {path}"`, as recorded by the audit middleware. */
+            action: string;
+            at: string;
+            /** Format: int32 */
+            status: number;
+            username: string;
         };
         /** @description The (secret) connection config for a channel — sealed at rest, never returned by the API. */
         ChannelConfig: {
@@ -3612,6 +3648,13 @@ export interface components {
         DependencyHealth: {
             detail: string;
             reachable: boolean;
+        };
+        /** @description Alerts attributed upstream to this incident. */
+        Dependents: {
+            /** @description The named dependents, capped — see `total` for how many there actually are. */
+            named: string[];
+            /** @description How many there are in total — kept separately so truncation is visible rather than silent. */
+            total: number;
         };
         /**
          * @description How a destination is spoken to.
@@ -4505,6 +4548,63 @@ export interface components {
             /** Format: int32 */
             created: number;
         };
+        /**
+         * @description Everything the model is told, before any of it becomes text.
+         *
+         *     `Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so
+         *     a reader can check the explanation rather than trust it (ADR-029). What serializes here is
+         *     exactly what the model saw, which is also what makes a bad answer reviewable afterwards.
+         */
+        IncidentContext: {
+            /** @description The alert on that node. */
+            alert: components["schemas"]["AlertFacts"];
+            /** @description Alerts rolled up under this one. */
+            dependents: components["schemas"]["Dependents"];
+            /**
+             * Format: int64
+             * @description When the context was assembled (Unix seconds), so the prompt can express ages rather than
+             *     absolute times the model has no clock for.
+             */
+            generated_at_s: number;
+            /** @description The node being explained — the root cause, after any roll-up hop. */
+            node: components["schemas"]["NodeFacts"];
+            /** @description Recent audited configuration changes touching this node. */
+            recent_changes: components["schemas"]["ChangeFacts"][];
+            /**
+             * Format: uuid
+             * @description Id of the node being explained. Differs from the one the operator clicked whenever the
+             *     roll-up hop fired, and it is what a generated report is filed under — a report explains the
+             *     cause, so it belongs to the cause.
+             */
+            root_node_id: string;
+            /** @description Cross-signal timeline for the window, oldest first. */
+            timeline: components["schemas"]["IncidentSignal"][];
+            /**
+             * @description Inventory ancestors, nearest first. Present even when healthy: "the parent is fine" is
+             *     evidence that the failure is local to this node.
+             */
+            upstream: components["schemas"]["NodeFacts"][];
+            /**
+             * Format: int64
+             * @description How far back the timeline reaches.
+             */
+            window_secs: number;
+        };
+        /**
+         * @description One dated signal on an incident timeline (`incident_correlate`).
+         *
+         *     `Serialize` because an RCA report stores the timeline it was grounded in alongside the answer:
+         *     the UI shows the two together so a reader can check the explanation against its evidence rather
+         *     than taking it on faith (ADR-029).
+         */
+        IncidentSignal: {
+            /** Format: int64 */
+            at_s: number;
+            kind: string;
+            label: string;
+            /** Format: double */
+            severity: number;
+        };
         /** @description The accepted event's id. */
         IngestedEvent: {
             /** Format: uuid */
@@ -4928,6 +5028,20 @@ export interface components {
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;
         };
+        /** @description The subset of a node the model may see. Notably not the credential binding. */
+        NodeFacts: {
+            address: string;
+            model?: string | null;
+            name: string;
+            /** @description Poller pool — usually the site, which is often the diagnosis ("everything in branch-osaka"). */
+            pool?: string | null;
+            /** @description Operator-set grouping attributes, capped and sorted for a deterministic prompt. */
+            tags: [
+                string,
+                string
+            ][];
+            vendor?: string | null;
+        };
         /** @description Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move). */
         NodeGroupAssignment: {
             /** Format: uuid */
@@ -5310,6 +5424,30 @@ export interface components {
             suggested_location?: string | null;
             suggested_model: string;
         };
+        /**
+         * @description The parsed explanation.
+         *
+         *     Every field is plain text and stays plain text: it is rendered as text by the WebUI, never as
+         *     HTML or markdown. Model output is untrusted for the same reason device output is (security.md),
+         *     and here it is doubly so — the model was itself reading device output.
+         */
+        RcaAnswer: {
+            /** @description `high` | `medium` | `low`, or `unknown` when the model said something else. */
+            confidence?: string;
+            /** @description Whether the other affected nodes are consequences of it. */
+            dependents?: string;
+            /** @description Concrete things to check next. */
+            next_steps?: string[];
+            /**
+             * @description Set when the reply was not parseable JSON: the model's text, verbatim and bounded. Its
+             *     presence is what tells the UI to render one prose block rather than empty sections.
+             */
+            raw?: string | null;
+            /** @description What most likely failed, and why the evidence says so. */
+            root_cause?: string;
+            /** @description One sentence an on-call engineer can act on. */
+            summary: string;
+        };
         /** @description The `POST /api/v1/rca` body. */
         RcaBody: {
             /** Format: uuid */
@@ -5333,9 +5471,13 @@ export interface components {
              */
             window_secs?: number | null;
         };
-        /** @description A stored report. `body` is the full [`ReportBody`]; `summary` is lifted out for list views. */
+        /**
+         * @description A stored report. `body` carries the answer and its evidence; `summary` is lifted out of it so a
+         *     list view does not have to fetch the whole thing.
+         */
         RcaReport: {
-            body: unknown;
+            /** @description The answer and the evidence it was grounded in. */
+            body: components["schemas"]["ReportBody"];
             /**
              * @description Whether this response came from the cache rather than a fresh call. Not a column — it
              *     describes *this* delivery of the report, not the report.
@@ -5352,6 +5494,20 @@ export interface components {
             node_id: string;
             provider: string;
             summary: string;
+        };
+        /**
+         * @description What goes in the `body` column: the answer, and the evidence it was grounded in.
+         *
+         *     Storing both is the point. An explanation without its evidence is an assertion, and ADR-029's
+         *     display rule — never show a claim the reader cannot check — needs the timeline to still be there
+         *     when the modal is reopened tomorrow.
+         */
+        ReportBody: {
+            answer: components["schemas"]["RcaAnswer"];
+            /** @description Everything the model was told, exactly as it saw it. */
+            evidence: components["schemas"]["IncidentContext"];
+            /** @description Which language the answer was requested in (`en` / `ja`). */
+            language: string;
         };
         /** @description A report definition (reusable template), as served to the API. */
         ReportDefinition: {
@@ -11699,11 +11855,13 @@ export interface operations {
         };
         responses: {
             /** @description Group created */
-            204: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
             };
             /** @description Empty name, unknown group type, or an invalid pool name */
             400: {
@@ -15341,13 +15499,11 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Definition deleted; its schedules cascade, its saved runs are kept */
-            200: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["Ok_"];
-                };
+                content?: never;
             };
             /** @description No valid bearer token */
             401: {
@@ -15549,13 +15705,11 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Run deleted */
-            200: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["Ok_"];
-                };
+                content?: never;
             };
             /** @description No valid bearer token */
             401: {
@@ -15726,7 +15880,7 @@ export interface operations {
         };
         responses: {
             /** @description Schedule created */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15857,13 +16011,11 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Schedule deleted */
-            200: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["Ok_"];
-                };
+                content?: never;
             };
             /** @description No valid bearer token */
             401: {

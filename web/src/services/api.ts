@@ -759,7 +759,7 @@ export const api = {
     apiPut('/api/v1/reports/definitions/{id}', { path: { id }, body }),
 
   /** Delete a report definition (admin only). */
-  deleteReportDefinition: (id: string): Promise<{ ok: boolean }> =>
+  deleteReportDefinition: (id: string): Promise<void> =>
     apiDelete('/api/v1/reports/definitions/{id}', { path: { id } }),
 
   /** Generate a report from a definition now (admin only); the run progresses over SSE. */
@@ -775,7 +775,7 @@ export const api = {
     apiGet('/api/v1/reports/runs/{id}', { path: { id } }),
 
   /** Delete a saved report run (admin only). */
-  deleteReportRun: (id: string): Promise<{ ok: boolean }> =>
+  deleteReportRun: (id: string): Promise<void> =>
     apiDelete('/api/v1/reports/runs/{id}', { path: { id } }),
 
   /** Download a report run as html|csv|pdf. Fetches with the bearer token (so it works on an
@@ -816,7 +816,7 @@ export const api = {
     apiPut('/api/v1/reports/schedules/{id}', { path: { id }, body }),
 
   /** Delete a report schedule (admin only). */
-  deleteReportSchedule: (id: string): Promise<{ ok: boolean }> =>
+  deleteReportSchedule: (id: string): Promise<void> =>
     apiDelete('/api/v1/reports/schedules/{id}', { path: { id } }),
 
   /** Create a node group. `parent_id` nests it under another group; `pool` assigns a poll-pool that
@@ -826,8 +826,7 @@ export const api = {
     group_type: GroupType;
     parent_id?: string | null;
     pool?: string;
-    // Unlike every other creator this answers 204, so there is no id to read back.
-  }): Promise<void> => apiPost('/api/v1/node-groups', { body }),
+  }): Promise<{ id: string }> => apiPost('/api/v1/node-groups', { body }),
 
   /** Rename / re-type / re-parent (move) a node group, and optionally move its poll-pool. `pool`
    *  has the same three-state contract as `setNodeBindings`: omitted = unchanged, `''` = inherit. */

@@ -59,7 +59,7 @@ const MAX_TAGS: usize = 8;
 /// `Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so
 /// a reader can check the explanation rather than trust it (ADR-029). What serializes here is
 /// exactly what the model saw, which is also what makes a bad answer reviewable afterwards.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct IncidentContext {
     /// When the context was assembled (Unix seconds), so the prompt can express ages rather than
     /// absolute times the model has no clock for.
@@ -79,7 +79,7 @@ pub struct IncidentContext {
     /// Inventory ancestors, nearest first. Present even when healthy: "the parent is fine" is
     /// evidence that the failure is local to this node.
     pub upstream: Vec<NodeFacts>,
-    /// Cross-signal timeline from [`AnalysisRunner::incident_signals`], oldest first.
+    /// Cross-signal timeline for the window, oldest first.
     pub timeline: Vec<IncidentSignal>,
     /// Recent audited configuration changes touching this node.
     pub recent_changes: Vec<ChangeFacts>,
@@ -156,14 +156,16 @@ fn fp_node(n: &NodeFacts) -> String {
     )
 }
 
-/// The subset of a node the model may see.
-///
-/// Every field is copied by name in [`Self::from_node`]. `credential` is **not** among them: it is
-/// only an id, but there is no diagnostic use for it and excluding it keeps the rule simple enough
-/// to enforce — nothing credential-shaped crosses this boundary.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// The subset of a node the model may see. Notably not the credential binding.
+//  Every field is copied by name in `from_node`. `credential` is **not** among them: it is only an
+//  id, but there is no diagnostic use for it and excluding it keeps the rule simple enough to
+//  enforce — nothing credential-shaped crosses this boundary. Kept below the doc line because this
+//  struct's doc text is published verbatim to API clients (ADR-035).
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct NodeFacts {
     pub name: String,
+    // utoipa has no schema for `IpAddr`; on the wire it is the serde `Display` form.
+    #[schema(value_type = String)]
     pub address: IpAddr,
     pub vendor: Option<String>,
     pub model: Option<String>,
@@ -202,7 +204,7 @@ fn cap_tags(tags: &BTreeMap<String, String>) -> Vec<(String, String)> {
 }
 
 /// The alert being explained.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct AlertFacts {
     pub severity: String,
     pub state: String,
@@ -219,7 +221,7 @@ pub struct AlertFacts {
     pub asked_about: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct BreachFacts {
     pub value: f64,
     pub threshold: Option<f64>,
@@ -227,16 +229,16 @@ pub struct BreachFacts {
 }
 
 /// Alerts attributed upstream to this incident.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct Dependents {
-    /// Up to [`MAX_NAMED_DEPENDENTS`] names.
+    /// The named dependents, capped — see `total` for how many there actually are.
     pub named: Vec<String>,
     /// How many there are in total — kept separately so truncation is visible rather than silent.
     pub total: usize,
 }
 
 /// One audited configuration change.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct ChangeFacts {
     pub at: String,
     pub username: String,

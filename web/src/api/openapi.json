@@ -7432,8 +7432,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Group created"
+          "201": {
+            "description": "Group created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "Empty name, unknown group type, or an invalid pool name",
@@ -12310,15 +12317,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Definition deleted; its schedules cascade, its saved runs are kept",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Ok_"
-                }
-              }
-            }
+          "204": {
+            "description": "Definition deleted; its schedules cascade, its saved runs are kept"
           },
           "401": {
             "description": "No valid bearer token",
@@ -12571,15 +12571,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Run deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Ok_"
-                }
-              }
-            }
+          "204": {
+            "description": "Run deleted"
           },
           "401": {
             "description": "No valid bearer token",
@@ -12781,7 +12774,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Schedule created",
             "content": {
               "application/json": {
@@ -12944,15 +12937,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Schedule deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Ok_"
-                }
-              }
-            }
+          "204": {
+            "description": "Schedule deleted"
           },
           "401": {
             "description": "No valid bearer token",
@@ -15168,6 +15154,55 @@
           }
         }
       },
+      "AlertFacts": {
+        "type": "object",
+        "description": "The alert being explained.",
+        "required": [
+          "severity",
+          "state",
+          "metric",
+          "at_unix_ms",
+          "flapping"
+        ],
+        "properties": {
+          "asked_about": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the operator clicked a *symptom* and the context hopped to its cause. Naming the\nnode they clicked keeps the answer connected to what they were looking at."
+          },
+          "at_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "breach": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BreachFacts",
+                "description": "Numeric detail for a threshold alert; absent for liveness."
+              }
+            ]
+          },
+          "flapping": {
+            "type": "boolean",
+            "description": "Whether the engine is damping this check as flapping. Worth telling the model: a flapping\nlink and a hard failure have different causes and different next steps."
+          },
+          "metric": {
+            "type": "string",
+            "description": "What the check measured — `icmp_rtt_ms`, or the liveness sentinel."
+          },
+          "severity": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "AlertHistoryRow": {
         "type": "object",
         "description": "One alert-history row for the API.",
@@ -15599,6 +15634,29 @@
           }
         }
       },
+      "BreachFacts": {
+        "type": "object",
+        "required": [
+          "value",
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "CalendarBucket": {
         "type": "object",
         "description": "One weekday×hour heatmap cell.",
@@ -15697,6 +15755,32 @@
               "null"
             ],
             "description": "Maker / model best-effort parsed from sysDescr (editable on import) — pre-fills the\nnode's descriptive metadata so the imported node displays \"name (addr) (vendor) (model)\"."
+          }
+        }
+      },
+      "ChangeFacts": {
+        "type": "object",
+        "description": "One audited configuration change.",
+        "required": [
+          "at",
+          "username",
+          "action",
+          "status"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`\"{METHOD} {path}\"`, as recorded by the audit middleware."
+          },
+          "at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "username": {
+            "type": "string"
           }
         }
       },
@@ -16752,6 +16836,28 @@
           },
           "reachable": {
             "type": "boolean"
+          }
+        }
+      },
+      "Dependents": {
+        "type": "object",
+        "description": "Alerts attributed upstream to this incident.",
+        "required": [
+          "named",
+          "total"
+        ],
+        "properties": {
+          "named": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The named dependents, capped — see `total` for how many there actually are."
+          },
+          "total": {
+            "type": "integer",
+            "description": "How many there are in total — kept separately so truncation is visible rather than silent.",
+            "minimum": 0
           }
         }
       },
@@ -18839,6 +18945,97 @@
           }
         }
       },
+      "IncidentContext": {
+        "type": "object",
+        "description": "Everything the model is told, before any of it becomes text.\n\n`Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so\na reader can check the explanation rather than trust it (ADR-029). What serializes here is\nexactly what the model saw, which is also what makes a bad answer reviewable afterwards.",
+        "required": [
+          "generated_at_s",
+          "window_secs",
+          "root_node_id",
+          "node",
+          "alert",
+          "dependents",
+          "upstream",
+          "timeline",
+          "recent_changes"
+        ],
+        "properties": {
+          "alert": {
+            "$ref": "#/components/schemas/AlertFacts",
+            "description": "The alert on that node."
+          },
+          "dependents": {
+            "$ref": "#/components/schemas/Dependents",
+            "description": "Alerts rolled up under this one."
+          },
+          "generated_at_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the context was assembled (Unix seconds), so the prompt can express ages rather than\nabsolute times the model has no clock for."
+          },
+          "node": {
+            "$ref": "#/components/schemas/NodeFacts",
+            "description": "The node being explained — the root cause, after any roll-up hop."
+          },
+          "recent_changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeFacts"
+            },
+            "description": "Recent audited configuration changes touching this node."
+          },
+          "root_node_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Id of the node being explained. Differs from the one the operator clicked whenever the\nroll-up hop fired, and it is what a generated report is filed under — a report explains the\ncause, so it belongs to the cause."
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentSignal"
+            },
+            "description": "Cross-signal timeline for the window, oldest first."
+          },
+          "upstream": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeFacts"
+            },
+            "description": "Inventory ancestors, nearest first. Present even when healthy: \"the parent is fine\" is\nevidence that the failure is local to this node."
+          },
+          "window_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How far back the timeline reaches."
+          }
+        }
+      },
+      "IncidentSignal": {
+        "type": "object",
+        "description": "One dated signal on an incident timeline (`incident_correlate`).\n\n`Serialize` because an RCA report stores the timeline it was grounded in alongside the answer:\nthe UI shows the two together so a reader can check the explanation against its evidence rather\nthan taking it on faith (ADR-029).",
+        "required": [
+          "at_s",
+          "severity",
+          "kind",
+          "label"
+        ],
+        "properties": {
+          "at_s": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "IngestedEvent": {
         "type": "object",
         "description": "The accepted event's id.",
@@ -20021,6 +20218,58 @@
           }
         }
       },
+      "NodeFacts": {
+        "type": "object",
+        "description": "The subset of a node the model may see. Notably not the credential binding.",
+        "required": [
+          "name",
+          "address",
+          "tags"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Poller pool — usually the site, which is often the diagnosis (\"everything in branch-osaka\")."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": false,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Operator-set grouping attributes, capped and sorted for a deterministic prompt."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "NodeGroupAssignment": {
         "type": "object",
         "description": "Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).",
@@ -20860,6 +21109,45 @@
           }
         }
       },
+      "RcaAnswer": {
+        "type": "object",
+        "description": "The parsed explanation.\n\nEvery field is plain text and stays plain text: it is rendered as text by the WebUI, never as\nHTML or markdown. Model output is untrusted for the same reason device output is (security.md),\nand here it is doubly so — the model was itself reading device output.",
+        "required": [
+          "summary"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string",
+            "description": "`high` | `medium` | `low`, or `unknown` when the model said something else."
+          },
+          "dependents": {
+            "type": "string",
+            "description": "Whether the other affected nodes are consequences of it."
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Concrete things to check next."
+          },
+          "raw": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the reply was not parseable JSON: the model's text, verbatim and bounded. Its\npresence is what tells the UI to render one prose block rather than empty sections."
+          },
+          "root_cause": {
+            "type": "string",
+            "description": "What most likely failed, and why the evidence says so."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence an on-call engineer can act on."
+          }
+        }
+      },
       "RcaBody": {
         "type": "object",
         "description": "The `POST /api/v1/rca` body.",
@@ -20900,7 +21188,7 @@
       },
       "RcaReport": {
         "type": "object",
-        "description": "A stored report. `body` is the full [`ReportBody`]; `summary` is lifted out for list views.",
+        "description": "A stored report. `body` carries the answer and its evidence; `summary` is lifted out of it so a\nlist view does not have to fetch the whole thing.",
         "required": [
           "id",
           "node_id",
@@ -20913,7 +21201,10 @@
           "created_by"
         ],
         "properties": {
-          "body": {},
+          "body": {
+            "$ref": "#/components/schemas/ReportBody",
+            "description": "The answer and the evidence it was grounded in."
+          },
           "cached": {
             "type": "boolean",
             "description": "Whether this response came from the cache rather than a fresh call. Not a column — it\ndescribes *this* delivery of the report, not the report."
@@ -20944,6 +21235,28 @@
           },
           "summary": {
             "type": "string"
+          }
+        }
+      },
+      "ReportBody": {
+        "type": "object",
+        "description": "What goes in the `body` column: the answer, and the evidence it was grounded in.\n\nStoring both is the point. An explanation without its evidence is an assertion, and ADR-029's\ndisplay rule — never show a claim the reader cannot check — needs the timeline to still be there\nwhen the modal is reopened tomorrow.",
+        "required": [
+          "answer",
+          "evidence",
+          "language"
+        ],
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/RcaAnswer"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/IncidentContext",
+            "description": "Everything the model was told, exactly as it saw it."
+          },
+          "language": {
+            "type": "string",
+            "description": "Which language the answer was requested in (`en` / `ja`)."
           }
         }
       },

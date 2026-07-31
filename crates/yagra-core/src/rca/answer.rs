@@ -30,7 +30,7 @@ const MAX_RAW_CHARS: usize = 16_000;
 /// Every field is plain text and stays plain text: it is rendered as text by the WebUI, never as
 /// HTML or markdown. Model output is untrusted for the same reason device output is (security.md),
 /// and here it is doubly so — the model was itself reading device output.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RcaAnswer {
     /// One sentence an on-call engineer can act on.
     pub summary: String,

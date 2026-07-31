@@ -25,7 +25,7 @@ use super::ApiState;
 use crate::reports::{self, ScheduleInput};
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -349,7 +349,7 @@ async fn update_report_definition(
     delete, path = "/api/v1/reports/definitions/{id}", tag = "reports",
     params(("id" = Uuid, Path, description = "Report definition id")),
     responses(
-        (status = 200, description = "Definition deleted; its schedules cascade, its saved runs are kept", body = Ok_),
+        (status = 204, description = "Definition deleted; its schedules cascade, its saved runs are kept"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such definition", body = super::error::ErrorBody),
@@ -360,7 +360,7 @@ async fn delete_report_definition(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Ok_>> {
+) -> ApiResult<StatusCode> {
     let deleted = admin
         .reports
         .repo()
@@ -374,7 +374,7 @@ async fn delete_report_definition(
             )
         })?;
     if deleted {
-        Ok(Ok_::yes())
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(no_definition(id))
     }
@@ -473,7 +473,7 @@ async fn get_report_run(
     delete, path = "/api/v1/reports/runs/{id}", tag = "reports",
     params(("id" = Uuid, Path, description = "Report run id")),
     responses(
-        (status = 200, description = "Run deleted", body = Ok_),
+        (status = 204, description = "Run deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such run", body = super::error::ErrorBody),
@@ -484,7 +484,7 @@ async fn delete_report_run(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Ok_>> {
+) -> ApiResult<StatusCode> {
     let deleted = admin.reports.repo().delete_run(id).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -493,7 +493,7 @@ async fn delete_report_run(
         )
     })?;
     if deleted {
-        Ok(Ok_::yes())
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(no_run(id))
     }
@@ -726,7 +726,7 @@ fn parse_schedule_body(
     post, path = "/api/v1/reports/schedules", tag = "reports",
     request_body = ReportScheduleBody,
     responses(
-        (status = 200, description = "Schedule created", body = CreatedId),
+        (status = 201, description = "Schedule created", body = CreatedId),
         (status = 400, description = "`frequency` is not daily|weekly|monthly", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
@@ -739,7 +739,7 @@ async fn create_report_schedule(
     admin: Admin,
     headers: HeaderMap,
     Json(body): Json<ReportScheduleBody>,
-) -> ApiResult<Json<CreatedId>> {
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let (input, next) = parse_schedule_body(body)?;
     let user = current_username(&st, &headers);
     let id = admin
@@ -754,7 +754,7 @@ async fn create_report_schedule(
                 "failed to create report schedule",
             )
         })?;
-    Ok(Json(CreatedId { id }))
+    Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
 /// Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the
@@ -808,7 +808,7 @@ async fn update_report_schedule(
     delete, path = "/api/v1/reports/schedules/{id}", tag = "reports",
     params(("id" = Uuid, Path, description = "Report schedule id")),
     responses(
-        (status = 200, description = "Schedule deleted", body = Ok_),
+        (status = 204, description = "Schedule deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such schedule", body = super::error::ErrorBody),
@@ -819,7 +819,7 @@ async fn delete_report_schedule(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Ok_>> {
+) -> ApiResult<StatusCode> {
     let deleted = admin
         .reports
         .repo()
@@ -833,7 +833,7 @@ async fn delete_report_schedule(
             )
         })?;
     if deleted {
-        Ok(Ok_::yes())
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
             "schedule_not_found",

@@ -15,6 +15,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView};
 use super::nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
+use super::util::CreatedId;
 use super::ApiState;
 use crate::groups::{placement_order, would_create_cycle, GroupType};
 use axum::{
@@ -126,7 +127,7 @@ async fn reject_cycle(admin: &Admin, id: Uuid, parent_id: Option<Uuid>) -> Resul
     post, path = "/api/v1/node-groups", tag = "groups",
     request_body = GroupBody,
     responses(
-        (status = 204, description = "Group created"),
+        (status = 201, description = "Group created", body = CreatedId),
         (status = 400, description = "Empty name, unknown group type, or an invalid pool name", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
@@ -137,10 +138,10 @@ async fn create_node_group(
     _guard: RequireManageConfig,
     admin: Admin,
     Json(body): Json<GroupBody>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let group_type = parse_group_body(&body)?;
     let pool = validate_pool_create(body.pool)?;
-    admin
+    let id = admin
         .groups
         .create(
             body.name.trim(),
@@ -152,7 +153,7 @@ async fn create_node_group(
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "create node group", "failed to create group")
         })?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
 #[utoipa::path(

@@ -33,6 +33,21 @@
   it was pointed. The WebUI never offered the field, so this affects API clients only. Group scoping
   will be accepted again when the read paths actually filter by it.
 
+- **Four report and group endpoints now answer the status code the rest of the API does.** The three
+  report deletes — `DELETE /api/v1/reports/definitions/{id}`, `/runs/{id}` and `/schedules/{id}` —
+  returned `200 {"ok": true}` where the other 24 deletes in the API return `204 No Content`; they now
+  return **204** with no body. `POST /api/v1/node-groups` was the only creator that discarded the id
+  it had just generated, answering 204; it now returns **201** with `{"id": "<uuid>"}` like the other
+  twenty creators. `POST /api/v1/reports/schedules` returned its `{"id": …}` under 200 and now
+  returns **201**. A client that checks for an exact status code, or reads `ok` off a delete
+  response, needs updating; the WebUI ships in the same image and ignored both.
+- **`GET /api/v1/rca/{id}` and `POST /api/v1/rca` now describe what is inside a report.** The
+  `body` field was published as an untyped JSON blob, so a generated client got `unknown` for the
+  entire AI answer and its evidence. The document now carries real schemas for the answer
+  (`summary`, `root_cause`, `dependents`, `next_steps`, `confidence`, `raw`) and for the incident
+  context it was grounded in. **The bytes on the wire are unchanged** — only the description was
+  missing. Regenerate your client to pick the types up.
+
 - **Running a Troubleshoot analysis is now an Operator action on both surfaces.** It required
   **Admin** over the REST API and merely **Viewer** over MCP, so the on-call operator was refused in
   the WebUI while the same person could run the identical analysis through an AI client. Both now
