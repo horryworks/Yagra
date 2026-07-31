@@ -3,7 +3,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { EventRule, EventRuleInput, EventSource, Severity } from '../types/api';
+import { asSeverity } from '../lib/nodeState';
+import {
+  type EventRule,
+  type EventRuleInput,
+  type EventSource,
+  type Severity,
+} from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -23,6 +29,11 @@ const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'info'> = {
   warning: 'warning',
   info: 'info',
 };
+
+function SeverityBadge({ value }: { value: string }) {
+  const severity = asSeverity(value);
+  return <Badge tone={SEVERITY_TONE[severity]}>{severityLabel(severity)}</Badge>;
+}
 
 function ruleToInput(r: EventRule): EventRuleInput {
   return {
@@ -150,7 +161,7 @@ export function EventRulesPage() {
                 <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
                   <div className="ytable-cell">{r.name}</div>
                   <div className="ytable-cell">
-                    <Badge tone={SEVERITY_TONE[r.severity]}>{severityLabel(r.severity)}</Badge>
+                    <SeverityBadge value={r.severity} />
                   </div>
                   <div className="ytable-cell eventrules-match">
                     <div className="eventrules-sig">
@@ -260,10 +271,13 @@ function RuleModal({
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(rule?.name ?? '');
-  const [matchKind, setMatchKind] = useState<'substring' | 'regex'>(rule?.match_kind ?? 'substring');
+  // `match_kind` is a `String` on the wire too; the DB CHECK admits only these two.
+  const [matchKind, setMatchKind] = useState<'substring' | 'regex'>(
+    rule?.match_kind === 'regex' ? 'regex' : 'substring',
+  );
   const [pattern, setPattern] = useState(rule?.pattern ?? '');
   const [clearPattern, setClearPattern] = useState(rule?.clear_pattern ?? '');
-  const [severity, setSeverity] = useState<Severity>(rule?.severity ?? 'warning');
+  const [severity, setSeverity] = useState<Severity>(rule ? asSeverity(rule.severity) : 'warning');
   const [sourceKind, setSourceKind] = useState<string>(rule?.source_kind ?? '');
   const [sourceId, setSourceId] = useState<string>(rule?.source_id ?? '');
   const [ttl, setTtl] = useState(String(rule?.ttl_secs ?? 1800));

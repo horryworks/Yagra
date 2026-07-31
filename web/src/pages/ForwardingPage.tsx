@@ -53,6 +53,11 @@ import './ForwardingPage.css';
 
 const STATUS_POLL_MS = 10_000;
 
+/** A condition as the form holds it. `Condition.value` is `#[serde(default)]` on the Rust side, so
+ *  the contract types it optional even though every response carries it — and the editor's text box
+ *  has to stay controlled, which an absent value would break. */
+type DraftCondition = ForwardCondition & { value: string };
+
 /** The editable shape of the modal form — flattened so the condition rows are easy to splice. */
 interface Draft {
   name: string;
@@ -63,7 +68,7 @@ interface Draft {
   pool: string;
   verbatim: boolean;
   mode: 'all' | 'any';
-  conditions: ForwardCondition[];
+  conditions: DraftCondition[];
   rate_limit: string;
   community: string;
   ca_cert: string;
@@ -98,7 +103,7 @@ function draftFrom(row: ForwardDestination): Draft {
     pool: row.pool ?? '',
     verbatim: row.verbatim,
     mode: row.filter?.mode ?? 'all',
-    conditions: row.filter?.conditions ?? [],
+    conditions: (row.filter?.conditions ?? []).map((c) => ({ ...c, value: c.value ?? '' })),
     rate_limit: row.rate_limit_per_sec == null ? '' : String(row.rate_limit_per_sec),
     community: '',
     ca_cert: row.ca_cert ?? '',
@@ -255,8 +260,8 @@ function ConditionRow({
 }: {
   t: TFunction;
   source: ForwardSourceKind;
-  condition: ForwardCondition;
-  onChange: (next: ForwardCondition) => void;
+  condition: DraftCondition;
+  onChange: (next: DraftCondition) => void;
   onRemove: () => void;
 }) {
   const ops = opsForField(condition.field);

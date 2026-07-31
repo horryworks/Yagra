@@ -25,6 +25,12 @@ interface MapRow {
   role: Role;
 }
 
+/** Narrow a role as the API reports it: Rust types `role_map` values and `default_role` as bare
+ *  `String`s, so the contract cannot promise the union the pickers below are keyed by (the write
+ *  path does reject an unknown role, so this only ever fires on data written around the API). */
+const asRole = (value: string | null | undefined): Role | null =>
+  ROLES.find((r) => r === value) ?? null;
+
 /** Add or edit an OIDC provider. On edit the client_secret is left intact unless "replace" is set. */
 function ProviderModal({
   provider,
@@ -49,9 +55,16 @@ function ProviderModal({
   const [scopes, setScopes] = useState(provider?.scopes ?? 'openid profile email groups');
   const [groupsClaim, setGroupsClaim] = useState(provider?.groups_claim ?? 'groups');
   const [rows, setRows] = useState<MapRow[]>(
-    provider ? Object.entries(provider.role_map).map(([group, role]) => ({ group, role })) : [],
+    provider
+      ? Object.entries(provider.role_map).map(([group, role]) => ({
+          // An unreadable role falls to the least privilege rather than dropping the mapping,
+          // which would silently widen the group to `default_role` on the next save.
+          group,
+          role: asRole(role) ?? 'viewer',
+        }))
+      : [],
   );
-  const [defaultRole, setDefaultRole] = useState<Role | ''>(provider?.default_role ?? '');
+  const [defaultRole, setDefaultRole] = useState<Role | ''>(asRole(provider?.default_role) ?? '');
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

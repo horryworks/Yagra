@@ -18,6 +18,7 @@ function node(over: Partial<NodeSummary>): NodeSummary {
     model: null,
     group_id: null,
     sort_order: 0,
+    source: 'device',
     ...over,
   };
 }

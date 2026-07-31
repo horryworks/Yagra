@@ -1,380 +1,226 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// API types — mirror the Rust serde shapes from `yagra-common` / the `/api/v1` router.
-// Keep these in sync when an endpoint or a shared type changes (coding-conventions).
+// API types — the northbound contract, taken from the generated OpenAPI schema (ADR-035).
+//
+// This file used to be a hand-written mirror of the Rust serde shapes, headed by an instruction to
+// "keep these in sync when an endpoint or a shared type changes". Nothing enforced that, and a
+// drifted mirror is never a compile error — it is a user seeing `undefined`. The chain is now:
+// Rust handlers (`#[utoipa::path]` / `ToSchema`) → `web/src/api/openapi.json` →
+// `web/src/api/schema.d.ts` (`npm run generate:api`) → this file.
+//
+// Exactly three kinds of declaration belong here:
+//
+//   1. **Re-exports of a generated schema.** The TypeScript name is kept even where the Rust schema
+//      name differs (`RoleMatrix` ⟷ `RolesMatrix`, `CollectionTemplate` ⟷ `TemplateSummary`,
+//      `MaintenanceWindow` ⟷ `StoredWindow`, …) because ~84 files import these names. The alias is
+//      the only hand-written part of the shape, and the compiler checks it resolves.
+//   2. **The runtime `as const` enum arrays.** These must exist at runtime — `i18nEnumKeys.test.ts`
+//      iterates them to prove *both* locales carry a string for every variant (`extensibility.md`
+//      §4), which a re-exported union cannot do. Each is pinned to its schema union in both
+//      directions by `schemaEnumPins` below, so a backend enum that gains or loses a variant fails
+//      to compile here rather than rendering a raw i18n key to an operator.
+//   3. **Shapes with no backend counterpart** — query-parameter unions, filter bags, documents the
+//      WebUI owns end to end, and the payloads Rust serializes as `serde_json::Value`. They are
+//      grouped at the bottom of the file under their own banner, each with the reason it survives.
+//
+// **Never hand-write an `interface` for something the API returns.** If a shape is missing or wrong,
+// fix the Rust annotation and regenerate — adding it here recreates the mirror ADR-035 deleted.
 
-/** The node/check state machine (yagra-common `NodeState`). */
-export type NodeState =
-  | 'ok'
-  | 'warning'
-  | 'critical'
-  | 'unknown'
-  | 'unreachable'
-  | 'maintenance';
+import type { components } from '../api/schema';
+
+/** Compile-time equality. Resolves to `true` only when A and B are the same type in *both*
+ *  directions, and to `never` otherwise — so assigning `true` to it stops compiling the moment
+ *  either side gains or loses a member. */
+type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
+/** Pins each runtime enum array in this file to the generated schema union it must equal.
+ *
+ *  Grouped into one object (rather than a const beside each array) because `noUnusedLocals` and
+ *  eslint both reject a declaration nothing reads, and `void`-ed rather than exported so this
+ *  file's export surface stays exactly the types consumers import. A backend enum that changes
+ *  makes exactly one property here fail to compile, naming the enum — which is also the signal
+ *  that `i18nEnumKeys.test.ts` is about to demand EN/JA strings for the new variant.
+ *
+ *  `GROUP_TYPES` is deliberately absent: Rust serializes `group_type` as a bare `String`, so the
+ *  document has no union to pin it to. See its declaration below. */
+const schemaEnumPins: {
+  Severity: AssertEqual<Severity, components['schemas']['Severity']>;
+  Role: AssertEqual<Role, components['schemas']['Role']>;
+  ScopeLevel: AssertEqual<ScopeLevel, components['schemas']['ScopeLevel']>;
+  Direction: AssertEqual<Direction, components['schemas']['Direction']>;
+  ForwardSourceKind: AssertEqual<ForwardSourceKind, components['schemas']['SourceKind']>;
+  ForwardDestKind: AssertEqual<ForwardDestKind, components['schemas']['DestKind']>;
+  NodeKind: AssertEqual<NodeKind, components['schemas']['NodeKind']>;
+} = {
+  Severity: true,
+  Role: true,
+  ScopeLevel: true,
+  Direction: true,
+  ForwardSourceKind: true,
+  ForwardDestKind: true,
+  NodeKind: true,
+};
+void schemaEnumPins;
+
+// ── Node state, metrics ─────────────────────────────────────────────────────────────────────────
+
+/** The node/check state machine. The ordered runtime list lives in `lib/nodeState.ts`
+ *  (`SEVERITY_ORDER`) — it is a display order, not part of the wire contract. */
+export type NodeState = components['schemas']['NodeState'];
 
 /** Every alert severity, ordered info < warning < critical. `Severity` derives from it, so the
  *  union and the runtime list can never disagree — and the i18n key-coverage test iterates the
  *  list, so a new severity without its `format:severity.*` strings fails the suite. */
 export const SEVERITIES = ['info', 'warning', 'critical'] as const;
 
-/** Alert severity (yagra-common `Severity`), ordered info < warning < critical. */
+/** Alert severity, ordered info < warning < critical. Pinned to `schemas.Severity`. */
 export type Severity = (typeof SEVERITIES)[number];
 
-/** Optional server-side aggregation for a node metric read. `max` collapses a per-entity
- *  table gauge (e.g. CPU% per entPhysicalIndex) into one node-level value. */
-export type MetricAgg = 'max';
-
 /** Latest reading for one node metric (`GET /api/v1/nodes/:id/metrics/:metric`). */
-export interface MetricReading {
-  node_id: string;
-  metric: string;
-  value: number;
-}
+export type MetricReading = components['schemas']['MetricReading'];
 
 /** One time-series point: `t` Unix seconds, `v` value. */
-export interface MetricPoint {
-  t: number;
-  v: number;
-}
+export type MetricPoint = components['schemas']['MetricPoint'];
 
 /** A time-series window (`GET /api/v1/nodes/:id/metrics/:metric/range`). */
-export interface MetricRange {
-  node_id: string;
-  metric: string;
-  points: MetricPoint[];
-}
-
-/** Aggregation for the fleet Top-N endpoint: `now` = most recent value; `max_1h` = hourly peak. */
-export type MetricTopAgg = 'now' | 'max_1h';
+export type MetricRange = components['schemas']['MetricRange'];
 
 /** One ranked node in a fleet Top-N result (`GET /api/v1/metrics/top`). `name` is joined from
  *  PostgreSQL (TSDB carries only the id); it falls back to the id for a since-deleted node. */
-export interface TopEntry {
-  node_id: string;
-  name: string;
-  value: number;
-}
+export type TopEntry = components['schemas']['TopEntry'];
 
-// ── Flow analysis (ADR-031) — mirror the Rust `flowstore` DTOs ──
+// ── Flow analysis (ADR-031) ─────────────────────────────────────────────────────────────────────
+
 /** A top-talker: one host address with summed traffic (`/nodes/:id/flow/top-talkers`). */
-export interface FlowTalker {
-  addr: string;
-  bytes: number;
-  packets: number;
-  flows: number;
-}
+export type FlowTalker = components['schemas']['FlowTalker'];
 
 /** A src→dst conversation with summed traffic (`/nodes/:id/flow/conversations`). `*_asn` 0 = unknown;
- *  `*_as_name` is filled when the IP→ASN table resolves it. Optional for N-1 tolerance. */
-export interface FlowConversation {
-  src: string;
-  dst: string;
-  src_asn?: number;
-  dst_asn?: number;
-  src_as_name?: string | null;
-  dst_as_name?: string | null;
-  bytes: number;
-  packets: number;
-  flows: number;
-}
+ *  `*_as_name` is filled when the IP→ASN table resolves it. */
+export type FlowConversation = components['schemas']['FlowConversation'];
 
 /** A destination-port aggregate (`/nodes/:id/flow/top-ports`). */
-export interface FlowPortAgg {
-  port: number;
-  bytes: number;
-  packets: number;
-  flows: number;
-}
+export type FlowPortAgg = components['schemas']['FlowPortAgg'];
 
 /** A protocol aggregate (`/nodes/:id/flow/protocols`). `proto` is the IP protocol number. */
-export interface FlowProtoAgg {
-  proto: number;
-  bytes: number;
-  packets: number;
-  flows: number;
-}
+export type FlowProtoAgg = components['schemas']['FlowProtoAgg'];
 
 /** A trend point: bytes/packets for one protocol at one 5-minute bucket (`/nodes/:id/flow/series`). */
-export interface FlowPoint {
-  ts_unix_ms: number;
-  proto: number;
-  bytes: number;
-  packets: number;
-}
+export type FlowPoint = components['schemas']['FlowPoint'];
 
 /** An autonomous-system aggregate (`/nodes/:id/flow/top-as`). `asn` 0 = unknown; `name` when
  *  the IP→ASN table resolves it (else `null`). */
-export interface FlowAsAgg {
-  asn: number;
-  name?: string | null;
-  bytes: number;
-  packets: number;
-  flows: number;
-}
-
-/** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer / AS). */
-export interface FlowFilters {
-  proto?: number;
-  port?: number;
-  peer?: string;
-  asn?: number;
-}
-
-/** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). */
-export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' | 'discards';
+export type FlowAsAgg = components['schemas']['FlowAsAgg'];
 
 /** One ranked interface in a fleet interface Top-N. `value` is bits/sec for throughput metrics,
  *  errors|discards per second otherwise; node/interface names joined from PostgreSQL. */
-export interface InterfaceTopEntry {
-  node_id: string;
-  node_name: string;
-  ifindex: number;
-  if_name: string | null;
-  if_alias: string | null;
-  if_speed_bps: number | null;
-  value: number;
-}
+export type InterfaceTopEntry = components['schemas']['InterfaceTopEntry'];
+
+// ── Alerts ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * Inbound acknowledgement state mirrored from an external incident tool (PagerDuty / JSM),
  * shown read-only (ADR-015). Yagra has no ack action of its own — this is reflected in only.
  */
-export interface AckView {
-  /** When the external tool recorded the ack (Unix ms, UTC). */
-  at_unix_ms: number;
-  /** External actor reference (id / handle). */
-  by: string;
-  /** Originating tool: 'pagerduty' | 'jsm' | 'manual' | … */
-  source: string;
-  /** Optional free-text note from the external tool. */
-  note?: string;
-}
+export type AckView = components['schemas']['AckView'];
 
-/** An alert as produced by the engine (`yagra_alert::Alert`), plus inbound ack state. */
-export interface Alert {
-  node: string;
-  check: string;
-  severity: Severity;
-  state: NodeState;
-  at_unix_ms: number;
-  root_cause: string | null;
-  flapping: boolean;
-  /** Read-only ack mirrored from the external tool (absent ⇒ not acknowledged). */
-  acked?: AckView | null;
-}
+/** An alert as served by `GET /api/v1/alerts` — the engine's alert plus inbound ack state (the
+ *  Rust type is `ActiveAlertView`; `schemas.Alert` is the bare engine alert without `acked`, which
+ *  is what `NodeStatus.alerts` carries). */
+export type Alert = components['schemas']['ActiveAlertView'];
 
 /** A node row for inventory listings. */
-export interface NodeSummary {
-  id: string;
-  name: string;
-  address: string;
-  state: NodeState;
-  /** Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
-  vendor: string | null;
-  model: string | null;
-  /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
-  group_id: string | null;
-  /** Manual order within the group (tree sorts members by this, then by name). */
-  sort_order: number;
-  /** The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
-   *  The tree's pool picker edits exactly this, so it marks the active choice. Optional so an
-   *  older core (which doesn't send it) still deserializes. */
-  pool?: string | null;
-  /** How this node is monitored, for the tree badge: `"meraki"` or `"device"` (default). */
-  source?: 'device' | 'meraki';
-}
+export type NodeSummary = components['schemas']['NodeSummary'];
 
 /** One resolved node id → display name (`POST /api/v1/node-names`). Unresolved ids are omitted
  *  from the response, so the caller keeps the raw id as the fallback (S12). */
-export interface NodeNameEntry {
-  id: string;
-  name: string;
-}
+export type NodeNameEntry = components['schemas']['NodeNameEntry'];
 
 /** One node-picker search hit (`GET /api/v1/nodes/search`): id + display name + address only —
  *  enough to show and select a node without loading the whole inventory client-side (A-2). */
-export interface NodeSearchResult {
-  id: string;
-  name: string;
-  address: string;
-}
+export type NodeSearchResult = components['schemas']['NodeSearchResult'];
 
 /** One group's direct member nodes (`GET /api/v1/nodes/by-group?group=<id>`; absent group ⇒ the
  *  ungrouped bucket). The inventory tree lazy-loads a group's members only when it is expanded, so
  *  the initial view never pulls the whole fleet (A-3). `truncated` ⇒ the group exceeded the load
  *  backstop (a pathologically large flat group). */
-export interface GroupNodesResult {
-  nodes: NodeSummary[];
-  truncated: boolean;
-}
+export type GroupNodesResult = components['schemas']['GroupNodes'];
 
-/** Every node-group type, in picker order. */
+/** Every node-group type, in picker order.
+ *
+ *  **Not pinned to the schema:** Rust models `GroupSummary.group_type` as a `String` (validated
+ *  against `GroupType` at the write edge), so the generated document has no union to compare with.
+ *  This array is therefore the only closed statement of the set anywhere in TypeScript — treat it
+ *  as unverified and check `yagra_core::groups::GroupType` when changing it. */
 export const GROUP_TYPES = ['site', 'region', 'device_type', 'service', 'generic'] as const;
 
-/** A node-group type (yagra-core `GroupType`, snake_case) — drives the tree icon. */
+/** A node-group type (snake_case) — drives the tree icon. */
 export type GroupType = (typeof GROUP_TYPES)[number];
 
 /** One node group (folder) in the hierarchical inventory tree (`GET /api/v1/node-groups`). */
-export interface NodeGroup {
-  id: string;
-  name: string;
-  group_type: GroupType;
-  /** Parent group; `null` ⇒ a top-level group. */
-  parent_id: string | null;
-  /** Manual order within the parent scope (tree sorts siblings by this, then by name). */
-  sort_order: number;
-  /** Optional geo coordinates for the dashboard map (both set ⇒ plotted). */
-  latitude: number | null;
-  longitude: number | null;
-  /** Poll-pool this folder assigns to its nodes (ADR-009/020); `null` ⇒ inherit from the nearest
-   *  ancestor that sets one, else the default pool. A node's own `pool` still wins. */
-  pool: string | null;
-}
+export type NodeGroup = components['schemas']['GroupSummary'];
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
- *  alerts currently attributed to it. */
-export interface NodeStatus {
-  node_id: string;
-  state: NodeState;
-  alerts: Alert[];
-}
+ *  alerts currently attributed to it (bare engine alerts — no ack state). */
+export type NodeStatus = components['schemas']['NodeStatus'];
 
 /** Credential metadata (never the secret value). */
-export interface CredentialSummary {
-  id: string;
-  name: string;
-  kind: string;
-  /** How many nodes reference this credential (0 ⇒ unused, safe to delete). */
-  used_by: number;
-}
+export type CredentialSummary = components['schemas']['CredentialSummary'];
 
 /** A page of the keyset-paginated node list (`GET /api/v1/nodes`). */
-export interface NodePage {
-  nodes: NodeSummary[];
-  next_cursor: string | null;
-}
+export type NodePage = components['schemas']['NodePage'];
+
+// ── Identity, roles, tokens ─────────────────────────────────────────────────────────────────────
 
 /** Current principal (`GET /api/v1/auth/me`). */
-export interface AuthMe {
-  role: string;
-  /** The signed-in account's username — lets the UI mark "you" in the user list. */
-  username: string;
-}
+export type AuthMe = components['schemas']['AuthMe'];
 
 /** Every predefined role, least → most privileged — the order role pickers offer them in.
  *  `Role` is derived from it, so the union and the list can never disagree. (Users, API tokens and
  *  the OIDC group mapping each used to carry their own literal copy.) */
 export const ROLES = ['viewer', 'operator', 'admin'] as const;
 
-/** A predefined role (yagra-common `Role`, snake_case), ordered least → most privileged. */
+/** A predefined role (snake_case), ordered least → most privileged. Pinned to `schemas.Role`. */
 export type Role = (typeof ROLES)[number];
 
 /** One capability in the role/privilege matrix (`GET /api/v1/roles`). */
-export interface PermissionInfo {
-  key: string;
-  label: string;
-  description: string;
-}
+export type PermissionInfo = components['schemas']['PermissionInfo'];
 
 /** One role in the matrix: metadata plus the permission keys it grants. `builtin` roles are
  *  fixed today (custom roles are not yet configurable). */
-export interface RoleInfo {
-  key: string;
-  label: string;
-  description: string;
-  builtin: boolean;
-  permissions: string[];
-}
+export type RoleInfo = components['schemas']['RoleInfo'];
 
 /** The role-vs-privilege matrix (`GET /api/v1/roles`): the permission catalogue + per-role grants. */
-export interface RoleMatrix {
-  permissions: PermissionInfo[];
-  roles: RoleInfo[];
-}
+export type RoleMatrix = components['schemas']['RolesMatrix'];
 
-/** A user account row (`GET /api/v1/users`, core `UserSummary`). Never includes the
- *  password hash. `created_at` is RFC 3339 text; `last_login_at` is RFC 3339 text or null
- *  (the account has never logged in). */
-export interface UserSummary {
-  id: string;
-  username: string;
-  role: Role;
-  created_at: string;
-  last_login_at: string | null;
-  /** Account status: a disabled account is kept for the record but cannot authenticate. */
-  enabled: boolean;
-  /** How the account authenticates: `local` (password) or `oidc` (external IdP). */
-  auth_source: 'local' | 'oidc';
-}
+/** A user account row (`GET /api/v1/users`). Never includes the password hash. `created_at` is
+ *  RFC 3339 text; `last_login_at` is RFC 3339 text or null (the account has never logged in). */
+export type UserSummary = components['schemas']['UserSummary'];
 
-/** A configured OIDC provider (`GET /api/v1/settings/oidc`, core `OidcProviderSummary`). The
- *  client_secret is write-only and never returned; `has_secret` signals one is stored. */
-export interface OidcProviderSummary {
-  id: string;
-  name: string;
-  issuer: string;
-  client_id: string;
-  redirect_uri: string;
-  scopes: string;
-  groups_claim: string;
-  /** IdP group name → Yagra role. */
-  role_map: Record<string, Role>;
-  default_role: Role | null;
-  enabled: boolean;
-  has_secret: boolean;
-}
+/** A configured OIDC provider (`GET /api/v1/settings/oidc`). The client_secret is write-only and
+ *  never returned; `has_secret` signals one is stored. */
+export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];
 
 /** Create/update payload for an OIDC provider. `client_secret` is write-only: omit (or empty) on
  *  update to keep the stored secret. */
-export interface OidcProviderInput {
-  name: string;
-  issuer: string;
-  client_id: string;
-  client_secret?: string;
-  redirect_uri: string;
-  scopes: string;
-  groups_claim: string;
-  role_map: Record<string, Role>;
-  default_role?: Role | null;
-  enabled: boolean;
-}
+export type OidcProviderInput = components['schemas']['OidcProviderInput'];
 
-/** An API token (`GET /api/v1/api-tokens`, core `ApiTokenInfo`) — a long-lived credential for
- *  non-browser/MCP clients (ADR-028). The raw token is write-only: shown once on create, never
- *  returned again; only metadata is listed. `scope` is the serde JSON of the core `Scope`
- *  (`"All"` or `{ "Groups": [...] }`) rendered as a string. */
-export interface ApiTokenSummary {
-  id: string;
-  name: string;
-  role: Role;
-  scope: unknown;
-  created_by: string;
-  created_at: string;
-  last_used_at: string | null;
-  revoked_at: string | null;
-}
+/** An API token (`GET /api/v1/api-tokens`) — a long-lived credential for non-browser/MCP clients
+ *  (ADR-028). The raw token is write-only: shown once on create, never returned again; only
+ *  metadata is listed. */
+export type ApiTokenSummary = components['schemas']['ApiTokenInfo'];
 
-/** Create payload for an API token. `scope` is omitted for global (All) visibility — the only
+/** Create payload for an API token. `scope` is omitted for global (`"All"`) visibility — the only
  *  scope the MCP tool surface accepts in Increment 1. */
-export interface ApiTokenInput {
-  name: string;
-  role: Role;
-  scope?: string;
-}
+export type ApiTokenInput = components['schemas']['CreateApiTokenBody'];
 
 /** Create response: the raw `token` is shown once and never returned again. */
-export interface CreatedApiToken {
-  id: string;
-  name: string;
-  role: Role;
-  token: string;
-}
+export type CreatedApiToken = components['schemas']['CreatedApiToken'];
 
 // ── Forwarding ("tee", ADR-034) — relay received syslog/traps to external collectors ────────────
 
 /** Every received stream a destination can tee. */
 export const FORWARD_SOURCE_KINDS = ['syslog', 'trap', 'flow'] as const;
 
-/** Which received stream a destination tees (core `yagra_forward::SourceKind`). */
+/** Which received stream a destination tees. Pinned to `schemas.SourceKind`. */
 export type ForwardSourceKind = (typeof FORWARD_SOURCE_KINDS)[number];
 
 /** Every way a destination can be spoken to. */
@@ -387,739 +233,295 @@ export const FORWARD_DEST_KINDS = [
   'bigquery',
 ] as const;
 
-/** How a destination is spoken to (core `yagra_forward::DestKind`). */
+/** How a destination is spoken to. Pinned to `schemas.DestKind`. */
 export type ForwardDestKind = (typeof FORWARD_DEST_KINDS)[number];
 
-/** A filter condition's subject (core `yagra_forward::FilterField`). For flow, `source_ip` is the
- *  exporting device and `kind` is the wire format (`netflow`/`sflow`); the record's own endpoints
- *  are `src_addr`/`dst_addr`. */
-export type ForwardFilterField =
-  | 'source_ip'
-  | 'pool'
-  | 'kind'
-  | 'facility'
-  | 'severity'
-  | 'hostname'
-  | 'app_name'
-  | 'message'
-  | 'trap_oid'
-  | 'varbind'
-  | 'src_addr'
-  | 'dst_addr'
-  | 'proto'
-  | 'src_port'
-  | 'dst_port'
-  | 'src_as'
-  | 'dst_as';
+/** A filter condition's subject. For flow, `source_ip` is the exporting device and `kind` is the
+ *  wire format (`netflow`/`sflow`); the record's own endpoints are `src_addr`/`dst_addr`. */
+export type ForwardFilterField = components['schemas']['FilterField'];
 
-/** A filter condition's comparison (core `yagra_forward::FilterOp`). */
-export type ForwardFilterOp =
-  | 'eq'
-  | 'ne'
-  | 'contains'
-  | 'not_contains'
-  | 'prefix'
-  | 'regex'
-  | 'not_regex'
-  | 'in_list'
-  | 'in_cidr'
-  | 'not_in_cidr'
-  | 'lte'
-  | 'gte';
+/** A filter condition's comparison. */
+export type ForwardFilterOp = components['schemas']['FilterOp'];
 
 /** One `field op value` test. `value` is always a string; core parses it per field type. */
-export interface ForwardCondition {
-  field: ForwardFilterField;
-  op: ForwardFilterOp;
-  value: string;
-}
+export type ForwardCondition = components['schemas']['Condition'];
 
-/** A destination's filter (core `yagra_forward::FilterExpr`). No conditions = forward everything. */
-export interface ForwardFilter {
-  mode: 'all' | 'any';
-  conditions: ForwardCondition[];
-}
+/** A destination's filter. No conditions = forward everything. */
+export type ForwardFilter = components['schemas']['FilterExpr'];
 
-/** A forwarding destination (`GET /api/v1/forwarding/destinations`, core `ForwardDestination`).
- *  `has_secret` reports whether a sealed secret (the SNMP community) is stored — the value itself
- *  is never returned. */
-export interface ForwardDestination {
-  id: string;
-  name: string;
-  enabled: boolean;
-  source_kind: ForwardSourceKind;
-  dest_kind: ForwardDestKind;
-  target: string;
-  pool: string | null;
-  verbatim: boolean;
-  filter: ForwardFilter;
-  rate_limit_per_sec: number | null;
-  /** Extra PEM trust anchor for a TLS destination. Not a secret, so it round-trips. */
-  ca_cert: string | null;
-  /** Whether a sealed secret is stored — the SNMP community, or the BigQuery service-account key.
-   *  On a BigQuery destination, `false` means Workload Identity (no stored credential). */
-  has_secret: boolean;
-}
+/** A forwarding destination (`GET /api/v1/forwarding/destinations`). `has_secret` reports whether a
+ *  sealed secret (the SNMP community, or the BigQuery service-account key) is stored — the value
+ *  itself is never returned. On a BigQuery destination, `false` means Workload Identity. */
+export type ForwardDestination = components['schemas']['ForwardDestination'];
 
 /** Create/update payload. Omitting `community` / `service_account_json` on update keeps the stored
  *  value; `ca_cert` is not a secret and is always sent, so clearing it removes the pinned CA. */
-export interface ForwardDestinationInput {
-  name: string;
-  enabled: boolean;
-  source_kind: ForwardSourceKind;
-  dest_kind: ForwardDestKind;
-  /** `host:port` for the relay kinds, `project.dataset.table` for `bigquery`. */
-  target: string;
-  pool?: string | null;
-  verbatim: boolean;
-  filter: ForwardFilter;
-  rate_limit_per_sec?: number | null;
-  ca_cert?: string | null;
-  community?: string;
-  /** Google service-account key JSON for a `bigquery` destination. Omit to use Workload Identity. */
-  service_account_json?: string;
-}
+export type ForwardDestinationInput = components['schemas']['ForwardDestinationBody'];
 
-/** One destination's live counters (core `forward::DestStatus`). `rendered` counts messages that
- *  were sent re-rendered despite `verbatim`, because no original payload was available. */
-export interface ForwardDestStatus {
-  id: string;
-  name: string;
-  sent: number;
-  filtered: number;
-  dropped: number;
-  errors: number;
-  rendered: number;
-  queue_depth: number;
-  circuit_open: boolean;
-  last_success_unix_ms: number | null;
-  last_error: string | null;
-}
+/** One destination's live counters. `rendered` counts messages that were sent re-rendered despite
+ *  `verbatim`, because no original payload was available. */
+export type ForwardDestStatus = components['schemas']['DestStatus'];
 
 /** `GET /api/v1/forwarding/status`. `sending` is false on an HA standby, whose dispatcher is idle. */
-export interface ForwardStatus {
-  destinations: ForwardDestStatus[];
-  /** Online pollers that attach no original bytes to events — byte-exact silently degrades. */
-  pollers_without_raw_capture: string[];
-  /** Online pollers that relay no flow datagrams at all — a flow destination receives *nothing*
-   *  from them, which is a different failure from degraded fidelity. */
-  pollers_without_flow_relay: string[];
-  sending: boolean;
-}
+export type ForwardStatus = components['schemas']['ForwardingStatus'];
 
 /** `POST /api/v1/forwarding/destinations/:id/test` — the transport result, not an HTTP error. */
-export interface ForwardTestResult {
-  delivered: boolean;
-  error?: string;
-}
+export type ForwardTestResult = components['schemas']['TestResult'];
 
-/** A device-class profile (`GET /api/v1/profiles`, repo `ProfileSummary`). Split by functional
- *  `category` (role) × `vendor`-NOS family; `category` is the kebab-case `ProfileCategory` token. */
-export interface ProfileSummary {
-  id: string;
-  name: string;
-  category: string;
-  vendor: string | null;
-  /** Per-profile polling-interval override (seconds); `null` ⇒ inherit the system default. */
-  poll_interval_secs: number | null;
-}
+// ── Profiles, thresholds, scopes ────────────────────────────────────────────────────────────────
+
+/** A device-class profile (`GET /api/v1/profiles`). Split by functional `category` (role) ×
+ *  `vendor`-NOS family; `category` is the kebab-case `ProfileCategory` token. */
+export type ProfileSummary = components['schemas']['ProfileSummary'];
 
 /** Create/update-profile request body (`POST`/`PUT /api/v1/profiles`). */
-export interface ProfileInput {
-  name: string;
-  category?: string;
-  vendor?: string | null;
-  /** Optional polling-interval override (seconds); omit/`null` to inherit the system default. */
-  poll_interval_secs?: number | null;
-}
+export type ProfileInput = components['schemas']['ProfileBody'];
 
 /** Every threshold scope level, broadest → most specific. */
 export const SCOPE_LEVELS = ['profile', 'group', 'node'] as const;
 
-/** Threshold scope level (yagra-common `ScopeLevel`, snake_case). Most-specific wins. */
+/** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */
 export type ScopeLevel = (typeof SCOPE_LEVELS)[number];
 
 /** Maintenance-window scope. The threshold scopes plus `group_id` — a hierarchical folder group
  *  (the All Nodes tree), resolved recursively incl. subgroups (ADR-022). Distinct from the legacy
  *  tag-based `group` scope (`scope_id` is a group UUID, not a tag value). */
-export type MaintenanceScopeLevel = ScopeLevel | 'group_id';
+export type MaintenanceScopeLevel = components['schemas']['WindowScope'];
 
 /** Every breach direction. */
 export const DIRECTIONS = ['above', 'below'] as const;
 
-/** Breach direction (yagra-common `Direction`, snake_case). */
+/** Breach direction (snake_case). Pinned to `schemas.Direction`. */
 export type Direction = (typeof DIRECTIONS)[number];
 
-/** A stored threshold rule (`GET /api/v1/thresholds`, core `StoredThreshold`). The rule
- *  fields are flattened onto the row. The GET shape uses `scope_level`, matching the POST body. */
-export interface StoredThreshold {
-  id: string;
-  scope_level: ScopeLevel;
-  scope_id: string;
-  metric: string;
-  direction: Direction;
-  warning: number | null;
-  critical: number | null;
-  dwell_samples: number;
-}
+/** A stored threshold rule (`GET /api/v1/thresholds`). The rule fields are flattened onto the row.
+ *  The GET shape uses `scope_level`, matching the POST body. */
+export type StoredThreshold = components['schemas']['StoredThreshold'];
 
-/** A capped page of threshold rules (`GET /api/v1/thresholds`, core `ThresholdPage`).
+/** A capped page of threshold rules (`GET /api/v1/thresholds`).
  *
  *  Thresholds are the one configuration table that grows with the fleet — a node-level override is
  *  per (node × metric) — so the list is capped server-side. `total` is the whole ruleset's size,
  *  and `truncated` says outright that `items` is a prefix, rather than leaving the UI to infer it
  *  from `items.length` (which is wrong when the ruleset is exactly the cap). */
-export interface ThresholdPage {
-  items: StoredThreshold[];
-  total: number;
-  truncated: boolean;
-}
+export type ThresholdPage = components['schemas']['ThresholdPage'];
 
-/** One alert-history row (`GET /api/v1/alerts/history`, core `AlertHistoryRow`). */
-export interface AlertHistoryRow {
-  node: string;
-  check: string;
-  severity: Severity;
-  state: NodeState;
-  at_unix_ms: number;
-  resolved: boolean;
-  /** Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel `__liveness__`).
-   *  `null` for rows recorded before this was captured ⇒ render "—". */
-  metric?: string | null;
-  /** Observed sample value that committed the transition (threshold checks only). */
-  observed_value?: number | null;
-  /** The bound crossed for the committed severity (threshold checks only). */
-  threshold_value?: number | null;
-  /** Breach direction (threshold checks only). */
-  direction?: Direction | null;
-  /** Insertion time (RFC 3339). The keyset cursor for paging: pass the last row's `recorded_at`
-   *  as `before` to fetch the next (older) page. */
-  recorded_at: string;
-  /** Read-only ack mirrored from the external tool, keyed by incident (absent ⇒ not acked). */
-  acked?: AckView | null;
-}
+/** One alert-history row (`GET /api/v1/alerts/history`) — the stored row plus inbound ack state
+ *  (the Rust type is `AlertHistoryView`). `metric` is `null` for rows recorded before it was
+ *  captured ⇒ render "—"; `observed_value` / `threshold_value` / `direction` are threshold checks
+ *  only. `recorded_at` is the keyset cursor: pass the last row's value as `before`. */
+export type AlertHistoryRow = components['schemas']['AlertHistoryView'];
 
 /** A chronic-offender row (`GET /api/v1/alerts/top-nodes`). */
-export interface AlertNodeCount {
-  node_id: string;
-  name: string;
-  count: number;
-}
+export type AlertNodeCount = components['schemas']['AlertNodeCount'];
 
 /** One weekday×hour heatmap cell (`GET /api/v1/alerts/calendar`); `dow` 0=Sun…6=Sat, hour 0–23 (UTC). */
-export interface CalendarBucket {
-  dow: number;
-  hour: number;
-  count: number;
-}
+export type CalendarBucket = components['schemas']['CalendarBucket'];
 
 /** A recent up/down transition (`GET /api/v1/alerts/transitions`). `resolved` = recovery to ok. */
-export interface AlertTransition {
-  node_id: string;
-  name: string;
-  state: NodeState;
-  severity: Severity;
-  resolved: boolean;
-  at_unix_ms: number;
-}
+export type AlertTransition = components['schemas']['AlertTransition'];
 
-/** A notification channel kind (yagra-core `ChannelKind`). */
-export type ChannelKind = 'webhook' | 'email' | 'pagerduty' | 'jsm';
+// ── Notifications ───────────────────────────────────────────────────────────────────────────────
+
+/** A notification channel kind. */
+export type ChannelKind = components['schemas']['ChannelKind'];
 
 /** Notification channel metadata (`GET /api/v1/notification-channels`) — the secret
  *  connection config is sealed server-side and never returned. */
-export interface NotificationChannel {
-  id: string;
-  name: string;
-  kind: ChannelKind;
-  enabled: boolean;
-}
+export type NotificationChannel = components['schemas']['ChannelSummary'];
 
-/** Channel connection config supplied on create (sealed server-side; tagged by `kind`). */
-export type ChannelConfigInput =
-  | { kind: 'webhook'; url: string }
-  | {
-      kind: 'email';
-      host: string;
-      port?: number;
-      from: string;
-      to: string;
-      user?: string;
-      pass?: string;
-    }
-  // PagerDuty Events API v2 — routing_key is the integration key; api_url overrides the
-  // default US endpoint (EU: https://events.eu.pagerduty.com/v2/enqueue).
-  | { kind: 'pagerduty'; routing_key: string; api_url?: string }
-  // JSM Alerts (Opsgenie-compatible) — api_url is the integration base, api_key the GenieKey.
-  | { kind: 'jsm'; api_url: string; api_key: string };
+/** Channel connection config supplied on create (sealed server-side; tagged by `kind`).
+ *  PagerDuty is the Events API v2 (`routing_key` is the integration key; `api_url` overrides the
+ *  default US endpoint — EU is https://events.eu.pagerduty.com/v2/enqueue). JSM is Alerts
+ *  (Opsgenie-compatible): `api_url` is the integration base, `api_key` the GenieKey. */
+export type ChannelConfigInput = components['schemas']['ChannelConfig'];
 
 /** A routing rule (`GET /api/v1/routing-rules`): alerts of `severity` (null = any) fan out
  *  to `channel_ids`. */
-export interface RoutingRule {
-  id: string;
-  name: string;
-  enabled: boolean;
-  severity: Severity | null;
-  channel_ids: string[];
-}
+export type RoutingRule = components['schemas']['RoutingRule'];
 
-/** How a collection item is gathered (yagra-common `CollectionKind`). */
-export type CollectionKind = 'scalar' | 'table';
+// ── Collection (metrics to gather) ──────────────────────────────────────────────────────────────
 
-/** Whether a metric is a gauge or a raw counter (yagra-common `MetricKind`). */
-export type MetricKind = 'gauge' | 'counter';
+/** How a collection item is gathered. */
+export type CollectionKind = components['schemas']['CollectionKind'];
 
-/** One thing to collect: a stable metric name, the OID, how to collect it, and its kind
- *  (`yagra-common::CollectionItem`). */
-export interface CollectionItem {
-  metric_name: string;
-  oid: string;
-  kind: CollectionKind;
-  metric_kind: MetricKind;
-}
+/** Whether a metric is a gauge or a raw counter. */
+export type MetricKind = components['schemas']['MetricKind'];
 
-/** A stored collection item with its id/scope/enabled flag (core `StoredCollectionItem`,
- *  the item fields flattened on). Also the shape of a template item (core `TemplateItem`,
- *  without the scope fields). */
-export interface StoredCollectionItem extends CollectionItem {
-  id: string;
-  scope_level?: ScopeLevel;
-  scope_id?: string;
-  enabled: boolean;
-}
+/** One thing to collect: a stable metric name, the OID, how to collect it, and its kind. */
+export type CollectionItem = components['schemas']['CollectionItem'];
 
-/** A reusable collection template (core `TemplateSummary`): a named metric bundle that
- *  device profiles attach. `item_count` is how many metrics it carries. */
-export interface CollectionTemplate {
-  id: string;
-  name: string;
-  description: string | null;
-  item_count: number;
-}
+/** A reusable collection template (Rust `TemplateSummary`): a named metric bundle that device
+ *  profiles attach. `item_count` is how many metrics it carries. */
+export type CollectionTemplate = components['schemas']['TemplateSummary'];
 
-/** One device a discovery scan found (`core::discovery::Candidate`). */
-export interface DiscoveryCandidate {
-  address: string;
-  reachable: boolean;
-  sysdescr: string | null;
-  sysname: string | null;
-  /** `sysObjectID` (dotted) if it answered SNMP — the authoritative device-type signal. */
-  sysobjectid: string | null;
-  /** Suggested profile **id**, resolved server-side via the classification rules (by
-   *  sysObjectID prefix, else sysDescr regex, else Generic SNMP). An id, not a name, so the
-   *  row pre-selects robustly even if the profile was renamed. */
-  suggested_profile_id: string | null;
-  /** Maker/model (rule-pinned or best-effort from sysDescr) — pre-fills the import row. */
-  vendor: string | null;
-  model: string | null;
-  /** The stored credential that answered SNMP, by id — preselected on import. */
-  matched_credential_id: string | null;
-}
+// ── Discovery & classification ──────────────────────────────────────────────────────────────────
 
-/** A device-classification rule (`GET /api/v1/classification-rules`, `yagra_common::ClassificationRule`).
- *  Maps a discovered device's SNMP signature to a profile; evaluated by ascending priority. */
-export interface ClassificationRule {
-  id: string;
-  priority: number;
-  /** Dotted-OID prefix matched against sysObjectID (authoritative), e.g. `1.3.6.1.4.1.9.`. */
-  sysobjectid_prefix: string | null;
-  /** Regex matched against sysDescr (fallback). */
-  sysdescr_regex: string | null;
-  /** Profile this rule suggests. */
-  profile_id: string;
-  vendor: string | null;
-  model: string | null;
-  enabled: boolean;
-}
+/** One device a discovery scan found. `suggested_profile_id` is resolved server-side via the
+ *  classification rules (by sysObjectID prefix, else sysDescr regex, else Generic SNMP) — an id,
+ *  not a name, so the row pre-selects robustly even if the profile was renamed. */
+export type DiscoveryCandidate = components['schemas']['Candidate'];
+
+/** A device-classification rule (`GET /api/v1/classification-rules`). Maps a discovered device's
+ *  SNMP signature to a profile; evaluated by ascending priority. */
+export type ClassificationRule = components['schemas']['ClassificationRule'];
 
 /** Create/update body for a classification rule. */
-export interface ClassificationRuleInput {
-  priority: number;
-  sysobjectid_prefix?: string | null;
-  sysdescr_regex?: string | null;
-  profile_id: string;
-  vendor?: string | null;
-  model?: string | null;
-  enabled: boolean;
-}
+export type ClassificationRuleInput = components['schemas']['ClassificationRuleBody'];
 
 /** A discovery scan's status (`GET /api/v1/discovery/scan/:id`). */
-export interface DiscoveryScan {
-  scan_id: string;
-  done: boolean;
-  /** Targets probed so far / total targets in the sweep. */
-  probed: number;
-  total: number;
-  /** The address the sweep is currently at, while running. */
-  scanning: string | null;
-  candidates: DiscoveryCandidate[];
-}
+export type DiscoveryScan = components['schemas']['ScanStatus'];
 
-/** One curated OID-catalog entry (`GET /api/v1/mib-catalog`, core `MibEntry`). A reference
- *  metric_name → (oid, kind) so the collection editor can pick by name. */
-export interface MibCatalogEntry {
-  id: string;
-  metric_name: string;
-  oid: string;
-  collection: CollectionKind;
-  metric_kind: MetricKind;
-  vendor: string | null;
-  description: string | null;
-}
+/** One curated OID-catalog entry (`GET /api/v1/mib-catalog`). A reference metric_name → (oid, kind)
+ *  so the collection editor can pick by name. */
+export type MibCatalogEntry = components['schemas']['MibEntry'];
 
-/** A maintenance window (`GET /api/v1/maintenance-windows`, core `StoredWindow`). Nodes
- *  covered by an active window observe `maintenance` — no alerts fire, existing ones
- *  resolve. Scoped like thresholds; times are RFC 3339. `active` = covers "now". */
-export interface MaintenanceWindow {
-  id: string;
-  name: string;
-  scope_level: MaintenanceScopeLevel;
-  scope_id: string;
-  starts_at: string;
-  ends_at: string;
-  enabled: boolean;
-  active: boolean;
-}
+// ── Maintenance & mutes ─────────────────────────────────────────────────────────────────────────
 
-/** A mute (`GET /api/v1/mutes`, core `StoredMute`): notifications are silenced until `until_at`
+/** A maintenance window (`GET /api/v1/maintenance-windows`, Rust `StoredWindow`). Nodes covered by
+ *  an active window observe `maintenance` — no alerts fire, existing ones resolve. Scoped like
+ *  thresholds; times are RFC 3339. `active` = covers "now". */
+export type MaintenanceWindow = components['schemas']['StoredWindow'];
+
+/** A mute (`GET /api/v1/mutes`, Rust `StoredMute`): notifications are silenced until `until_at`
  *  — the alert still shows in the UI/history. A `node` mute targets one node (optionally one
  *  `metric_name`); a `group` mute targets every node under a folder group (recursive). Exactly
  *  one of `node_id` / `group_id` is set, per `scope_kind`. */
-export interface Mute {
-  id: string;
-  scope_kind: 'node' | 'group';
-  node_id: string | null;
-  group_id: string | null;
-  metric_name: string | null;
-  until_at: string;
-  reason: string | null;
-}
+export type Mute = components['schemas']['StoredMute'];
 
-/** Which HTTP status codes count as "up" for a URL monitor (mirrors yagra_common::ExpectedStatus,
- *  a tagged object). */
-export type ExpectedStatus =
-  | { kind: 'two_xx' }
-  | { kind: 'exact'; codes: number[] }
-  | { kind: 'range'; lo: number; hi: number };
+// ── URL & DNS monitors ──────────────────────────────────────────────────────────────────────────
+
+/** Which HTTP status codes count as "up" for a URL monitor (a tagged object). */
+export type ExpectedStatus = components['schemas']['ExpectedStatus'];
 
 /** A node's URL-monitor configuration (1:1 with the node). `url` is the only required field on
  *  create; the rest default server-side. */
-export interface UrlCheckConfig {
-  url: string;
-  method: 'GET' | 'HEAD' | 'POST';
-  expected_status: ExpectedStatus;
-  verify_tls: boolean;
-  follow_redirects: boolean;
-  timeout_ms: number;
-  /** Reserved for Basic/Bearer/Header auth; unused in the MVP. */
-  credential: string | null;
-}
+export type UrlCheckConfig = components['schemas']['UrlCheckConfig'];
 
-/** Which record type a DNS monitor resolves to (mirrors yagra_common::DnsRecordType). */
-export type DnsRecordType = 'A' | 'AAAA' | 'CNAME';
+/** Which record type a DNS monitor resolves to. */
+export type DnsRecordType = components['schemas']['DnsRecordType'];
 
-/** One record in a resolution answer set (mirrors yagra_common::DnsRecord, a tagged object). */
-export type DnsRecord =
-  | { kind: 'cname'; target: string }
-  | { kind: 'a'; addr: string }
-  | { kind: 'aaaa'; addr: string };
+/** One record in a resolution answer set (a tagged object). */
+export type DnsRecord = components['schemas']['DnsRecord'];
 
 /** One answer plus its TTL. The TTL is display-only — it is not part of the change key. */
-export interface DnsAnswer {
-  record: DnsRecord;
-  ttl: number;
-}
+export type DnsAnswer = components['schemas']['DnsAnswer'];
 
 /** One hop of a resolution chain: the name queried and the answers for it (canonical order). */
-export interface DnsHop {
-  name: string;
-  answers: DnsAnswer[];
-}
+export type DnsHop = components['schemas']['DnsHop'];
 
-/** Why a resolution did not reach a terminal record set (mirrors yagra_common::DnsFailure). */
-export type DnsFailure =
-  | { kind: 'nx_domain' }
-  | { kind: 'no_data' }
-  | { kind: 'serv_fail' }
-  | { kind: 'refused' }
-  | { kind: 'other_rcode'; rcode: number }
-  | { kind: 'timeout' }
-  | { kind: 'loop_detected'; at: string }
-  | { kind: 'depth_exceeded'; max_depth: number }
-  | { kind: 'malformed' };
+/** Why a resolution did not reach a terminal record set. */
+export type DnsFailure = components['schemas']['DnsFailure'];
 
-/** One observed resolution chain — the artifact of a DNS check. */
-export interface DnsChain {
-  query: string;
-  record_type: DnsRecordType;
-  /** Where we asked (`10.0.0.53:53`, or `system`). Provenance, not content. */
-  resolver: string;
-  /** Hops in walk order; the order is significant. */
-  hops: DnsHop[];
-  /** `null` ⇒ the chain resolved. */
-  failure: DnsFailure | null;
-  resolve_ms: number;
-}
+/** One observed resolution chain — the artifact of a DNS check. `resolver` is where we asked
+ *  (`10.0.0.53:53`, or `system`): provenance, not content. Hop order is significant, and a `null`
+ *  `failure` means the chain resolved. */
+export type DnsChain = components['schemas']['DnsChain'];
 
 /** A node's DNS-monitor configuration (1:1 with the node). `name` is the only required field on
- *  create; the rest default server-side. */
-export interface DnsCheckConfig {
-  name: string;
-  record_type: DnsRecordType;
-  /** `null` ⇒ the poller's system resolver. */
-  resolver: string | null;
-  resolver_port: number;
-  max_depth: number;
-  timeout_ms: number;
-}
+ *  create; the rest default server-side, and `resolver: null` ⇒ the poller's system resolver. */
+export type DnsCheckConfig = components['schemas']['DnsCheckConfig'];
 
 /** The current chain plus how long it has held (`GET /api/v1/nodes/:id/dns-chain`). */
-export interface DnsChainCurrent {
-  chain: DnsChain;
-  resolved: boolean;
-  failure_kind: string | null;
-  first_seen: string;
-  last_seen: string;
-}
+export type DnsChainCurrent = components['schemas']['DnsChainCurrent'];
 
-/** One append-on-change history row (`GET /api/v1/nodes/:id/dns-chain/history`). */
-export interface DnsChainChange {
-  id: number;
-  at: string;
-  chain: DnsChain;
-  resolved: boolean;
-  failure_kind: string | null;
-  /** `null` on the first observation for this node. */
-  prev_chain_key: string | null;
-}
+/** One append-on-change history row (`GET /api/v1/nodes/:id/dns-chain/history`).
+ *  `prev_chain_key` is `null` on the first observation for this node. */
+export type DnsChainChange = components['schemas']['DnsChainChange'];
 
 /** A page of DNS chain history with its keyset cursor (`null` ⇒ no more rows). */
-export interface DnsChainHistoryPage {
-  changes: DnsChainChange[];
-  next: { at: string; id: number } | null;
-}
+export type DnsChainHistoryPage = components['schemas']['DnsChainHistory'];
 
-/** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`). */
-export interface NodeDetail {
-  id: string;
-  name: string;
-  address: string;
-  profile_id: string | null;
-  credential_id: string | null;
-  parent_id: string | null;
-  /** Descriptive maker/model, editable from the node detail. */
-  vendor: string | null;
-  model: string | null;
-  /** The group this node belongs to (inventory tree); `null` ⇒ ungrouped. */
-  group_id: string | null;
-  /** The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.
-   *  Deliberately the raw stored value so the edit form can tell explicit from inherited — for the
-   *  *effective* pool and the current poller use `getNodeAssignment`. */
-  pool: string | null;
-  /** **What this node is** — the kind the backend actually polls it as (`NodeKind::resolve`).
-   *  Branch on this, not on which of the three configs below is non-null: a node can carry more
-   *  than one row (the API refuses new ones, but older rows exist) and only one of them wins. */
-  kind: NodeKind;
-  /** URL-monitor config when this node carries a URL-check row; `null` otherwise. */
-  url_check: UrlCheckConfig | null;
-  /** DNS-monitor config when this node carries a DNS-check row; `null` otherwise. */
-  dns_check: DnsCheckConfig | null;
-  /** Cisco Meraki binding when this node carries a Meraki row; `null` otherwise. */
-  meraki_device: MerakiDeviceConfig | null;
-}
+// ── Node detail ─────────────────────────────────────────────────────────────────────────────────
 
-/** A node's monitoring kind, in the backend's precedence order (`yagra_common::NodeKind`).
- *  `device` is the fallthrough: ICMP liveness plus SNMP when configured. */
+/** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`).
+ *
+ *  `pool` is deliberately the raw stored value so the edit form can tell explicit from inherited —
+ *  for the *effective* pool and the current poller use `getNodeAssignment`. Branch on `kind`, not
+ *  on which of the three config rows below is non-null: a node can carry more than one row (the
+ *  API refuses new ones, but older rows exist) and only one of them wins. */
+export type NodeDetail = components['schemas']['NodeDetail'];
+
+/** A node's monitoring kind, in the backend's precedence order. `device` is the fallthrough:
+ *  ICMP liveness plus SNMP when configured. */
 export const NODE_KINDS = ['meraki', 'url', 'dns', 'device'] as const;
+
+/** Pinned to `schemas.NodeKind`. */
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** A node's Cisco Meraki binding (1:1; part of `NodeDetail`). */
-export interface MerakiDeviceConfig {
-  org_uuid: string;
-  org_id: string;
-  serial: string;
-  network_id: string;
-  product_type: string;
-  model: string | null;
-}
+export type MerakiDeviceConfig = components['schemas']['MerakiDeviceConfig'];
 
 /** A configured Meraki organization (`GET /api/v1/meraki/orgs`). */
-export interface MerakiOrg {
-  id: string;
-  org_id: string;
-  name: string;
-  base_url: string;
-  enabled: boolean;
-  availability_secs: number;
-  uplink_secs: number;
-  traffic_secs: number;
-  inventory_secs: number;
-  enabled_tiers: string[];
-  target_rps: number;
-  group_id: string | null;
-}
+export type MerakiOrg = components['schemas']['MerakiOrgView'];
 
 /** An organization the API key can access (from `POST /api/v1/meraki/orgs/discover`). */
-export interface MerakiOrgOption {
-  id: string;
-  name: string;
-}
+export type MerakiOrgOption = components['schemas']['MerakiOrgOption'];
 
 /** A network within an org, with its monitored (watch/skip) flag. */
-export interface MerakiNetwork {
-  network_id: string;
-  name: string;
-  monitored: boolean;
-}
+export type MerakiNetwork = components['schemas']['MerakiNetworkView'];
 
 /** An import candidate device (from `POST /api/v1/meraki/orgs/:id/enumerate`). */
-export interface MerakiCandidate {
-  serial: string;
-  name: string;
-  model: string | null;
-  product_type: string;
-  network_id: string;
-  network_name: string;
-  lan_ip: string | null;
-}
+export type MerakiCandidate = components['schemas']['MerakiCandidate'];
 
 /** The enumerate response: the org's networks + import candidates. */
-export interface MerakiEnumeration {
-  networks: MerakiNetwork[];
-  devices: MerakiCandidate[];
-}
+export type MerakiEnumeration = components['schemas']['MerakiEnumeration'];
 
 /** One interface row for the node-detail Interfaces tab (`GET /api/v1/nodes/:id/interfaces`).
  *  Rates/utilization are derived at query time; `null` when there's no data or no known speed. */
-export interface InterfaceRow {
-  ifindex: number;
-  if_name: string | null;
-  if_alias: string | null;
-  if_speed_bps: number | null;
-  oper_status: number | null;
-  in_bps: number | null;
-  out_bps: number | null;
-  in_util_pct: number | null;
-  out_util_pct: number | null;
-  last_seen_unix: number | null;
-  stale: boolean;
-}
+export type InterfaceRow = components['schemas']['InterfaceRow'];
 
 /** Per-interface time-series for the detail pane (`GET /nodes/:id/interfaces/:ifindex/series`).
  *  All arrays share the `timestamps` x-axis; `null` is a gap. `*_bps` are bits/sec (rate of
  *  the octet counters × 8); `*_errors` are errors/sec. */
-export interface InterfaceSeries {
-  timestamps: number[];
-  in_bps: (number | null)[];
-  out_bps: (number | null)[];
-  in_errors: (number | null)[];
-  out_errors: (number | null)[];
-}
+export type InterfaceSeries = components['schemas']['InterfaceSeries'];
 
-/** One audit-log row (`GET /api/v1/audit`, core `AuditRow`). Admin-only. `action` is
- *  either `METHOD /api/v1/...` (mutating request) or `auth.login`; `at` is RFC 3339. */
-export interface AuditRow {
-  id: string;
-  at: string;
-  username: string;
-  action: string;
-  status: number;
-}
+// ── Fleet, audit, self-observability ────────────────────────────────────────────────────────────
+
+/** One audit-log row (`GET /api/v1/audit`). Admin-only. `action` is either `METHOD /api/v1/...`
+ *  (mutating request) or `auth.login`; `at` is RFC 3339. */
+export type AuditRow = components['schemas']['AuditRow'];
 
 /** Fleet state-count timeline (`GET /api/v1/fleet/state-history`): per-state series aligned to a
  *  shared `timestamps` axis (Unix seconds). `series` is keyed by node state. */
-export interface StateHistory {
-  timestamps: number[];
-  series: Record<string, number[]>;
-}
+export type StateHistory = components['schemas']['FleetStateHistory'];
 
 /** Fleet aggregate throughput over time (`GET /api/v1/metrics/throughput-range`); bits/sec, `null` = gap. */
-export interface ThroughputRange {
-  timestamps: number[];
-  in_bps: (number | null)[];
-  out_bps: (number | null)[];
-}
+export type ThroughputRange = components['schemas']['ThroughputRange'];
 
 /** Busiest-links × time throughput heatmap (`GET /api/v1/metrics/interface-heatmap`). `values`
  *  is rows (`links`) × cols (`timestamps`), each cell bits/sec. */
-export interface InterfaceHeatmap {
-  links: string[];
-  timestamps: number[];
-  values: number[][];
-}
+export type InterfaceHeatmap = components['schemas']['InterfaceHeatmap'];
 
-/** Poll-loop self-monitoring (`GET /api/v1/poller-health`). */
-export interface PollerHealth {
-  last_sweep_unix_ms: number | null;
-  jobs_last_round: number;
-  results_total: number;
-}
+/** Poll-loop self-monitoring (`GET /api/v1/poller-health`, Rust `SchedulerStatsSnapshot`). */
+export type PollerHealth = components['schemas']['SchedulerStatsSnapshot'];
 
 /** One registered poller in the distributed pool (`GET /api/v1/pollers`, ADR-009/020). A merge of
  *  the live registry (current status/telemetry) and the durable inventory, so an offline poller
- *  still lists. `last_seen`/`first_seen`/`version` are null for a live poller not yet persisted. */
-export interface PollerInfo {
-  /** Operator-chosen, subject-safe id (stable across restarts). */
-  id: string;
-  /** Pool it serves (`default` when unassigned). */
-  pool: string;
-  status: 'online' | 'offline';
-  /** Last durably-recorded contact (RFC 3339), or null when not yet persisted. */
-  last_seen: string | null;
-  /** First durably-recorded contact (RFC 3339), or null when not yet persisted. */
-  first_seen: string | null;
-  /** Build version from its latest heartbeat (or the durable row when offline), or null. */
-  version: string | null;
-  /** Working-set node count it last reported (0 when offline / never reported). */
-  working_set_nodes: number;
-  /** Working-set spec count it last reported. */
-  working_set_specs: number;
-  /** Poll results core has consumed from it since core started. */
-  results_total: number;
-  /** Current host CPU % (0–100) from its latest heartbeat; null when offline / on an N-1 build. */
-  cpu_pct: number | null;
-  /** Current host memory-used % (0–100); null when unavailable. */
-  mem_used_pct: number | null;
-  /** Highest watched-filesystem used % (0–100); null when unavailable. */
-  disk_used_pct: number | null;
-}
+ *  still lists. `last_seen`/`first_seen`/`version` are null for a live poller not yet persisted,
+ *  and the host gauges are null when offline / on an N-1 build. */
+export type PollerInfo = components['schemas']['PollerInfo'];
 
 /** Per-pool summary in the `GET /api/v1/pollers` response: node count vs. live pollers, dispatch
- *  mode, and a warning when the pool has nodes but no live poller (they would go unmonitored). */
-export interface PoolSummary {
-  pool: string;
-  /** Non-Meraki nodes assigned to this pool. */
-  nodes: number;
-  /** Live (online) pollers serving this pool. */
-  live_pollers: number;
-  /** `working_set` when a live poller serves it, else `legacy` (per-job fallback). */
-  mode: 'working_set' | 'legacy';
-  /** `nodes_without_live_poller` when the pool has nodes but no live poller, else null. */
-  warning: 'nodes_without_live_poller' | null;
-}
+ *  mode (`working_set` when a live poller serves it, else the `legacy` per-job fallback), and
+ *  `warning: "nodes_without_live_poller"` when the pool has nodes but no live poller — they would
+ *  go unmonitored. */
+export type PoolSummary = components['schemas']['PoolSummary'];
 
 /** The `GET /api/v1/pollers` body: the registered poller fleet + the per-pool summary. */
-export interface PollersResponse {
-  pollers: PollerInfo[];
-  pools: PoolSummary[];
-}
+export type PollersResponse = components['schemas']['PollersResponse'];
 
-/** Where a node's effective pool came from (yagra-core `PoolSource`). */
-export type PoolSource = 'node' | 'group' | 'default';
+/** Where a node's effective pool came from. */
+export type PoolSource = components['schemas']['PoolSource'];
 
-/** One pool offered by the assignment picker (`GET /api/v1/pools`). */
-export interface PoolOption {
-  name: string;
-  /** Whether a live poller currently serves it. A pool with none takes the legacy per-job path
-   *  onto a subject nothing subscribes to, so assigning to it leaves the node unmonitored — the
-   *  picker warns rather than presenting it as an equivalent choice. */
-  live: boolean;
-}
+/** One pool offered by the assignment picker (`GET /api/v1/pools`). `live` is whether a live poller
+ *  currently serves it — a pool with none takes the legacy per-job path onto a subject nothing
+ *  subscribes to, so assigning to it leaves the node unmonitored, and the picker warns rather than
+ *  presenting it as an equivalent choice. */
+export type PoolOption = components['schemas']['PoolOption'];
 
 /** The `GET /api/v1/pools` body. */
-export interface PoolsResponse {
-  pools: PoolOption[];
-}
+export type PoolsResponse = components['schemas']['PoolOptions'];
 
 /** Which poller currently polls a node.
  *  - `assigned` — it is in that poller's published working set (`poller_id` set).
@@ -1129,183 +531,273 @@ export interface PoolsResponse {
  *    subscribed: no owner, and probably unmonitored.
  *  - `meraki` — core's org collector polls it, not a pool poller.
  *  - `unknown` — this core is an HA standby and runs no coordinator. */
-export interface PolledBy {
-  state: 'assigned' | 'legacy_fanout' | 'pending' | 'meraki' | 'unknown';
-  /** The owning poller; set only in the `assigned` state. */
-  poller_id: string | null;
-}
+export type PolledBy = components['schemas']['PolledBy'];
 
-/** `GET /api/v1/nodes/:id/assignment` — effective pool, its provenance, and the current poller. */
-export interface NodeAssignment {
-  /** Effective pool: the node's own, else the nearest ancestor folder's, else `default`. */
-  pool: string;
-  pool_source: PoolSource;
-  /** The folder that supplied the pool, when `pool_source === 'group'`. */
-  pool_source_group_id: string | null;
-  polled_by: PolledBy;
-}
+/** `GET /api/v1/nodes/:id/assignment` — effective pool (the node's own, else the nearest ancestor
+ *  folder's, else `default`), its provenance, and the current poller. */
+export type NodeAssignment = components['schemas']['NodeAssignment'];
 
 /** One node in the poller drill-down. */
-export interface PollerNodeRef {
-  id: string;
-  name: string;
-}
+export type PollerNodeRef = components['schemas']['PollerNodeRef'];
 
 /** `GET /api/v1/pollers/:id/nodes` — the nodes a poller currently holds. Read from the coordinator's
- *  published working set, so it is the same data the node detail's "Polled by" reports. */
-export interface PollerNodesResponse {
-  poller_id: string;
-  /** The pool it serves; `null` unless it is live. */
-  pool: string | null;
-  /** `assigned` (live), `offline` (unknown / not beating), `unknown` (this core is a standby). */
-  state: 'assigned' | 'offline' | 'unknown';
-  /** Nodes in its working set, before the page cap. */
-  total: number;
-  /** Whether `nodes` is a capped page of `total`. */
-  truncated: boolean;
-  nodes: PollerNodeRef[];
-}
+ *  published working set, so it is the same data the node detail's "Polled by" reports. `state` is
+ *  `assigned` (live), `offline` (unknown / not beating) or `unknown` (this core is a standby). */
+export type PollerNodesResponse = components['schemas']['PollerNodesResponse'];
 
 /** One core↔poller visibility outage (`GET /api/v1/monitoring-gaps`, Phase 3 store-and-forward): a
  *  span during which core could not hear from the poller. If the poller stayed alive but partitioned,
  *  its local buffer backfills the metrics for the window on reconnect; alerts are not backfilled. */
-export interface MonitoringGap {
-  id: string;
-  /** The poller whose visibility lapsed. */
-  poller_id: string;
-  /** Pool it serves. */
-  pool: string;
-  /** Start of the gap window (RFC 3339 — core's last contact before the outage). */
-  started_at: string;
-  /** End of the gap window (RFC 3339 — core heard from it again). */
-  ended_at: string;
-  /** Gap length in seconds. */
-  duration_secs: number;
-  /** When core recorded the gap (RFC 3339). */
-  recorded_at: string;
-}
+export type MonitoringGap = components['schemas']['MonitoringGapRow'];
 
 /** Reachability of one Yagra backing dependency (no secrets — just a flag + label). */
-export interface DependencyHealth {
-  reachable: boolean;
-  detail: string;
-}
+export type DependencyHealth = components['schemas']['DependencyHealth'];
 
 /** Yagra self-health: backing-service reachability (`GET /api/v1/system-health`). `bus` is an
- *  indirect signal inferred from poll-loop activity, not a direct NATS ping. */
-export interface SystemHealth {
-  overall: 'ok' | 'degraded';
-  postgres: DependencyHealth;
-  tsdb: DependencyHealth;
-  /** VictoriaLogs event log store (ADR-024). Reported reachable when not configured (events then
-   *  live in PostgreSQL), so an unconfigured log store never degrades `overall`. */
-  logs: DependencyHealth;
-  bus: DependencyHealth;
-}
+ *  indirect signal inferred from poll-loop activity, not a direct NATS ping. `logs` (VictoriaLogs,
+ *  ADR-024) and `flow` (ClickHouse, ADR-031) report reachable when not configured — events then
+ *  live in PostgreSQL and flow is simply off — so an unconfigured store never degrades `overall`. */
+export type SystemHealth = components['schemas']['SystemHealth'];
 
 /** Running product version (`GET /api/v1/version`). `core` is the live `yagra-core` crate version
  *  (= the workspace version). Public — no secrets. The WebUI pairs this with its own build version. */
-export interface VersionInfo {
-  core: string;
-}
+export type VersionInfo = components['schemas']['VersionInfo'];
 
 // ── Host self-observability (Yagra monitoring its own core + pollers) ──────────
 
 /** Usage of one watched filesystem (or a store-size proxy). `size_bytes === 0` ⇒ capacity unknown
  *  (a bare growing size, e.g. the PostgreSQL `database` proxy) — show used bytes, not a %. */
-export interface DiskUsage {
-  mount: string;
-  used_bytes: number;
-  size_bytes: number;
-}
+export type DiskUsage = components['schemas']['DiskUsage'];
 
 /** Current host resources for one self-monitored instance (`GET /api/v1/system/hosts`): core
- *  (`role: 'core'`) or a poller (`role: 'poller'`). Metrics are null until the first sample. */
-export interface HostInfo {
-  /** `core` or the poller id. */
-  instance: string;
-  role: 'core' | 'poller';
-  /** Pool a poller serves; null for core. */
-  pool: string | null;
-  online: boolean;
-  cpu_pct: number | null;
-  load1: number | null;
-  mem_used_bytes: number | null;
-  mem_total_bytes: number | null;
-  mem_used_pct: number | null;
-  disk_used_pct: number | null;
-  disks: DiskUsage[];
-}
+ *  (`role: 'core'`, `instance: 'core'`) or a poller (`role: 'poller'`, `instance` = poller id;
+ *  `pool` is null for core). Metrics are null until the first sample. */
+export type HostInfo = components['schemas']['HostInfo'];
 
 /** The `GET /api/v1/system/hosts` body: core plus every poller reporting host telemetry. */
-export interface SystemHostsResponse {
-  hosts: HostInfo[];
-}
+export type SystemHostsResponse = components['schemas']['SystemHostsResponse'];
 
 /** A per-mount filesystem trend within a `HostMetricRange`. Derive % from `used_bytes`/`size_bytes`
  *  aligned on timestamps, or show a bare-bytes trend when `size_bytes` is empty/zero. */
-export interface HostDiskRange {
-  mount: string;
-  used_bytes: MetricPoint[];
-  size_bytes: MetricPoint[];
-}
+export type HostDiskRange = components['schemas']['HostDiskRange'];
 
 /** Host CPU/load/mem/disk trends for one instance over a window
  *  (`GET /api/v1/system/hosts/:instance/metrics/range`). One round trip per instance/range. */
-export interface HostMetricRange {
-  instance: string;
-  cpu_pct: MetricPoint[];
-  load1: MetricPoint[];
-  load5: MetricPoint[];
-  load15: MetricPoint[];
-  mem_used_bytes: MetricPoint[];
-  mem_total_bytes: MetricPoint[];
-  disks: HostDiskRange[];
-}
+export type HostMetricRange = components['schemas']['HostMetricRange'];
 
 /** Fleet data-coverage summary (`GET /api/v1/fleet/coverage`). */
-export interface FleetCoverage {
-  total: number;
-  fresh: number;
-  coverage_pct: number;
-  stale: { node_id: string; name: string }[];
-}
+export type FleetCoverage = components['schemas']['FleetCoverage'];
 
 /** Fleet-wide status summary (`GET /api/v1/fleet/summary`): total node count + a per-state tally,
  *  computed server-side so the dashboard's status/health/down widgets are correct over the whole
  *  fleet (not a paged slice). Every state key is present and the counts sum to `total`. */
-export interface FleetSummary {
-  total: number;
-  states: Record<NodeState, number>;
-}
+export type FleetSummary = components['schemas']['FleetSummary'];
 
 /** Per-group health rollup (`GET /api/v1/fleet/group-summary`): for each group id, the state tally
  *  of its **direct** member nodes, computed server-side over the whole fleet (not a paged slice) so
  *  the site-matrix / region-rollup / geo-map widgets stay correct past the first 100 nodes (A-1).
  *  Every state key is present; ungrouped nodes are omitted (no widget rolls them up), and the client
  *  sums descendants for the region rollup. */
-export interface FleetGroupSummary {
-  groups: Record<string, Record<NodeState, number>>;
-}
+export type FleetGroupSummary = components['schemas']['FleetGroupSummary'];
 
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */
-export interface TopologyNode {
-  id: string;
-  name: string;
-  parent_id: string | null;
-  state: NodeState;
-  /** Upstream node currently attributed as this node's root cause (dependency suppression). */
-  root_cause: string | null;
-}
+export type TopologyNode = components['schemas']['TopologyNode'];
 
 /** The fixed error envelope (ADR-019). */
-export interface ApiErrorBody {
-  error: { code: string; message: string; details?: unknown };
-}
+export type ApiErrorBody = components['schemas']['ApiErrorBody'];
 
 // ── Troubleshoot analysis jobs (ADR-022) ─────────────────────────────────────
 
-/** Which diagnostic a job runs (mirrors the Rust `AnalysisTool`). */
+/** An analysis job row / SSE event (`/api/v1/analysis/jobs`). Timestamps are epoch-millis.
+ *  `params` is a `serde_json::Value` server-side — see the UI-only section for why it is narrowed. */
+export type AnalysisJob = components['schemas']['AnalysisJob'];
+
+/** One finding from an analysis (`GET /api/v1/analysis/jobs/:id/findings`). `detail` is a
+ *  tool-specific payload the backend serializes opaquely — cast it per tool (`AnomalyDetail`, …). */
+export type AnalysisFinding = components['schemas']['AnalysisFinding'];
+
+/** Request body to launch an analysis (`POST /api/v1/analysis/jobs`). */
+export type AnalysisJobInput = components['schemas']['CreateAnalysisJob'];
+
+// ── Reports (Dashboard → Reports) ──
+// Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
+// preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
+
+/** One choice for a `select` section setting. */
+export type ReportSettingOption = components['schemas']['SettingOption'];
+
+/** A configurable setting on a report section (drives the builder controls). `kind` is
+ *  `number` | `select`. */
+export type ReportSectionSetting = components['schemas']['SectionSetting'];
+
+/** A report-section type from the catalog (`GET /api/v1/reports/sections`). */
+export type ReportSectionDef = components['schemas']['SectionDef'];
+
+/** A saved report definition (template). `spec` is opaque to the backend — see the UI-only
+ *  section for `ReportSpec`. */
+export type ReportDefinition = components['schemas']['ReportDefinition'];
+
+/** Create/update body for a report definition. */
+export type ReportDefinitionInput = components['schemas']['ReportDefinitionBody'];
+
+/** A report schedule (joined with its definition's name). */
+export type ReportSchedule = components['schemas']['ReportSchedule'];
+
+/** Create/update body for a report schedule. */
+export type ReportScheduleInput = components['schemas']['ReportScheduleBody'];
+
+/** A saved report run (the saved-reports list; no heavy payloads). */
+export type ReportRun = components['schemas']['ReportRun'];
+
+/** A run plus its rendered result (the viewer). */
+export type ReportRunDetail = components['schemas']['ReportRunDetail'];
+
+// ── Passive events (syslog / SNMP traps / webhooks) ──
+
+/** A webhook ingest source (`GET /api/v1/event-sources`) — the bearer token is shown
+ *  once on create/rotate and stored only as a hash. */
+export type EventSource = components['schemas']['EventSourceView'];
+
+/** An event match rule (`GET /api/v1/event-rules`). severity 'info' records the match but
+ *  raises no alert. `ttl_secs` auto-closes; `clear_pattern` resolves early; `min_count`
+ *  matches inside `window_secs` gate the fire. */
+export type EventRule = components['schemas']['StoredEventRule'];
+
+/** Create/update body for an event rule (`POST/PUT /api/v1/event-rules`). */
+export type EventRuleInput = components['schemas']['EventRuleBody'];
+
+/** Result of the interactive rule tester (`POST /api/v1/event-rules/test`). */
+export type EventRuleTestResult = components['schemas']['RuleTestResult'];
+
+/** One received event (`GET /api/v1/events`).
+ *
+ *  `at_unix_ms` is **event time** — when the device says it happened. The log is filtered, ordered
+ *  and *paged* by this; `eventCursor()` turns it into the `before` parameter. `recorded_at` is
+ *  ingest time and informational only: it is not the paging cursor and not what `start`/`end`
+ *  filter, because the VictoriaLogs path has no true ingest time to report, so only event time can
+ *  agree across both backends. `trap_name` is the well-known MIB name for `trap_oid`, resolved
+ *  server-side; null for syslog/webhook events or an OID outside the curated set. */
+export type EventRow = components['schemas']['EventRow'];
+
+/** One categorical `/events/stats` bucket. `key` is stable for the list key + fallback display;
+ *  `label` is a server-resolved display hint (e.g. a trap's MIB name); `node_id` is set for source
+ *  grouping when the source maps to an inventory node (resolve its name via `useEntityNames`, per
+ *  the no-raw-UUID rule). */
+export type EventStatBucket = components['schemas']['EventStatBucket'];
+
+/** One time bucket for the `/events/stats?group_by=time` volume series. `by_kind` is present only
+ *  when `split=kind` was requested. */
+export type EventTimeBucket = components['schemas']['EventTimeBucket'];
+
+// ── AI-assisted RCA (ADR-029: Settings ▸ AI, and "Explain this incident") ──────────────────────
+
+/** One selectable LLM vendor (`GET /api/v1/llm/config` → `providers`).
+ *
+ *  Served by the backend rather than hardcoded here so the egress warning the form shows reads the
+ *  same value the adapters obey — a copy in the WebUI would drift the day a provider changed.
+ *  `leaves_operator_boundary` is true when picking it sends hostnames, addresses, topology and
+ *  syslog outside the operator's own cloud; `needs_project` when it wants a GCP project + region
+ *  rather than just an API key; `credential_optional` when the credential may be omitted (Vertex on
+ *  GKE/GCE uses Workload Identity instead). The `suggested_*` values are hints, not an allowlist —
+ *  model ids turn over faster than releases. */
+export type LlmProviderChoice = components['schemas']['ProviderChoice'];
+
+/** The stored provider configuration. Never carries the credential — only `has_api_key`. */
+export type LlmConfigView = components['schemas']['LlmConfigView'];
+
+/** `GET /api/v1/llm/config`. `config` is null until something has been configured — the normal
+ *  state of a fresh install, not an error. */
+export type LlmConfigResponse = components['schemas']['LlmConfigResponse'];
+
+/** `PUT /api/v1/llm/config`. `api_key` is write-only and three-valued: omit to keep the stored
+ *  credential, `''` to clear it (which is how Vertex moves onto Workload Identity), a value to
+ *  replace it. */
+export type LlmConfigInput = components['schemas']['LlmConfigInput'];
+
+/** `POST /api/v1/llm/test`. A provider failure comes back as `{ ok: false, error }` on HTTP 200 —
+ *  the configuration is the caller's, not a server fault. */
+export type LlmTestResult = components['schemas']['LlmTestResult'];
+
+/** A generated (or cached) report (`POST /api/v1/rca`, `GET /api/v1/rca/:id`). `node_id` is the
+ *  node the report is filed under — the root cause, after any roll-up hop — and `cached` says
+ *  whether this delivery came from the cache rather than a fresh (billed) call. */
+export type RcaReport = components['schemas']['RcaReport'];
+
+/** `POST /api/v1/rca`. */
+export type RcaRequestInput = components['schemas']['RcaBody'];
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// NO BACKEND COUNTERPART — hand-written on purpose
+//
+// Everything below is hand-written because there is nothing in `web/src/api/schema.d.ts` to
+// re-export. Two distinct reasons, kept apart because they call for different follow-ups:
+//
+//   (a) the WebUI invented the shape (query-parameter unions, filter bags, documents the backend
+//       stores opaquely) — nothing to generate, and nothing to fix;
+//   (b) the backend *has* the concept but types it as `String` or `serde_json::Value`, so the
+//       generated document says `string` / `unknown`. Those are unguarded: they can drift exactly
+//       the way the whole file used to. Each one names the Rust definition to check.
+//
+// Do not add to either group to dodge a regeneration. If the API returns it, generate it.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ── (a) Shapes the WebUI invents ────────────────────────────────────────────────────────────────
+
+/** Optional server-side aggregation for a node metric read. `max` collapses a per-entity
+ *  table gauge (e.g. CPU% per entPhysicalIndex) into one node-level value. A query-parameter
+ *  value, not a body shape — the document types the `agg` parameter as a bare `string`. */
+export type MetricAgg = 'max';
+
+/** Aggregation for the fleet Top-N endpoint: `now` = most recent value; `max_1h` = hourly peak.
+ *  A query-parameter value (`?agg=`), typed `string` in the document. */
+export type MetricTopAgg = 'now' | 'max_1h';
+
+/** Interface Top-N dimension (`GET /api/v1/metrics/interface-top?metric=`). A query-parameter
+ *  value, typed `string` in the document. */
+export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' | 'discards';
+
+/** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer /
+ *  AS). A bag the client spreads into a query string — the endpoints take these as individual
+ *  query parameters, so there is no request body schema for it. */
+export interface FlowFilters {
+  proto?: number;
+  port?: number;
+  peer?: string;
+  asn?: number;
+}
+
+/** One placed section instance in a report definition's spec. Part of `ReportSpec` — see below. */
+export interface ReportSectionInstance {
+  id: string;
+  kind: string;
+  settings: Record<string, unknown>;
+}
+
+/** The report document (definition `spec`). The backend stores it as an opaque `serde_json::Value`
+ *  and never interprets it — the frontend owns and migrates this shape (same contract as the
+ *  dashboard layout document), so it is genuinely a WebUI type, not an un-generated Rust one.
+ *  `reports/types.ts` holds the sanitizer that tolerates older documents. */
+export interface ReportSpec {
+  version: number;
+  params: { range_secs: number };
+  sections: ReportSectionInstance[];
+}
+
+/** Anomaly finding detail — the report chart's real series. The WebUI's reading of one shape of
+ *  `AnalysisFinding.detail`, which the backend serializes opaquely per tool. */
+export interface AnomalyDetail {
+  points: { t: number; v: number; recent: boolean }[];
+  mean: number;
+  sigma: number;
+  recent_from: number;
+}
+
+// ── (b) Backend concepts the generated document does not describe ───────────────────────────────
+// Each of these is a real backend value that Rust types as `String` (or hides inside a
+// `serde_json::Value`). Nothing checks them; changing the Rust side changes nothing here.
+
+/** Which diagnostic a job runs. Rust: `yagra_core::analysis::AnalysisTool`, serialized into
+ *  `AnalysisJob.tool` as a `String`, so the document offers no union to pin this to. */
 export type AnalysisToolKey =
   | 'anomaly'
   | 'correlation'
@@ -1326,369 +818,48 @@ export type AnalysisToolKey =
   | 'saturation'
   | 'incident_correlate';
 
-/** An analysis job row / SSE event (`/api/v1/analysis/jobs`). Timestamps are epoch-millis. */
-export interface AnalysisJob {
-  id: string;
-  tool: AnalysisToolKey;
-  scope_kind: 'all' | 'group' | 'node';
-  scope_id: string | null;
-  scope_label: string;
-  params: Record<string, unknown>;
-  state: 'running' | 'done' | 'failed' | 'cancelled';
-  pct: number;
-  phase: string | null;
-  finding_count: number;
-  summary: string | null;
-  error: string | null;
-  created_ms: number;
-  started_ms: number | null;
-  finished_ms: number | null;
-}
-
-/** One finding from an analysis (`GET /api/v1/analysis/jobs/:id/findings`). */
-export interface AnalysisFinding {
-  id: string;
-  score: number;
-  /** crit | warn | info (derived from score). */
-  severity: 'crit' | 'warn' | 'info';
-  node_id: string | null;
-  node_name: string;
-  metric: string;
-  /** Anomaly shape / correlation / capacity / flap kind. */
-  kind: string;
-  when_label: string;
-  duration: string;
-  /** Tool-specific payload (anomaly chart series: points/mean/sigma/recent_from). */
-  detail: AnomalyDetail | Record<string, unknown>;
-}
-
-/** Anomaly finding detail — the report chart's real series. */
-export interface AnomalyDetail {
-  points: { t: number; v: number; recent: boolean }[];
-  mean: number;
-  sigma: number;
-  recent_from: number;
-}
-
-/** Request body to launch an analysis (`POST /api/v1/analysis/jobs`). */
-export interface AnalysisJobInput {
-  tool: AnalysisToolKey;
-  scope_kind: 'all' | 'group' | 'node';
-  scope_id?: string | null;
-  scope_label: string;
-  window_secs: number;
-  baseline_secs?: number;
-  sensitivity?: number;
-  depth?: string;
-  family?: string;
-  notify?: boolean;
-}
-
-// ── Reports (Dashboard → Reports) ──
-// Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
-// preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
-
-/** One choice for a `select` section setting. */
-export interface ReportSettingOption {
-  value: string;
-  label: string;
-}
-
-/** A configurable setting on a report section (drives the builder controls). */
-export interface ReportSectionSetting {
-  key: string;
-  label: string;
-  kind: 'number' | 'select';
-  default: unknown;
-  options?: ReportSettingOption[];
-}
-
-/** A report-section type from the catalog (`GET /api/v1/reports/sections`). */
-export interface ReportSectionDef {
-  kind: string;
-  title: string;
-  blurb: string;
-  group: string;
-  settings: ReportSectionSetting[];
-}
-
-/** One placed section instance in a report definition's spec. */
-export interface ReportSectionInstance {
-  id: string;
-  kind: string;
-  settings: Record<string, unknown>;
-}
-
-/** The report document (definition `spec`) — the frontend owns and migrates this shape. */
-export interface ReportSpec {
-  version: number;
-  params: { range_secs: number };
-  sections: ReportSectionInstance[];
-}
-
-/** A saved report definition (template). */
-export interface ReportDefinition {
-  id: string;
-  name: string;
-  description: string | null;
-  spec: ReportSpec;
-  updated_by: string | null;
-  created_ms: number;
-  updated_ms: number;
-}
-
-/** Create/update body for a report definition. */
-export interface ReportDefinitionInput {
-  name: string;
-  description?: string;
-  spec: ReportSpec;
-}
-
-/** Schedule cadence preset. */
+/** Schedule cadence preset. Rust: `ReportSchedule.frequency`, a `String`. */
 export type ReportFrequency = 'daily' | 'weekly' | 'monthly';
 
-/** A report schedule (joined with its definition's name). */
-export interface ReportSchedule {
-  id: string;
-  definition_id: string;
-  definition_name: string;
-  frequency: ReportFrequency;
-  day_of_week: number | null;
-  day_of_month: number | null;
-  at_hour: number;
-  at_minute: number;
-  enabled: boolean;
-  next_run_ms: number;
-  last_run_ms: number | null;
-  last_status: string | null;
-}
-
-/** Create/update body for a report schedule. */
-export interface ReportScheduleInput {
-  definition_id: string;
-  frequency: ReportFrequency;
-  day_of_week?: number | null;
-  day_of_month?: number | null;
-  at_hour: number;
-  at_minute: number;
-  enabled?: boolean;
-}
-
-/** Lifecycle of a generated report run. */
+/** Lifecycle of a generated report run. Rust: `ReportRun.state`, a `String`. */
 export type ReportRunState = 'queued' | 'running' | 'succeeded' | 'failed';
 
-/** A saved report run (the saved-reports list; no heavy payloads). */
-export interface ReportRun {
-  id: string;
-  definition_id: string | null;
-  name: string;
-  trigger: 'manual' | 'scheduled';
-  state: ReportRunState;
-  pct: number;
-  error: string | null;
-  range_from_ms: number | null;
-  range_to_ms: number | null;
-  section_count: number;
-  created_by: string | null;
-  created_ms: number;
-  started_ms: number | null;
-  finished_ms: number | null;
-}
-
-/** A run plus its rendered result (the viewer). */
-export interface ReportRunDetail extends ReportRun {
-  result_json: unknown | null;
-  result_html: string | null;
-}
-
-// ── Passive events (syslog / SNMP traps / webhooks) ──
-
-/** What kind of passive event a source produces (yagra-bus `EventKind`). */
+/** What kind of passive event a source produces. Rust: `yagra_bus::EventKind`, flattened to a
+ *  `String` on `EventRow.kind` / `EventSourceView.kind`. */
 export type EventKind = 'syslog' | 'trap' | 'webhook';
 
-/** A webhook ingest source (`GET /api/v1/event-sources`) — the bearer token is shown
- *  once on create/rotate and stored only as a hash. */
-export interface EventSource {
-  id: string;
-  name: string;
-  kind: EventKind;
-  enabled: boolean;
-  node_id: string | null;
-  created_at: string;
-}
-
-/** An event match rule (`GET /api/v1/event-rules`). severity 'info' records the match but
- *  raises no alert. `ttl_secs` auto-closes; `clear_pattern` resolves early; `min_count`
- *  matches inside `window_secs` gate the fire. */
-export interface EventRule {
-  id: string;
-  name: string;
-  enabled: boolean;
-  source_kind: EventKind | null;
-  source_id: string | null;
-  node_id: string | null;
-  match_kind: 'substring' | 'regex';
-  pattern: string;
-  clear_pattern: string | null;
-  severity: Severity;
-  ttl_secs: number;
-  min_count: number;
-  window_secs: number;
-  created_at: string;
-}
-
-/** Create/update body for an event rule (`POST/PUT /api/v1/event-rules`). */
-export interface EventRuleInput {
-  name: string;
-  enabled: boolean;
-  source_kind?: EventKind | null;
-  source_id?: string | null;
-  node_id?: string | null;
-  match_kind: 'substring' | 'regex';
-  pattern: string;
-  clear_pattern?: string | null;
-  severity: Severity;
-  ttl_secs?: number;
-  min_count?: number;
-  window_secs?: number;
-}
-
-/** Result of the interactive rule tester (`POST /api/v1/event-rules/test`). */
-export interface EventRuleTestResult {
-  matched: boolean;
-  clear_matched: boolean | null;
-  error: string | null;
-}
-
-/** One received event (`GET /api/v1/events`). */
-export interface EventRow {
-  id: string;
-  kind: EventKind;
-  /** Event time — when the device says it happened. The log is filtered, ordered and **paged**
-   *  by this; `eventCursor()` turns it into the `before` parameter. */
-  at_unix_ms: number;
-  /** Ingest time. Informational only — not the paging cursor, and not what `start`/`end` filter
-   *  (the VictoriaLogs path has no true ingest time to report, so only event time can agree
-   *  across both backends). */
-  recorded_at: string;
-  source_ip: string | null;
-  node_id: string | null;
-  source_id: string | null;
-  pool: string | null;
-  facility: number | null;
-  syslog_severity: number | null;
-  hostname: string | null;
-  app_name: string | null;
-  trap_oid: string | null;
-  /** Well-known MIB name for `trap_oid` (e.g. `linkDown`), resolved server-side; null for
-   *  syslog/webhook events or an OID outside the curated set. */
-  trap_name: string | null;
-  varbinds: Array<[string, string]> | null;
-  message: string;
-  matched_rule_id: string | null;
-  action: 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
-}
-
-/** The categorical event `action` outcomes (pipeline result). */
+/** The categorical event `action` outcomes (pipeline result). Rust: `EventRow.action`, a `String`. */
 export type EventAction = 'none' | 'fired' | 'refreshed' | 'cleared' | 'suppressed' | 'info';
 
-/** One categorical `/events/stats` bucket (mirrors the Rust `EventStatBucket`). `key` is stable for
- *  the list key + fallback display; `label` is a server-resolved display hint (e.g. a trap's MIB
- *  name); `node_id` is set for source grouping when the source maps to an inventory node (resolve
- *  its name via `useEntityNames`, per the no-raw-UUID rule). */
-export interface EventStatBucket {
-  key: string;
-  label?: string | null;
-  node_id?: string | null;
-  count: number;
-}
-
-/** One time bucket for the `/events/stats?group_by=time` volume series (mirrors the Rust
- *  `EventTimeBucket`). `by_kind` is present only when `split=kind` was requested. */
-export interface EventTimeBucket {
-  ts_unix_ms: number;
-  count: number;
-  by_kind?: Record<string, number> | null;
-}
-
-// ── AI-assisted RCA (ADR-029: Settings ▸ AI, and "Explain this incident") ──────────────────────
-
-/** One selectable LLM vendor (`GET /api/v1/llm/config` → `providers`).
+/** A stored collection item with its id/scope/enabled flag.
  *
- *  Served by the backend rather than hardcoded here so the egress warning the form shows reads the
- *  same value the adapters obey — a copy in the WebUI would drift the day a provider changed. */
-export interface LlmProviderChoice {
-  key: 'vertex' | 'gemini' | 'claude';
-  /** Placeholder model id. A hint, not an allowlist — model ids turn over faster than releases. */
-  suggested_model: string;
-  /** Placeholder region; only Vertex has one to choose. */
-  suggested_location: string | null;
-  /** True when picking this sends hostnames, addresses, topology and syslog outside the operator's
-   *  own cloud. Drives the warning banner. */
-  leaves_operator_boundary: boolean;
-  /** Whether this provider needs a GCP project + region rather than just an API key. */
-  needs_project: boolean;
-  /** Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead). */
-  credential_optional: boolean;
-}
-
-/** The stored provider configuration. Never carries the credential — only `has_api_key`. */
-export interface LlmConfigView {
-  provider: string;
-  model: string;
-  project: string;
-  location: string;
-  enabled: boolean;
-  max_output_tokens: number;
-  has_api_key: boolean;
-  leaves_operator_boundary: boolean;
-  updated_at: string;
-}
-
-/** `GET /api/v1/llm/config`. `config` is null until something has been configured — the normal
- *  state of a fresh install, not an error. */
-export interface LlmConfigResponse {
-  config: LlmConfigView | null;
-  providers: LlmProviderChoice[];
-}
-
-/** `PUT /api/v1/llm/config`. */
-export interface LlmConfigInput {
-  provider: string;
-  model: string;
-  project?: string;
-  location?: string;
-  enabled: boolean;
-  max_output_tokens?: number;
-  /** Write-only, three-valued: omit to keep the stored credential, `''` to clear it (which is how
-   *  Vertex moves onto Workload Identity), a value to replace it. */
-  api_key?: string;
-}
-
-/** `POST /api/v1/llm/test`. A provider failure comes back as `{ ok: false, error }` on HTTP 200 —
- *  the configuration is the caller's, not a server fault. */
-export interface LlmTestResult {
-  ok: boolean;
-  latency_ms?: number;
-  reply?: string;
-  error?: string;
-}
+ *  One TypeScript type covering **two** endpoints with different shapes: `GET /nodes/:id/collection`
+ *  answers Rust's `StoredCollectionItem`, which carries `scope_level`/`scope_id` (required), while
+ *  `GET /collection-templates/:id/items` answers `TemplateItem`, which has neither. `CollectionEditor`
+ *  holds both in one `useState`, so the scope pair is optional here — that union is a WebUI decision,
+ *  not something the document says, which is why this stays hand-written on top of the generated
+ *  `TemplateItem` rather than re-exporting either one. Splitting the editor's state is the fix;
+ *  until then, do not assume `scope_level` is present. Rust: `yagra_core::collection`. */
+export type StoredCollectionItem = components['schemas']['TemplateItem'] & {
+  scope_level?: ScopeLevel;
+  scope_id?: string;
+};
 
 /** The model's parsed explanation. Every field is plain text and MUST be rendered as text — never
- *  as HTML or markdown (the model was itself reading untrusted device output). */
+ *  as HTML or markdown (the model was itself reading untrusted device output). `confidence` is a
+ *  closed set the badge styles (`high` | `medium` | `low` | `unknown`), and `raw` is set when the
+ *  reply was not parseable JSON — its presence is what tells the UI to render one prose block
+ *  instead of empty sections. Rust: `yagra_core::rca::answer::RcaAnswer`. */
 export interface RcaAnswer {
   summary: string;
   root_cause: string;
   dependents: string;
   next_steps: string[];
-  /** `high` | `medium` | `low` | `unknown` — a closed set the badge styles. */
   confidence: string;
-  /** Set when the reply was not parseable JSON: the model's text verbatim. Its presence is what
-   *  tells the UI to render one prose block instead of empty sections. */
   raw?: string | null;
 }
 
-/** One node's facts as the model saw them. */
+/** One node's facts as the model saw them. Rust: `yagra_core::rca::context::NodeFacts`. */
 export interface RcaNodeFacts {
   name: string;
   address: string;
@@ -1698,7 +869,7 @@ export interface RcaNodeFacts {
   tags: Array<[string, string]>;
 }
 
-/** One dated signal on the evidence timeline. */
+/** One dated signal on the evidence timeline. Rust: `yagra_core::rca::context::IncidentSignal`. */
 export interface RcaSignal {
   at_s: number;
   severity: number;
@@ -1707,7 +878,9 @@ export interface RcaSignal {
 }
 
 /** The evidence the answer was grounded in — stored beside it so a reader can check the
- *  explanation rather than trust it (ADR-029's display rule). */
+ *  explanation rather than trust it (ADR-029's display rule).
+ *  Rust: `yagra_core::rca::context::IncidentContext` (+ `AlertFacts` / `BreachFacts` / `Dependents`
+ *  / `ChangeFacts` for the nested shapes). */
 export interface RcaEvidence {
   generated_at_s: number;
   window_secs: number;
@@ -1729,36 +902,14 @@ export interface RcaEvidence {
   recent_changes: Array<{ at: string; username: string; action: string; status: number }>;
 }
 
-/** The `body` column of a stored report. */
+/** The `body` column of a stored report — a `serde_json::Value` on the Rust side, so the contract
+ *  says `unknown` and `RcaReport.body` stays `unknown`; the one consumer (`RcaModal`) asserts this
+ *  shape where it reads it. The one place in this file where a real Rust struct is still
+ *  transcribed by hand: unlike a report spec or a tool's params, this document is produced *by
+ *  Yagra*, not by an operator, so `RcaAnswer` + `IncidentContext` deriving `ToSchema` would retire
+ *  all five of these types and the assertion with them. */
 export interface RcaReportBody {
   answer: RcaAnswer;
   evidence: RcaEvidence;
   language: string;
-}
-
-/** A generated (or cached) report (`POST /api/v1/rca`, `GET /api/v1/rca/:id`). */
-export interface RcaReport {
-  id: string;
-  /** The node the report is filed under — the root cause, after any roll-up hop. */
-  node_id: string;
-  check_id: string;
-  provider: string;
-  model: string;
-  summary: string;
-  body: RcaReportBody;
-  generated_at: string;
-  created_by: string;
-  /** Whether this delivery came from the cache rather than a fresh (billed) call. */
-  cached: boolean;
-}
-
-/** `POST /api/v1/rca`. */
-export interface RcaRequestInput {
-  node: string;
-  check: string;
-  window_secs?: number;
-  /** UI language tag; the instructions stay English, only the answer follows the reader. */
-  language?: string;
-  /** Regenerate instead of serving the cached report. Still rate-limited. */
-  force?: boolean;
 }

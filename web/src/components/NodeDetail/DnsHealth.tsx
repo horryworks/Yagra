@@ -71,7 +71,7 @@ export function DnsHealth({ nodeId, check }: { nodeId: string; check: DnsCheckCo
 
   const resolves = up === 1;
   const rows = current ? chainToRows(current.chain) : [];
-  const failure = current ? failureLabel(current.chain.failure) : null;
+  const failure = current ? failureLabel(current.chain.failure ?? null) : null;
 
   const historyColumns: Column<DnsChainChange>[] = [
     {

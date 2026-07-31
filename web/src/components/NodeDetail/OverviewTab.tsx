@@ -441,7 +441,7 @@ function useFacts(
     };
   }, [node.id]);
 
-  const path = groupPath(groups, node.group_id);
+  const path = groupPath(groups, node.group_id ?? null);
   const groupName = (id: string) => groups.find((g) => g.id === id)?.name;
   return [
     { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },

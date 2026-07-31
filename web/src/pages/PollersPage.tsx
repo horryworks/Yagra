@@ -492,10 +492,10 @@ export function PollersPage() {
                         {workingSetLabel(p.working_set_nodes, p.working_set_specs, online, t)}
                       </div>
                       <div className="ytable-cell right mono">{formatCount(p.results_total)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.cpu_pct)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct)}</div>
-                      <div className="ytable-cell">{lastSeenLabel(p.last_seen, online, t)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.cpu_pct ?? null)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct ?? null)}</div>
+                      <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct ?? null)}</div>
+                      <div className="ytable-cell">{lastSeenLabel(p.last_seen ?? null, online, t)}</div>
                       <div className="ytable-cell right">
                         {authed && !online && (
                           <span className="ytable-actions">

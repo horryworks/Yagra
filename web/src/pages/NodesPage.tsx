@@ -486,7 +486,7 @@ export function NodesPage() {
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
-            onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
+            onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
             onAddNode={
               authed
@@ -544,7 +544,7 @@ export function NodesPage() {
               groups={groups}
               nodes={treeNodes}
               canEdit={authed}
-              onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id })}
+              onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => setAdding(true)}
             />
           ) : (

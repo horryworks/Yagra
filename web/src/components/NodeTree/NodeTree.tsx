@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices } from '../../lib/pool';
 import {
+  asGroupType,
   buildNodeTree,
   flattenTree,
   flatRowKey,
@@ -402,7 +403,7 @@ export function NodeTree({
   const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
     const { group, depth, isOpen, hasChildren, tally } = row;
     const isSel = selected?.kind === 'group' && selected.id === group.id;
-    const target: Target = { kind: 'group', id: group.id, scope: group.parent_id };
+    const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
     return (
       <div
         className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${drag?.id === group.id ? ' dragging' : ''}`}
@@ -436,7 +437,7 @@ export function NodeTree({
           ▶
         </button>
         <span className="ntree-icon">
-          <GroupIcon type={group.group_type} />
+          <GroupIcon type={asGroupType(group.group_type)} />
         </span>
         <button
           type="button"
@@ -496,7 +497,7 @@ export function NodeTree({
   };
 
   const renderNode = (node: NodeSummary, depth: number): React.ReactNode => {
-    const target: Target = { kind: 'node', id: node.id, scope: node.group_id };
+    const target: Target = { kind: 'node', id: node.id, scope: node.group_id ?? null };
     const isSel = selected?.kind === 'node' && selected.id === node.id;
     return (
       <div
@@ -702,7 +703,7 @@ export function NodeTree({
                 {t('tree.moveToGroup')}
               </button>
               {onAddNode && (
-                <button type="button" onClick={() => { onAddNode(menu.node.group_id); setMenu(null); }}>
+                <button type="button" onClick={() => { onAddNode(menu.node.group_id ?? null); setMenu(null); }}>
                   {t('tree.addNodeEllipsis')}
                 </button>
               )}

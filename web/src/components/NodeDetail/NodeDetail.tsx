@@ -195,7 +195,7 @@ export function NodeDetail({
   }
 
   const state = status?.state ?? 'unknown';
-  const path = groupPath(groups, node.group_id);
+  const path = groupPath(groups, node.group_id ?? null);
   const lastSeen = series.timestamps.at(-1);
   // What the tab bar decorates itself from (count pills / warning dots) — the rules themselves live
   // beside the whitelist in tabs.ts.
@@ -333,7 +333,7 @@ export function NodeDetail({
         <SetParentModal
           nodeId={nodeId}
           nodeName={node.name}
-          currentParentId={node.parent_id}
+          currentParentId={node.parent_id ?? null}
           onClose={() => setEditingParent(false)}
           onSaved={() => {
             setEditingParent(false);

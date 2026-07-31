@@ -11,6 +11,7 @@ import { Button } from '../ui/Button';
 import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from '../NodeTree/GroupIcon';
 import {
+  asGroupType,
   buildNodeTree,
   descendantNodes,
   groupPath,
@@ -55,7 +56,7 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
     <div className="nd">
       <div className="nd-head">
         <div className="nd-eyebrow">
-          <GroupIcon type={group.group_type} />{' '}
+          <GroupIcon type={asGroupType(group.group_type)} />{' '}
           {group.group_type === 'generic'
             ? t('groupType.genericFolder')
             : t(`groupType.${group.group_type}`)}

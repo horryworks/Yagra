@@ -12,6 +12,7 @@ import {
   stateColorVar,
   stateLabel,
 } from '../../lib/format';
+import { isNodeState, isSeverity } from '../../lib/nodeState';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
 import { AlertRows } from '../../widgets/AlertRows';
@@ -143,11 +144,20 @@ export function RecentStateChangesWidget() {
         <li className="dwl-row" key={`${row.node_id}-${row.at_unix_ms}-${i}`}>
           <span
             className="dwl-dot"
-            style={{ background: row.resolved ? stateColorVar('ok') : severityColorVar(row.severity) }}
+            style={{
+              background: row.resolved
+                ? stateColorVar('ok')
+                : isSeverity(row.severity)
+                  ? severityColorVar(row.severity)
+                  : 'var(--status-unknown)',
+            }}
           />
           <span className="dwl-name">{row.name}</span>
           <span className="dwl-sub muted">
-            {row.resolved ? `→ ${t('widgets.recentChanges.recovered')}` : `→ ${stateLabel(row.state)}`} ·{' '}
+            {row.resolved
+              ? `→ ${t('widgets.recentChanges.recovered')}`
+              : `→ ${isNodeState(row.state) ? stateLabel(row.state) : row.state}`}{' '}
+            ·{' '}
             {relativeTime(new Date(row.at_unix_ms).toISOString(), Date.now())}
           </span>
         </li>

@@ -207,7 +207,7 @@ export interface RegionStat {
  *  ignored. Cycle-guarded. Returns only regions with at least one member. */
 export function topLevelRollup(nodes: NodeSummary[], groups: NodeGroup[]): RegionStat[] {
   const byId = new Map(groups.map((g) => [g.id, g]));
-  const topOf = (gid: string | null): string | null => {
+  const topOf = (gid: string | null | undefined): string | null => {
     let cur = gid ? byId.get(gid) : undefined;
     const seen = new Set<string>();
     while (cur && cur.parent_id && byId.has(cur.parent_id)) {

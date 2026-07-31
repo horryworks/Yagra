@@ -12,7 +12,10 @@ import type { Alert, AnalysisJob, NodeState, ReportRun } from '../types/api';
 import { isNodeState } from '../lib/nodeState';
 import { getToken, notifyAuthFailure } from './api';
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
+// Origin prefix, empty by default — the same meaning `services/api.ts` gives it, with `/api/v1`
+// spelled at the call site. It used to default to `/api/v1` and be used as a path prefix here while
+// the API client treated it as a base, so setting it pointed the two at different URLs.
+const ORIGIN = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 /** Backoff before reconnecting after a stream ends or errors (mirrors EventSource's retry). */
 const RECONNECT_MS = 3000;
 
@@ -141,7 +144,7 @@ function subscribeSSE(
         const token = getToken();
         const headers: Record<string, string> = { Accept: 'text/event-stream' };
         if (token) headers.Authorization = `Bearer ${token}`;
-        const res = await fetch(`${BASE}${path}`, {
+        const res = await fetch(`${ORIGIN}${path}`, {
           headers,
           cache: 'no-store',
           signal: controller.signal,
@@ -197,7 +200,7 @@ export function subscribeAlerts(
   onError?: (err: unknown) => void,
 ): () => void {
   return subscribeSSE(
-    '/stream/alerts',
+    '/api/v1/stream/alerts',
     (data) => {
       const event = parseAlertEvent(data);
       if (!event) return;
@@ -218,7 +221,7 @@ export function subscribeNodeStates(
   onError?: (err: unknown) => void,
 ): () => void {
   return subscribeSSE(
-    '/stream/node-states',
+    '/api/v1/stream/node-states',
     (data) => {
       const ev = parseNodeStateEvent(data);
       if (ev) onState(ev);
@@ -236,7 +239,7 @@ export function subscribeAnalysis(
   onError?: (err: unknown) => void,
 ): () => void {
   return subscribeSSE(
-    '/stream/analysis',
+    '/api/v1/stream/analysis',
     (data) => {
       const job = parseAnalysisJob(data);
       if (job) onJob(job);
@@ -254,7 +257,7 @@ export function subscribeReportRuns(
   onError?: (err: unknown) => void,
 ): () => void {
   return subscribeSSE(
-    '/stream/report-runs',
+    '/api/v1/stream/report-runs',
     (data) => {
       const run = parseReportRun(data);
       if (run) onRun(run);

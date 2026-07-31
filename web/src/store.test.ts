@@ -9,6 +9,7 @@ function alert(over: Partial<Alert>): Alert {
     check: 'c1',
     severity: 'warning',
     state: 'warning',
+    metric: 'icmp_rtt_ms',
     at_unix_ms: 0,
     root_cause: null,
     flapping: false,

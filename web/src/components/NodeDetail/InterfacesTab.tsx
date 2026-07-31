@@ -151,15 +151,15 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               </span>
               <span className="nd-if-cell nd-if-desc">{r.if_alias || '—'}</span>
               <span className="nd-if-oper">
-                <StatusDot state={operState(r.oper_status)} withLabel={false} />
-                {operLabel(r.oper_status, t)}
+                <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
+                {operLabel(r.oper_status ?? null, t)}
               </span>
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
               </span>
               <span className="nd-if-cell right">
                 {r.oper_status === 1
-                  ? `${formatBps(r.in_bps)} / ${formatBps(r.out_bps)}`
+                  ? `${formatBps(r.in_bps ?? null)} / ${formatBps(r.out_bps ?? null)}`
                   : t('interfaces.operDown')}
               </span>
             </button>
@@ -329,16 +329,16 @@ function InterfaceDock({
   return (
     <div className="nd-if-dock">
       <div className="nd-if-dock-head">
-        <StatusDot state={operState(row.oper_status)} withLabel={false} />
+        <StatusDot state={operState(row.oper_status ?? null)} withLabel={false} />
         <span className="mono nd-if-dock-name">{row.if_name ?? `if${row.ifindex}`}</span>
         {row.if_alias && <span className="nd-muted nd-if-dock-alias">{row.if_alias}</span>}
         <div className="nd-if-dock-ctl">
           <span className="nd-if-dock-stats">
             <span>
-              <span className="nd-muted">{t('interfaces.in')}</span> {formatBps(row.in_bps)}
+              <span className="nd-muted">{t('interfaces.in')}</span> {formatBps(row.in_bps ?? null)}
             </span>
             <span>
-              <span className="nd-muted">{t('interfaces.out')}</span> {formatBps(row.out_bps)}
+              <span className="nd-muted">{t('interfaces.out')}</span> {formatBps(row.out_bps ?? null)}
             </span>
             {errRate != null && errRate > 0 && (
               <span>

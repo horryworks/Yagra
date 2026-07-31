@@ -5,6 +5,7 @@
 // non-admins; the server enforces it too).
 
 import { useEffect, useState } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -22,15 +23,29 @@ import type {
   ReportRun,
   ReportSchedule,
   ReportSectionDef,
+  ReportSpec,
 } from '../types/api';
 import { useReportRunsStore } from './store';
-import { cadenceLabel } from './types';
+import { cadenceLabel, isReportFrequency } from './types';
 import { ReportBuilder } from './ReportBuilder';
 import { ReportViewer } from './ReportViewer';
 import { ScheduleModal } from './ScheduleModal';
 import './reports.css';
 
 type Tab = 'saved' | 'templates' | 'schedules';
+
+/** `cadenceLabel` reads the closed cadence set and both day fields; a stored schedule types the
+ *  cadence as a bare string and may omit the day that its cadence doesn't use. An unrecognised
+ *  cadence reads as daily, which is what `cadenceLabel` already does with one. */
+function scheduleCadence(t: TFunction, s: ReportSchedule): string {
+  return cadenceLabel(t, {
+    frequency: isReportFrequency(s.frequency) ? s.frequency : 'daily',
+    day_of_week: s.day_of_week ?? null,
+    day_of_month: s.day_of_month ?? null,
+    at_hour: s.at_hour,
+    at_minute: s.at_minute,
+  });
+}
 
 /** Status chip for a run (live progress while generating). */
 function RunStatus({ run }: { run: ReportRun }) {
@@ -184,7 +199,11 @@ export function ReportsPage() {
       key: 'sections',
       header: t('defs.cols.sections'),
       width: '110px',
-      render: (d) => <span className="muted">{d.spec?.sections?.length ?? 0}</span>,
+      // `spec` is opaque JSON to the backend, hence `unknown` on the wire; this is the WebUI's
+      // reading of the document it owns.
+      render: (d) => (
+        <span className="muted">{(d.spec as ReportSpec | null)?.sections?.length ?? 0}</span>
+      ),
     },
     {
       key: 'updated',
@@ -221,7 +240,12 @@ export function ReportsPage() {
 
   const schedColumns: Column<ReportSchedule>[] = [
     { key: 'name', header: t('scheds.cols.report'), width: '1.4fr', render: (s) => s.definition_name },
-    { key: 'cadence', header: t('scheds.cols.cadence'), width: '1.4fr', render: (s) => cadenceLabel(t, s) },
+    {
+      key: 'cadence',
+      header: t('scheds.cols.cadence'),
+      width: '1.4fr',
+      render: (s) => scheduleCadence(t, s),
+    },
     {
       key: 'next',
       header: t('scheds.cols.nextRun'),

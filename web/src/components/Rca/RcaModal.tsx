@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
 import { api } from '../../services/api';
 import { formatExactTime, formatTimestamp, LIVENESS_METRIC } from '../../lib/format';
-import type { RcaEvidence, RcaReport } from '../../types/api';
+import type { RcaEvidence, RcaReport, RcaReportBody } from '../../types/api';
 import { formatWindow, nodeLine, refusalText } from './rcaText';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -157,8 +157,11 @@ export function RcaModal({ node, check, onClose }: Props) {
     generate(false);
   }, [generate]);
 
-  const answer = report?.body.answer;
-  const evidence = report?.body.evidence;
+  // `body` is an opaque `serde_json::Value` on the wire — the backend stores and returns the
+  // document without interpreting it, so `RcaReportBody` is the WebUI's reading of it.
+  const body = report ? (report.body as RcaReportBody) : undefined;
+  const answer = body?.answer;
+  const evidence = body?.evidence;
   const confidence = answer?.confidence ?? 'unknown';
 
   return (

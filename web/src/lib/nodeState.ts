@@ -11,7 +11,8 @@
 // dashboard/widgets/util, `ORDER` in StatusSummary, `LEGEND_ORDER` in TopologyMapPage) — three of
 // them byte-identical — plus a fifth hand-written list validating the SSE stream.
 
-import type { NodeState } from '../types/api';
+import { SEVERITIES } from '../types/api';
+import type { NodeState, Severity } from '../types/api';
 
 /** Every node state, in severity order (worst first). The single enumeration of the union. */
 export const SEVERITY_ORDER: readonly NodeState[] = [
@@ -44,6 +45,28 @@ export const PROBLEM_STATES: ReadonlySet<NodeState> = new Set<NodeState>([
 /** Narrow an untrusted string (SSE payload, URL param) to a `NodeState`. */
 export function isNodeState(s: string): s is NodeState {
   return (SEVERITY_ORDER as readonly string[]).includes(s);
+}
+
+/** Whether an untrusted string is a severity this build knows.
+ *
+ *  Needed because Rust types `severity` as a bare `String` on `StoredEventRule`, `AlertHistoryRow`
+ *  and `AlertTransition`, so the generated contract offers `string` and the closed union is a WebUI
+ *  belief that a DB `CHECK` happens to uphold. A core newer than this bundle can name a variant the
+ *  display helpers have no case for, and those helpers are exhaustive switches with no `default` —
+ *  so an unguarded value reaches them and paints a colourless dot.
+ *
+ *  The membership test lives here and the *policy* stays at the call site, because callers want
+ *  different ones: a badge reads an unknown severity as `info` (what the backend itself does —
+ *  `events.rs::parse_severity`), while a dashboard dot would rather show neutral than claim a
+ *  severity it did not receive. It arrived as three copies in one change, which is what
+ *  `extensibility.md` §3 is about. */
+export function isSeverity(v: string): v is Severity {
+  return (SEVERITIES as readonly string[]).includes(v);
+}
+
+/** An alert severity off the wire, falling back to `info` — see [`isSeverity`] for why. */
+export function asSeverity(value: string): Severity {
+  return isSeverity(value) ? value : 'info';
 }
 
 /** A zeroed per-state tally — the shape both the client-side count and the server's

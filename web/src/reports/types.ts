@@ -11,6 +11,12 @@ import type {
   ReportSpec,
 } from '../types/api';
 
+/** Narrow a stored schedule's cadence. Rust types `ReportSchedule.frequency` as a bare `String`, so
+ *  the closed set exists only on this side. */
+export function isReportFrequency(v: string | undefined): v is ReportFrequency {
+  return v === 'daily' || v === 'weekly' || v === 'monthly';
+}
+
 /** Time-range presets for a report window. `labelKey` resolves in the reports namespace (this is a
  *  non-component module, so it stores i18n keys instead of resolving them at module load). */
 export const RANGE_OPTIONS: { labelKey: string; secs: number }[] = [

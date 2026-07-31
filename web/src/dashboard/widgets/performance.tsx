@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Select } from '../../components/ui/Field';
 import { formatBps, formatRtt } from '../../lib/format';
 import { api } from '../../services/api';
-import type { InterfaceTopMetric, MetricTopAgg } from '../../types/api';
+import type { InterfaceTopEntry, InterfaceTopMetric, MetricTopAgg } from '../../types/api';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
@@ -105,7 +105,9 @@ export function TopMemoryWidget({ instance }: WidgetProps) {
 }
 
 /** A friendly `node · interface` label for an interface Top-N row. */
-function ifaceLabel(e: { node_name: string; if_name: string | null; if_alias: string | null; ifindex: number }): string {
+function ifaceLabel(
+  e: Pick<InterfaceTopEntry, 'node_name' | 'if_name' | 'if_alias' | 'ifindex'>,
+): string {
   const iface = e.if_name ?? e.if_alias ?? `if${e.ifindex}`;
   return `${e.node_name} · ${iface}`;
 }

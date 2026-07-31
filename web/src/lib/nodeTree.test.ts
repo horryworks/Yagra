@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  asGroupType,
   buildNodeTree,
   descendantNodes,
   flattenTree,
@@ -13,6 +14,7 @@ import {
   UNGROUPED,
   visibleOpenGroupKeys,
 } from './nodeTree';
+import { GROUP_TYPES } from '../types/api';
 import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
 
 const group = (
@@ -46,6 +48,7 @@ const node = (
   model: null,
   group_id: groupId,
   sort_order,
+  source: 'device',
 });
 
 describe('flattenTree', () => {
@@ -249,6 +252,17 @@ describe('groupPath', () => {
   it('returns an empty path for a null or unknown id', () => {
     expect(groupPath(groups, null)).toEqual([]);
     expect(groupPath(groups, 'missing')).toEqual([]);
+  });
+});
+
+describe('asGroupType', () => {
+  it('passes through every known type', () => {
+    for (const gt of GROUP_TYPES) expect(asGroupType(gt)).toBe(gt);
+  });
+
+  it('reads an unknown or absent wire value as the generic folder', () => {
+    expect(asGroupType('rack')).toBe('generic');
+    expect(asGroupType(undefined)).toBe('generic');
   });
 });
 

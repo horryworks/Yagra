@@ -120,7 +120,7 @@ export function inheritedGroupPool(
     if (!g) return undefined;
     const own = g.pool?.trim();
     if (own) return own;
-    cur = g.parent_id;
+    cur = g.parent_id ?? null;
   }
   return undefined;
 }

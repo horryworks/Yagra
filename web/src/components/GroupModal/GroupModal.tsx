@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
-import { groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
+import { asGroupType, groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -38,7 +38,7 @@ export function GroupModal({
   const { t } = useTranslation('nodes');
   const editing = state.mode === 'edit';
   const [name, setName] = useState(state.group?.name ?? '');
-  const [type, setType] = useState<GroupType>(state.group?.group_type ?? 'generic');
+  const [type, setType] = useState<GroupType>(asGroupType(state.group?.group_type));
   const [parent, setParent] = useState<string>(
     (editing ? state.group?.parent_id : state.parentId) ?? '',
   );

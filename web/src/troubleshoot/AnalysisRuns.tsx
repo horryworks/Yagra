@@ -21,12 +21,14 @@ function RunRow({ job }: { job: AnalysisJob }) {
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
 
+  // `job.tool` is a bare string on the wire, so the catalog lookup is also what narrows it.
   const tool = toolById(job.tool);
   // `tool.name` is an i18next key (see data.ts); an unknown tool falls back to its raw backend id.
   const name = tool ? t(tool.name) : job.tool;
-  // Every tool has a report now, so the path is derived from the job's own tool key — a job from a
-  // future backend the catalog doesn't know yet still resolves (the route redirects if unknown).
-  const reportPath = reportPathFor(job.tool);
+  // Every tool in the catalog has a report, so the path comes from the job's own tool key. A job
+  // from a newer core naming a tool this build doesn't have has no report to open — send it to the
+  // catalog, which is where `/troubleshoot/report/<unknown>` redirects anyway.
+  const reportPath = tool ? reportPathFor(tool.id) : '/troubleshoot';
 
   const view = () => navigate(`${reportPath}?job=${encodeURIComponent(job.id)}`);
 

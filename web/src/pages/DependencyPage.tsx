@@ -188,7 +188,7 @@ export function DependencyPage() {
         <SetParentModal
           nodeId={editing.id}
           nodeName={editing.name}
-          currentParentId={editing.parent_id}
+          currentParentId={editing.parent_id ?? null}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);

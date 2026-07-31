@@ -75,11 +75,13 @@ export function CollectionEditor({
     return () => clearTimeout(timer);
   }, [picking, pickQuery]);
 
+  // A catalog row types `collection`/`metric_kind` as bare strings on the wire, unlike the stored
+  // collection item this form writes, so the picker narrows rather than adopting the row's value.
   const pick = (e: MibCatalogEntry) => {
     setMetricName(e.metric_name);
     setOid(e.oid);
-    setCollection(e.collection);
-    setMetricKind(e.metric_kind);
+    setCollection(e.collection === 'table' ? 'table' : 'scalar');
+    setMetricKind(e.metric_kind === 'counter' ? 'counter' : 'gauge');
     setPicking(false);
   };
 

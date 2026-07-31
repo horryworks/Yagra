@@ -60,7 +60,7 @@ export function AiSettingsPage() {
       .then((res) => {
         setProviders(res.providers);
         setUnavailable(false);
-        setStored(res.config);
+        setStored(res.config ?? null);
         if (res.config) {
           setProvider(res.config.provider);
           setModel(res.config.model);

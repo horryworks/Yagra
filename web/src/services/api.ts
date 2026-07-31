@@ -2,6 +2,11 @@
 // The single typed boundary to the Yagra-core northbound API (coding-conventions: never
 // scatter raw fetch across components). All calls go through `api`; errors surface as a
 // typed `ApiError` decoded from the fixed error envelope (ADR-019).
+//
+// Every method addresses the API by its **contract path** — the template key from the generated
+// `api/schema.d.ts` — so the URL, the method, the path/query parameters and the request body are
+// all checked against what the Rust handlers actually serve (ADR-035). A renamed endpoint or a
+// dropped parameter is now a compile error here instead of a 404 in front of an operator.
 
 import type {
   Alert,
@@ -122,6 +127,7 @@ import type {
   RcaReport,
   RcaRequestInput,
 } from '../types/api';
+import { buildUrl, type Op, type Ok, type OptsArg, type PathsWith } from './typedPaths';
 
 /** Request body to create a collection item (scalar or table). */
 export interface CollectionItemInput {
@@ -132,7 +138,10 @@ export interface CollectionItemInput {
   enabled?: boolean;
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
+// Origin prefix, empty by default. The contract paths already carry `/api/v1`, so this exists only
+// to point a dev build at a core on another host (`VITE_API_BASE=https://core.example.net`) — it is
+// an origin, never a path fragment.
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 const TOKEN_KEY = 'yagra_token';
 
 let authToken: string | null =
@@ -227,6 +236,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Pick the arm of a query-dependent response union.
+ *
+ *  Three endpoints answer with a different shape depending on a query parameter — `?resolved=` on
+ *  the node collection set, `?group_by=` on the event summary. OpenAPI keys a response schema off
+ *  the status code only, so the contract can say no more than "one of these"; which one is settled
+ *  by the argument the wrapper just passed. Stating that here keeps it beside the query that
+ *  determines it, instead of pushing a union onto every caller that cannot narrow it either. */
+function arm<T>(p: Promise<unknown>): Promise<T> {
+  return p as Promise<T>;
+}
+
 /** JSON request body init for a mutating call. */
 function jsonBody(method: string, body: unknown): RequestInit {
   return {
@@ -236,24 +256,62 @@ function jsonBody(method: string, body: unknown): RequestInit {
   };
 }
 
-/** Build the from/to(/limit) + optional-filter query string shared by the flow endpoints (ADR-031).
- *  Filters (proto/port/peer) and `dir` are appended only when set; core parses/validates them. */
-function flowParams(
+// The four contract-checked entry points. `path` is the template key from `api/schema.d.ts`, and
+// everything else — which parameters exist, which are required, the body shape, the success type —
+// is derived from it. The `as never` is the one place the generic plumbing needs help: TypeScript
+// cannot see through the unresolved conditional types to `buildUrl`'s plain record.
+
+function apiGet<P extends PathsWith<'get'>>(
+  path: P,
+  ...args: OptsArg<Op<P, 'get'>>
+): Promise<Ok<Op<P, 'get'>>> {
+  return request(buildUrl(path, args[0] as never));
+}
+
+function apiPost<P extends PathsWith<'post'>>(
+  path: P,
+  ...args: OptsArg<Op<P, 'post'>>
+): Promise<Ok<Op<P, 'post'>>> {
+  const opts = args[0] as { body?: unknown } | undefined;
+  return request(buildUrl(path, args[0] as never), jsonBody('POST', opts?.body ?? {}));
+}
+
+function apiPut<P extends PathsWith<'put'>>(
+  path: P,
+  ...args: OptsArg<Op<P, 'put'>>
+): Promise<Ok<Op<P, 'put'>>> {
+  const opts = args[0] as { body?: unknown } | undefined;
+  return request(buildUrl(path, args[0] as never), jsonBody('PUT', opts?.body));
+}
+
+// No DELETE in the contract declares a request body, so this never sends one.
+function apiDelete<P extends PathsWith<'delete'>>(
+  path: P,
+  ...args: OptsArg<Op<P, 'delete'>>
+): Promise<Ok<Op<P, 'delete'>>> {
+  return request(buildUrl(path, args[0] as never), { method: 'DELETE' });
+}
+
+/** The from/to(/limit) + optional-filter query shared by the flow endpoints (ADR-031).
+ *  Filters (proto/port/peer) and `dir` are sent only when set; core parses/validates them. */
+function flowQuery(
   opts: {
     from: number;
     to: number;
     limit?: number;
     dir?: 'src' | 'dst';
   } & FlowFilters,
-): string {
-  const params = new URLSearchParams({ from: String(opts.from), to: String(opts.to) });
-  if (opts.limit != null) params.set('limit', String(opts.limit));
-  if (opts.proto != null) params.set('proto', String(opts.proto));
-  if (opts.port != null) params.set('port', String(opts.port));
-  if (opts.peer) params.set('peer', opts.peer);
-  if (opts.asn != null) params.set('asn', String(opts.asn));
-  if (opts.dir) params.set('dir', opts.dir);
-  return params.toString();
+) {
+  return {
+    from: opts.from,
+    to: opts.to,
+    limit: opts.limit ?? undefined,
+    proto: opts.proto != null ? String(opts.proto) : undefined,
+    port: opts.port != null ? String(opts.port) : undefined,
+    peer: opts.peer || undefined,
+    asn: opts.asn != null ? String(opts.asn) : undefined,
+    dir: opts.dir || undefined,
+  };
 }
 
 /** Shared filter for the `/events/stats` summary endpoint — mirrors the event-log filter (no paging
@@ -268,16 +326,16 @@ export interface EventStatsFilter {
   regex?: boolean;
 }
 
-function eventStatsParams(f: EventStatsFilter): URLSearchParams {
-  const p = new URLSearchParams();
-  if (f.start) p.set('start', f.start);
-  if (f.end) p.set('end', f.end);
-  if (f.kind) p.set('kind', f.kind);
-  if (f.node_id) p.set('node_id', f.node_id);
-  if (f.matched != null) p.set('matched', String(f.matched));
-  if (f.q) p.set('q', f.q);
-  if (f.regex) p.set('regex', 'true');
-  return p;
+function eventStatsQuery(f: EventStatsFilter) {
+  return {
+    start: f.start || undefined,
+    end: f.end || undefined,
+    kind: f.kind || undefined,
+    node_id: f.node_id || undefined,
+    matched: f.matched ?? undefined,
+    q: f.q || undefined,
+    regex: f.regex ? true : undefined,
+  };
 }
 
 /** Public client bootstrap config (no secrets). */
@@ -296,121 +354,96 @@ export interface ClientConfig {
 
 export const api = {
   /** Public bootstrap config: whether reads are open, login availability, default poll interval. */
-  getConfig: (): Promise<ClientConfig> => request('/config'),
+  getConfig: (): Promise<ClientConfig> => apiGet('/api/v1/config'),
 
   /** Update the global default polling interval (seconds). ManageConfig-gated. */
   updateConfig: (body: { default_poll_interval_secs: number }): Promise<void> =>
-    request('/config', jsonBody('PUT', body)),
+    apiPut('/api/v1/config', { body }),
 
   /** Latest reading for one node metric. */
   getNodeMetric: (
     nodeId: string,
     metric: string,
     opts?: { agg?: MetricAgg },
-  ): Promise<MetricReading> => {
-    const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}`;
-    return request(opts?.agg ? `${path}?agg=${opts.agg}` : path);
-  },
+  ): Promise<MetricReading> =>
+    apiGet('/api/v1/nodes/{node_id}/metrics/{metric}', {
+      path: { node_id: nodeId, metric },
+      query: { agg: opts?.agg },
+    }),
 
   /** Time-series window for one node metric (defaults: last hour, 60s step). */
   getNodeMetricRange: (
     nodeId: string,
     metric: string,
     opts?: { from?: number; to?: number; step?: number; agg?: MetricAgg },
-  ): Promise<MetricRange> => {
-    const params = new URLSearchParams();
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    if (opts?.step != null) params.set('step', String(opts.step));
-    if (opts?.agg) params.set('agg', opts.agg);
-    const qs = params.toString();
-    const path = `/nodes/${encodeURIComponent(nodeId)}/metrics/${encodeURIComponent(metric)}/range`;
-    return request(qs ? `${path}?${qs}` : path);
-  },
+  ): Promise<MetricRange> =>
+    apiGet('/api/v1/nodes/{node_id}/metrics/{metric}/range', {
+      path: { node_id: nodeId, metric },
+      query: { from: opts?.from, to: opts?.to, step: opts?.step, agg: opts?.agg },
+    }),
 
   /** Fleet-wide Top-N for a metric: the highest-value nodes now (`agg: 'now'`, default) or by
    *  trailing-hour peak (`agg: 'max_1h'`). Powers the dashboard Top RTT/CPU/… widgets. */
   getTopMetrics: (
     metric: string,
     opts?: { agg?: MetricTopAgg; limit?: number },
-  ): Promise<TopEntry[]> => {
-    const params = new URLSearchParams({ metric });
-    if (opts?.agg) params.set('agg', opts.agg);
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    return request(`/metrics/top?${params.toString()}`);
-  },
+  ): Promise<TopEntry[]> =>
+    apiGet('/api/v1/metrics/top', {
+      query: { metric, agg: opts?.agg, limit: opts?.limit },
+    }),
 
   /** Fleet-wide interface Top-N (busiest links / most errors). `metric` selects the dimension. */
   getInterfaceTop: (
     metric: InterfaceTopMetric,
     opts?: { agg?: MetricTopAgg; limit?: number },
-  ): Promise<InterfaceTopEntry[]> => {
-    const params = new URLSearchParams({ metric });
-    if (opts?.agg) params.set('agg', opts.agg);
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    return request(`/metrics/interface-top?${params.toString()}`);
-  },
+  ): Promise<InterfaceTopEntry[]> =>
+    apiGet('/api/v1/metrics/interface-top', {
+      query: { metric, agg: opts?.agg, limit: opts?.limit },
+    }),
 
   /** Interfaces whose throughput moved the most vs `window`s ago — `up` (spikes) / `down` (drops).
    *  `value` is the signed delta in bits/sec. */
   getInterfaceDelta: (
     direction: 'up' | 'down',
     opts?: { window?: number; limit?: number },
-  ): Promise<InterfaceTopEntry[]> => {
-    const params = new URLSearchParams({ direction });
-    if (opts?.window != null) params.set('window', String(opts.window));
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    return request(`/metrics/interface-delta?${params.toString()}`);
-  },
+  ): Promise<InterfaceTopEntry[]> =>
+    apiGet('/api/v1/metrics/interface-delta', {
+      query: { direction, window: opts?.window, limit: opts?.limit },
+    }),
 
   /** Inventory listing (first page; the response is keyset-paginated). */
-  listNodes: (): Promise<NodeSummary[]> =>
-    request<NodePage>('/nodes').then((r) => r.nodes),
+  listNodes: (): Promise<NodeSummary[]> => apiGet('/api/v1/nodes').then((r) => r.nodes),
 
   /** Resolve a batch of node ids → display names across the whole fleet (not just the first list
    *  page). Backs the shared `useEntityNames` resolver so a reference to any node — not only the
    *  first 100 — shows its name instead of a raw UUID (S12). Unresolved ids are omitted. */
   getNodeNames: (ids: string[]): Promise<NodeNameEntry[]> =>
-    ids.length === 0
-      ? Promise.resolve([])
-      : request<NodeNameEntry[]>('/node-names', jsonBody('POST', { ids })),
+    ids.length === 0 ? Promise.resolve([]) : apiPost('/api/v1/node-names', { body: { ids } }),
 
   /** Server-side node search for the node-picker typeahead (A-2): match name or address by
    *  case-insensitive substring, capped, so the picker never loads the whole inventory into the
    *  browser. Empty `q` returns the first page ordered by name. */
-  searchNodes: (q: string, limit = 50): Promise<NodeSearchResult[]> => {
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    params.set('limit', String(limit));
-    return request(`/nodes/search?${params.toString()}`);
-  },
+  searchNodes: (q: string, limit = 50): Promise<NodeSearchResult[]> =>
+    apiGet('/api/v1/nodes/search', { query: { q: q || undefined, limit } }),
 
   /** A group's direct member nodes for the inventory tree's per-group lazy load (A-3). Pass a group
    *  id, or omit `group` for the ungrouped bucket. Fetched only when a group is expanded, so the
    *  tree never pulls the whole fleet up front. */
-  getGroupNodes: (group: string | null): Promise<GroupNodesResult> => {
-    const params = new URLSearchParams();
-    if (group) params.set('group', group);
-    const qs = params.toString();
-    return request(qs ? `/nodes/by-group?${qs}` : '/nodes/by-group');
-  },
+  getGroupNodes: (group: string | null): Promise<GroupNodesResult> =>
+    apiGet('/api/v1/nodes/by-group', { query: { group: group || undefined } }),
 
   /** One keyset page of the inventory (for the virtualized node table). Pass the previous
    *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. A non-empty
    *  `search` switches to server-side name/address search — a single capped page (no cursor) of
    *  full node summaries — so the Nodes tree's filter never full-loads the fleet client-side. */
-  listNodesPage: (opts?: {
-    cursor?: string;
-    limit?: number;
-    search?: string;
-  }): Promise<NodePage> => {
-    const params = new URLSearchParams();
-    if (opts?.cursor) params.set('cursor', opts.cursor);
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    if (opts?.search) params.set('search', opts.search);
-    const qs = params.toString();
-    return request(qs ? `/nodes?${qs}` : '/nodes');
-  },
+  listNodesPage: (opts?: { cursor?: string; limit?: number; search?: string }): Promise<NodePage> =>
+    apiGet('/api/v1/nodes', {
+      query: {
+        cursor: opts?.cursor || undefined,
+        limit: opts?.limit,
+        search: opts?.search || undefined,
+      },
+    }),
 
   /** Create a node. Optional profile/credential/parent bindings + descriptive maker/model. */
   createNode: (body: {
@@ -422,7 +455,7 @@ export const api = {
     parent_id?: string;
     vendor?: string;
     model?: string;
-  }): Promise<{ id: string }> => request('/nodes', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/nodes', { body }),
 
   /** Create a URL monitor in one call: a node bound to the built-in URL/HTTP profile plus its
    *  URL-check config. Only `url`+`name` are required; the rest default server-side. */
@@ -436,12 +469,12 @@ export const api = {
     verify_tls?: boolean;
     follow_redirects?: boolean;
     timeout_ms?: number;
-  }): Promise<{ id: string }> => request('/url-monitors', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/url-monitors', { body }),
 
   /** A node's URL-monitor config, or `null` if it isn't a URL monitor (404 → null). */
   getUrlCheck: async (id: string): Promise<UrlCheckConfig | null> => {
     try {
-      return await request(`/nodes/${encodeURIComponent(id)}/url-check`);
+      return await apiGet('/api/v1/nodes/{node_id}/url-check', { path: { node_id: id } });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -450,11 +483,11 @@ export const api = {
 
   /** Create or replace a node's URL-monitor config (the node must already exist). */
   setUrlCheck: (id: string, body: UrlCheckConfig): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/url-check`, jsonBody('PUT', body)),
+    apiPut('/api/v1/nodes/{node_id}/url-check', { path: { node_id: id }, body }),
 
   /** Remove a node's URL-monitor config (the node itself is untouched). */
   deleteUrlCheck: (id: string): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/url-check`, { method: 'DELETE' }),
+    apiDelete('/api/v1/nodes/{node_id}/url-check', { path: { node_id: id } }),
 
   // ── DNS name-resolution monitoring (ADR-033) ──────────────────────────────────────
   /** Create a DNS monitor in one call: a node bound to the built-in DNS profile plus its
@@ -471,12 +504,12 @@ export const api = {
     resolver_port?: number;
     max_depth?: number;
     timeout_ms?: number;
-  }): Promise<{ id: string }> => request('/dns-monitors', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/dns-monitors', { body }),
 
   /** A node's DNS-monitor config, or `null` if it isn't a DNS monitor (404 → null). */
   getDnsCheck: async (id: string): Promise<DnsCheckConfig | null> => {
     try {
-      return await request(`/nodes/${encodeURIComponent(id)}/dns-check`);
+      return await apiGet('/api/v1/nodes/{node_id}/dns-check', { path: { node_id: id } });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -485,16 +518,16 @@ export const api = {
 
   /** Create or replace a node's DNS-monitor config (the node must already exist). */
   setDnsCheck: (id: string, body: DnsCheckConfig): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/dns-check`, jsonBody('PUT', body)),
+    apiPut('/api/v1/nodes/{node_id}/dns-check', { path: { node_id: id }, body }),
 
   /** Remove a node's DNS-monitor config (the node and its recorded chains are untouched). */
   deleteDnsCheck: (id: string): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/dns-check`, { method: 'DELETE' }),
+    apiDelete('/api/v1/nodes/{node_id}/dns-check', { path: { node_id: id } }),
 
   /** The node's current resolution chain, or `null` if nothing has been observed yet. */
   getDnsChain: async (id: string): Promise<DnsChainCurrent | null> => {
     try {
-      return await request(`/nodes/${encodeURIComponent(id)}/dns-chain`);
+      return await apiGet('/api/v1/nodes/{node_id}/dns-chain', { path: { node_id: id } });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -506,41 +539,40 @@ export const api = {
     id: string,
     opts: { limit?: number; beforeAt?: string; beforeId?: number } = {},
   ): Promise<DnsChainHistoryPage> => {
-    const p = new URLSearchParams();
-    if (opts.limit != null) p.set('limit', String(opts.limit));
     // Both cursor halves or neither — the server rejects a half-specified cursor.
-    if (opts.beforeAt != null && opts.beforeId != null) {
-      p.set('before_at', opts.beforeAt);
-      p.set('before_id', String(opts.beforeId));
-    }
-    const qs = p.toString();
-    return request(
-      `/nodes/${encodeURIComponent(id)}/dns-chain/history${qs ? `?${qs}` : ''}`,
-    );
+    const cursor = opts.beforeAt != null && opts.beforeId != null;
+    return apiGet('/api/v1/nodes/{node_id}/dns-chain/history', {
+      path: { node_id: id },
+      query: {
+        limit: opts.limit,
+        before_at: cursor ? opts.beforeAt : undefined,
+        before_id: cursor ? opts.beforeId : undefined,
+      },
+    });
   },
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
   /** List the orgs an API key can access (nothing is persisted). Read-only. */
   merakiDiscover: (body: { api_key: string; base_url?: string }): Promise<MerakiOrgOption[]> =>
-    request('/meraki/orgs/discover', jsonBody('POST', body)),
+    apiPost('/api/v1/meraki/orgs/discover', { body }),
 
   /** The configured Meraki organizations. */
-  listMerakiOrgs: (): Promise<MerakiOrg[]> => request('/meraki/orgs'),
+  listMerakiOrgs: (): Promise<MerakiOrg[]> => apiGet('/api/v1/meraki/orgs'),
 
   /** Onboard one or more orgs under a shared read-only key. */
   createMerakiOrgs: (body: {
     api_key: string;
     base_url?: string;
     org_ids: string[];
-  }): Promise<{ created: number }> => request('/meraki/orgs', jsonBody('POST', body)),
+  }): Promise<{ created: number }> => apiPost('/api/v1/meraki/orgs', { body }),
 
   /** Delete an org (removes its device nodes, config, and groups). */
   deleteMerakiOrg: (id: string): Promise<void> =>
-    request(`/meraki/orgs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/meraki/orgs/{id}', { path: { id } }),
 
   /** Enable/disable an org (pause collection without losing config). */
   setMerakiOrgEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/meraki/orgs/${encodeURIComponent(id)}/enabled`, jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/meraki/orgs/{id}/enabled', { path: { id }, body: { enabled } }),
 
   /** Update an org's per-tier cadence, enabled tiers, and rate budget. */
   setMerakiOrgCadence: (
@@ -553,12 +585,11 @@ export const api = {
       enabled_tiers: string[];
       target_rps: number;
     },
-  ): Promise<void> =>
-    request(`/meraki/orgs/${encodeURIComponent(id)}/cadence`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/meraki/orgs/{id}/cadence', { path: { id }, body }),
 
   /** The org's networks with their monitored (watch/skip) flag. */
   listMerakiNetworks: (id: string): Promise<MerakiNetwork[]> =>
-    request(`/meraki/orgs/${encodeURIComponent(id)}/networks`),
+    apiGet('/api/v1/meraki/orgs/{id}/networks', { path: { id } }),
 
   /** Set the monitored flag for a set of the org's networks. */
   setMerakiNetworksMonitored: (
@@ -566,58 +597,52 @@ export const api = {
     network_ids: string[],
     monitored: boolean,
   ): Promise<void> =>
-    request(
-      `/meraki/orgs/${encodeURIComponent(id)}/networks`,
-      jsonBody('PUT', { network_ids, monitored }),
-    ),
+    apiPut('/api/v1/meraki/orgs/{id}/networks', { path: { id }, body: { network_ids, monitored } }),
 
   /** Enumerate an org's networks + device candidates from the Dashboard API (read-only). */
   enumerateMerakiOrg: (id: string): Promise<MerakiEnumeration> =>
-    request(`/meraki/orgs/${encodeURIComponent(id)}/enumerate`, { method: 'POST' }),
+    apiPost('/api/v1/meraki/orgs/{id}/enumerate', { path: { id } }),
 
   /** Import selected devices as nodes (atomic), setting the chosen networks in scope. */
   importMerakiDevices: (body: {
     org_uuid: string;
     monitored_network_ids: string[];
     devices: MerakiCandidate[];
-  }): Promise<{ imported: number }> => request('/meraki/import', jsonBody('POST', body)),
+  }): Promise<{ imported: number }> => apiPost('/api/v1/meraki/import', { body }),
 
   /** Read the global Meraki polling kill switch. */
-  getMerakiPolling: (): Promise<{ enabled: boolean }> => request('/meraki/polling'),
+  getMerakiPolling: (): Promise<{ enabled: boolean }> => apiGet('/api/v1/meraki/polling'),
 
   /** Set the global Meraki polling kill switch (safeguard: instantly halt all Meraki polling). */
   setMerakiPolling: (enabled: boolean): Promise<void> =>
-    request('/meraki/polling', jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/meraki/polling', { body: { enabled } }),
 
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>
-    request(`/nodes/${encodeURIComponent(id)}/status`),
+    apiGet('/api/v1/nodes/{node_id}/status', { path: { node_id: id } }),
 
   /** One node's config detail incl. bindings (profile/credential/parent). */
-  getNode: (id: string): Promise<NodeDetail> => request(`/nodes/${encodeURIComponent(id)}`),
+  getNode: (id: string): Promise<NodeDetail> =>
+    apiGet('/api/v1/nodes/{node_id}', { path: { node_id: id } }),
 
   /** Interfaces discovered on a node, with query-time utilization. Empty in skeleton mode. */
   listNodeInterfaces: (id: string): Promise<InterfaceRow[]> =>
-    request(`/nodes/${encodeURIComponent(id)}/interfaces`),
+    apiGet('/api/v1/nodes/{node_id}/interfaces', { path: { node_id: id } }),
 
   /** Per-interface throughput + error time-series for the detail charts (defaults: last hour). */
   getInterfaceSeries: (
     nodeId: string,
     ifindex: number,
     opts?: { from?: number; to?: number; step?: number },
-  ): Promise<InterfaceSeries> => {
-    const params = new URLSearchParams();
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    if (opts?.step != null) params.set('step', String(opts.step));
-    const qs = params.toString();
-    const path = `/nodes/${encodeURIComponent(nodeId)}/interfaces/${ifindex}/series`;
-    return request(qs ? `${path}?${qs}` : path);
-  },
+  ): Promise<InterfaceSeries> =>
+    apiGet('/api/v1/nodes/{node_id}/interfaces/{ifindex}/series', {
+      path: { node_id: nodeId, ifindex },
+      query: { from: opts?.from, to: opts?.to, step: opts?.step },
+    }),
 
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/nodes/{node_id}', { path: { node_id: id } }),
 
   /** Trigger an immediate poll of a node (ICMP + its configured SNMP set), bypassing the
    *  scheduler interval. Returns how many jobs were dispatched and the pool they went to;
@@ -625,7 +650,7 @@ export const api = {
    *  shortly after. `pool` is the node's *effective* pool, which may be inherited from its
    *  folder rather than set on the node itself. */
   pollNode: (id: string): Promise<{ dispatched: number; node_id: string; pool: string }> =>
-    request(`/nodes/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
+    apiPost('/api/v1/nodes/{node_id}/poll', { path: { node_id: id } }),
 
   /** Set or clear a node's device-profile + bound credential and its maker/model. The node-edit
    *  UI loads the current values and resends them, so an unchanged field is preserved.
@@ -643,111 +668,115 @@ export const api = {
       model?: string | null;
       pool?: string;
     },
-  ): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/bindings`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/bindings', { path: { node_id: id }, body }),
 
   /** Which pool a node effectively belongs to (own > folder > default) and which poller currently
    *  polls it. Separate from `getNode` because it reads the live coordinator, not the inventory. */
   getNodeAssignment: (id: string): Promise<NodeAssignment> =>
-    request(`/nodes/${encodeURIComponent(id)}/assignment`),
+    apiGet('/api/v1/nodes/{node_id}/assignment', { path: { node_id: id } }),
 
   /** The pools that exist, for the assignment picker. View-gated; names only.
    *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */
-  listPools: (): Promise<PoolsResponse> => request('/pools'),
+  listPools: (): Promise<PoolsResponse> => apiGet('/api/v1/pools'),
 
   /** Move a node to a poll-pool. `''` clears it back to inherited (folder, else default pool).
    *
    *  Single-field on purpose — do NOT reach for `setNodeBindings({ pool })`: that endpoint
    *  overwrites profile/credential/vendor/model unconditionally and would blank all four. */
   setNodePool: (id: string, pool: string): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/pool`, jsonBody('PUT', { pool })),
+    apiPut('/api/v1/nodes/{node_id}/pool', { path: { node_id: id }, body: { pool } }),
 
   /** Move a folder to a poll-pool (`''` ⇒ inherit). Every node beneath it without a pool of its
    *  own follows on the next sweep. */
   setNodeGroupPool: (id: string, pool: string): Promise<void> =>
-    request(`/node-groups/${encodeURIComponent(id)}/pool`, jsonBody('PUT', { pool })),
+    apiPut('/api/v1/node-groups/{id}/pool', { path: { id }, body: { pool } }),
 
   /** Move a node into a group (or `null` to ungroup it), appending it to the end — used by the
    *  "Move to…" picker and a drop directly onto a group. */
   setNodeGroup: (id: string, groupId: string | null): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/group`, jsonBody('PUT', { group_id: groupId })),
+    apiPut('/api/v1/nodes/{node_id}/group', {
+      path: { node_id: id },
+      body: { group_id: groupId },
+    }),
 
   /** Set (or clear with `null`) a node's dependency parent (upstream) — the alert-suppression
    *  edge (parent down ⇒ suppress children, ADR-015). Distinct from `setNodeGroup` (the folder
    *  tree). The server rejects self-dependencies and cycles. */
   setNodeParent: (id: string, parentId: string | null): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/parent`, jsonBody('PUT', { parent_id: parentId })),
+    apiPut('/api/v1/nodes/{node_id}/parent', {
+      path: { node_id: id },
+      body: { parent_id: parentId },
+    }),
 
   /** Drag-reorder a node: place it in `group_id` (`null` ⇒ ungrouped) next to a sibling node.
    *  `before`/`after` name the sibling (at most one; omit both to append). */
   placeNode: (
     id: string,
     body: { group_id: string | null; before?: string; after?: string },
-  ): Promise<void> =>
-    request(`/nodes/${encodeURIComponent(id)}/placement`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/placement', { path: { node_id: id }, body }),
 
   /** The node groups (the inventory folder tree; flat list with parent links). */
-  listNodeGroups: (): Promise<NodeGroup[]> => request('/node-groups'),
+  listNodeGroups: (): Promise<NodeGroup[]> => apiGet('/api/v1/node-groups'),
 
   // ── Troubleshoot analysis jobs (ADR-022) ──
   /** Recent analysis jobs (the runs list), newest first. */
   listAnalysisJobs: (limit?: number): Promise<AnalysisJob[]> =>
-    request(limit != null ? `/analysis/jobs?limit=${limit}` : '/analysis/jobs'),
+    apiGet('/api/v1/analysis/jobs', { query: { limit } }),
 
   /** One analysis job by id. */
   getAnalysisJob: (id: string): Promise<AnalysisJob> =>
-    request(`/analysis/jobs/${encodeURIComponent(id)}`),
+    apiGet('/api/v1/analysis/jobs/{id}', { path: { id } }),
 
   /** A job's findings (the report list), highest score first. */
   getAnalysisFindings: (id: string): Promise<AnalysisFinding[]> =>
-    request(`/analysis/jobs/${encodeURIComponent(id)}/findings`),
+    apiGet('/api/v1/analysis/jobs/{id}/findings', { path: { id } }),
 
   /** Launch a background analysis job; the returned row progresses over SSE. */
   createAnalysisJob: (body: AnalysisJobInput): Promise<AnalysisJob> =>
-    request('/analysis/jobs', jsonBody('POST', body)),
+    apiPost('/api/v1/analysis/jobs', { body }),
 
   /** Cancel a running analysis job. */
   cancelAnalysisJob: (id: string): Promise<{ cancelled: boolean }> =>
-    request(`/analysis/jobs/${encodeURIComponent(id)}/cancel`, jsonBody('POST', {})),
+    apiPost('/api/v1/analysis/jobs/{id}/cancel', { path: { id } }),
 
   // ── Reports (Dashboard → Reports) ──
   /** The report-section catalog (drives the builder). */
-  listReportSections: (): Promise<ReportSectionDef[]> => request('/reports/sections'),
+  listReportSections: (): Promise<ReportSectionDef[]> => apiGet('/api/v1/reports/sections'),
 
   /** All report definitions (templates). */
-  listReportDefinitions: (): Promise<ReportDefinition[]> => request('/reports/definitions'),
+  listReportDefinitions: (): Promise<ReportDefinition[]> => apiGet('/api/v1/reports/definitions'),
 
   /** One report definition by id. */
   getReportDefinition: (id: string): Promise<ReportDefinition> =>
-    request(`/reports/definitions/${encodeURIComponent(id)}`),
+    apiGet('/api/v1/reports/definitions/{id}', { path: { id } }),
 
   /** Create a report definition (admin only). */
   createReportDefinition: (body: ReportDefinitionInput): Promise<ReportDefinition> =>
-    request('/reports/definitions', jsonBody('POST', body)),
+    apiPost('/api/v1/reports/definitions', { body }),
 
   /** Update a report definition (admin only). */
   updateReportDefinition: (id: string, body: ReportDefinitionInput): Promise<{ ok: boolean }> =>
-    request(`/reports/definitions/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/reports/definitions/{id}', { path: { id }, body }),
 
   /** Delete a report definition (admin only). */
-  deleteReportDefinition: (id: string): Promise<void> =>
-    request(`/reports/definitions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteReportDefinition: (id: string): Promise<{ ok: boolean }> =>
+    apiDelete('/api/v1/reports/definitions/{id}', { path: { id } }),
 
   /** Generate a report from a definition now (admin only); the run progresses over SSE. */
   runReport: (id: string): Promise<ReportRun> =>
-    request(`/reports/definitions/${encodeURIComponent(id)}/run`, jsonBody('POST', {})),
+    apiPost('/api/v1/reports/definitions/{id}/run', { path: { id } }),
 
   /** Saved report runs, newest first. */
   listReportRuns: (limit?: number): Promise<ReportRun[]> =>
-    request(limit != null ? `/reports/runs?limit=${limit}` : '/reports/runs'),
+    apiGet('/api/v1/reports/runs', { query: { limit } }),
 
   /** One report run with its rendered result (the viewer). */
   getReportRun: (id: string): Promise<ReportRunDetail> =>
-    request(`/reports/runs/${encodeURIComponent(id)}`),
+    apiGet('/api/v1/reports/runs/{id}', { path: { id } }),
 
   /** Delete a saved report run (admin only). */
-  deleteReportRun: (id: string): Promise<void> =>
-    request(`/reports/runs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteReportRun: (id: string): Promise<{ ok: boolean }> =>
+    apiDelete('/api/v1/reports/runs/{id}', { path: { id } }),
 
   /** Download a report run as html|csv|pdf. Fetches with the bearer token (so it works on an
    *  auth-enabled deployment, unlike a plain anchor href) and returns a Blob to save. */
@@ -755,7 +784,7 @@ export const api = {
     const headers: Record<string, string> = {};
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
     const res = await fetch(
-      `${BASE}/reports/runs/${encodeURIComponent(id)}/export?format=${format}`,
+      `${BASE}/api/v1/reports/runs/${encodeURIComponent(id)}/export?format=${format}`,
       { headers },
     );
     if (!res.ok) {
@@ -776,19 +805,19 @@ export const api = {
   },
 
   /** All report schedules. */
-  listReportSchedules: (): Promise<ReportSchedule[]> => request('/reports/schedules'),
+  listReportSchedules: (): Promise<ReportSchedule[]> => apiGet('/api/v1/reports/schedules'),
 
   /** Create a report schedule (admin only). */
   createReportSchedule: (body: ReportScheduleInput): Promise<{ id: string }> =>
-    request('/reports/schedules', jsonBody('POST', body)),
+    apiPost('/api/v1/reports/schedules', { body }),
 
   /** Update a report schedule (admin only). */
   updateReportSchedule: (id: string, body: ReportScheduleInput): Promise<{ ok: boolean }> =>
-    request(`/reports/schedules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/reports/schedules/{id}', { path: { id }, body }),
 
   /** Delete a report schedule (admin only). */
-  deleteReportSchedule: (id: string): Promise<void> =>
-    request(`/reports/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteReportSchedule: (id: string): Promise<{ ok: boolean }> =>
+    apiDelete('/api/v1/reports/schedules/{id}', { path: { id } }),
 
   /** Create a node group. `parent_id` nests it under another group; `pool` assigns a poll-pool that
    *  its nodes inherit (omit or `''` ⇒ inherit from an ancestor, else the default pool). */
@@ -797,52 +826,49 @@ export const api = {
     group_type: GroupType;
     parent_id?: string | null;
     pool?: string;
-  }): Promise<{ id: string }> => request('/node-groups', jsonBody('POST', body)),
+    // Unlike every other creator this answers 204, so there is no id to read back.
+  }): Promise<void> => apiPost('/api/v1/node-groups', { body }),
 
   /** Rename / re-type / re-parent (move) a node group, and optionally move its poll-pool. `pool`
    *  has the same three-state contract as `setNodeBindings`: omitted = unchanged, `''` = inherit. */
   updateNodeGroup: (
     id: string,
     body: { name: string; group_type: GroupType; parent_id?: string | null; pool?: string },
-  ): Promise<void> =>
-    request(`/node-groups/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/node-groups/{id}', { path: { id }, body }),
 
   /** Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) next to a sibling
    *  group. `before`/`after` name the sibling (at most one; omit both to append). Cycle-guarded. */
   placeNodeGroup: (
     id: string,
     body: { parent_id: string | null; before?: string; after?: string },
-  ): Promise<void> =>
-    request(`/node-groups/${encodeURIComponent(id)}/placement`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/node-groups/{id}/placement', { path: { id }, body }),
 
   /** Set (or clear, with both `null`) a group's geo coordinates for the dashboard map. */
   setNodeGroupGeo: (
     id: string,
     body: { latitude: number | null; longitude: number | null },
-  ): Promise<void> =>
-    request(`/node-groups/${encodeURIComponent(id)}/geo`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/node-groups/{id}/geo', { path: { id }, body }),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
-    request(`/node-groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/node-groups/{id}', { path: { id } }),
 
   /** Device-class profiles. */
-  listProfiles: (): Promise<ProfileSummary[]> => request('/profiles'),
+  listProfiles: (): Promise<ProfileSummary[]> => apiGet('/api/v1/profiles'),
 
   /** Create a profile (name + optional category/vendor). */
   createProfile: (body: ProfileInput): Promise<{ id: string }> =>
-    request('/profiles', jsonBody('POST', body)),
+    apiPost('/api/v1/profiles', { body }),
 
   /** Update a profile's name / category / vendor. */
   updateProfile: (id: string, body: ProfileInput): Promise<void> =>
-    request(`/profiles/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/profiles/{id}', { path: { id }, body }),
 
   /** Delete a profile. */
-  deleteProfile: (id: string): Promise<void> =>
-    request(`/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteProfile: (id: string): Promise<void> => apiDelete('/api/v1/profiles/{id}', { path: { id } }),
 
   /** Threshold rules (hierarchical overrides; most-specific scope wins). */
-  listThresholds: (): Promise<ThresholdPage> => request('/thresholds'),
+  listThresholds: (): Promise<ThresholdPage> => apiGet('/api/v1/thresholds'),
 
   /** Create a threshold rule. */
   createThreshold: (body: {
@@ -853,43 +879,50 @@ export const api = {
     warning?: number;
     critical?: number;
     dwell_samples?: number;
-  }): Promise<{ id: string }> => request('/thresholds', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/thresholds', { body }),
 
   /** Delete a threshold rule. */
   deleteThreshold: (id: string): Promise<void> =>
-    request(`/thresholds/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/thresholds/{id}', { path: { id } }),
 
   /** A node's collection items. `resolved` returns the effective set (the profile's
    *  templates overridden by node-level items) rather than just the node-level overrides. */
-  listNodeCollection: (id: string, resolved = false): Promise<StoredCollectionItem[]> => {
-    const path = `/nodes/${encodeURIComponent(id)}/collection`;
-    return request(resolved ? `${path}?resolved=true` : path);
-  },
+  listNodeCollection: (id: string, resolved = false): Promise<StoredCollectionItem[]> =>
+    arm(
+      apiGet('/api/v1/nodes/{node_id}/collection', {
+        path: { node_id: id },
+        query: { resolved: resolved ? true : undefined },
+      }),
+    ),
 
   /** Add (or update) a collection item on a node (overrides the profile/template default). */
   addNodeCollection: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
-    request(`/nodes/${encodeURIComponent(id)}/collection`, jsonBody('POST', body)),
+    apiPost('/api/v1/nodes/{node_id}/collection', { path: { node_id: id }, body }),
 
   /** Delete a node-scope collection item by id. */
   deleteCollectionItem: (itemId: string): Promise<void> =>
-    request(`/collection/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/collection/{item_id}', { path: { item_id: itemId } }),
 
   /** Reusable collection templates (named metric bundles profiles attach). */
-  listCollectionTemplates: (): Promise<CollectionTemplate[]> => request('/collection-templates'),
+  listCollectionTemplates: (): Promise<CollectionTemplate[]> =>
+    apiGet('/api/v1/collection-templates'),
 
   /** Create a template. 409 `template_name_taken` if the name is in use. */
-  createCollectionTemplate: (body: {
-    name: string;
-    description?: string;
-  }): Promise<{ id: string }> => request('/collection-templates', jsonBody('POST', body)),
+  createCollectionTemplate: (body: { name: string; description?: string }): Promise<{ id: string }> =>
+    apiPost('/api/v1/collection-templates', { body }),
 
   /** Delete a template (also detaches it from every profile). */
   deleteCollectionTemplate: (id: string): Promise<void> =>
-    request(`/collection-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/collection-templates/{id}', { path: { id } }),
 
-  /** The curated OID catalog (MIB repository), optionally filtered by a substring. */
+  /** The curated OID catalog (MIB repository), optionally filtered by a substring.
+   *
+   *  The only endpoint still addressed by a hand-built URL: it percent-encodes the search term
+   *  (`if%20hc`) where every other filter is form-encoded (`if+hc`). Both decode to the same value
+   *  server-side, but the request assertions compare whole URL strings, so routing this through
+   *  `buildUrl` would rewrite a URL nobody asked to change. */
   listMibCatalog: (q?: string): Promise<MibCatalogEntry[]> =>
-    request(q ? `/mib-catalog?q=${encodeURIComponent(q)}` : '/mib-catalog'),
+    request(q ? `/api/v1/mib-catalog?q=${encodeURIComponent(q)}` : '/api/v1/mib-catalog'),
 
   /** Add a catalog entry. 409 `metric_name_taken` if the name is in use. */
   createMibEntry: (body: {
@@ -899,11 +932,11 @@ export const api = {
     metric_kind: MetricKind;
     vendor?: string;
     description?: string;
-  }): Promise<{ id: string }> => request('/mib-catalog', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/mib-catalog', { body }),
 
   /** Delete a catalog entry. */
   deleteMibEntry: (id: string): Promise<void> =>
-    request(`/mib-catalog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/mib-catalog/{id}', { path: { id } }),
 
   /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). Stored
    *  credentials go by id (resolved server-side). The WebUI scans with stored credentials
@@ -912,64 +945,57 @@ export const api = {
     targets: string[];
     communities?: string[];
     credential_ids: string[];
-  }): Promise<{ scan_id: string }> => request('/discovery/scan', jsonBody('POST', body)),
+  }): Promise<{ scan_id: string }> => apiPost('/api/v1/discovery/scan', { body }),
 
   /** Poll a discovery scan's status + candidates. */
   getDiscoveryScan: (id: string): Promise<DiscoveryScan> =>
-    request(`/discovery/scan/${encodeURIComponent(id)}`),
+    apiGet('/api/v1/discovery/scan/{id}', { path: { id } }),
 
   /** Recent discovered (unclassified) devices across scans — the dashboard discovery queue. */
   getDiscoveryCandidates: (limit?: number): Promise<DiscoveryCandidate[]> =>
-    request(limit != null ? `/discovery/candidates?limit=${limit}` : '/discovery/candidates'),
+    apiGet('/api/v1/discovery/candidates', { query: { limit } }),
 
   /** Poll-loop self-monitoring (last sweep / jobs per round / results total). */
-  getPollerHealth: (): Promise<PollerHealth> => request('/poller-health'),
+  getPollerHealth: (): Promise<PollerHealth> => apiGet('/api/v1/poller-health'),
 
   /** The registered distributed-poller fleet + per-pool summary (ADR-009/020). View-gated;
    *  returns the standard 503 (`admin_unavailable`) in skeleton mode. */
-  listPollers: (): Promise<PollersResponse> => request('/pollers'),
+  listPollers: (): Promise<PollersResponse> => apiGet('/api/v1/pollers'),
 
   /** The nodes a poller currently holds in its published working set — the Pollers-page drill-down
    *  ("if this poller dies, what stops being monitored?"). Capped server-side; the response says
    *  whether it was truncated. */
   listPollerNodes: (id: string, limit?: number): Promise<PollerNodesResponse> =>
-    request(
-      `/pollers/${encodeURIComponent(id)}/nodes${limit != null ? `?limit=${limit}` : ''}`,
-    ),
+    apiGet('/api/v1/pollers/{id}/nodes', { path: { id }, query: { limit } }),
 
   /** Remove a decommissioned poller from the durable inventory. Rejects with a typed `ApiError`:
    *  409 `poller_online` if it is currently online (stop it first), 404 `poller_not_found` if it is
    *  unknown. ManageConfig-gated. */
-  deletePoller: (id: string): Promise<void> =>
-    request(`/pollers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deletePoller: (id: string): Promise<void> => apiDelete('/api/v1/pollers/{id}', { path: { id } }),
 
   /** Recent core↔poller visibility outages (Phase 3 store-and-forward). View-gated; degrades to an
    *  empty list on a DB read error, and returns 503 (`admin_unavailable`) in skeleton mode. */
-  listMonitoringGaps: (): Promise<MonitoringGap[]> => request('/monitoring-gaps'),
+  listMonitoringGaps: (): Promise<MonitoringGap[]> => apiGet('/api/v1/monitoring-gaps'),
 
   /** Yagra self-health: reachability of PostgreSQL / TSDB / bus (indirect). */
-  getSystemHealth: (): Promise<SystemHealth> => request('/system-health'),
+  getSystemHealth: (): Promise<SystemHealth> => apiGet('/api/v1/system-health'),
 
   /** Current host resources (CPU/load/mem/disk) for core + every poller reporting telemetry.
    *  Powers the System Health "Host resources" instance selector + the Pollers table columns. */
-  getSystemHosts: (): Promise<SystemHostsResponse> => request('/system/hosts'),
+  getSystemHosts: (): Promise<SystemHostsResponse> => apiGet('/api/v1/system/hosts'),
 
   /** Host CPU/load/mem/disk trends for one instance (`core` or a poller id) over a window. */
   getHostMetricRange: (
     instance: string,
     opts?: { from?: number; to?: number; step?: number },
-  ): Promise<HostMetricRange> => {
-    const params = new URLSearchParams();
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    if (opts?.step != null) params.set('step', String(opts.step));
-    const qs = params.toString();
-    const path = `/system/hosts/${encodeURIComponent(instance)}/metrics/range`;
-    return request(qs ? `${path}?${qs}` : path);
-  },
+  ): Promise<HostMetricRange> =>
+    apiGet('/api/v1/system/hosts/{instance}/metrics/range', {
+      path: { instance },
+      query: { from: opts?.from, to: opts?.to, step: opts?.step },
+    }),
 
   /** Running core/API version (for Settings ▸ About). Public — no auth required. */
-  getVersion: (): Promise<VersionInfo> => request('/version'),
+  getVersion: (): Promise<VersionInfo> => apiGet('/api/v1/version'),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (
@@ -981,57 +1007,55 @@ export const api = {
       vendor?: string;
       model?: string;
     }[],
-  ): Promise<{ created: number }> => request('/discovery/import', jsonBody('POST', { nodes })),
+  ): Promise<{ created: number }> => apiPost('/api/v1/discovery/import', { body: { nodes } }),
 
   /** Device-classification rules (discovery → suggested profile), ascending by priority. */
-  listClassificationRules: (): Promise<ClassificationRule[]> => request('/classification-rules'),
+  listClassificationRules: (): Promise<ClassificationRule[]> =>
+    apiGet('/api/v1/classification-rules'),
 
   /** Create a classification rule. 400s on bad regex/prefix/profile. */
   createClassificationRule: (body: ClassificationRuleInput): Promise<{ id: string }> =>
-    request('/classification-rules', jsonBody('POST', body)),
+    apiPost('/api/v1/classification-rules', { body }),
 
   /** Update a classification rule in place. */
   updateClassificationRule: (id: string, body: ClassificationRuleInput): Promise<void> =>
-    request(`/classification-rules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/classification-rules/{id}', { path: { id }, body }),
 
   /** Delete a classification rule. */
   deleteClassificationRule: (id: string): Promise<void> =>
-    request(`/classification-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/classification-rules/{id}', { path: { id } }),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>
-    request(`/collection-templates/${encodeURIComponent(id)}/items`),
+    apiGet('/api/v1/collection-templates/{id}/items', { path: { id } }),
 
   /** Add (or update) a metric in a template. */
   addTemplateItem: (id: string, body: CollectionItemInput): Promise<{ id: string }> =>
-    request(`/collection-templates/${encodeURIComponent(id)}/items`, jsonBody('POST', body)),
+    apiPost('/api/v1/collection-templates/{id}/items', { path: { id }, body }),
 
   /** Delete a metric from a template. */
   deleteTemplateItem: (templateId: string, itemId: string): Promise<void> =>
-    request(
-      `/collection-templates/${encodeURIComponent(templateId)}/items/${encodeURIComponent(itemId)}`,
-      { method: 'DELETE' },
-    ),
+    apiDelete('/api/v1/collection-templates/{id}/items/{item_id}', {
+      path: { id: templateId, item_id: itemId },
+    }),
 
   /** The templates a profile attaches. */
   listProfileTemplates: (id: string): Promise<CollectionTemplate[]> =>
-    request(`/profiles/${encodeURIComponent(id)}/templates`),
+    apiGet('/api/v1/profiles/{id}/templates', { path: { id } }),
 
   /** Replace the set of templates a profile attaches. */
   setProfileTemplates: (id: string, templateIds: string[]): Promise<void> =>
-    request(`/profiles/${encodeURIComponent(id)}/templates`, jsonBody('PUT', {
-      template_ids: templateIds,
-    })),
+    apiPut('/api/v1/profiles/{id}/templates', {
+      path: { id },
+      body: { template_ids: templateIds },
+    }),
 
   /** Credential metadata listing (never includes secret values). */
-  listCredentials: (): Promise<CredentialSummary[]> => request('/credentials'),
+  listCredentials: (): Promise<CredentialSummary[]> => apiGet('/api/v1/credentials'),
 
   /** Store a new encrypted credential. */
-  createCredential: (body: {
-    name: string;
-    kind: string;
-    secret: string;
-  }): Promise<{ id: string }> => request('/credentials', jsonBody('POST', body)),
+  createCredential: (body: { name: string; kind: string; secret: string }): Promise<{ id: string }> =>
+    apiPost('/api/v1/credentials', { body }),
 
   /** Update a credential. `name` is required; pass `secret` (with its `kind`) only to replace the
    *  stored secret — omit it to rename in place (the secret is never returned, so editing keeps
@@ -1039,42 +1063,33 @@ export const api = {
   updateCredential: (
     id: string,
     body: { name: string; kind?: string; secret?: string },
-  ): Promise<void> =>
-    request(`/credentials/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/credentials/{id}', { path: { id }, body }),
 
   /** Delete a credential. */
   deleteCredential: (id: string): Promise<void> =>
-    request(`/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/credentials/{id}', { path: { id } }),
 
   /** Active alerts. */
-  listAlerts: (): Promise<Alert[]> => request('/alerts'),
+  listAlerts: (): Promise<Alert[]> => apiGet('/api/v1/alerts'),
 
   /** Alert history page, newest first. `before` is the keyset cursor: pass the last row's
    *  `recorded_at` to fetch the next (older) page (mirrors the audit log's paging). */
-  listAlertHistory: (opts?: { limit?: number; before?: string }): Promise<AlertHistoryRow[]> => {
-    const params = new URLSearchParams();
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    if (opts?.before) params.set('before', opts.before);
-    const qs = params.toString();
-    return request(qs ? `/alerts/history?${qs}` : '/alerts/history');
-  },
+  listAlertHistory: (opts?: { limit?: number; before?: string }): Promise<AlertHistoryRow[]> =>
+    apiGet('/api/v1/alerts/history', {
+      query: { limit: opts?.limit, before: opts?.before || undefined },
+    }),
 
   /** Nodes generating the most alert fires over a trailing window (chronic offenders). */
-  getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<AlertNodeCount[]> => {
-    const params = new URLSearchParams();
-    if (opts?.window != null) params.set('window', String(opts.window));
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    const qs = params.toString();
-    return request(qs ? `/alerts/top-nodes?${qs}` : '/alerts/top-nodes');
-  },
+  getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<AlertNodeCount[]> =>
+    apiGet('/api/v1/alerts/top-nodes', { query: { window: opts?.window, limit: opts?.limit } }),
 
   /** Alert fires bucketed weekday×hour over the last `days` (heatmap). */
   getAlertCalendar: (days?: number): Promise<CalendarBucket[]> =>
-    request(days != null ? `/alerts/calendar?days=${days}` : '/alerts/calendar'),
+    apiGet('/api/v1/alerts/calendar', { query: { days } }),
 
   /** Recent up/down transitions (latest fires + recoveries). */
   getAlertTransitions: (limit?: number): Promise<AlertTransition[]> =>
-    request(limit != null ? `/alerts/transitions?limit=${limit}` : '/alerts/transitions'),
+    apiGet('/api/v1/alerts/transitions', { query: { limit } }),
 
   /** The dependency graph: nodes + parent edges + state + active root-cause attribution. The
    *  endpoint is keyset-paginated (S7) — this pages through `next_cursor` and assembles the whole
@@ -1086,12 +1101,7 @@ export const api = {
     // Bounded loop: pages are ≤5000 server-side, so even a 50k fleet is ~10 iterations. The guard
     // caps a pathological run at 100k nodes (200 pages) rather than looping unbounded.
     for (let i = 0; i < 200; i++) {
-      const params = new URLSearchParams();
-      if (cursor) params.set('cursor', cursor);
-      const qs = params.toString();
-      const page = await request<{ nodes: TopologyNode[]; next_cursor: string | null }>(
-        qs ? `/topology?${qs}` : '/topology',
-      );
+      const page = await apiGet('/api/v1/topology', { query: { cursor } });
       nodes.push(...page.nodes);
       if (!page.next_cursor) break;
       cursor = page.next_cursor;
@@ -1101,38 +1111,29 @@ export const api = {
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */
-  getFleetSummary: (): Promise<FleetSummary> => request('/fleet/summary'),
+  getFleetSummary: (): Promise<FleetSummary> => apiGet('/api/v1/fleet/summary'),
 
   /** Per-group health rollup (each group's direct-member state counts), computed server-side so the
    *  site-matrix / region-rollup / geo-map widgets aggregate the whole fleet, not the first page of
    *  nodes (A-1). The client joins these to the group tree for names/geo and sums descendants. */
-  getFleetGroupSummary: (): Promise<FleetGroupSummary> => request('/fleet/group-summary'),
+  getFleetGroupSummary: (): Promise<FleetGroupSummary> => apiGet('/api/v1/fleet/group-summary'),
 
   /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
-  getFleetCoverage: (): Promise<FleetCoverage> => request('/fleet/coverage'),
+  getFleetCoverage: (): Promise<FleetCoverage> => apiGet('/api/v1/fleet/coverage'),
 
   /** Node-state counts over time (fleet health timeline; default last 24h). */
-  getStateHistory: (opts?: { from?: number; to?: number }): Promise<StateHistory> => {
-    const params = new URLSearchParams();
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    const qs = params.toString();
-    return request(qs ? `/fleet/state-history?${qs}` : '/fleet/state-history');
-  },
+  getStateHistory: (opts?: { from?: number; to?: number }): Promise<StateHistory> =>
+    apiGet('/api/v1/fleet/state-history', { query: { from: opts?.from, to: opts?.to } }),
 
   /** Fleet aggregate ingress/egress (bits/sec) over time (default last 24h). */
   getThroughputRange: (opts?: {
     from?: number;
     to?: number;
     step?: number;
-  }): Promise<ThroughputRange> => {
-    const params = new URLSearchParams();
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    if (opts?.step != null) params.set('step', String(opts.step));
-    const qs = params.toString();
-    return request(qs ? `/metrics/throughput-range?${qs}` : '/metrics/throughput-range');
-  },
+  }): Promise<ThroughputRange> =>
+    apiGet('/api/v1/metrics/throughput-range', {
+      query: { from: opts?.from, to: opts?.to, step: opts?.step },
+    }),
 
   /** Busiest-links × time throughput heatmap (default top 8 over last 6h). */
   getInterfaceHeatmap: (opts?: {
@@ -1140,91 +1141,86 @@ export const api = {
     from?: number;
     to?: number;
     step?: number;
-  }): Promise<InterfaceHeatmap> => {
-    const params = new URLSearchParams();
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    if (opts?.from != null) params.set('from', String(opts.from));
-    if (opts?.to != null) params.set('to', String(opts.to));
-    if (opts?.step != null) params.set('step', String(opts.step));
-    const qs = params.toString();
-    return request(qs ? `/metrics/interface-heatmap?${qs}` : '/metrics/interface-heatmap');
-  },
+  }): Promise<InterfaceHeatmap> =>
+    apiGet('/api/v1/metrics/interface-heatmap', {
+      query: { limit: opts?.limit, from: opts?.from, to: opts?.to, step: opts?.step },
+    }),
 
   /** Notification channels (metadata only; the secret config is never returned). */
   listNotificationChannels: (): Promise<NotificationChannel[]> =>
-    request('/notification-channels'),
+    apiGet('/api/v1/notification-channels'),
 
   /** Create a notification channel (name + secret config, sealed server-side). */
   createNotificationChannel: (body: {
     name: string;
     config: ChannelConfigInput;
-  }): Promise<{ id: string }> => request('/notification-channels', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/notification-channels', { body }),
 
   /** Enable/disable a channel. */
   setNotificationChannelEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/notification-channels/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/notification-channels/{id}', { path: { id }, body: { enabled } }),
 
   /** Delete a channel (and drop it from any rule). */
   deleteNotificationChannel: (id: string): Promise<void> =>
-    request(`/notification-channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/notification-channels/{id}', { path: { id } }),
 
   /** Routing rules (which alerts, by severity, fan out to which channels). */
-  listRoutingRules: (): Promise<RoutingRule[]> => request('/routing-rules'),
+  listRoutingRules: (): Promise<RoutingRule[]> => apiGet('/api/v1/routing-rules'),
 
   /** Create a routing rule. `severity` null ⇒ matches all severities. */
   createRoutingRule: (body: {
     name: string;
     severity: Severity | null;
     channel_ids: string[];
-  }): Promise<{ id: string }> => request('/routing-rules', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/routing-rules', { body }),
 
   /** Enable/disable a rule. */
   setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/routing-rules/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/routing-rules/{id}', { path: { id }, body: { enabled } }),
 
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
-    request(`/routing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/routing-rules/{id}', { path: { id } }),
 
   // ── Passive events (syslog / SNMP traps / webhooks) ──
 
   /** Webhook ingest sources (the bearer token is never returned after create/rotate). */
-  listEventSources: (): Promise<EventSource[]> => request('/event-sources'),
+  listEventSources: (): Promise<EventSource[]> => apiGet('/api/v1/event-sources'),
 
   /** Create a webhook source; the response `token` is shown once and only its hash is stored. */
   createEventSource: (body: {
     name: string;
     node_id?: string | null;
-  }): Promise<{ id: string; token: string }> => request('/event-sources', jsonBody('POST', body)),
+  }): Promise<{ id: string; token: string }> => apiPost('/api/v1/event-sources', { body }),
 
   /** Update a source's name / enabled / node binding. */
   updateEventSource: (
     id: string,
     body: { name: string; enabled: boolean; node_id?: string | null },
-  ): Promise<void> => request(`/event-sources/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+  ): Promise<void> => apiPut('/api/v1/event-sources/{id}', { path: { id }, body }),
 
   /** Replace a source's token; the new `token` is shown once. */
   rotateEventSourceToken: (id: string): Promise<{ token: string }> =>
-    request(`/event-sources/${encodeURIComponent(id)}/rotate-token`, { method: 'POST' }),
+    apiPost('/api/v1/event-sources/{id}/rotate-token', { path: { id } }),
 
   /** Delete a webhook source. */
   deleteEventSource: (id: string): Promise<void> =>
-    request(`/event-sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/event-sources/{id}', { path: { id } }),
 
   /** Event match rules (substring/regex → alert). */
-  listEventRules: (): Promise<EventRule[]> => request('/event-rules'),
+  listEventRules: (): Promise<EventRule[]> => apiGet('/api/v1/event-rules'),
 
   /** Create an event rule. */
   createEventRule: (body: EventRuleInput): Promise<{ id: string }> =>
-    request('/event-rules', jsonBody('POST', body)),
+    apiPost('/api/v1/event-rules', { body }),
 
   /** Update an event rule. */
   updateEventRule: (id: string, body: EventRuleInput): Promise<void> =>
-    request(`/event-rules/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/event-rules/{id}', { path: { id }, body }),
 
   /** Delete an event rule. */
   deleteEventRule: (id: string): Promise<void> =>
-    request(`/event-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/event-rules/{id}', { path: { id } }),
 
   /** Try a pattern against a sample message (compile errors returned in-band). */
   testEventRule: (body: {
@@ -1232,7 +1228,7 @@ export const api = {
     pattern: string;
     clear_pattern?: string | null;
     sample: string;
-  }): Promise<EventRuleTestResult> => request('/event-rules/test', jsonBody('POST', body)),
+  }): Promise<EventRuleTestResult> => apiPost('/api/v1/event-rules/test', { body }),
 
   /** Received events, keyset-paged on `recorded_at` (newest first) with optional filters. */
   listEvents: (opts?: {
@@ -1250,48 +1246,52 @@ export const api = {
     start?: string;
     /** Time-range upper bound (inclusive, RFC 3339). */
     end?: string;
-  }): Promise<EventRow[]> => {
-    const params = new URLSearchParams();
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    if (opts?.before) params.set('before', opts.before);
-    if (opts?.kind) params.set('kind', opts.kind);
-    if (opts?.node_id) params.set('node_id', opts.node_id);
-    if (opts?.matched != null) params.set('matched', String(opts.matched));
-    if (opts?.q) params.set('q', opts.q);
-    if (opts?.regex) params.set('regex', 'true');
-    if (opts?.start) params.set('start', opts.start);
-    if (opts?.end) params.set('end', opts.end);
-    const qs = params.toString();
-    return request(qs ? `/events?${qs}` : '/events');
-  },
+  }): Promise<EventRow[]> =>
+    apiGet('/api/v1/events', {
+      query: {
+        limit: opts?.limit,
+        before: opts?.before || undefined,
+        kind: opts?.kind || undefined,
+        node_id: opts?.node_id || undefined,
+        matched: opts?.matched ?? undefined,
+        q: opts?.q || undefined,
+        regex: opts?.regex ? true : undefined,
+        start: opts?.start || undefined,
+        end: opts?.end || undefined,
+      },
+    }),
 
   /** Manually close an active event alert (identity mirrors the alert wire shape). */
   closeEventAlert: (node: string, check: string): Promise<void> =>
-    request('/events/alerts/close', jsonBody('POST', { node, check })),
+    apiPost('/api/v1/events/alerts/close', { body: { node, check } }),
 
   /** Categorical passive-event summary counts (kind/action/trap/source), ordered by count desc.
    *  Backed by the log store when enabled, else PostgreSQL — same filter as the event log. */
   getEventStats: (
     groupBy: 'kind' | 'action' | 'trap' | 'source',
     opts?: EventStatsFilter & { limit?: number },
-  ): Promise<EventStatBucket[]> => {
-    const p = eventStatsParams(opts ?? {});
-    p.set('group_by', groupBy);
-    if (opts?.limit != null) p.set('limit', String(opts.limit));
-    return request(`/events/stats?${p.toString()}`);
-  },
+  ): Promise<EventStatBucket[]> =>
+    arm(
+      apiGet('/api/v1/events/stats', {
+        query: { ...eventStatsQuery(opts ?? {}), group_by: groupBy, limit: opts?.limit },
+      }),
+    ),
 
   /** Passive-event volume time series (counts per `bucketSecs` window; `splitKind` adds a per-kind
    *  breakdown). */
   getEventVolume: (
     opts?: EventStatsFilter & { bucketSecs?: number; splitKind?: boolean },
-  ): Promise<EventTimeBucket[]> => {
-    const p = eventStatsParams(opts ?? {});
-    p.set('group_by', 'time');
-    if (opts?.bucketSecs != null) p.set('bucket_secs', String(opts.bucketSecs));
-    if (opts?.splitKind) p.set('split', 'kind');
-    return request(`/events/stats?${p.toString()}`);
-  },
+  ): Promise<EventTimeBucket[]> =>
+    arm(
+      apiGet('/api/v1/events/stats', {
+        query: {
+          ...eventStatsQuery(opts ?? {}),
+          group_by: 'time',
+          bucket_secs: opts?.bucketSecs,
+          split: opts?.splitKind ? 'kind' : undefined,
+        },
+      }),
+    ),
 
   // ── Flow analysis (ADR-031) — served only when a ClickHouse flow store is configured; the
   // endpoints 503 (`flow_unavailable`) otherwise. `from`/`to` are unix seconds. ──
@@ -1300,76 +1300,95 @@ export const api = {
     nodeId: string,
     opts: { from: number; to: number } & FlowFilters,
   ): Promise<FlowPoint[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/series?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/series', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   /** Top source hosts by bytes. */
   getNodeFlowTopTalkers: (
     nodeId: string,
     opts: { from: number; to: number; limit?: number } & FlowFilters,
   ): Promise<FlowTalker[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-talkers?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/top-talkers', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   /** Top src→dst conversations by bytes. */
   getNodeFlowConversations: (
     nodeId: string,
     opts: { from: number; to: number; limit?: number } & FlowFilters,
   ): Promise<FlowConversation[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/conversations?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/conversations', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   /** Top destination ports by bytes. */
   getNodeFlowTopPorts: (
     nodeId: string,
     opts: { from: number; to: number; limit?: number } & FlowFilters,
   ): Promise<FlowPortAgg[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-ports?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/top-ports', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   /** Traffic by IP protocol. */
   getNodeFlowProtocols: (
     nodeId: string,
     opts: { from: number; to: number; limit?: number } & FlowFilters,
   ): Promise<FlowProtoAgg[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/protocols?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/protocols', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   /** Top autonomous systems by bytes (`dir` = 'src' | 'dst', default 'dst'). */
   getNodeFlowTopAs: (
     nodeId: string,
     opts: { from: number; to: number; limit?: number; dir?: 'src' | 'dst' } & FlowFilters,
   ): Promise<FlowAsAgg[]> =>
-    request(`/nodes/${encodeURIComponent(nodeId)}/flow/top-as?${flowParams(opts)}`),
+    apiGet('/api/v1/nodes/{node_id}/flow/top-as', {
+      path: { node_id: nodeId },
+      query: flowQuery(opts),
+    }),
 
   // ── Fleet-wide flow (all exporters) — the dashboard Traffic-flow widgets. Same shapes as the
   // per-node endpoints, no node scope; same 503 (`flow_unavailable`) gate. ──
   /** Fleet bytes/packets over time per protocol (trend). */
   getFlowSeries: (opts: { from: number; to: number } & FlowFilters): Promise<FlowPoint[]> =>
-    request(`/flow/series?${flowParams(opts)}`),
+    apiGet('/api/v1/flow/series', { query: flowQuery(opts) }),
 
   /** Fleet top source hosts by bytes. */
   getFlowTopTalkers: (
     opts: { from: number; to: number; limit?: number } & FlowFilters,
-  ): Promise<FlowTalker[]> => request(`/flow/top-talkers?${flowParams(opts)}`),
+  ): Promise<FlowTalker[]> => apiGet('/api/v1/flow/top-talkers', { query: flowQuery(opts) }),
 
   /** Fleet top src→dst conversations by bytes. */
   getFlowConversations: (
     opts: { from: number; to: number; limit?: number } & FlowFilters,
-  ): Promise<FlowConversation[]> => request(`/flow/conversations?${flowParams(opts)}`),
+  ): Promise<FlowConversation[]> =>
+    apiGet('/api/v1/flow/conversations', { query: flowQuery(opts) }),
 
   /** Fleet top destination ports by bytes. */
   getFlowTopPorts: (
     opts: { from: number; to: number; limit?: number } & FlowFilters,
-  ): Promise<FlowPortAgg[]> => request(`/flow/top-ports?${flowParams(opts)}`),
+  ): Promise<FlowPortAgg[]> => apiGet('/api/v1/flow/top-ports', { query: flowQuery(opts) }),
 
   /** Fleet traffic by IP protocol. */
   getFlowProtocols: (
     opts: { from: number; to: number; limit?: number } & FlowFilters,
-  ): Promise<FlowProtoAgg[]> => request(`/flow/protocols?${flowParams(opts)}`),
+  ): Promise<FlowProtoAgg[]> => apiGet('/api/v1/flow/protocols', { query: flowQuery(opts) }),
 
   /** Fleet top autonomous systems by bytes (`dir` = 'src' | 'dst', default 'dst'). */
   getFlowTopAs: (
     opts: { from: number; to: number; limit?: number; dir?: 'src' | 'dst' } & FlowFilters,
-  ): Promise<FlowAsAgg[]> => request(`/flow/top-as?${flowParams(opts)}`),
+  ): Promise<FlowAsAgg[]> => apiGet('/api/v1/flow/top-as', { query: flowQuery(opts) }),
 
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
-  listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => request('/maintenance-windows'),
+  listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => apiGet('/api/v1/maintenance-windows'),
 
   /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds plus `group_id`
    *  (a folder group, resolved recursively). */
@@ -1379,18 +1398,18 @@ export const api = {
     scope_id: string;
     starts_at: string;
     ends_at: string;
-  }): Promise<{ id: string }> => request('/maintenance-windows', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/maintenance-windows', { body }),
 
   /** Enable/disable a maintenance window. */
   setMaintenanceWindowEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/maintenance-windows/${encodeURIComponent(id)}`, jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/maintenance-windows/{id}', { path: { id }, body: { enabled } }),
 
   /** Delete a maintenance window. */
   deleteMaintenanceWindow: (id: string): Promise<void> =>
-    request(`/maintenance-windows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/maintenance-windows/{id}', { path: { id } }),
 
   /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
-  listMutes: (): Promise<Mute[]> => request('/mutes'),
+  listMutes: (): Promise<Mute[]> => apiGet('/api/v1/mutes'),
 
   /** Create a mute. `scope_kind` is `node` (one node, optionally one `metric_name`) or `group`
    *  (every node under a folder group, recursive — `metric_name` ignored); `scope_id` is the
@@ -1401,79 +1420,68 @@ export const api = {
     metric_name?: string;
     until: string;
     reason?: string;
-  }): Promise<{ id: string }> => request('/mutes', jsonBody('POST', body)),
+  }): Promise<{ id: string }> => apiPost('/api/v1/mutes', { body }),
 
   /** Delete (lift) a mute. */
-  deleteMute: (id: string): Promise<void> =>
-    request(`/mutes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteMute: (id: string): Promise<void> => apiDelete('/api/v1/mutes/{id}', { path: { id } }),
 
   /** The role-vs-privilege matrix: which permissions each role grants. Read-only (View). */
-  listRoles: (): Promise<RoleMatrix> => request('/roles'),
+  listRoles: (): Promise<RoleMatrix> => apiGet('/api/v1/roles'),
 
   /** User accounts (metadata only; never the password hash). Requires admin (ManageUsers). */
-  listUsers: (): Promise<UserSummary[]> => request('/users'),
+  listUsers: (): Promise<UserSummary[]> => apiGet('/api/v1/users'),
 
   /** Create a user account. The password is hashed server-side and never returned. */
-  createUser: (body: {
-    username: string;
-    password: string;
-    role: Role;
-  }): Promise<{ id: string }> => request('/users', jsonBody('POST', body)),
+  createUser: (body: { username: string; password: string; role: Role }): Promise<{ id: string }> =>
+    apiPost('/api/v1/users', { body }),
 
   /** Delete a user account. Refused (409 `last_admin`) for the last admin. */
-  deleteUser: (id: string): Promise<void> =>
-    request(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteUser: (id: string): Promise<void> => apiDelete('/api/v1/users/{id}', { path: { id } }),
 
   /** Change a user's role. Refused (409 `last_admin`) when demoting the last admin. */
   setUserRole: (id: string, role: Role): Promise<void> =>
-    request(`/users/${encodeURIComponent(id)}/role`, jsonBody('PUT', { role })),
+    apiPut('/api/v1/users/{id}/role', { path: { id }, body: { role } }),
 
   /** Enable or disable a user account. Refused (409 `last_admin`) when disabling the last
    *  admin that can still log in. A disabled account is kept for the audit trail. */
   setUserEnabled: (id: string, enabled: boolean): Promise<void> =>
-    request(`/users/${encodeURIComponent(id)}/enabled`, jsonBody('PUT', { enabled })),
+    apiPut('/api/v1/users/{id}/enabled', { path: { id }, body: { enabled } }),
 
   /** Reset a user's password (hashed server-side; never echoed back). */
   setUserPassword: (id: string, password: string): Promise<void> =>
-    request(`/users/${encodeURIComponent(id)}/password`, jsonBody('PUT', { password })),
+    apiPut('/api/v1/users/{id}/password', { path: { id }, body: { password } }),
 
   /** Audit log page, newest first (admin-only). `before` is the keyset cursor: pass the
    *  last row's `at` to fetch the next (older) page. */
-  listAudit: (opts?: { limit?: number; before?: string }): Promise<AuditRow[]> => {
-    const params = new URLSearchParams();
-    if (opts?.limit != null) params.set('limit', String(opts.limit));
-    if (opts?.before) params.set('before', opts.before);
-    const qs = params.toString();
-    return request(qs ? `/audit?${qs}` : '/audit');
-  },
+  listAudit: (opts?: { limit?: number; before?: string }): Promise<AuditRow[]> =>
+    apiGet('/api/v1/audit', {
+      query: { limit: opts?.limit, before: opts?.before || undefined },
+    }),
 
   /** The caller's saved My Dashboard layout, or `null` if none saved yet (the client then uses
    *  its default). The body is opaque JSON — the client owns and migrates the widget shape
    *  (types in `dashboard/types`); the server stores it verbatim, scoped to the logged-in user. */
-  getDashboard: (): Promise<unknown> => request('/dashboard'),
+  getDashboard: (): Promise<unknown> => apiGet('/api/v1/dashboard'),
 
   /** Save (replace) the caller's My Dashboard layout. */
   putDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
-    request('/dashboard', jsonBody('PUT', layout)),
+    apiPut('/api/v1/dashboard', { body: layout }),
 
   /** The global Shared Dashboard layout (one board shown to all users), or null until an admin
    *  has saved one. Open-read; the write side is admin-only. Same opaque-JSON contract. */
-  getSharedDashboard: (): Promise<unknown> => request('/shared-dashboard'),
+  getSharedDashboard: (): Promise<unknown> => apiGet('/api/v1/shared-dashboard'),
 
   /** Save (replace) the global Shared Dashboard layout. Admin only — a 403 means the caller's role
    *  may not change it (the change applies to every user). */
   putSharedDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
-    request('/shared-dashboard', jsonBody('PUT', layout)),
+    apiPut('/api/v1/shared-dashboard', { body: layout }),
 
   /** The current principal (role). Requires a valid session. */
-  me: (): Promise<AuthMe> => request('/auth/me'),
+  me: (): Promise<AuthMe> => apiGet('/api/v1/auth/me'),
 
   /** Log in; stores the bearer token on success. */
   login: async (username: string, password: string): Promise<{ token: string; role: string }> => {
-    const res = await request<{ token: string; role: string }>(
-      '/auth/login',
-      jsonBody('POST', { username, password }),
-    );
+    const res = await apiPost('/api/v1/auth/login', { body: { username, password } });
     setToken(res.token);
     return res;
   },
@@ -1483,7 +1491,7 @@ export const api = {
    *  never trap the user in a logged-in UI. */
   logout: async (): Promise<void> => {
     try {
-      await request('/auth/logout', jsonBody('POST', {}));
+      await apiPost('/api/v1/auth/logout');
     } catch {
       // Ignore: the token may already be invalid/expired; we still clear it locally below.
     }
@@ -1492,85 +1500,83 @@ export const api = {
 
   // ── OIDC (external IdP login) ──
   /** Begin SSO: get the IdP authorization URL to redirect the browser to. */
-  oidcAuthorize: (): Promise<{ authorize_url: string }> => request('/auth/oidc/authorize'),
+  oidcAuthorize: (): Promise<{ authorize_url: string }> => apiGet('/api/v1/auth/oidc/authorize'),
 
   /** Complete SSO from the IdP redirect: exchange code+state for a session; stores the token. */
   oidcCallback: async (code: string, state: string): Promise<{ token: string; role: string }> => {
-    const res = await request<{ token: string; role: string }>(
-      '/auth/oidc/callback',
-      jsonBody('POST', { code, state }),
-    );
+    const res = await apiPost('/api/v1/auth/oidc/callback', { body: { code, state } });
     setToken(res.token);
     return res;
   },
 
   // ── OIDC provider config (Settings ▸ Auth, ManageUsers) ──
   /** List configured OIDC providers (never includes the client_secret). */
-  listOidcProviders: (): Promise<OidcProviderSummary[]> => request('/settings/oidc'),
+  listOidcProviders: (): Promise<OidcProviderSummary[]> => apiGet('/api/v1/settings/oidc'),
 
   /** Create an OIDC provider. */
   createOidcProvider: (body: OidcProviderInput): Promise<{ id: string }> =>
-    request('/settings/oidc', jsonBody('POST', body)),
+    apiPost('/api/v1/settings/oidc', { body }),
 
   /** Update an OIDC provider (omit client_secret to keep the stored one). */
   updateOidcProvider: (id: string, body: OidcProviderInput): Promise<void> =>
-    request(`/settings/oidc/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/settings/oidc/{id}', { path: { id }, body }),
 
   /** Delete an OIDC provider. */
   deleteOidcProvider: (id: string): Promise<void> =>
-    request(`/settings/oidc/${encodeURIComponent(id)}`, jsonBody('DELETE', {})),
+    apiDelete('/api/v1/settings/oidc/{id}', { path: { id } }),
 
   // ── API tokens (Settings ▸ API tokens, ManageUsers) — the MCP/API client credential (ADR-028) ──
   /** List API tokens (metadata only — never the raw token). */
-  listApiTokens: (): Promise<ApiTokenSummary[]> => request('/api-tokens'),
+  listApiTokens: (): Promise<ApiTokenSummary[]> => apiGet('/api/v1/api-tokens'),
 
   /** Create an API token; the response `token` is shown once and only its hash is stored. */
   createApiToken: (body: ApiTokenInput): Promise<CreatedApiToken> =>
-    request('/api-tokens', jsonBody('POST', body)),
+    apiPost('/api/v1/api-tokens', { body }),
 
   /** Revoke (soft-delete) an API token. */
   revokeApiToken: (id: string): Promise<void> =>
-    request(`/api-tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/api-tokens/{id}', { path: { id } }),
 
   // ── Forwarding (Settings ▸ Forwarding, ManageConfig) — the passive-data tee (ADR-034) ──
   /** List forwarding destinations (never the stored secret). */
-  listForwardDestinations: (): Promise<ForwardDestination[]> => request('/forwarding/destinations'),
+  listForwardDestinations: (): Promise<ForwardDestination[]> =>
+    apiGet('/api/v1/forwarding/destinations'),
 
   /** Create a forwarding destination. */
   createForwardDestination: (body: ForwardDestinationInput): Promise<{ id: string }> =>
-    request('/forwarding/destinations', jsonBody('POST', body)),
+    apiPost('/api/v1/forwarding/destinations', { body }),
 
   /** Update a forwarding destination; omitting `community` keeps the stored one. */
   updateForwardDestination: (id: string, body: ForwardDestinationInput): Promise<void> =>
-    request(`/forwarding/destinations/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+    apiPut('/api/v1/forwarding/destinations/{id}', { path: { id }, body }),
 
   /** Delete a forwarding destination. */
   deleteForwardDestination: (id: string): Promise<void> =>
-    request(`/forwarding/destinations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    apiDelete('/api/v1/forwarding/destinations/{id}', { path: { id } }),
 
   /** Send one synthetic message to a destination. A transport failure comes back as
    *  `{ delivered: false, error }` (HTTP 200) — the configuration is the caller's, not a server
    *  fault, and the error text is what the admin needs to fix it. */
   testForwardDestination: (id: string): Promise<ForwardTestResult> =>
-    request(`/forwarding/destinations/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+    apiPost('/api/v1/forwarding/destinations/{id}/test', { path: { id } }),
 
   /** Live forwarding counters + any online poller that cannot supply original bytes. */
-  forwardingStatus: (): Promise<ForwardStatus> => request('/forwarding/status'),
+  forwardingStatus: (): Promise<ForwardStatus> => apiGet('/api/v1/forwarding/status'),
 
   // ── AI-assisted RCA (ADR-029) — provider config is ManageConfig, generation is AckAlerts ──
   /** The active provider's configuration plus the selectable vendors. Never the credential. */
-  getLlmConfig: (): Promise<LlmConfigResponse> => request('/llm/config'),
+  getLlmConfig: (): Promise<LlmConfigResponse> => apiGet('/api/v1/llm/config'),
 
   /** Create or replace the provider configuration. Omit `api_key` to keep the stored one. */
-  saveLlmConfig: (body: LlmConfigInput): Promise<void> => request('/llm/config', jsonBody('PUT', body)),
+  saveLlmConfig: (body: LlmConfigInput): Promise<void> => apiPut('/api/v1/llm/config', { body }),
 
   /** Send one minimal prompt to the **saved** configuration. Ignores `enabled`, so a provider can
    *  be validated before it is switched on. A provider failure is `{ ok: false, error }` on 200. */
-  testLlmProvider: (): Promise<LlmTestResult> => request('/llm/test', { method: 'POST' }),
+  testLlmProvider: (): Promise<LlmTestResult> => apiPost('/api/v1/llm/test'),
 
   /** Explain one incident. Serves the cached report for identical evidence unless `force`. */
-  createRca: (body: RcaRequestInput): Promise<RcaReport> => request('/rca', jsonBody('POST', body)),
+  createRca: (body: RcaRequestInput): Promise<RcaReport> => apiPost('/api/v1/rca', { body }),
 
   /** Read a stored report back by id (`View` — display-only text). */
-  getRca: (id: string): Promise<RcaReport> => request(`/rca/${encodeURIComponent(id)}`),
+  getRca: (id: string): Promise<RcaReport> => apiGet('/api/v1/rca/{id}', { path: { id } }),
 };

@@ -3,7 +3,8 @@
 // shapes, answer "is X a descendant of Y" for drag-drop cycle guards, and roll up the health of a
 // group's descendant nodes. Kept free of React so they can be unit-tested directly.
 
-import type { NodeGroup, NodeState, NodeSummary } from '../types/api';
+import { GROUP_TYPES } from '../types/api';
+import type { GroupType, NodeGroup, NodeState, NodeSummary } from '../types/api';
 import { DISPLAY_ORDER, PROBLEM_STATES, emptyStateCounts } from './nodeState';
 
 /** Re-exported for the health-bar/legend call sites that read "the order states are shown in".
@@ -250,6 +251,14 @@ function subtreeTallyMap(
   return out;
 }
 
+/** Read a group's `group_type` off the wire, where it is a bare string (the server validates it at
+ *  the write edge, so the closed set only exists in TypeScript — see `GROUP_TYPES`). Anything
+ *  unrecognised reads as `generic`, which is the plain-folder rendering the icon already fell back
+ *  to. The single narrowing site, so the picker, the tree and the detail pane cannot disagree. */
+export function asGroupType(value: string | undefined): GroupType {
+  return GROUP_TYPES.find((g) => g === value) ?? 'generic';
+}
+
 /** The chain of group names from the top-level ancestor down to `groupId` (inclusive), for the
  *  detail-pane breadcrumb eyebrow (e.g. `Tokyo / Edge / Firewall`). Empty for a null/unknown id.
  *  Bounded by the group count so malformed (cyclic) data can't loop forever. */
@@ -270,7 +279,7 @@ export function groupPath(groups: NodeGroup[], groupId: string | null): string[]
 export function groupOptions(groups: NodeGroup[]): { id: string; label: string }[] {
   const byParent = new Map<string | null, NodeGroup[]>();
   for (const g of groups) {
-    const k = g.parent_id;
+    const k = g.parent_id ?? null;
     byParent.set(k, [...(byParent.get(k) ?? []), g]);
   }
   const out: { id: string; label: string }[] = [];
@@ -303,7 +312,7 @@ export function visibleOpenGroupKeys(
 ): string[] {
   const childrenOf = new Map<string | null, NodeGroup[]>();
   for (const g of groups) {
-    const k = g.parent_id;
+    const k = g.parent_id ?? null;
     childrenOf.set(k, [...(childrenOf.get(k) ?? []), g]);
   }
   const out: string[] = [UNGROUPED];

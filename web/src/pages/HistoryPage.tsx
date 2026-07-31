@@ -14,6 +14,7 @@ import {
   stateLabel,
 } from '../lib/format';
 import { api } from '../services/api';
+import { asSeverity, isNodeState } from '../lib/nodeState';
 import type { AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
@@ -87,12 +88,15 @@ export function HistoryPage() {
         key: 'sev',
         header: t('history.cols.severity'),
         width: '110px',
-        render: (r) => (
-          <span className="yt-status">
-            <span className="yt-status-dot" style={{ background: severityColorVar(r.severity) }} />
-            <span className="muted">{severityLabel(r.severity)}</span>
-          </span>
-        ),
+        render: (r) => {
+          const severity = asSeverity(r.severity);
+          return (
+            <span className="yt-status">
+              <span className="yt-status-dot" style={{ background: severityColorVar(severity) }} />
+              <span className="muted">{severityLabel(severity)}</span>
+            </span>
+          );
+        },
       },
       {
         key: 'node',
@@ -101,7 +105,14 @@ export function HistoryPage() {
         render: (r) => <EntityName name={nodeName(r.node)} id={r.node} />,
       },
       { key: 'what', header: t('history.cols.what'), width: '1.6fr', render: (r) => <WhatCell row={r} /> },
-      { key: 'state', header: t('history.cols.state'), width: '120px', render: (r) => stateLabel(r.state) },
+      {
+        key: 'state',
+        header: t('history.cols.state'),
+        width: '120px',
+        // An unrecognized state is shown verbatim rather than relabelled: `unknown` is itself a
+        // state with a meaning, and claiming it would misreport the row.
+        render: (r) => (isNodeState(r.state) ? stateLabel(r.state) : r.state),
+      },
       {
         key: 'phase',
         header: t('history.cols.event'),

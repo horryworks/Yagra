@@ -9,7 +9,7 @@ import { Button } from '../components/ui/Button';
 import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { api, ApiError } from '../services/api';
 import type { ReportDefinition, ReportFrequency, ReportSchedule } from '../types/api';
-import { WEEKDAY_OPTIONS } from './types';
+import { WEEKDAY_OPTIONS, isReportFrequency } from './types';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -28,7 +28,10 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
   const [definitionId, setDefinitionId] = useState(
     schedule?.definition_id ?? definitions[0]?.id ?? '',
   );
-  const [frequency, setFrequency] = useState<ReportFrequency>(schedule?.frequency ?? 'daily');
+  const stored = schedule?.frequency;
+  const [frequency, setFrequency] = useState<ReportFrequency>(
+    isReportFrequency(stored) ? stored : 'daily',
+  );
   const [dayOfWeek, setDayOfWeek] = useState<number>(schedule?.day_of_week ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState<number>(schedule?.day_of_month ?? 1);
   const [time, setTime] = useState<string>(

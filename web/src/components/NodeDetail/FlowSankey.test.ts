@@ -11,8 +11,9 @@ const convo = (
 ): FlowConversation => ({
   src,
   dst,
-  src_asn: as?.srcAsn,
-  dst_asn: as?.dstAsn,
+  // 0 is the wire's "unknown AS", which is what an un-enriched conversation carries.
+  src_asn: as?.srcAsn ?? 0,
+  dst_asn: as?.dstAsn ?? 0,
   src_as_name: as?.srcName,
   dst_as_name: as?.dstName,
   bytes,

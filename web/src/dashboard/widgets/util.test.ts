@@ -35,6 +35,7 @@ const node = (id: string, state: NodeSummary['state'], group_id: string | null =
   model: null,
   group_id,
   sort_order: 0,
+  source: 'device',
 });
 
 const group = (id: string, parent_id: string | null = null): NodeGroup => ({

@@ -19,6 +19,7 @@ const node = (id: string, group_id: string | null): NodeSummary => ({
   model: null,
   group_id,
   sort_order: 0,
+  source: 'device',
 });
 const nodes: NodeSummary[] = [node('n1', 'tokyo'), node('n2', 'edge'), node('n3', 'osaka')];
 

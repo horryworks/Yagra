@@ -11,6 +11,12 @@
 ## Unreleased
 
 ### Breaking changes
+- **`VITE_API_BASE` is now an origin, not a base path.** It used to default to `/api/v1` and be
+  prepended to relative paths; it now defaults to empty and the `/api/v1` prefix is part of every
+  path. Only a WebUI build that overrides it is affected, and only to drop the `/api/v1` suffix:
+  `VITE_API_BASE=https://core.example.net`, not `…/api/v1`. This also fixes the live-update streams,
+  which never appended `/api/v1` themselves and so pointed at a different host than the API client
+  whenever the variable was set.
 - **`GET /api/v1/thresholds` returns an envelope and is capped.** The response changed from a bare
   `StoredThreshold[]` to `{ "items": [...], "total": <n>, "truncated": <bool> }`, and the server
   returns at most **500** rules per request — `?limit=` can narrow that, never widen it. The WebUI

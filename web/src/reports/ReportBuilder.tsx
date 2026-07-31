@@ -14,6 +14,7 @@ import type {
   ReportDefinition,
   ReportSectionDef,
   ReportSectionInstance,
+  ReportSpec,
 } from '../types/api';
 import {
   RANGE_OPTIONS,
@@ -32,8 +33,11 @@ interface Props {
 
 export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) {
   const { t } = useTranslation('reports');
+  // `spec` is opaque JSON to the backend (it stores and returns it untouched), so the document
+  // types it `unknown`; this is the WebUI's reading of its own document, and `sanitizeSpec` is
+  // what makes an older or partial one usable.
   const initial = useMemo(
-    () => (definition ? sanitizeSpec(definition.spec) : null),
+    () => (definition ? sanitizeSpec(definition.spec as ReportSpec | null) : null),
     [definition],
   );
   const [name, setName] = useState(definition?.name ?? '');

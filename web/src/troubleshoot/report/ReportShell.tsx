@@ -148,9 +148,15 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   const { findings, notices } = useMemo(() => splitNotices(rows), [rows]);
 
   // A `?job=` belonging to another tool would render this body over foreign findings — send it to
-  // the report that can actually read it, so every link is self-correcting.
+  // the report that can actually read it, so every link is self-correcting. `job.tool` is a bare
+  // string on the wire; the catalog lookup narrows it, and a tool this build has no report for
+  // goes back to the catalog.
   if (job && job.tool !== descriptor.tool) {
-    return <Navigate to={`${reportPathFor(job.tool)}?job=${encodeURIComponent(job.id)}`} replace />;
+    const jobTool = toolById(job.tool);
+    const to = jobTool
+      ? `${reportPathFor(jobTool.id)}?job=${encodeURIComponent(job.id)}`
+      : '/troubleshoot';
+    return <Navigate to={to} replace />;
   }
 
   const run = async () => {

@@ -155,7 +155,7 @@ export function UsersPage() {
               </div>
             ) : (
               list.map((u) => {
-                const last = relativeTime(u.last_login_at);
+                const last = relativeTime(u.last_login_at ?? null);
                 return (
                   <div className={u.enabled ? 'il-row' : 'il-row is-muted'} key={u.id}>
                     <Monogram name={u.username} role={u.role} lg />

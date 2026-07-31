@@ -120,7 +120,7 @@ export function layoutTopology(nodes: TopologyNode[]): TopologyLayout {
       state: n.state,
       cx: cxOf(c),
       cy: cyOf(depthOf.get(id) ?? 0),
-      rootCause: n.root_cause,
+      rootCause: n.root_cause ?? null,
       suppressed: n.root_cause != null,
     });
   }
