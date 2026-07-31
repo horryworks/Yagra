@@ -3033,8 +3033,7 @@ export interface components {
             at_unix_ms: number;
             /** Format: uuid */
             check: string;
-            /** @description Breach direction, `"above"`/`"below"` (threshold checks only). */
-            direction?: string | null;
+            direction?: null | components["schemas"]["Direction"];
             /**
              * @description Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for
              *     rows recorded before this was captured (legacy) so the WebUI can show "—".
@@ -3054,8 +3053,8 @@ export interface components {
              */
             recorded_at: string;
             resolved: boolean;
-            severity: string;
-            state: string;
+            severity: components["schemas"]["Severity"];
+            state: components["schemas"]["NodeState"];
             /**
              * Format: double
              * @description The bound crossed for the committed severity (threshold checks only).
@@ -3086,8 +3085,8 @@ export interface components {
             node_id: string;
             /** @description true = recovery (→ ok); false = went into the alert state. */
             resolved: boolean;
-            severity: string;
-            state: string;
+            severity: components["schemas"]["Severity"];
+            state: components["schemas"]["NodeState"];
         };
         /** @description One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row). */
         AnalysisFinding: {
@@ -3184,8 +3183,8 @@ export interface components {
          *     Carried for the history log + notification payload — not part of alert identity.
          */
         Breach: {
-            /** @description Breach direction: `"above"` or `"below"`. */
-            direction: string;
+            /** @description Which way the metric crossed its bound. */
+            direction: components["schemas"]["Direction"];
             /**
              * Format: double
              * @description The bound crossed for the committed severity, if the rule defines one at that level.
@@ -3198,7 +3197,7 @@ export interface components {
             value: number;
         };
         BreachFacts: {
-            direction: string;
+            direction: components["schemas"]["Direction"];
             /** Format: double */
             threshold?: number | null;
             /** Format: double */
@@ -5830,7 +5829,7 @@ export interface components {
             /** Format: uuid */
             node_id?: string | null;
             pattern: string;
-            severity: string;
+            severity: components["schemas"]["Severity"];
             /** Format: uuid */
             source_id?: string | null;
             source_kind?: string | null;

@@ -1511,7 +1511,7 @@ impl ReportRunner {
         let mut fires: HashMap<String, i64> = HashMap::new();
         for r in &recent {
             if !r.resolved && r.at_unix_ms >= from_ms {
-                *fires.entry(r.severity.clone()).or_insert(0) += 1;
+                *fires.entry(r.severity.as_str().to_owned()).or_insert(0) += 1;
             }
         }
         let total_fires: i64 = fires.values().sum();

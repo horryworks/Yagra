@@ -7,7 +7,7 @@
 //! external tool — Yagra owns the quality, not the escalation.
 
 use serde::{Deserialize, Serialize};
-use yagra_common::{CheckId, NodeId, NodeState, Severity};
+use yagra_common::{CheckId, Direction, NodeId, NodeState, Severity};
 
 /// Dedup key: two alerts with the same key are the same alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -28,8 +28,8 @@ pub struct Breach {
     pub value: f64,
     /// The bound crossed for the committed severity, if the rule defines one at that level.
     pub threshold: Option<f64>,
-    /// Breach direction: `"above"` or `"below"`.
-    pub direction: String,
+    /// Which way the metric crossed its bound.
+    pub direction: Direction,
 }
 
 /// A single alert produced by the engine.

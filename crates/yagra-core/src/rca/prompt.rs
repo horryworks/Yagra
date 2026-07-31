@@ -487,7 +487,7 @@ mod tests {
         c.alert.breach = Some(BreachFacts {
             value: 91.5,
             threshold: Some(85.0),
-            direction: "above".to_owned(),
+            direction: yagra_common::Direction::Above,
         });
         let out = render(&c, Language::English, 4096);
         assert!(

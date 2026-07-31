@@ -49,24 +49,16 @@ export function isNodeState(s: string): s is NodeState {
 
 /** Whether an untrusted string is a severity this build knows.
  *
- *  Needed because Rust types `severity` as a bare `String` on `StoredEventRule`, `AlertHistoryRow`
- *  and `AlertTransition`, so the generated contract offers `string` and the closed union is a WebUI
- *  belief that a DB `CHECK` happens to uphold. A core newer than this bundle can name a variant the
- *  display helpers have no case for, and those helpers are exhaustive switches with no `default` —
- *  so an unguarded value reaches them and paints a colourless dot.
+ *  This used to carry a long note about `severity` being a bare `String` on `StoredEventRule`,
+ *  `AlertHistoryRow` and `AlertTransition`, which made the closed union a WebUI belief rather than a
+ *  contract. **That is no longer true** — all three are typed, so the generated types narrow them
+ *  and the degradation happens once, server-side, where the row is read.
  *
- *  The membership test lives here and the *policy* stays at the call site, because callers want
- *  different ones: a badge reads an unknown severity as `info` (what the backend itself does —
- *  `events.rs::parse_severity`), while a dashboard dot would rather show neutral than claim a
- *  severity it did not receive. It arrived as three copies in one change, which is what
- *  `extensibility.md` §3 is about. */
+ *  What remains is genuinely untrusted input: an SSE payload or a URL parameter, neither of which
+ *  the contract can vouch for. Its companion `asSeverity` had exactly one shape of caller left
+ *  (a fallback to `info`) and no callers at all once the DTOs were typed, so it is gone. */
 export function isSeverity(v: string): v is Severity {
   return (SEVERITIES as readonly string[]).includes(v);
-}
-
-/** An alert severity off the wire, falling back to `info` — see [`isSeverity`] for why. */
-export function asSeverity(value: string): Severity {
-  return isSeverity(value) ? value : 'info';
 }
 
 /** A zeroed per-state tally — the shape both the client-side count and the server's

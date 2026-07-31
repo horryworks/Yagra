@@ -10,14 +10,15 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_alert::Alert;
+use yagra_common::{Direction, NodeState, Severity};
 
 /// One alert-history row for the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AlertHistoryRow {
     pub node: Uuid,
     pub check: Uuid,
-    pub severity: String,
-    pub state: String,
+    pub severity: Severity,
+    pub state: NodeState,
     pub at_unix_ms: i64,
     pub resolved: bool,
     /// Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for
@@ -27,8 +28,8 @@ pub struct AlertHistoryRow {
     pub observed_value: Option<f64>,
     /// The bound crossed for the committed severity (threshold checks only).
     pub threshold_value: Option<f64>,
-    /// Breach direction, `"above"`/`"below"` (threshold checks only).
-    pub direction: Option<String>,
+    /// Which way the metric crossed its bound (threshold checks only).
+    pub direction: Option<Direction>,
     /// Insertion time as an RFC 3339 timestamp. This is the **keyset cursor**: the WebUI passes
     /// the last row's `recorded_at` as `before` to fetch the next (older) page (matches the audit
     /// log's paging). Distinct from `at_unix_ms` (the event time), which can collide across rows.
@@ -50,7 +51,7 @@ impl AlertHistoryStore {
     /// metric (and numeric breach detail, if a threshold check) so the history is human-readable.
     pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
         let (value, threshold, direction) = match &alert.breach {
-            Some(b) => (Some(b.value), b.threshold, Some(b.direction.clone())),
+            Some(b) => (Some(b.value), b.threshold, Some(b.direction)),
             None => (None, None, None),
         };
         let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
@@ -70,7 +71,7 @@ impl AlertHistoryStore {
         .bind(metric)
         .bind(value)
         .bind(threshold)
-        .bind(direction)
+        .bind(direction.map(Direction::as_str))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -91,7 +92,7 @@ impl AlertHistoryStore {
         );
         qb.push_values(records.iter(), |mut b, (alert, resolved)| {
             let (value, threshold, direction) = match &alert.breach {
-                Some(br) => (Some(br.value), br.threshold, Some(br.direction.clone())),
+                Some(br) => (Some(br.value), br.threshold, Some(br.direction)),
                 None => (None, None, None),
             };
             let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
@@ -105,7 +106,7 @@ impl AlertHistoryStore {
                 .push_bind(metric)
                 .push_bind(value)
                 .push_bind(threshold)
-                .push_bind(direction);
+                .push_bind(direction.map(Direction::as_str));
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
@@ -196,14 +197,23 @@ impl AlertHistoryStore {
                 Ok(AlertHistoryRow {
                     node: row.try_get("node")?,
                     check: row.try_get("check_id")?,
-                    severity: row.try_get("severity")?,
-                    state: row.try_get("state")?,
+                    // The column has no CHECK, so an unrecognised token means a newer core wrote
+                    // the row. Degrading beats failing the whole page of history, and `Info` /
+                    // `Unknown` are each the least-assertive member of their set — better to
+                    // under-state one row than to lose the log an operator is reading it from.
+                    severity: Severity::from_token(row.try_get("severity")?)
+                        .unwrap_or(Severity::Info),
+                    state: NodeState::from_token(row.try_get("state")?)
+                        .unwrap_or(NodeState::Unknown),
                     at_unix_ms: row.try_get("at_unix_ms")?,
                     resolved: row.try_get("resolved")?,
                     metric: row.try_get("metric")?,
                     observed_value: row.try_get("observed_value")?,
                     threshold_value: row.try_get("threshold_value")?,
-                    direction: row.try_get("direction")?,
+                    direction: row
+                        .try_get::<Option<String>, _>("direction")?
+                        .as_deref()
+                        .and_then(Direction::from_token),
                     recorded_at: recorded_at.to_rfc3339(),
                 })
             })

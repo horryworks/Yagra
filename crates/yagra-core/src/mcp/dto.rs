@@ -111,7 +111,7 @@ impl AlertDto {
             breach: alert.breach.as_ref().map(|b| BreachDto {
                 value: b.value,
                 threshold: b.threshold,
-                direction: b.direction.clone(),
+                direction: b.direction.as_str().to_owned(),
             }),
         }
     }
@@ -142,14 +142,14 @@ impl AlertHistoryDto {
         Self {
             node_id: row.node,
             node_name,
-            severity: row.severity.clone(),
-            state: row.state.clone(),
+            severity: row.severity.as_str().to_owned(),
+            state: row.state.as_str().to_owned(),
             metric: row.metric.clone(),
             resolved: row.resolved,
             at: unix_ms_to_rfc3339(row.at_unix_ms),
             observed_value: row.observed_value,
             threshold_value: row.threshold_value,
-            direction: row.direction.clone(),
+            direction: row.direction.map(|d| d.as_str().to_owned()),
         }
     }
 }

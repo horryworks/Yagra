@@ -10,6 +10,7 @@
 
 use crate::state::NodeState;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Which way a metric breaches its bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -50,6 +51,14 @@ impl Direction {
             Direction::Above => a.min(b),
             Direction::Below => a.max(b),
         }
+    }
+}
+
+/// Matches `Severity` and `NodeState`. Direction was the one shared enum without it, which is part
+/// of why its carriers reached for a `String` field instead of the type.
+impl fmt::Display for Direction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

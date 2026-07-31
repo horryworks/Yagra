@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import { asSeverity } from '../lib/nodeState';
 import {
   type EventRule,
   type EventRuleInput,
@@ -30,9 +29,8 @@ const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'info'> = {
   info: 'info',
 };
 
-function SeverityBadge({ value }: { value: string }) {
-  const severity = asSeverity(value);
-  return <Badge tone={SEVERITY_TONE[severity]}>{severityLabel(severity)}</Badge>;
+function SeverityBadge({ value }: { value: Severity }) {
+  return <Badge tone={SEVERITY_TONE[value]}>{severityLabel(value)}</Badge>;
 }
 
 function ruleToInput(r: EventRule): EventRuleInput {
@@ -277,7 +275,7 @@ function RuleModal({
   );
   const [pattern, setPattern] = useState(rule?.pattern ?? '');
   const [clearPattern, setClearPattern] = useState(rule?.clear_pattern ?? '');
-  const [severity, setSeverity] = useState<Severity>(rule ? asSeverity(rule.severity) : 'warning');
+  const [severity, setSeverity] = useState<Severity>(rule?.severity ?? 'warning');
   const [sourceKind, setSourceKind] = useState<string>(rule?.source_kind ?? '');
   const [sourceId, setSourceId] = useState<string>(rule?.source_id ?? '');
   const [ttl, setTtl] = useState(String(rule?.ttl_secs ?? 1800));

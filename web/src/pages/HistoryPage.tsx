@@ -14,7 +14,6 @@ import {
   stateLabel,
 } from '../lib/format';
 import { api } from '../services/api';
-import { asSeverity, isNodeState } from '../lib/nodeState';
 import type { AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
@@ -72,15 +71,12 @@ export function HistoryPage() {
         key: 'sev',
         header: t('history.cols.severity'),
         width: '110px',
-        render: (r) => {
-          const severity = asSeverity(r.severity);
-          return (
-            <span className="yt-status">
-              <span className="yt-status-dot" style={{ background: severityColorVar(severity) }} />
-              <span className="muted">{severityLabel(severity)}</span>
-            </span>
-          );
-        },
+        render: (r) => (
+          <span className="yt-status">
+            <span className="yt-status-dot" style={{ background: severityColorVar(r.severity) }} />
+            <span className="muted">{severityLabel(r.severity)}</span>
+          </span>
+        ),
       },
       {
         key: 'node',
@@ -98,9 +94,7 @@ export function HistoryPage() {
         key: 'state',
         header: t('history.cols.state'),
         width: '120px',
-        // An unrecognized state is shown verbatim rather than relabelled: `unknown` is itself a
-        // state with a meaning, and claiming it would misreport the row.
-        render: (r) => (isNodeState(r.state) ? stateLabel(r.state) : r.state),
+        render: (r) => stateLabel(r.state),
       },
       {
         key: 'phase',

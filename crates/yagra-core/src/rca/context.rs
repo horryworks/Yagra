@@ -30,7 +30,7 @@ use std::net::IpAddr;
 use serde::Serialize;
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::{Node, NodeId};
+use yagra_common::{Direction, Node, NodeId};
 
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, IncidentSignal};
@@ -225,7 +225,7 @@ pub struct AlertFacts {
 pub struct BreachFacts {
     pub value: f64,
     pub threshold: Option<f64>,
-    pub direction: String,
+    pub direction: Direction,
 }
 
 /// Alerts attributed upstream to this incident.
@@ -366,7 +366,7 @@ fn alert_facts(a: &Alert, asked_about: Option<String>) -> AlertFacts {
         breach: a.breach.as_ref().map(|b| BreachFacts {
             value: b.value,
             threshold: b.threshold,
-            direction: b.direction.clone(),
+            direction: b.direction,
         }),
         asked_about,
     }
@@ -643,7 +643,7 @@ mod tests {
         a.breach = Some(yagra_alert::Breach {
             value: 91.5,
             threshold: Some(85.0),
-            direction: "above".to_owned(),
+            direction: Direction::Above,
         });
         let facts = alert_facts(&a, None);
         assert_eq!(facts.metric, "cpu_pct");
@@ -652,7 +652,7 @@ mod tests {
         let breach = facts.breach.unwrap();
         assert!((breach.value - 91.5).abs() < f64::EPSILON);
         assert_eq!(breach.threshold, Some(85.0));
-        assert_eq!(breach.direction, "above");
+        assert_eq!(breach.direction, Direction::Above);
         assert!(facts.asked_about.is_none());
     }
 

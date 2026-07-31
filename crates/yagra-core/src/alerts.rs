@@ -535,7 +535,7 @@ impl AlertManager {
                     alert.breach = Some(Breach {
                         value: ev.value,
                         threshold,
-                        direction: ev.direction.as_str().to_string(),
+                        direction: ev.direction,
                     });
                 }
                 self.active
@@ -1737,7 +1737,7 @@ mod tests {
         let breach = alert.breach.expect("threshold alert carries a breach");
         assert_eq!(breach.value, 150.0);
         assert_eq!(breach.threshold, Some(100.0)); // committed severity is critical
-        assert_eq!(breach.direction, "above");
+        assert_eq!(breach.direction, Direction::Above);
     }
 
     #[test]

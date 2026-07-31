@@ -12,7 +12,6 @@ import {
   stateColorVar,
   stateLabel,
 } from '../../lib/format';
-import { isNodeState, isSeverity } from '../../lib/nodeState';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
 import { AlertRows } from '../../widgets/AlertRows';
@@ -147,16 +146,14 @@ export function RecentStateChangesWidget() {
             style={{
               background: row.resolved
                 ? stateColorVar('ok')
-                : isSeverity(row.severity)
-                  ? severityColorVar(row.severity)
-                  : 'var(--status-unknown)',
+                : severityColorVar(row.severity),
             }}
           />
           <span className="dwl-name">{row.name}</span>
           <span className="dwl-sub muted">
             {row.resolved
               ? `→ ${t('widgets.recentChanges.recovered')}`
-              : `→ ${isNodeState(row.state) ? stateLabel(row.state) : row.state}`}{' '}
+              : `→ ${stateLabel(row.state)}`}{' '}
             ·{' '}
             {relativeTime(new Date(row.at_unix_ms).toISOString(), Date.now())}
           </span>

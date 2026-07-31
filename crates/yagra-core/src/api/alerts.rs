@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::Severity;
+use yagra_common::{NodeState, Severity};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -108,7 +108,7 @@ fn decorate_history(
 ) -> Vec<AlertHistoryView> {
     rows.into_iter()
         .map(|row| {
-            let key: AckKey = (row.node, row.check, row.severity.clone());
+            let key: AckKey = (row.node, row.check, row.severity.as_str().to_owned());
             let acked = acks.get(&key).cloned();
             AlertHistoryView { row, acked }
         })
@@ -437,8 +437,8 @@ async fn alert_calendar(
 pub(crate) struct AlertTransition {
     pub node_id: Uuid,
     pub name: String,
-    pub state: String,
-    pub severity: String,
+    pub state: NodeState,
+    pub severity: Severity,
     /// true = recovery (→ ok); false = went into the alert state.
     pub resolved: bool,
     pub at_unix_ms: i64,
@@ -630,21 +630,21 @@ mod tests {
         let fire = AlertHistoryRow {
             node,
             check,
-            severity: "critical".to_owned(),
-            state: "critical".to_owned(),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
             at_unix_ms: 10,
             resolved: false,
             metric: Some("icmp_rtt_ms".to_owned()),
             observed_value: Some(150.0),
             threshold_value: Some(100.0),
-            direction: Some("above".to_owned()),
+            direction: Some(yagra_common::Direction::Above),
             recorded_at: "1970-01-01T00:00:10Z".to_owned(),
         };
         let clear = AlertHistoryRow {
             node,
             check,
-            severity: "critical".to_owned(),
-            state: "ok".to_owned(),
+            severity: Severity::Critical,
+            state: NodeState::Ok,
             at_unix_ms: 20,
             resolved: true,
             metric: Some("icmp_rtt_ms".to_owned()),
@@ -656,8 +656,8 @@ mod tests {
         let unrelated = AlertHistoryRow {
             node: Uuid::from_u128(7),
             check,
-            severity: "warning".to_owned(),
-            state: "warning".to_owned(),
+            severity: Severity::Warning,
+            state: NodeState::Warning,
             at_unix_ms: 5,
             resolved: false,
             metric: None,

@@ -15225,11 +15225,15 @@
             "format": "uuid"
           },
           "direction": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Breach direction, `\"above\"`/`\"below\"` (threshold checks only)."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Direction",
+                "description": "Which way the metric crossed its bound (threshold checks only)."
+              }
+            ]
           },
           "metric": {
             "type": [
@@ -15258,10 +15262,10 @@
             "type": "boolean"
           },
           "severity": {
-            "type": "string"
+            "$ref": "#/components/schemas/Severity"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/NodeState"
           },
           "threshold_value": {
             "type": [
@@ -15346,10 +15350,10 @@
             "description": "true = recovery (→ ok); false = went into the alert state."
           },
           "severity": {
-            "type": "string"
+            "$ref": "#/components/schemas/Severity"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/NodeState"
           }
         }
       },
@@ -15616,8 +15620,8 @@
         ],
         "properties": {
           "direction": {
-            "type": "string",
-            "description": "Breach direction: `\"above\"` or `\"below\"`."
+            "$ref": "#/components/schemas/Direction",
+            "description": "Which way the metric crossed its bound."
           },
           "threshold": {
             "type": [
@@ -15642,7 +15646,7 @@
         ],
         "properties": {
           "direction": {
-            "type": "string"
+            "$ref": "#/components/schemas/Direction"
           },
           "threshold": {
             "type": [
@@ -22174,7 +22178,7 @@
             "type": "string"
           },
           "severity": {
-            "type": "string"
+            "$ref": "#/components/schemas/Severity"
           },
           "source_id": {
             "type": [
