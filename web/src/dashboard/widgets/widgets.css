@@ -132,6 +132,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A stat that has crossed into "an operator should look at this" (e.g. pools running without a
+   live poller). Paired with a caption, so it is never colour-alone. */
+.statstrip-val.warn {
+  color: var(--status-warning);
+}
+
 .statstrip-cap {
   font-size: var(--font-xs);
   text-transform: uppercase;

@@ -47,12 +47,24 @@
   flex: none;
 }
 
+/* Node name (via EntityName — see AlertRows.tsx). Shrinks before "what fired" does: a truncated
+   hostname is still recognisable, a truncated `icmp_rtt_ms above 100` is not. */
 .alertrow-node {
   font-size: var(--font-sm);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
+/* What the check measured, in place of the check's (unnameable) hash id. Takes the slack so the
+   age stays right-aligned. */
 .alertrow-check {
   color: var(--text-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .alertrow-cause {
@@ -113,6 +125,13 @@ html[data-viewport='mobile'] .alertrow-node {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* On its own line the "what" needs no slack — reset the desktop grow so it doesn't fight the
+   wrapped layout, and let it wrap rather than ellipsize where there is room. */
+html[data-viewport='mobile'] .alertrow-check {
+  flex: 0 1 100%;
+  white-space: normal;
 }
 
 html[data-viewport='mobile'] .alertrow-time {

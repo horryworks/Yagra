@@ -375,7 +375,13 @@
       "never": "never",
       "lastRun": "last poll run",
       "jobsPerRun": "jobs per run",
-      "results": "results collected"
+      "results": "results collected",
+      "pools": "pools: working-set / legacy",
+      "poolsHint": "Pools whose nodes are pushed to a live poller as a working set, versus pools falling back to per-job publish because no poller is registered and alive for them.",
+      "workingSet": "snapshots / deltas",
+      "workingSetHint": "Working-set pushes since core started: full snapshots and incremental deltas. A rising snapshot count means pollers keep resyncing.",
+      "mirrorWrites": "assignment mirror writes",
+      "mirrorWritesHint": "Rewrites of the Redis poller-assignment mirror since core started. Redis is rebuildable, so this is a churn signal, not a durability one."
     },
     "discovery": {
       "empty": "No pending discoveries. Run a scan from Nodes → Discovery.",

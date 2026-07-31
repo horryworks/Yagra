@@ -52,6 +52,22 @@
   same document, which removes 3,340 lines of hand-transcribed TypeScript that nothing was checking.
 
 ### Improvements
+- **Active alerts now say which device and what broke, instead of two UUIDs.** A triage row read
+  `● 550e8400-… 7c9e6679-… 2m ago`. The node resolves to its name (the id is on hover, as everywhere
+  else), and the check's id — a one-way hash of node and metric, so it has no name to resolve to —
+  is replaced by what the check actually measured: `icmp_rtt_ms above 100 (was 450)`. That detail
+  was already stored with every alert and shown on Alerts ▸ History; the triage screen simply never
+  displayed it. Both screens now render it through the same formatter, so they cannot disagree.
+- **Settings ▸ System Health lists the flow store, and shows the server's own verdict.** The
+  ClickHouse row was missing while the page's aggregate health counted it, so a flow-store outage
+  read as "everything reachable". The card now lists all five backing stores plus the bus, and
+  carries an "All reachable" / "Degraded" badge that comes from the server rather than being
+  re-derived from the rows — so the next dependency the page forgets disagrees visibly.
+- **Poll-loop health reports working-set distribution.** The widget adds pools served as a working
+  set versus pools falling back to per-job publish (the latter turns amber when non-zero — it means
+  a pool has no live registered poller), working-set snapshots versus deltas, and assignment-mirror
+  writes. Settings ▸ Pollers also gains a **Registered** column showing when each poller first
+  checked in.
 - **The app icon now matches the one on the Yagra website.** The browser-tab favicon and the mark in
   the top bar, the mobile top bar and the sign-in panel are the topology fork that also reads as a
   "Y" — one root node branching to two — replacing the older double-ring mark. The orange seal, the

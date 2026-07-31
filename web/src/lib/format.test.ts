@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   alertWhat,
+  alertWhatOf,
   deriveMem,
   formatAsn,
   formatBps,
@@ -90,6 +91,33 @@ describe('format', () => {
       condition: null,
       observed: null,
     });
+  });
+
+  it('describes a LIVE alert the same way as its history row (alertWhatOf)', () => {
+    // The nested `breach` and the flattened history columns are the same fact in two shapes; the
+    // whole point of the adapter is that they can never render differently.
+    const live = {
+      metric: 'icmp_rtt_ms',
+      breach: { value: 450, threshold: 100, direction: 'above' },
+    };
+    const historyRow = {
+      metric: 'icmp_rtt_ms',
+      direction: 'above',
+      threshold_value: 100,
+      observed_value: 450,
+    };
+    expect(alertWhatOf(live)).toEqual(alertWhat(historyRow));
+
+    // A liveness alert carries no breach at all.
+    expect(alertWhatOf({ metric: '__liveness__', breach: null })).toEqual({ kind: 'liveness' });
+
+    // A threshold alert whose committed severity has no bound at that level: value, no threshold.
+    expect(
+      alertWhatOf({ metric: 'cpu_pct', breach: { value: 91, threshold: null, direction: 'above' } }),
+    ).toEqual({ kind: 'metric', metric: 'cpu_pct', condition: null, observed: 'was 91' });
+
+    // An alert with no metric at all (an N-1 core that predates migration 0036) → "—".
+    expect(alertWhatOf({})).toEqual({ kind: 'none' });
   });
 
   it('capitalizes state labels', () => {

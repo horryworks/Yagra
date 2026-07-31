@@ -111,6 +111,28 @@ export function PollerHealthWidget() {
         <span className="statstrip-val">{formatCount(data?.results_total ?? 0)}</span>
         <span className="statstrip-cap">{t('widgets.pollerHealth.results')}</span>
       </div>
+      {/* ADR-020: a pool served in *legacy* mode has no live registered poller, so core is falling
+          back to per-job publish. That is the one number here an operator must act on, so it turns
+          warning-coloured the moment it is non-zero rather than reading as just another counter. */}
+      <div className="statstrip-item" title={t('widgets.pollerHealth.poolsHint')}>
+        <span className={`statstrip-val${(data?.pools_legacy ?? 0) > 0 ? ' warn' : ''}`}>
+          {formatCount(data?.pools_working_set ?? 0)} / {formatCount(data?.pools_legacy ?? 0)}
+        </span>
+        <span className="statstrip-cap">{t('widgets.pollerHealth.pools')}</span>
+      </div>
+      <div className="statstrip-item" title={t('widgets.pollerHealth.workingSetHint')}>
+        <span className="statstrip-val">
+          {formatCount(data?.snapshots_published_total ?? 0)} /{' '}
+          {formatCount(data?.deltas_published_total ?? 0)}
+        </span>
+        <span className="statstrip-cap">{t('widgets.pollerHealth.workingSet')}</span>
+      </div>
+      <div className="statstrip-item" title={t('widgets.pollerHealth.mirrorWritesHint')}>
+        <span className="statstrip-val">
+          {formatCount(data?.assignment_mirror_writes_total ?? 0)}
+        </span>
+        <span className="statstrip-cap">{t('widgets.pollerHealth.mirrorWrites')}</span>
+      </div>
     </div>
   );
 }

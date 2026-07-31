@@ -30,7 +30,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
-import { formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
+import { dateOnly, formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
 import {
   buildPollerEnv,
   isValidPollerToken,
@@ -42,7 +42,7 @@ import {
 } from '../lib/pollers';
 import './PollersPage.css';
 
-const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 112px 58px';
+const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 96px 112px 58px';
 const REFRESH_MS = 10_000;
 
 /** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
@@ -443,6 +443,7 @@ export function PollersPage() {
                 <div className="ytable-h right">{t('pollers.cols.cpu')}</div>
                 <div className="ytable-h right">{t('pollers.cols.mem')}</div>
                 <div className="ytable-h right">{t('pollers.cols.disk')}</div>
+                <div className="ytable-h">{t('pollers.cols.firstSeen')}</div>
                 <div className="ytable-h">{t('pollers.cols.lastSeen')}</div>
                 <div className="ytable-h right">{t('pollers.cols.actions')}</div>
               </div>
@@ -495,6 +496,11 @@ export function PollersPage() {
                       <div className="ytable-cell right mono">{formatUtil(p.cpu_pct ?? null)}</div>
                       <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct ?? null)}</div>
                       <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct ?? null)}</div>
+                      {/* Date only: this is inventory ("since when has this poller existed"), so a
+                          registration date beats a relative age. Exact instant on hover. */}
+                      <div className="ytable-cell mono" title={p.first_seen ? formatExactTime(p.first_seen) : undefined}>
+                        {p.first_seen ? dateOnly(p.first_seen) : '—'}
+                      </div>
                       <div className="ytable-cell">{lastSeenLabel(p.last_seen ?? null, online, t)}</div>
                       <div className="ytable-cell right">
                         {authed && !online && (

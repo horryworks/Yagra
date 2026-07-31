@@ -32,6 +32,7 @@
       "cpu": "CPU",
       "mem": "メモリ",
       "disk": "ディスク",
+      "firstSeen": "登録日",
       "lastSeen": "最終確認",
       "actions": "操作"
     },
@@ -106,6 +107,8 @@
     "note": "Yagra 自身の健全性：ポールループ、バックエンドサービス、フリートのデータカバレッジ、ホストリソース。",
     "reachable": "到達可能",
     "unreachable": "到達不可",
+    "overallOk": "すべて到達可能",
+    "overallDegraded": "劣化",
     "noHistory": "履歴はまだありません…",
     "core": "コア",
     "hostResources": "ホストリソース",
@@ -115,6 +118,7 @@
       "postgres": "PostgreSQL",
       "tsdb": "VictoriaMetrics (TSDB)",
       "logs": "VictoriaLogs（イベントログ）",
+      "flow": "ClickHouse（フローストア）",
       "bus": "NATS バス"
     },
     "cards": {

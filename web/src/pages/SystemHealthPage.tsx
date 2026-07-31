@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // System Health (Settings ▸ System Health). Yagra's own health in one place: the poll loop's
-// live counters, backing-service reachability (PostgreSQL / TSDB / bus), fleet data coverage, and
-// — new — host-resource trends (CPU / load / memory / disk) for the core and every distributed
-// poller. Read-only; the backend gates each read with View. Reuses the dashboard monitoring widgets
-// so this page and the dashboard cards stay in sync, and the shared MetricChart + RangeControl for
-// the trend charts so they match the node-detail health charts.
+// live counters, backing-service reachability (all five stores plus the bus), fleet data coverage,
+// and host-resource trends (CPU / load / memory / disk) for the core and every distributed poller.
+// Read-only; the backend gates each read with View. Reuses the dashboard monitoring widgets so this
+// page and the dashboard cards stay in sync, and the shared MetricChart + RangeControl for the
+// trend charts so they match the node-detail health charts.
 //
 // Split out of the former "Pollers & system health" page so Settings ▸ Pollers can be reserved for
 // future distributed-poller configuration.
@@ -50,20 +50,45 @@ function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | un
   );
 }
 
-/** Backing-service reachability (PostgreSQL / TSDB / bus). Bus is an indirect signal inferred from
- *  poll-loop activity — the row detail spells that out. */
+/** Backing-service reachability: every store the deployment can use, plus the bus. Bus is an
+ *  indirect signal inferred from poll-loop activity, and the optional stores (VictoriaLogs,
+ *  ClickHouse) report reachable when they are not configured at all — the row detail spells both
+ *  out, so an operator can tell "off" from "down".
+ *
+ *  The header badge is the **server's own** verdict (`overall`), not a re-derivation of the rows.
+ *  That is deliberate: this card silently omitted the ClickHouse row for two releases while
+ *  `overall` counted it, so a flow-store outage read as "everything reachable". Rendering the
+ *  server's answer next to the rows means the next dependency we forget to list disagrees visibly
+ *  instead of hiding. */
 function DependencyHealthCard() {
   const { t } = useTranslation('system');
   const { data, loading, error } = usePolled(() => api.getSystemHealth(), []);
-  if (error) return <p className="muted">{error}</p>;
-  if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
+  const ok = data?.overall === 'ok';
   return (
-    <ul className="dep-list">
-      <DependencyRow name={t('health.deps.postgres')} dep={data?.postgres} />
-      <DependencyRow name={t('health.deps.tsdb')} dep={data?.tsdb} />
-      <DependencyRow name={t('health.deps.logs')} dep={data?.logs} />
-      <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
-    </ul>
+    <Card
+      title={t('health.cards.dependency')}
+      actions={
+        data && (
+          <Badge tone={ok ? 'up' : 'warning'}>
+            {ok ? t('health.overallOk') : t('health.overallDegraded')}
+          </Badge>
+        )
+      }
+    >
+      {error ? (
+        <p className="muted">{error}</p>
+      ) : loading && !data ? (
+        <p className="muted">{t('common:loading')}</p>
+      ) : (
+        <ul className="dep-list">
+          <DependencyRow name={t('health.deps.postgres')} dep={data?.postgres} />
+          <DependencyRow name={t('health.deps.tsdb')} dep={data?.tsdb} />
+          <DependencyRow name={t('health.deps.logs')} dep={data?.logs} />
+          <DependencyRow name={t('health.deps.flow')} dep={data?.flow} />
+          <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
+        </ul>
+      )}
+    </Card>
   );
 }
 
@@ -324,9 +349,8 @@ export function SystemHealthPage() {
         <Card title={t('health.cards.pollLoop')}>
           <PollerHealthWidget />
         </Card>
-        <Card title={t('health.cards.dependency')}>
-          <DependencyHealthCard />
-        </Card>
+        {/* Owns its own Card so the server's `overall` verdict can sit in the header actions slot. */}
+        <DependencyHealthCard />
         <Card title={t('health.cards.dataCoverage')}>
           <DataCoverageWidget />
         </Card>

@@ -338,6 +338,22 @@ export function alertWhat(row: {
   return { kind: 'metric', metric: row.metric, condition, observed };
 }
 
+/** Same question for a **live** alert. The two carry the identical fact in two shapes: history
+ *  flattens the breach into `direction`/`threshold_value`/`observed_value` columns (migration 0036)
+ *  while the live `Alert` keeps `breach` nested. Adapt rather than duplicate `alertWhat`, so the
+ *  triage screen and the history log can never describe the same breach differently. */
+export function alertWhatOf(alert: {
+  metric?: string | null;
+  breach?: { value?: number; threshold?: number | null; direction?: string } | null;
+}): AlertWhat {
+  return alertWhat({
+    metric: alert.metric,
+    direction: alert.breach?.direction,
+    threshold_value: alert.breach?.threshold,
+    observed_value: alert.breach?.value,
+  });
+}
+
 /** An autonomous-system label: `AS15169 · GOOGLE` (with name) or `AS15169` (number only), or
  *  `null` when the ASN is unknown/absent (0) — callers omit the AS line in that case. The org
  *  name is device/registry data, shown verbatim (not localized). */

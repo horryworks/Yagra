@@ -35,6 +35,7 @@
       "cpu": "CPU",
       "mem": "Mem",
       "disk": "Disk",
+      "firstSeen": "Registered",
       "lastSeen": "Last seen",
       "actions": "Actions"
     },
@@ -109,6 +110,8 @@
     "note": "Yagra's own health: the poll loop, its backing services, fleet data coverage, and host resources.",
     "reachable": "Reachable",
     "unreachable": "Unreachable",
+    "overallOk": "All reachable",
+    "overallDegraded": "Degraded",
     "noHistory": "No history yet…",
     "core": "Core",
     "hostResources": "Host resources",
@@ -118,6 +121,7 @@
       "postgres": "PostgreSQL",
       "tsdb": "VictoriaMetrics (TSDB)",
       "logs": "VictoriaLogs (event log)",
+      "flow": "ClickHouse (flow store)",
       "bus": "NATS bus"
     },
     "cards": {

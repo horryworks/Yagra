@@ -21,23 +21,7 @@ import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-
-/** What fired: the metric and (for threshold checks) the condition it crossed. Liveness up/down
- *  reads as "Reachability"; legacy rows with no captured metric read as "—". Formatting logic is
- *  the pure `alertWhat` (unit-tested); this just maps its parts to styled spans. */
-function WhatCell({ row }: { row: AlertHistoryRow }) {
-  const { t } = useTranslation();
-  const what = alertWhat(row);
-  if (what.kind === 'none') return <span className="muted">—</span>;
-  if (what.kind === 'liveness') return <span>{t('format:liveness')}</span>;
-  return (
-    <span>
-      <span className="mono">{what.metric}</span>
-      {what.condition && <span className="muted"> {what.condition}</span>}
-      {what.observed && <span className="muted"> ({what.observed})</span>}
-    </span>
-  );
-}
+import { AlertWhatText } from '../widgets/AlertWhatText';
 
 const PAGE_SIZE = 100;
 
@@ -104,7 +88,12 @@ export function HistoryPage() {
         width: '1.4fr',
         render: (r) => <EntityName name={nodeName(r.node)} id={r.node} />,
       },
-      { key: 'what', header: t('history.cols.what'), width: '1.6fr', render: (r) => <WhatCell row={r} /> },
+      {
+        key: 'what',
+        header: t('history.cols.what'),
+        width: '1.6fr',
+        render: (r) => <AlertWhatText what={alertWhat(r)} />,
+      },
       {
         key: 'state',
         header: t('history.cols.state'),
