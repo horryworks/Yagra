@@ -70,16 +70,6 @@ pub(crate) fn authorize(st: &ApiState, headers: &HeaderMap, perm: Permission) ->
     }
 }
 
-/// Gate a read-only endpoint. In public-dashboard mode reads are open (returns `None`);
-/// otherwise a valid session with `View` (granted to every role) is required. Returns
-/// `Some(error response)` to short-circuit on failure.
-pub(crate) fn require_view(st: &ApiState, headers: &HeaderMap) -> Option<Response> {
-    if st.public_dashboard {
-        return None;
-    }
-    authorize(st, headers, Permission::View)
-}
-
 /// Guard for handlers that touch leader-only in-memory pipelines (ADR-016): `Some(503)` on a
 /// standby, `None` on the leader (and always `None` when HA is off / this core is always leader).
 /// Mirrors [`authorize`]'s `Option<Response>` shape so call sites read the same.
