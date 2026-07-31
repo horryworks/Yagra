@@ -17365,7 +17365,7 @@
       },
       "DnsFailureKind": {
         "type": "string",
-        "description": "[`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the\nvalue the API serves for grouping and for UI keying.\n\nDerived from `DnsFailure` rather than declared beside it. Written out as a second list, the two\nwould be nine names maintained in two places, and a variant added to one is invisible to the\nother; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.",
+        "description": "Why a resolution failed, without the detail that distinguishes one instance from another — the\n`failure_kind` column, and what the API serves for grouping.",
         "enum": [
           "nx_domain",
           "no_data",
@@ -17521,7 +17521,7 @@
       },
       "EventAction": {
         "type": "string",
-        "description": "What the pipeline did with an event.\n\nVariants are declared least → most consequential so the derived `Ord` ranks them: when several\nrules match one event, the row records the strongest outcome. That ordering *was* a hand-written\n`action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new\nvariant would have silently ranked below \"nothing happened\".",
+        "description": "What the pipeline did with an event. When several rules match one event, the row records the\nstrongest outcome.",
         "enum": [
           "none",
           "info",
@@ -19004,7 +19004,7 @@
       },
       "IncidentContext": {
         "type": "object",
-        "description": "Everything the model is told, before any of it becomes text.\n\n`Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so\na reader can check the explanation rather than trust it (ADR-029). What serializes here is\nexactly what the model saw, which is also what makes a bad answer reviewable afterwards.",
+        "description": "Exactly what the model was shown about the incident, so an answer can be checked rather than\ntrusted (ADR-029). Stored beside the answer; also what makes a bad answer reviewable later.",
         "required": [
           "generated_at_s",
           "window_secs",
@@ -21176,7 +21176,7 @@
       },
       "RcaAnswer": {
         "type": "object",
-        "description": "The parsed explanation.\n\nEvery field is plain text and stays plain text: it is rendered as text by the WebUI, never as\nHTML or markdown. Model output is untrusted for the same reason device output is (security.md),\nand here it is doubly so — the model was itself reading device output.",
+        "description": "The parsed explanation. **Every field is plain text and must be rendered as text, never as HTML\nor markdown** — this is model output, and the model was itself reading untrusted device output.",
         "required": [
           "summary"
         ],
@@ -21253,7 +21253,7 @@
       },
       "RcaConfidence": {
         "type": "string",
-        "description": "How sure the model claims to be.\n\nA closed set because the UI styles each level, and because the value is the model's own\nuntrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of\nthese, so nothing downstream has to cope with prose.",
+        "description": "How sure the model says it is. `unknown` means it answered outside this set, or not at all.",
         "enum": [
           "high",
           "medium",
@@ -21315,7 +21315,7 @@
       },
       "ReportBody": {
         "type": "object",
-        "description": "What goes in the `body` column: the answer, and the evidence it was grounded in.\n\nStoring both is the point. An explanation without its evidence is an assertion, and ADR-029's\ndisplay rule — never show a claim the reader cannot check — needs the timeline to still be there\nwhen the modal is reopened tomorrow.",
+        "description": "A report's contents: the answer, the evidence it was grounded in, and the language it was\nrequested in.",
         "required": [
           "answer",
           "evidence",

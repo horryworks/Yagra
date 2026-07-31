@@ -103,11 +103,11 @@ pub struct RcaReport {
     pub cached: bool,
 }
 
-/// What goes in the `body` column: the answer, and the evidence it was grounded in.
-///
-/// Storing both is the point. An explanation without its evidence is an assertion, and ADR-029's
-/// display rule — never show a claim the reader cannot check — needs the timeline to still be there
-/// when the modal is reopened tomorrow.
+/// A report's contents: the answer, the evidence it was grounded in, and the language it was
+/// requested in.
+//  Storing both is the point. An explanation without its evidence is an assertion, and ADR-029's
+//  display rule — never show a claim the reader cannot check — needs the timeline to still be there
+//  when the modal is reopened tomorrow. Below the doc line: published to API clients.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ReportBody {
     pub answer: RcaAnswer,

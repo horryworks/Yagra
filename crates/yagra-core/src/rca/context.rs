@@ -54,11 +54,10 @@ const AUDIT_SCAN_ROWS: i64 = 200;
 /// is already in every API response; the cap just stops a heavily-tagged node from dominating.
 const MAX_TAGS: usize = 8;
 
-/// Everything the model is told, before any of it becomes text.
-///
-/// `Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so
-/// a reader can check the explanation rather than trust it (ADR-029). What serializes here is
-/// exactly what the model saw, which is also what makes a bad answer reviewable afterwards.
+/// Exactly what the model was shown about the incident, so an answer can be checked rather than
+/// trusted (ADR-029). Stored beside the answer; also what makes a bad answer reviewable later.
+//  Below the doc line: a schema's doc text is published verbatim to API clients, so keep the
+//  gathering rules (the three in the module docs) out of it.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct IncidentContext {
     /// When the context was assembled (Unix seconds), so the prompt can express ages rather than

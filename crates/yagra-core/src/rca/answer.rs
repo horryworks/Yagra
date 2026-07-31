@@ -25,11 +25,10 @@ const MAX_NEXT_STEPS: usize = 10;
 /// Longest raw fallback text kept.
 const MAX_RAW_CHARS: usize = 16_000;
 
-/// The parsed explanation.
-///
-/// Every field is plain text and stays plain text: it is rendered as text by the WebUI, never as
-/// HTML or markdown. Model output is untrusted for the same reason device output is (security.md),
-/// and here it is doubly so — the model was itself reading device output.
+/// The parsed explanation. **Every field is plain text and must be rendered as text, never as HTML
+/// or markdown** — this is model output, and the model was itself reading untrusted device output.
+//  (That warning is deliberately in the published doc: it is the one thing a consumer of this type
+//  has to know. The reasoning behind it is security.md's "treat all device data as untrusted".)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RcaAnswer {
     /// One sentence an on-call engineer can act on.
@@ -137,11 +136,10 @@ fn strip_fence(text: &str) -> &str {
         .trim_matches('\n')
 }
 
-/// How sure the model claims to be.
-///
-/// A closed set because the UI styles each level, and because the value is the model's own
-/// untrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of
-/// these, so nothing downstream has to cope with prose.
+/// How sure the model says it is. `unknown` means it answered outside this set, or not at all.
+//  A closed set because the UI styles each level, and because the value is the model's own
+//  untrusted output — `normalize` is the boundary that turns whatever it said into one of these,
+//  so nothing downstream has to cope with prose. Below the doc line: published to API clients.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RcaConfidence {

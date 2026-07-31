@@ -3865,12 +3865,8 @@ export interface components {
             kind: "malformed";
         };
         /**
-         * @description [`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the
-         *     value the API serves for grouping and for UI keying.
-         *
-         *     Derived from `DnsFailure` rather than declared beside it. Written out as a second list, the two
-         *     would be nine names maintained in two places, and a variant added to one is invisible to the
-         *     other; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.
+         * @description Why a resolution failed, without the detail that distinguishes one instance from another — the
+         *     `failure_kind` column, and what the API serves for grouping.
          * @enum {string}
          */
         DnsFailureKind: "nx_domain" | "no_data" | "serv_fail" | "refused" | "other_rcode" | "timeout" | "loop_detected" | "depth_exceeded" | "malformed";
@@ -3936,12 +3932,8 @@ export interface components {
             message: string;
         };
         /**
-         * @description What the pipeline did with an event.
-         *
-         *     Variants are declared least → most consequential so the derived `Ord` ranks them: when several
-         *     rules match one event, the row records the strongest outcome. That ordering *was* a hand-written
-         *     `action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new
-         *     variant would have silently ranked below "nothing happened".
+         * @description What the pipeline did with an event. When several rules match one event, the row records the
+         *     strongest outcome.
          * @enum {string}
          */
         EventAction: "none" | "info" | "suppressed" | "cleared" | "refreshed" | "fired";
@@ -4578,11 +4570,8 @@ export interface components {
             created: number;
         };
         /**
-         * @description Everything the model is told, before any of it becomes text.
-         *
-         *     `Serialize` because a stored report keeps the evidence beside the answer — the UI shows both, so
-         *     a reader can check the explanation rather than trust it (ADR-029). What serializes here is
-         *     exactly what the model saw, which is also what makes a bad answer reviewable afterwards.
+         * @description Exactly what the model was shown about the incident, so an answer can be checked rather than
+         *     trusted (ADR-029). Stored beside the answer; also what makes a bad answer reviewable later.
          */
         IncidentContext: {
             /** @description The alert on that node. */
@@ -5463,11 +5452,8 @@ export interface components {
             suggested_model: string;
         };
         /**
-         * @description The parsed explanation.
-         *
-         *     Every field is plain text and stays plain text: it is rendered as text by the WebUI, never as
-         *     HTML or markdown. Model output is untrusted for the same reason device output is (security.md),
-         *     and here it is doubly so — the model was itself reading device output.
+         * @description The parsed explanation. **Every field is plain text and must be rendered as text, never as HTML
+         *     or markdown** — this is model output, and the model was itself reading untrusted device output.
          */
         RcaAnswer: {
             /** @description How sure the model says it is. */
@@ -5510,11 +5496,7 @@ export interface components {
             window_secs?: number | null;
         };
         /**
-         * @description How sure the model claims to be.
-         *
-         *     A closed set because the UI styles each level, and because the value is the model's own
-         *     untrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of
-         *     these, so nothing downstream has to cope with prose.
+         * @description How sure the model says it is. `unknown` means it answered outside this set, or not at all.
          * @enum {string}
          */
         RcaConfidence: "high" | "medium" | "low" | "unknown";
@@ -5543,11 +5525,8 @@ export interface components {
             summary: string;
         };
         /**
-         * @description What goes in the `body` column: the answer, and the evidence it was grounded in.
-         *
-         *     Storing both is the point. An explanation without its evidence is an assertion, and ADR-029's
-         *     display rule — never show a claim the reader cannot check — needs the timeline to still be there
-         *     when the modal is reopened tomorrow.
+         * @description A report's contents: the answer, the evidence it was grounded in, and the language it was
+         *     requested in.
          */
         ReportBody: {
             answer: components["schemas"]["RcaAnswer"];

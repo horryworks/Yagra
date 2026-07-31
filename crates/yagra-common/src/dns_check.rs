@@ -240,12 +240,13 @@ pub enum DnsFailure {
     Malformed,
 }
 
-/// [`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the
-/// value the API serves for grouping and for UI keying.
-///
-/// Derived from `DnsFailure` rather than declared beside it. Written out as a second list, the two
-/// would be nine names maintained in two places, and a variant added to one is invisible to the
-/// other; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.
+/// Why a resolution failed, without the detail that distinguishes one instance from another — the
+/// `failure_kind` column, and what the API serves for grouping.
+//  Derived from `DnsFailure` via `kind()` rather than declared beside it. Written out as a second
+//  list, the two would be nine names maintained in two places and a variant added to one would be
+//  invisible to the other; `kind()` is an exhaustive match, so a new failure has to name its kind
+//  to compile. Kept below the doc line because a schema's doc text is published verbatim to API
+//  clients — and a rustdoc link like [`DnsFailure`] reaches them as that literal string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DnsFailureKind {

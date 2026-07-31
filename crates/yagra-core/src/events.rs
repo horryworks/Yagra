@@ -134,12 +134,12 @@ pub struct RuleParams<'a> {
     pub window_secs: i32,
 }
 
-/// What the pipeline did with an event.
-///
-/// Variants are declared least → most consequential so the derived `Ord` ranks them: when several
-/// rules match one event, the row records the strongest outcome. That ordering *was* a hand-written
-/// `action_rank(&str) -> u8` with a `_ => 0` arm, i.e. a second copy of this list where a new
-/// variant would have silently ranked below "nothing happened".
+/// What the pipeline did with an event. When several rules match one event, the row records the
+/// strongest outcome.
+//  Variants are declared least → most consequential so the derived `Ord` is that ranking. It *was*
+//  a hand-written `action_rank(&str) -> u8` with a `_ => 0` arm — a second copy of this list, where
+//  a new variant would have silently ranked below "nothing happened". Below the doc line because a
+//  schema's doc text is published verbatim to API clients.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema,
 )]
