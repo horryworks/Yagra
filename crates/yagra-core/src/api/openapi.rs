@@ -199,4 +199,118 @@ mod tests {
              then `cd web && npm run generate:api` to refresh schema.d.ts."
         );
     }
+
+    /// Strip module paths and whitespace so `Vec<crate::discovery::Candidate>` and
+    /// `Json<Vec<Candidate>>` compare equal — what matters is which type, not how it was spelled.
+    fn normalize(ty: &str) -> String {
+        let t: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+        match t.strip_prefix("Vec<").and_then(|r| r.strip_suffix('>')) {
+            Some(inner) => format!("Vec<{}>", inner.rsplit("::").next().unwrap_or(inner)),
+            None => t.rsplit("::").next().unwrap_or(&t).to_owned(),
+        }
+    }
+
+    /// The success `body =` of a `#[utoipa::path]` attribute: the first 2xx response carrying one.
+    /// `None` for a documented stream/download (a `content_type` with no body) or a bare 204.
+    fn declared_body(attr: &str) -> Option<String> {
+        for line in attr.lines() {
+            if !line.contains("(status = 2") {
+                continue;
+            }
+            let rest = line.split("body = ").nth(1)?;
+            return Some(normalize(
+                rest.trim_end().trim_end_matches(',').trim_end_matches(')'),
+            ));
+        }
+        None
+    }
+
+    /// The type a handler actually serializes, from its signature. `None` when it returns no body
+    /// (`StatusCode`) or erases to a `Response` — those are the cases nothing here can compare.
+    fn returned_body(ret: &str) -> Option<String> {
+        let mut t: String = ret.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Some(inner) = t
+            .strip_prefix("ApiResult<")
+            .and_then(|r| r.strip_suffix('>'))
+        {
+            t = inner.to_owned();
+        }
+        if let Some(inner) = t
+            .strip_prefix("(StatusCode,")
+            .and_then(|r| r.strip_suffix(')'))
+        {
+            t = inner.to_owned();
+        }
+        let json = t.strip_prefix("Json<").and_then(|r| r.strip_suffix('>'))?;
+        Some(normalize(json))
+    }
+
+    /// **The one link utoipa itself does not check.**
+    ///
+    /// `#[utoipa::path]` is an attribute; the macro never reads the function it sits on. Naming a
+    /// type that does not exist, or one without `ToSchema`, is a compile error — but naming a
+    /// *different real* schema type compiles, generates a wrong TypeScript type, and fails only in
+    /// front of an operator. That is the same class of silent drift the whole generated-contract
+    /// change exists to remove, so it gets a guard rather than a warning in a rules file.
+    ///
+    /// Deliberately source-text, and deliberately partial: it compares only handlers whose success
+    /// body is a plain `Json<T>`, skipping SSE streams, downloads and 204s, where there is nothing
+    /// to compare. A handler shape this cannot parse is *skipped*, never failed — a heuristic that
+    /// blocks CI on its own blind spots gets disabled, and then guards nothing.
+    #[test]
+    fn every_documented_body_is_the_type_its_handler_returns() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
+        let mut compared = 0usize;
+        let mut wrong = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("read src/api") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read module");
+            let file = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("?")
+                .to_owned();
+
+            for chunk in src.split("#[utoipa::path(").skip(1) {
+                let Some((attr, after)) = chunk.split_once("\n)]") else {
+                    continue;
+                };
+                // The signature runs from the fn name to the `{` that opens the body.
+                let Some(sig) = after
+                    .split_once("async fn ")
+                    .and_then(|(_, s)| s.split_once('{'))
+                else {
+                    continue;
+                };
+                let name = sig.0.split('(').next().unwrap_or("?").trim().to_owned();
+                let Some(ret) = sig.0.rsplit_once("->").map(|(_, r)| r) else {
+                    continue;
+                };
+                let (Some(declared), Some(returned)) = (declared_body(attr), returned_body(ret))
+                else {
+                    continue;
+                };
+                compared += 1;
+                if declared != returned {
+                    wrong.push(format!(
+                        "{file}::{name} — documents {declared}, returns {returned}"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            compared > 100,
+            "only compared {compared} handlers — the parser stopped matching"
+        );
+        assert!(
+            wrong.is_empty(),
+            "documented body ≠ handler return type:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
 }

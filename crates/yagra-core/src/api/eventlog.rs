@@ -270,9 +270,7 @@ async fn events_stats(
     admin: Admin,
     State(st): State<ApiState>,
     Query(q): Query<EventStatsQuery>,
-) -> ApiResult<axum::response::Response> {
-    use axum::response::IntoResponse;
-
+) -> ApiResult<Json<EventStats>> {
     let group_by = q.group_by.as_deref().unwrap_or("kind").to_owned();
     let filter = parse_event_filter(EventFilterInput {
         before: None,
@@ -285,8 +283,6 @@ async fn events_stats(
         regex: q.regex.unwrap_or(false),
     })?;
 
-    // The time series and the categorical breakdown return different row types, so this is the one
-    // handler here that erases to `Response` rather than a single `Json<T>`.
     if group_by == "time" {
         let bucket = q.bucket_secs.unwrap_or(3600);
         let split_kind = q.split.as_deref() == Some("kind");
@@ -304,7 +300,7 @@ async fn events_stats(
                 "failed to compute event stats",
             )
         })?;
-        return Ok(Json(EventStats::Series(buckets)).into_response());
+        return Ok(Json(EventStats::Series(buckets)));
     }
 
     let group = EventStatGroup::parse(&group_by).ok_or_else(|| {
@@ -328,7 +324,7 @@ async fn events_stats(
             "failed to compute event stats",
         )
     })?;
-    Ok(Json(EventStats::Grouped(buckets)).into_response())
+    Ok(Json(EventStats::Grouped(buckets)))
 }
 
 #[cfg(test)]

@@ -24,7 +24,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
@@ -343,15 +342,12 @@ async fn discovery_candidates(
     _guard: RequireView,
     State(st): State<ApiState>,
     Query(q): Query<CandidatesQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Vec<crate::discovery::Candidate>>> {
     let Some(admin) = st.admin.as_ref() else {
-        return Ok(Json(Value::Array(Vec::new())));
+        return Ok(Json(Vec::new()));
     };
     let limit = q.limit.unwrap_or(10).clamp(1, 50);
-    let candidates = admin.discovery.recent_candidates(limit);
-    Ok(Json(
-        serde_json::to_value(candidates).unwrap_or(Value::Array(Vec::new())),
-    ))
+    Ok(Json(admin.discovery.recent_candidates(limit)))
 }
 
 #[cfg(test)]
@@ -434,7 +430,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
         assert_eq!(
-            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
             serde_json::json!([])
         );
     }
