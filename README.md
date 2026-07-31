@@ -233,6 +233,27 @@ network service, note AGPL **§13**: if you run a **modified** version and let u
 interact with it over a network, you must offer those users the Corresponding Source of
 your modified version.
 
+**What this means in practice.** The AGPL is more often avoided on reputation than on what it
+actually says, so, in plain language — [LICENSE](LICENSE) is the text that governs, and the
+following is a summary, not legal advice:
+
+- **Running Yagra unmodified triggers nothing.** §13 applies only *if you modify the Program*.
+  Deploy the published images, configure them, monitor your network — no source-disclosure
+  obligation arises, whether the users are your own staff or your customers.
+- **Your data and configuration are not covered.** §13 reaches Yagra's own source code. Your node
+  inventory, dashboards, thresholds, alert history, collected metrics, credentials, and the
+  configuration you feed Yagra are yours, and disclose nothing.
+- **"Offer to users" is not "publish to the world."** If you do modify Yagra and serve it over a
+  network, the Corresponding Source goes to the people interacting with that instance — your own
+  staff for an internal deployment, your customers if you host it for them. There is no obligation
+  to publish it publicly or to contribute it upstream.
+- **Writing a client is not modifying Yagra.** Independent programs that talk to Yagra's REST API
+  or MCP surface are generally treated as separate works. Code added *inside* the workspace — a new
+  check kind, a poller change, a WebUI change — is a modification.
+- **Redistribution is the other trigger, and it is GPL-standard.** Passing Yagra's binaries or
+  images to a third party carries the usual §6 source obligation whether or not you modified it.
+  That is identical under GPL-3.0 and is not an AGPL-specific term.
+
 For use under terms other than the AGPL (e.g. embedding Yagra in a proprietary product,
 or operating a modified version without the source-disclosure obligation), a separate
 **commercial license** may be available — contact horryworks@gmail.com.
