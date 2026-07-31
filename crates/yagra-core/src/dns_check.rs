@@ -14,7 +14,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{DnsChain, DnsCheckConfig, DnsRecordType};
+use yagra_common::{DnsChain, DnsCheckConfig, DnsFailure, DnsFailureKind, DnsRecordType};
 
 /// The current resolution chain for a node, plus how long it has held.
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub struct CurrentChain {
     /// Whether that observation reached a terminal record set.
     pub resolved: bool,
     /// Stable failure token when it did not (`nx_domain`, `timeout`, …).
-    pub failure_kind: Option<String>,
+    pub failure_kind: Option<DnsFailureKind>,
     /// When this exact chain was first observed.
     pub first_seen: DateTime<Utc>,
     /// When it was last confirmed still current.
@@ -43,7 +43,7 @@ pub struct ChainChange {
     /// Whether it resolved.
     pub resolved: bool,
     /// Stable failure token when it did not.
-    pub failure_kind: Option<String>,
+    pub failure_kind: Option<DnsFailureKind>,
     /// The key this replaced; `None` marks the first-ever observation for the node.
     pub prev_chain_key: Option<String>,
 }
@@ -158,7 +158,7 @@ impl DnsCheckRepo {
     pub async fn record_observation(&self, node_id: Uuid, chain: &DnsChain) -> anyhow::Result<()> {
         let chain_key = chain.content_key();
         let resolved = chain.resolved();
-        let failure_kind = chain.failure.as_ref().map(|f| f.kind_token());
+        let failure_kind = chain.failure.as_ref().map(DnsFailure::kind_token);
         sqlx::query(
             "WITH up AS ( \
                 INSERT INTO dns_chains \
@@ -211,7 +211,10 @@ impl DnsCheckRepo {
         Ok(Some(CurrentChain {
             chain: chain.0,
             resolved: row.try_get("resolved")?,
-            failure_kind: row.try_get("failure_kind")?,
+            failure_kind: row
+                .try_get::<Option<String>, _>("failure_kind")?
+                .as_deref()
+                .and_then(DnsFailureKind::from_token),
             first_seen: row.try_get("first_seen")?,
             last_seen: row.try_get("last_seen")?,
         }))
@@ -265,7 +268,10 @@ impl DnsCheckRepo {
                     at: row.try_get("at")?,
                     chain: chain.0,
                     resolved: row.try_get("resolved")?,
-                    failure_kind: row.try_get("failure_kind")?,
+                    failure_kind: row
+                        .try_get::<Option<String>, _>("failure_kind")?
+                        .as_deref()
+                        .and_then(DnsFailureKind::from_token),
                     prev_chain_key: row.try_get("prev_chain_key")?,
                 })
             })

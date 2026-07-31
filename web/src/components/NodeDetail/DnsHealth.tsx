@@ -84,9 +84,15 @@ export function DnsHealth({ nodeId, check }: { nodeId: string; check: DnsCheckCo
       key: 'outcome',
       header: t('overview.resolution'),
       width: '140px',
+      // The failure kind used to render as its raw token, so a Japanese operator read
+      // `nx_domain`. It is a closed set now, so it gets translated strings.
       render: (row) => (
         <Badge tone={row.resolved ? 'up' : 'critical'}>
-          {row.resolved ? t('overview.resolves') : (row.failure_kind ?? t('overview.doesNotResolve'))}
+          {row.resolved
+            ? t('overview.resolves')
+            : row.failure_kind
+              ? t(`dns.failure.${row.failure_kind}`)
+              : t('overview.doesNotResolve')}
         </Badge>
       ),
     },

@@ -17078,9 +17078,13 @@
             "$ref": "#/components/schemas/DnsChain"
           },
           "failure_kind": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DnsFailureKind"
+              }
             ]
           },
           "id": {
@@ -17112,9 +17116,13 @@
             "$ref": "#/components/schemas/DnsChain"
           },
           "failure_kind": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DnsFailureKind"
+              }
             ]
           },
           "first_seen": {
@@ -17354,6 +17362,21 @@
           }
         ],
         "description": "Why a resolution did not reach a terminal record set."
+      },
+      "DnsFailureKind": {
+        "type": "string",
+        "description": "[`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the\nvalue the API serves for grouping and for UI keying.\n\nDerived from `DnsFailure` rather than declared beside it. Written out as a second list, the two\nwould be nine names maintained in two places, and a variant added to one is invisible to the\nother; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.",
+        "enum": [
+          "nx_domain",
+          "no_data",
+          "serv_fail",
+          "refused",
+          "other_rcode",
+          "timeout",
+          "loop_detected",
+          "depth_exceeded",
+          "malformed"
+        ]
       },
       "DnsHistoryCursor": {
         "type": "object",
@@ -19304,6 +19327,14 @@
           }
         }
       },
+      "Language": {
+        "type": "string",
+        "description": "What language the answer should be written in.\n\nThe prompt is always English — instructions in one language keep the model's behaviour stable —\nbut the *answer* follows the reader. An operator reading a Japanese UI should not get an English\nexplanation of their own network.",
+        "enum": [
+          "en",
+          "ja"
+        ]
+      },
       "LlmConfigInput": {
         "type": "object",
         "description": "The `PUT /api/v1/llm/config` body.",
@@ -21151,8 +21182,8 @@
         ],
         "properties": {
           "confidence": {
-            "type": "string",
-            "description": "`high` | `medium` | `low`, or `unknown` when the model said something else."
+            "$ref": "#/components/schemas/RcaConfidence",
+            "description": "How sure the model says it is."
           },
           "dependents": {
             "type": "string",
@@ -21219,6 +21250,16 @@
             "description": "Timeline window in seconds; clamped by the orchestrator. Defaults to an hour."
           }
         }
+      },
+      "RcaConfidence": {
+        "type": "string",
+        "description": "How sure the model claims to be.\n\nA closed set because the UI styles each level, and because the value is the model's own\nuntrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of\nthese, so nothing downstream has to cope with prose.",
+        "enum": [
+          "high",
+          "medium",
+          "low",
+          "unknown"
+        ]
       },
       "RcaReport": {
         "type": "object",
@@ -21289,8 +21330,8 @@
             "description": "Everything the model was told, exactly as it saw it."
           },
           "language": {
-            "type": "string",
-            "description": "Which language the answer was requested in (`en` / `ja`)."
+            "$ref": "#/components/schemas/Language",
+            "description": "Which language the answer was requested in."
           }
         }
       },

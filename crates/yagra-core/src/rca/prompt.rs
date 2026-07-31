@@ -17,6 +17,7 @@
 //! **The output budget is a hard cap, not a hope.** [`MAX_PROMPT_CHARS`] is enforced by truncation
 //! after rendering, so a pathological incident cannot produce an unbounded request.
 
+use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
 use super::context::{ChangeFacts, IncidentContext, NodeFacts};
@@ -42,10 +43,14 @@ const UNTRUSTED_CLOSE: &str = "UNTRUSTED-DEVICE-OUTPUT>>>";
 /// The prompt is always English — instructions in one language keep the model's behaviour stable —
 /// but the *answer* follows the reader. An operator reading a Japanese UI should not get an English
 /// explanation of their own network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+//  Per-variant `rename`, not `rename_all`: the stored tokens are the ISO codes `en`/`ja`, and
+//  `rename_all = "snake_case"` would emit `english`/`japanese`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum Language {
     #[default]
+    #[serde(rename = "en")]
     English,
+    #[serde(rename = "ja")]
     Japanese,
 }
 

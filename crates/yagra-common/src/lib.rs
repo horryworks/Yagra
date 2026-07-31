@@ -38,8 +38,8 @@ pub use collection::{
 };
 pub use dns_check::{
     is_resolver_blocked, normalize_dns_name, validate_dns_name, DnsAnswer, DnsChain,
-    DnsCheckConfig, DnsFailure, DnsHop, DnsRecord, DnsRecordType, METRIC_DNS_ANSWER_COUNT,
-    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
+    DnsCheckConfig, DnsFailure, DnsFailureKind, DnsHop, DnsRecord, DnsRecordType,
+    METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
 };
 pub use host::{DiskUsage, HostSample};
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};

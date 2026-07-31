@@ -234,11 +234,12 @@ export function RcaModal({ node, check, onClose }: Props) {
                   <p className="rca-text">{answer.dependents}</p>
                 </section>
               )}
-              {answer.next_steps.length > 0 && (
+              {/* Optional on the wire (serde default), so an older stored report may omit it. */}
+              {(answer.next_steps?.length ?? 0) > 0 && (
                 <section className="rca-section">
                   <h3 className="rca-h">{t('section.nextSteps')}</h3>
                   <ol className="rca-steps">
-                    {answer.next_steps.map((s, i) => (
+                    {(answer.next_steps ?? []).map((s, i) => (
                       <li key={i}>{s}</li>
                     ))}
                   </ol>

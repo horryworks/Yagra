@@ -56,6 +56,7 @@ const schemaEnumPins: {
   EventKind: AssertEqual<EventKind, components['schemas']['EventKind']>;
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
+  DnsFailureKind: AssertEqual<DnsFailureKind, components['schemas']['DnsFailureKind']>;
 } = {
   Severity: true,
   Role: true,
@@ -70,6 +71,7 @@ const schemaEnumPins: {
   EventKind: true,
   EventAction: true,
   EventMatchKind: true,
+  DnsFailureKind: true,
 };
 void schemaEnumPins;
 
@@ -870,6 +872,21 @@ export type EventAction = (typeof EVENT_ACTIONS)[number];
 export const EVENT_MATCH_KINDS = ['substring', 'regex', 'unknown'] as const;
 export type EventMatchKind = (typeof EVENT_MATCH_KINDS)[number];
 
+/** Why a DNS chain did not reach a terminal record set — the payload-free projection of
+ *  `DnsFailure`, which is what the `failure_kind` column stores. */
+export const DNS_FAILURE_KINDS = [
+  'nx_domain',
+  'no_data',
+  'serv_fail',
+  'refused',
+  'other_rcode',
+  'timeout',
+  'loop_detected',
+  'depth_exceeded',
+  'malformed',
+] as const;
+export type DnsFailureKind = (typeof DNS_FAILURE_KINDS)[number];
+
 /** A stored collection item with its id/scope/enabled flag.
  *
  *  One TypeScript type covering **two** endpoints with different shapes: `GET /nodes/:id/collection`
@@ -885,70 +902,30 @@ export type StoredCollectionItem = components['schemas']['TemplateItem'] & {
 };
 
 /** The model's parsed explanation. Every field is plain text and MUST be rendered as text — never
- *  as HTML or markdown (the model was itself reading untrusted device output). `confidence` is a
- *  closed set the badge styles (`high` | `medium` | `low` | `unknown`), and `raw` is set when the
- *  reply was not parseable JSON — its presence is what tells the UI to render one prose block
- *  instead of empty sections. Rust: `yagra_core::rca::answer::RcaAnswer`. */
-export interface RcaAnswer {
-  summary: string;
-  root_cause: string;
-  dependents: string;
-  next_steps: string[];
-  confidence: string;
-  raw?: string | null;
-}
+ *  as HTML or markdown (the model was itself reading untrusted device output). `raw` is set when
+ *  the reply was not parseable JSON — its presence is what tells the UI to render one prose block
+ *  instead of empty sections. */
+export type RcaAnswer = components['schemas']['RcaAnswer'];
 
-/** One node's facts as the model saw them. Rust: `yagra_core::rca::context::NodeFacts`. */
-export interface RcaNodeFacts {
-  name: string;
-  address: string;
-  vendor: string | null;
-  model: string | null;
-  pool: string | null;
-  tags: Array<[string, string]>;
-}
+/** How sure the model says it is. `unknown` covers both "it said something else" and "it said
+ *  nothing" — the backend normalizes the model's untrusted output into this set. */
+export const RCA_CONFIDENCES = ['high', 'medium', 'low', 'unknown'] as const;
+export type RcaConfidence = (typeof RCA_CONFIDENCES)[number];
 
-/** One dated signal on the evidence timeline. Rust: `yagra_core::rca::context::IncidentSignal`. */
-export interface RcaSignal {
-  at_s: number;
-  severity: number;
-  kind: string;
-  label: string;
-}
+/** One node's facts as the model saw them. */
+export type RcaNodeFacts = components['schemas']['NodeFacts'];
+
+/** One dated signal on the evidence timeline. */
+export type RcaSignal = components['schemas']['IncidentSignal'];
 
 /** The evidence the answer was grounded in — stored beside it so a reader can check the
- *  explanation rather than trust it (ADR-029's display rule).
- *  Rust: `yagra_core::rca::context::IncidentContext` (+ `AlertFacts` / `BreachFacts` / `Dependents`
- *  / `ChangeFacts` for the nested shapes). */
-export interface RcaEvidence {
-  generated_at_s: number;
-  window_secs: number;
-  root_node_id: string;
-  node: RcaNodeFacts;
-  alert: {
-    severity: string;
-    state: string;
-    metric: string;
-    at_unix_ms: number;
-    flapping: boolean;
-    breach: { value: number; threshold: number | null; direction: string } | null;
-    /** Set when the operator clicked a symptom and the context hopped to its cause. */
-    asked_about: string | null;
-  };
-  dependents: { named: string[]; total: number };
-  upstream: RcaNodeFacts[];
-  timeline: RcaSignal[];
-  recent_changes: Array<{ at: string; username: string; action: string; status: number }>;
-}
+ *  explanation rather than trust it (ADR-029's display rule). */
+export type RcaEvidence = components['schemas']['IncidentContext'];
 
-/** The `body` column of a stored report — a `serde_json::Value` on the Rust side, so the contract
- *  says `unknown` and `RcaReport.body` stays `unknown`; the one consumer (`RcaModal`) asserts this
- *  shape where it reads it. The one place in this file where a real Rust struct is still
- *  transcribed by hand: unlike a report spec or a tool's params, this document is produced *by
- *  Yagra*, not by an operator, so `RcaAnswer` + `IncidentContext` deriving `ToSchema` would retire
- *  all five of these types and the assertion with them. */
-export interface RcaReportBody {
-  answer: RcaAnswer;
-  evidence: RcaEvidence;
-  language: string;
-}
+/** The `body` of a stored report: the answer, its evidence, and the language it was asked for.
+ *
+ *  These five types were transcribed by hand while `RcaReport.body` was a bare `serde_json::Value`
+ *  — the contract said `unknown`, so `RcaModal` asserted the shape where it read it. The Rust side
+ *  now *declares* the shape (`#[schema(value_type = ReportBody)]` over a column that stays loose so
+ *  an older row still reads back), which is what retired the mirror. */
+export type RcaReportBody = components['schemas']['ReportBody'];

@@ -115,8 +115,8 @@ pub struct ReportBody {
     //  Same loose-storage / declared-shape split as `RcaReport::body` above.
     #[schema(value_type = super::context::IncidentContext)]
     pub evidence: serde_json::Value,
-    /// Which language the answer was requested in (`en` / `ja`).
-    pub language: String,
+    /// Which language the answer was requested in.
+    pub language: crate::rca::prompt::Language,
 }
 
 /// A row to insert.

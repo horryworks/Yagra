@@ -317,5 +317,18 @@
     "dependsOn": "Depends on (upstream)",
     "noUpstream": "— No upstream (top-level) —",
     "hint": "When this upstream is down, {{name}}'s alert is suppressed and rolled up under it."
+  },
+  "dns": {
+    "failure": {
+      "nx_domain": "No such name (NXDOMAIN)",
+      "no_data": "No record of that type",
+      "serv_fail": "Resolver failed (SERVFAIL)",
+      "refused": "Resolver refused (REFUSED)",
+      "other_rcode": "Other response code",
+      "timeout": "Timed out",
+      "loop_detected": "CNAME loop",
+      "depth_exceeded": "Chain too long",
+      "malformed": "Malformed response"
+    }
   }
 }

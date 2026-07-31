@@ -35,7 +35,8 @@ use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    is_ssrf_blocked, DnsCheckConfig, NodeKind, NodeRows, ProfileCategory, UrlCheckConfig,
+    is_ssrf_blocked, DnsCheckConfig, DnsFailureKind, NodeKind, NodeRows, ProfileCategory,
+    UrlCheckConfig,
 };
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -772,7 +773,7 @@ async fn create_dns_monitor(
 pub(crate) struct DnsChainCurrent {
     chain: yagra_common::DnsChain,
     resolved: bool,
-    failure_kind: Option<String>,
+    failure_kind: Option<DnsFailureKind>,
     first_seen: String,
     last_seen: String,
 }
@@ -822,7 +823,7 @@ pub(crate) struct DnsChainChange {
     at: String,
     chain: yagra_common::DnsChain,
     resolved: bool,
-    failure_kind: Option<String>,
+    failure_kind: Option<DnsFailureKind>,
     prev_chain_key: Option<String>,
 }
 

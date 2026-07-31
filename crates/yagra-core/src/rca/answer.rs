@@ -43,9 +43,9 @@ pub struct RcaAnswer {
     /// Concrete things to check next.
     #[serde(default)]
     pub next_steps: Vec<String>,
-    /// `high` | `medium` | `low`, or `unknown` when the model said something else.
+    /// How sure the model says it is.
     #[serde(default)]
-    pub confidence: String,
+    pub confidence: RcaConfidence,
     /// Set when the reply was not parseable JSON: the model's text, verbatim and bounded. Its
     /// presence is what tells the UI to render one prose block rather than empty sections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,7 +85,7 @@ pub fn parse(text: &str) -> RcaAnswer {
                 .take(MAX_NEXT_STEPS)
                 .map(|s| clamp(s, MAX_SECTION_CHARS))
                 .collect(),
-            confidence: normalize_confidence(&w.confidence),
+            confidence: RcaConfidence::normalize(&w.confidence),
             raw: None,
         },
         _ => raw_answer(text),
@@ -103,7 +103,7 @@ fn raw_answer(text: &str) -> RcaAnswer {
         .unwrap_or("The model returned no text.");
     RcaAnswer {
         summary: clamp(first_line, MAX_SUMMARY_CHARS),
-        confidence: "unknown".to_owned(),
+        confidence: RcaConfidence::Unknown,
         raw: Some(clamp(trimmed, MAX_RAW_CHARS)),
         ..RcaAnswer::default()
     }
@@ -137,17 +137,35 @@ fn strip_fence(text: &str) -> &str {
         .trim_matches('\n')
 }
 
-/// Constrain confidence to the closed set the UI styles. Anything else becomes `unknown` rather
-/// than being passed through: the value drives a badge, and an unbounded string there would be both
-/// an unstyled badge and (were it ever counted) an unbounded metric label.
-fn normalize_confidence(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "high" => "high",
-        "medium" | "moderate" => "medium",
-        "low" => "low",
-        _ => "unknown",
+/// How sure the model claims to be.
+///
+/// A closed set because the UI styles each level, and because the value is the model's own
+/// untrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of
+/// these, so nothing downstream has to cope with prose.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RcaConfidence {
+    High,
+    Medium,
+    Low,
+    /// The model said something outside the set, or said nothing.
+    #[default]
+    Unknown,
+}
+
+impl RcaConfidence {
+    /// Constrain the model's answer to the styled set. Case- and space-insensitive, and it accepts
+    /// "moderate" for medium because models produce it; anything else becomes `Unknown` rather than
+    /// reaching the UI as prose.
+    #[must_use]
+    pub fn normalize(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "high" => Self::High,
+            "medium" | "moderate" => Self::Medium,
+            "low" => Self::Low,
+            _ => Self::Unknown,
+        }
     }
-    .to_owned()
 }
 
 /// Trim and cap on a char boundary, marking the cut so a truncated section does not read as a
@@ -181,7 +199,7 @@ mod tests {
         let a = parse(GOOD);
         assert!(a.summary.starts_with("core-sw-01 is unreachable"));
         assert_eq!(a.next_steps.len(), 2);
-        assert_eq!(a.confidence, "high");
+        assert_eq!(a.confidence, RcaConfidence::High);
         assert!(a.raw.is_none(), "structured replies carry no raw block");
     }
 
@@ -195,7 +213,7 @@ mod tests {
     #[test]
     fn commentary_around_the_object_is_ignored() {
         let chatty = format!("Here is my analysis:\n\n{GOOD}\n\nHope that helps!");
-        assert_eq!(parse(&chatty).confidence, "high");
+        assert_eq!(parse(&chatty).confidence, RcaConfidence::High);
     }
 
     #[test]
@@ -206,7 +224,7 @@ mod tests {
             a.raw.as_deref(),
             Some("The switch is down.\nIts children followed it.")
         );
-        assert_eq!(a.confidence, "unknown");
+        assert_eq!(a.confidence, RcaConfidence::Unknown);
         assert!(a.root_cause.is_empty(), "no structure was invented");
     }
 
@@ -222,15 +240,51 @@ mod tests {
     fn an_empty_reply_still_produces_a_readable_answer() {
         let a = parse("   \n  ");
         assert_eq!(a.summary, "The model returned no text.");
-        assert_eq!(a.confidence, "unknown");
+        assert_eq!(a.confidence, RcaConfidence::Unknown);
     }
 
     #[test]
     fn confidence_is_constrained_to_the_styled_set() {
-        assert_eq!(normalize_confidence("High"), "high");
-        assert_eq!(normalize_confidence(" MODERATE "), "medium");
-        assert_eq!(normalize_confidence("very high indeed"), "unknown");
-        assert_eq!(normalize_confidence(""), "unknown");
+        assert_eq!(RcaConfidence::normalize("High"), RcaConfidence::High);
+        assert_eq!(
+            RcaConfidence::normalize(" MODERATE "),
+            RcaConfidence::Medium
+        );
+        assert_eq!(
+            RcaConfidence::normalize("very high indeed"),
+            RcaConfidence::Unknown
+        );
+        assert_eq!(RcaConfidence::normalize(""), RcaConfidence::Unknown);
+
+        // Unlike the enums that also name a DB column, serde is the *only* writer here — the value
+        // lives inside the report's JSONB blob. So what needs pinning is the tag itself: these are
+        // the strings already in stored reports, and the WebUI keys its badge styles off them.
+        for (c, token) in [
+            (RcaConfidence::High, "high"),
+            (RcaConfidence::Medium, "medium"),
+            (RcaConfidence::Low, "low"),
+            (RcaConfidence::Unknown, "unknown"),
+        ] {
+            assert_eq!(serde_json::to_string(&c).unwrap(), format!("\"{token}\""));
+            assert_eq!(RcaConfidence::normalize(token), c);
+        }
+    }
+
+    #[test]
+    fn the_answer_language_serializes_as_its_iso_code() {
+        // `rename_all = "snake_case"` would write "english"/"japanese"; the stored token is the ISO
+        // code, so each variant carries its own rename. Getting this wrong is silent — it would
+        // only show up as a stored report whose language no reader recognises.
+        use crate::rca::prompt::Language;
+        assert_eq!(serde_json::to_string(&Language::English).unwrap(), "\"en\"");
+        assert_eq!(
+            serde_json::to_string(&Language::Japanese).unwrap(),
+            "\"ja\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Language>("\"ja\"").unwrap(),
+            Language::Japanese
+        );
     }
 
     #[test]
@@ -274,6 +328,6 @@ mod tests {
     #[test]
     fn a_fence_without_a_language_tag_still_unwraps() {
         let a = parse(&format!("```\n{GOOD}\n```"));
-        assert_eq!(a.confidence, "high");
+        assert_eq!(a.confidence, RcaConfidence::High);
     }
 }

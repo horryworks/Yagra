@@ -25,6 +25,8 @@ import {
   REPORT_TRIGGERS,
   EVENT_ACTIONS,
   EVENT_MATCH_KINDS,
+  DNS_FAILURE_KINDS,
+  RCA_CONFIDENCES,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -47,6 +49,8 @@ import enAlerts from './locales/en/alerts.json';
 import jaAlerts from './locales/ja/alerts.json';
 import enDashboard from './locales/en/dashboard.json';
 import jaDashboard from './locales/ja/dashboard.json';
+import enRca from './locales/en/rca.json';
+import jaRca from './locales/ja/rca.json';
 import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
@@ -166,6 +170,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'eventRules.matchKind.',
       EVENT_MATCH_KINDS,
     );
+  });
+
+  it('every DNS failure kind has a label (nodes:dns.failure.*)', () => {
+    // Until these existed, DnsHealth rendered the raw token, so a Japanese operator read
+    // "nx_domain" in the resolution column.
+    expectKeys('dns failure', { en: enNodes, ja: jaNodes }, 'dns.failure.', DNS_FAILURE_KINDS);
+  });
+
+  it('every RCA confidence level has a label (rca:confidence.*)', () => {
+    expectKeys('confidence', { en: enRca, ja: jaRca }, 'confidence.', RCA_CONFIDENCES);
   });
 
   it('every addable monitor kind has its three strings (nodes:add.*/err.*)', () => {

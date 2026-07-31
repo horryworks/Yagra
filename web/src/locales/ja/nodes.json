@@ -317,5 +317,18 @@
     "dependsOn": "依存先 (上流)",
     "noUpstream": "— 上流なし (トップレベル) —",
     "hint": "この上流がダウンしているとき、{{name}} のアラートは抑制され、上流の下にロールアップされます。"
+  },
+  "dns": {
+    "failure": {
+      "nx_domain": "名前が存在しない（NXDOMAIN）",
+      "no_data": "その型のレコードなし",
+      "serv_fail": "リゾルバ障害（SERVFAIL）",
+      "refused": "リゾルバが拒否（REFUSED）",
+      "other_rcode": "その他の応答コード",
+      "timeout": "タイムアウト",
+      "loop_detected": "CNAME ループ",
+      "depth_exceeded": "チェーンが長すぎる",
+      "malformed": "不正な応答"
+    }
   }
 }

@@ -3780,7 +3780,7 @@ export interface components {
         DnsChainChange: {
             at: string;
             chain: components["schemas"]["DnsChain"];
-            failure_kind?: string | null;
+            failure_kind?: null | components["schemas"]["DnsFailureKind"];
             /** Format: int64 */
             id: number;
             prev_chain_key?: string | null;
@@ -3789,7 +3789,7 @@ export interface components {
         /** @description The node's current resolution chain, plus how long it has held. */
         DnsChainCurrent: {
             chain: components["schemas"]["DnsChain"];
-            failure_kind?: string | null;
+            failure_kind?: null | components["schemas"]["DnsFailureKind"];
             first_seen: string;
             last_seen: string;
             resolved: boolean;
@@ -3864,6 +3864,16 @@ export interface components {
             /** @enum {string} */
             kind: "malformed";
         };
+        /**
+         * @description [`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the
+         *     value the API serves for grouping and for UI keying.
+         *
+         *     Derived from `DnsFailure` rather than declared beside it. Written out as a second list, the two
+         *     would be nine names maintained in two places, and a variant added to one is invisible to the
+         *     other; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.
+         * @enum {string}
+         */
+        DnsFailureKind: "nx_domain" | "no_data" | "serv_fail" | "refused" | "other_rcode" | "timeout" | "loop_detected" | "depth_exceeded" | "malformed";
         /** @description Keyset cursor for the next page (ADR-019 — never OFFSET). */
         DnsHistoryCursor: {
             at: string;
@@ -4698,6 +4708,15 @@ export interface components {
              */
             value: number;
         };
+        /**
+         * @description What language the answer should be written in.
+         *
+         *     The prompt is always English — instructions in one language keep the model's behaviour stable —
+         *     but the *answer* follows the reader. An operator reading a Japanese UI should not get an English
+         *     explanation of their own network.
+         * @enum {string}
+         */
+        Language: "en" | "ja";
         /** @description The `PUT /api/v1/llm/config` body. */
         LlmConfigInput: {
             /**
@@ -5451,8 +5470,8 @@ export interface components {
          *     and here it is doubly so — the model was itself reading device output.
          */
         RcaAnswer: {
-            /** @description `high` | `medium` | `low`, or `unknown` when the model said something else. */
-            confidence?: string;
+            /** @description How sure the model says it is. */
+            confidence?: components["schemas"]["RcaConfidence"];
             /** @description Whether the other affected nodes are consequences of it. */
             dependents?: string;
             /** @description Concrete things to check next. */
@@ -5491,6 +5510,15 @@ export interface components {
             window_secs?: number | null;
         };
         /**
+         * @description How sure the model claims to be.
+         *
+         *     A closed set because the UI styles each level, and because the value is the model's own
+         *     untrusted output — [`Self::normalize`] is the boundary that turns whatever it said into one of
+         *     these, so nothing downstream has to cope with prose.
+         * @enum {string}
+         */
+        RcaConfidence: "high" | "medium" | "low" | "unknown";
+        /**
          * @description A stored report. `body` carries the answer and its evidence; `summary` is lifted out of it so a
          *     list view does not have to fetch the whole thing.
          */
@@ -5525,8 +5553,8 @@ export interface components {
             answer: components["schemas"]["RcaAnswer"];
             /** @description Everything the model was told, exactly as it saw it. */
             evidence: components["schemas"]["IncidentContext"];
-            /** @description Which language the answer was requested in (`en` / `ja`). */
-            language: string;
+            /** @description Which language the answer was requested in. */
+            language: components["schemas"]["Language"];
         };
         /** @description A report definition (reusable template), as served to the API. */
         ReportDefinition: {

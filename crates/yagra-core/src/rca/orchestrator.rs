@@ -269,10 +269,7 @@ impl RcaOrchestrator {
         let body = ReportBody {
             answer: answer.clone(),
             evidence: serde_json::to_value(&ctx).map_err(|e| anyhow::anyhow!(e))?,
-            language: match req.language {
-                Language::Japanese => "ja".to_owned(),
-                Language::English => "en".to_owned(),
-            },
+            language: req.language,
         };
         let report = self
             .repo

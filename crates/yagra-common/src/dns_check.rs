@@ -240,23 +240,85 @@ pub enum DnsFailure {
     Malformed,
 }
 
+/// [`DnsFailure`] with its discriminating payload dropped — the `failure_kind` column and the
+/// value the API serves for grouping and for UI keying.
+///
+/// Derived from `DnsFailure` rather than declared beside it. Written out as a second list, the two
+/// would be nine names maintained in two places, and a variant added to one is invisible to the
+/// other; `kind()` is an exhaustive match, so a new failure has to name its kind to compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DnsFailureKind {
+    NxDomain,
+    NoData,
+    ServFail,
+    Refused,
+    OtherRcode,
+    Timeout,
+    LoopDetected,
+    DepthExceeded,
+    Malformed,
+}
+
+impl DnsFailureKind {
+    /// Every kind, for the UI's per-kind strings and any full tally.
+    pub const ALL: [DnsFailureKind; 9] = [
+        Self::NxDomain,
+        Self::NoData,
+        Self::ServFail,
+        Self::Refused,
+        Self::OtherRcode,
+        Self::Timeout,
+        Self::LoopDetected,
+        Self::DepthExceeded,
+        Self::Malformed,
+    ];
+
+    /// The stable snake_case token — the column value and the JSON tag.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NxDomain => "nx_domain",
+            Self::NoData => "no_data",
+            Self::ServFail => "serv_fail",
+            Self::Refused => "refused",
+            Self::OtherRcode => "other_rcode",
+            Self::Timeout => "timeout",
+            Self::LoopDetected => "loop_detected",
+            Self::DepthExceeded => "depth_exceeded",
+            Self::Malformed => "malformed",
+        }
+    }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+}
+
 impl DnsFailure {
-    /// A stable snake_case token for the `failure_kind` column and for UI keying. The
-    /// discriminating payload (rcode / loop name / depth) is intentionally **not** included — the
-    /// column is for grouping, and the full detail lives in the stored chain JSON.
+    /// Which kind of failure this is, with the discriminating payload (rcode / loop name / depth)
+    /// dropped — that detail lives in the stored chain JSON, and the column is for grouping.
+    #[must_use]
+    pub const fn kind(&self) -> DnsFailureKind {
+        match self {
+            DnsFailure::NxDomain => DnsFailureKind::NxDomain,
+            DnsFailure::NoData => DnsFailureKind::NoData,
+            DnsFailure::ServFail => DnsFailureKind::ServFail,
+            DnsFailure::Refused => DnsFailureKind::Refused,
+            DnsFailure::OtherRcode { .. } => DnsFailureKind::OtherRcode,
+            DnsFailure::Timeout => DnsFailureKind::Timeout,
+            DnsFailure::LoopDetected { .. } => DnsFailureKind::LoopDetected,
+            DnsFailure::DepthExceeded { .. } => DnsFailureKind::DepthExceeded,
+            DnsFailure::Malformed => DnsFailureKind::Malformed,
+        }
+    }
+
+    /// The stable token for this failure's kind.
     #[must_use]
     pub const fn kind_token(&self) -> &'static str {
-        match self {
-            DnsFailure::NxDomain => "nx_domain",
-            DnsFailure::NoData => "no_data",
-            DnsFailure::ServFail => "serv_fail",
-            DnsFailure::Refused => "refused",
-            DnsFailure::OtherRcode { .. } => "other_rcode",
-            DnsFailure::Timeout => "timeout",
-            DnsFailure::LoopDetected { .. } => "loop_detected",
-            DnsFailure::DepthExceeded { .. } => "depth_exceeded",
-            DnsFailure::Malformed => "malformed",
-        }
+        self.kind().as_str()
     }
 }
 
@@ -447,6 +509,50 @@ pub fn is_resolver_blocked(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_failure_maps_to_a_kind_and_every_kind_round_trips() {
+        // One representative of each `DnsFailure` variant, including the three that carry a
+        // payload — the point of `kind()` is that the payload is dropped, not that it is absent.
+        let all: [(DnsFailure, DnsFailureKind); 9] = [
+            (DnsFailure::NxDomain, DnsFailureKind::NxDomain),
+            (DnsFailure::NoData, DnsFailureKind::NoData),
+            (DnsFailure::ServFail, DnsFailureKind::ServFail),
+            (DnsFailure::Refused, DnsFailureKind::Refused),
+            (
+                DnsFailure::OtherRcode { rcode: 9 },
+                DnsFailureKind::OtherRcode,
+            ),
+            (DnsFailure::Timeout, DnsFailureKind::Timeout),
+            (
+                DnsFailure::LoopDetected {
+                    at: "a.example.".into(),
+                },
+                DnsFailureKind::LoopDetected,
+            ),
+            (
+                DnsFailure::DepthExceeded { max_depth: 8 },
+                DnsFailureKind::DepthExceeded,
+            ),
+            (DnsFailure::Malformed, DnsFailureKind::Malformed),
+        ];
+        for (failure, kind) in &all {
+            assert_eq!(failure.kind(), *kind);
+            assert_eq!(failure.kind_token(), kind.as_str());
+        }
+        // The list above covers ALL exactly once, so a tenth failure has to be added here too.
+        assert_eq!(all.len(), DnsFailureKind::ALL.len());
+        for k in DnsFailureKind::ALL {
+            assert!(all.iter().any(|(_, mapped)| *mapped == k), "{k:?} unmapped");
+            // The column value and the JSON tag are produced by two mechanisms; pin them together.
+            assert_eq!(DnsFailureKind::from_token(k.as_str()), Some(k));
+            assert_eq!(
+                serde_json::to_string(&k).unwrap(),
+                format!("\"{}\"", k.as_str())
+            );
+        }
+        assert_eq!(DnsFailureKind::from_token("not_a_kind"), None);
+    }
 
     fn a(addr: &str, ttl: u32) -> DnsAnswer {
         DnsAnswer {
