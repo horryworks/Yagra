@@ -26,6 +26,19 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_node_groups,
+    create_node_group,
+    update_node_group,
+    delete_node_group,
+    place_group,
+    set_node_group_geo,
+    set_node_group_pool
+))]
+pub(super) struct Doc;
+
 /// The node-group routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -42,6 +55,15 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/node-groups", tag = "groups",
+    responses(
+        (status = 200, description = "Every folder group in the inventory tree", body = Vec<crate::groups::GroupSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_node_groups(
     _guard: RequireView,
     admin: Admin,
@@ -53,8 +75,8 @@ async fn list_node_groups(
 }
 
 /// Create/update body for a group. `group_type` is a validated [`GroupType`] key.
-#[derive(Deserialize)]
-struct GroupBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupBody {
     name: String,
     group_type: String,
     #[serde(default)]
@@ -100,6 +122,17 @@ async fn reject_cycle(admin: &Admin, id: Uuid, parent_id: Option<Uuid>) -> Resul
     Ok(())
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/node-groups", tag = "groups",
+    request_body = GroupBody,
+    responses(
+        (status = 204, description = "Group created"),
+        (status = 400, description = "Empty name, unknown group type, or an invalid pool name", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_node_group(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -122,6 +155,19 @@ async fn create_node_group(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = GroupBody,
+    responses(
+        (status = 204, description = "Group updated"),
+        (status = 400, description = "Empty name, unknown group type, an invalid pool name, or a move that would nest the group inside its own subtree", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_node_group(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -158,8 +204,8 @@ async fn update_node_group(
 
 /// Drag-reorder a group: re-parent it under `parent_id` (`null` ⇒ top level) and position it
 /// relative to a sibling. `before`/`after` name the sibling; both omitted ⇒ append.
-#[derive(Deserialize)]
-struct GroupPlacement {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupPlacement {
     #[serde(default)]
     parent_id: Option<Uuid>,
     #[serde(default)]
@@ -168,6 +214,19 @@ struct GroupPlacement {
     after: Option<Uuid>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/placement", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = GroupPlacement,
+    responses(
+        (status = 204, description = "Group re-parented and re-ordered"),
+        (status = 400, description = "Both before and after given, or a move that would nest the group inside its own subtree", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn place_group(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -210,12 +269,25 @@ async fn place_group(
 }
 
 /// Set or clear a group's map pin. `null` for both clears it.
-#[derive(Deserialize)]
-struct GroupGeo {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupGeo {
     latitude: Option<f64>,
     longitude: Option<f64>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/geo", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = GroupGeo,
+    responses(
+        (status = 204, description = "Map pin set or cleared"),
+        (status = 400, description = "Only one of latitude/longitude given, or a coordinate out of range", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_group_geo(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -264,6 +336,19 @@ async fn set_node_group_geo(
 
 /// Set just the folder's pool. Every node beneath it that has no pool of its own follows on the
 /// next sweep (see `poolres`).
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/pool", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = PoolAssignment,
+    responses(
+        (status = 204, description = "Folder pool set or cleared"),
+        (status = 400, description = "Pool name too long or containing characters outside letters, digits, '_' and '-'", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_group_pool(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -288,6 +373,17 @@ async fn set_node_group_pool(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/node-groups/{id}", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    responses(
+        (status = 204, description = "Group deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_node_group(
     _guard: RequireManageConfig,
     admin: Admin,

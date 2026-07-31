@@ -38,7 +38,7 @@ pub struct PollerRow {
 /// stopped hearing from the poller (partition or the poller went down) and later saw it again. If the
 /// poller was alive but partitioned, its store-and-forward buffer backfills the metrics for the
 /// window on reconnect (Phase 3); alerts are *not* backfilled (they resume from "now").
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MonitoringGapRow {
     /// Row id.
     pub id: Uuid,

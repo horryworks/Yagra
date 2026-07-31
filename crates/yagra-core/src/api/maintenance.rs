@@ -26,6 +26,19 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_maintenance_windows,
+    create_maintenance_window,
+    set_maintenance_window_enabled,
+    delete_maintenance_window,
+    list_mutes,
+    create_mute,
+    delete_mute
+))]
+pub(super) struct Doc;
+
 /// The maintenance + mute routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -109,6 +122,15 @@ async fn validate_group_scope(admin: &super::AdminState, scope_id: &str) -> Resu
 
 // ── Maintenance windows (planned; ManageMaintenance) ─────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/maintenance-windows", tag = "maintenance",
+    responses(
+        (status = 200, description = "Every maintenance window", body = Vec<crate::maintenance::StoredWindow>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_maintenance_windows(
     _perm: RequireView,
     admin: Admin,
@@ -129,8 +151,8 @@ async fn list_maintenance_windows(
 
 /// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
 /// `group_id` (a folder-group UUID, resolved recursively — the All Nodes right-click scope).
-#[derive(Deserialize)]
-struct CreateWindow {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateWindow {
     name: String,
     scope_level: String,
     scope_id: String,
@@ -138,6 +160,18 @@ struct CreateWindow {
     ends_at: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/maintenance-windows", tag = "maintenance",
+    request_body = CreateWindow,
+    responses(
+        (status = 201, description = "Window created", body = CreatedId),
+        (status = 400, description = "Empty name/scope_id, an unknown scope_level, or bounds that are not RFC 3339 or end at or before they start", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 404, description = "A group_id scope naming a group that does not exist", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_maintenance_window(
     _perm: RequireManageMaintenance,
     admin: Admin,
@@ -179,6 +213,18 @@ async fn create_maintenance_window(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/maintenance-windows/{id}", tag = "maintenance",
+    params(("id" = Uuid, Path, description = "Maintenance window id")),
+    request_body = super::util::EnabledBody,
+    responses(
+        (status = 204, description = "Window enabled or disabled"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such maintenance window", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_maintenance_window_enabled(
     _perm: RequireManageMaintenance,
     admin: Admin,
@@ -206,6 +252,17 @@ async fn set_maintenance_window_enabled(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/maintenance-windows/{id}", tag = "maintenance",
+    params(("id" = Uuid, Path, description = "Maintenance window id")),
+    responses(
+        (status = 204, description = "Window deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such maintenance window", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_maintenance_window(
     _perm: RequireManageMaintenance,
     admin: Admin,
@@ -230,6 +287,15 @@ async fn delete_maintenance_window(
 
 // ── Mutes (reactive; AckAlerts) ──────────────────────────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/mutes", tag = "maintenance",
+    responses(
+        (status = 200, description = "Every mute", body = Vec<crate::maintenance::StoredMute>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_mutes(
     _perm: RequireView,
     admin: Admin,
@@ -245,8 +311,8 @@ async fn list_mutes(
 /// Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or
 /// `group` (silence every node under a folder group, recursive — `metric_name` is ignored);
 /// `scope_id` is the node/group UUID. `until` is RFC 3339.
-#[derive(Deserialize)]
-struct CreateMute {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateMute {
     scope_kind: String,
     scope_id: Uuid,
     metric_name: Option<String>,
@@ -254,6 +320,18 @@ struct CreateMute {
     reason: Option<String>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/mutes", tag = "maintenance",
+    request_body = CreateMute,
+    responses(
+        (status = 201, description = "Mute created", body = CreatedId),
+        (status = 400, description = "An unknown scope_kind, an invalid metric_name, or an `until` that is not RFC 3339 or is already in the past", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
+        (status = 404, description = "A group scope naming a group that does not exist", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_mute(
     _perm: RequireAckAlerts,
     admin: Admin,
@@ -316,6 +394,17 @@ async fn create_mute(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/mutes/{id}", tag = "maintenance",
+    params(("id" = Uuid, Path, description = "Mute id")),
+    responses(
+        (status = 204, description = "Mute deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such mute", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_mute(
     _perm: RequireAckAlerts,
     admin: Admin,

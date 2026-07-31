@@ -22,7 +22,7 @@ pub struct DedupKey {
 
 /// Numeric breach detail for a threshold alert (absent for a liveness up/down alert).
 /// Carried for the history log + notification payload — not part of alert identity.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Breach {
     /// Observed sample value that committed the transition.
     pub value: f64,
@@ -33,7 +33,7 @@ pub struct Breach {
 }
 
 /// A single alert produced by the engine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Alert {
     /// Affected node.
     pub node: NodeId,

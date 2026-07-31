@@ -13,18 +13,35 @@ use super::ApiState;
 use axum::{extract::Query, routing::get, Json, Router};
 use serde::Deserialize;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_audit))]
+pub(super) struct Doc;
+
 /// The audit routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/audit", get(list_audit))
 }
 
 /// Page size plus a keyset cursor (rows strictly older than `before`).
-#[derive(Deserialize)]
-struct AuditQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct AuditQuery {
     limit: Option<i64>,
     before: Option<String>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/audit", tag = "audit",
+    params(AuditQuery),
+    responses(
+        (status = 200, description = "One page of audit rows, newest first", body = Vec<crate::audit::AuditRow>),
+        (status = 400, description = "`before` is not an RFC 3339 timestamp", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view-audit permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode keeps no audit log", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_audit(
     _guard: RequireViewAudit,
     admin: Admin,

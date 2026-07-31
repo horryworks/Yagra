@@ -22,6 +22,11 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_mib_catalog, create_mib_entry, delete_mib_entry))]
+pub(super) struct Doc;
+
 /// The MIB-catalog routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -36,11 +41,22 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Free-text search over the catalog.
-#[derive(Deserialize)]
-struct MibQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct MibQuery {
     q: Option<String>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/mib-catalog", tag = "mib",
+    params(MibQuery),
+    responses(
+        (status = 200, description = "Matching catalog entries, or the whole catalog when no term is given", body = Vec<crate::mib::MibEntry>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_mib_catalog(
     _guard: RequireView,
     admin: Admin,
@@ -55,8 +71,8 @@ async fn list_mib_catalog(
 }
 
 /// Create-entry body for the catalog.
-#[derive(Deserialize)]
-struct CreateMibEntry {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateMibEntry {
     metric_name: String,
     oid: String,
     collection: String,
@@ -65,6 +81,18 @@ struct CreateMibEntry {
     description: Option<String>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/mib-catalog", tag = "mib",
+    request_body = CreateMibEntry,
+    responses(
+        (status = 201, description = "Entry added to the catalog", body = CreatedId),
+        (status = 400, description = "The metric name is not an identifier, the OID is not dotted-numeric, or collection/metric_kind is outside its vocabulary", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 409, description = "An entry already claims that metric name", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_mib_entry(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -118,6 +146,17 @@ async fn create_mib_entry(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/mib-catalog/{id}", tag = "mib",
+    params(("id" = Uuid, Path, description = "Catalog entry id")),
+    responses(
+        (status = 204, description = "Entry removed"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such entry", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_mib_entry(
     _guard: RequireManageConfig,
     admin: Admin,

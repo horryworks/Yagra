@@ -24,6 +24,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 use yagra_common::ProfileCategory;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_profiles, create_profile, update_profile, delete_profile))]
+pub(super) struct Doc;
+
 /// The profile routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -35,8 +40,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Create/update body. `category` is optional on create (defaults to generic SNMP).
-#[derive(Deserialize)]
-struct ProfileBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ProfileBody {
     name: String,
     #[serde(default)]
     category: Option<String>,
@@ -107,6 +112,15 @@ fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, ApiError> {
     })
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/profiles", tag = "profiles",
+    responses(
+        (status = 200, description = "Every device profile", body = Vec<crate::repo::ProfileSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_profiles(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -117,6 +131,17 @@ async fn list_profiles(
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/profiles", tag = "profiles",
+    request_body = ProfileBody,
+    responses(
+        (status = 201, description = "Profile created", body = CreatedId),
+        (status = 400, description = "Empty name, unknown category, or an out-of-bounds poll interval", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_profile(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -138,6 +163,19 @@ async fn create_profile(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/profiles/{id}", tag = "profiles",
+    params(("id" = Uuid, Path, description = "Profile id")),
+    request_body = ProfileBody,
+    responses(
+        (status = 204, description = "Profile updated"),
+        (status = 400, description = "Empty name, unknown category, or an out-of-bounds poll interval", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such profile", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_profile(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -168,6 +206,17 @@ async fn update_profile(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/profiles/{id}", tag = "profiles",
+    params(("id" = Uuid, Path, description = "Profile id")),
+    responses(
+        (status = 204, description = "Profile deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such profile", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_profile(
     _guard: RequireManageConfig,
     admin: Admin,

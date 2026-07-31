@@ -33,6 +33,16 @@ use uuid::Uuid;
 /// unbounded outbound scan of someone else's network.
 const MAX_SCAN_TARGETS: usize = 1024;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    start_discovery_scan,
+    get_discovery_scan,
+    import_discovered,
+    discovery_candidates
+))]
+pub(super) struct Doc;
+
 /// The discovery routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -44,8 +54,8 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// Start-scan body: explicit target IPs (the WebUI expands a CIDR), candidate stored credentials by
 /// id, and ad-hoc communities.
-#[derive(Deserialize)]
-struct StartScan {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct StartScan {
     targets: Vec<String>,
     #[serde(default)]
     communities: Vec<String>,
@@ -57,13 +67,13 @@ struct StartScan {
 }
 
 /// The accepted scan's id, for polling its status.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct StartedScan {
     scan_id: Uuid,
 }
 
 /// How many nodes an import created.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ImportResult {
     created: u32,
 }
@@ -137,6 +147,17 @@ async fn resolve_scan_credentials(
     Ok(out)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/discovery/scan", tag = "discovery",
+    request_body = StartScan,
+    responses(
+        (status = 202, description = "Sweep accepted; poll its status by id", body = StartedScan),
+        (status = 400, description = "No targets or more than the cap, an unparseable address, or a named credential that is missing or unusable", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn start_discovery_scan(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -187,6 +208,17 @@ async fn start_discovery_scan(
     Ok((StatusCode::ACCEPTED, Json(StartedScan { scan_id })))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/discovery/scan/{id}", tag = "discovery",
+    params(("id" = Uuid, Path, description = "Scan id returned when the sweep was accepted")),
+    responses(
+        (status = 200, description = "Progress and the candidates found so far", body = crate::discovery::ScanStatus),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such scan", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_discovery_scan(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -200,8 +232,8 @@ async fn get_discovery_scan(
 }
 
 /// One discovered device the operator chose to add.
-#[derive(Deserialize)]
-struct ImportNode {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ImportNode {
     address: String,
     name: String,
     profile_id: Option<String>,
@@ -214,11 +246,22 @@ struct ImportNode {
 }
 
 /// Import body: the selected devices to create as nodes.
-#[derive(Deserialize)]
-struct ImportDiscovered {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ImportDiscovered {
     nodes: Vec<ImportNode>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/discovery/import", tag = "discovery",
+    request_body = ImportDiscovered,
+    responses(
+        (status = 201, description = "Nodes created, in one transaction", body = ImportResult),
+        (status = 400, description = "An unparseable address, an empty name, or a binding id that is not a UUID", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn import_discovered(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -275,8 +318,9 @@ async fn import_discovered(
 }
 
 /// Query for the standing discovery-candidates view.
-#[derive(Deserialize)]
-struct CandidatesQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct CandidatesQuery {
     limit: Option<usize>,
 }
 
@@ -286,6 +330,15 @@ struct CandidatesQuery {
 /// `View`, unlike the rest of this module, because it reports what has been seen rather than
 /// causing anything to happen. Empty in skeleton mode: with no discovery runner there are genuinely
 /// no candidates, which is an answer rather than an outage.
+#[utoipa::path(
+    get, path = "/api/v1/discovery/candidates", tag = "discovery",
+    params(CandidatesQuery),
+    responses(
+        (status = 200, description = "Recent unclassified devices; empty in skeleton mode", body = Vec<crate::discovery::Candidate>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn discovery_candidates(
     _guard: RequireView,
     State(st): State<ApiState>,

@@ -122,7 +122,7 @@ pub struct OidcProviderConfig {
 }
 
 /// Provider metadata for the admin API — **never** includes the client_secret.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct OidcProviderSummary {
     pub id: Uuid,
     pub name: String,
@@ -140,7 +140,7 @@ pub struct OidcProviderSummary {
 
 /// Create/update payload from the admin UI. `client_secret` is write-only: `None` on update keeps
 /// the stored value (so editing other fields doesn't require re-entering the secret).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct OidcProviderInput {
     pub name: String,
     pub issuer: String,

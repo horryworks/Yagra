@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// What a metric's values represent over time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
     /// An instantaneous value (CPU %, temperature, memory). Used as-is.

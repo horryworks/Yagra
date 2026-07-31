@@ -22,7 +22,24 @@ use super::extract::{Admin, Caller, RequireManageConfig, RequireView};
 use super::util::MAX_JSON_DOC_BYTES;
 use super::ApiState;
 use axum::{routing::get, Json, Router};
+use serde::Serialize;
 use serde_json::Value;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_dashboard,
+    put_dashboard,
+    get_shared_dashboard,
+    put_shared_dashboard
+))]
+pub(super) struct Doc;
+
+/// A save's acknowledgement. The layout is not echoed back — the client already has it.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct DashboardSaved {
+    ok: bool,
+}
 
 /// The dashboard routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -55,6 +72,15 @@ fn validate_layout(body: &Value) -> Result<(), ApiError> {
 
 /// The caller's saved layout, or JSON `null` when they have never saved one — an explicit null
 /// rather than 404, so the client falls back to its default layout instead of showing an error.
+#[utoipa::path(
+    get, path = "/api/v1/dashboard", tag = "dashboard",
+    responses(
+        (status = 200, description = "The caller's opaque layout document, or JSON null when they have never saved one", body = serde_json::Value),
+        (status = 401, description = "No valid bearer token — the layout is keyed by account, so this stays closed in public-dashboard mode", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_dashboard(caller: Caller, admin: Admin) -> ApiResult<Json<Value>> {
     let layout = admin
         .dashboards
@@ -71,11 +97,24 @@ async fn get_dashboard(caller: Caller, admin: Admin) -> ApiResult<Json<Value>> {
 }
 
 /// Save (replace) the caller's layout. Mutating, so `audit_mw` records it automatically.
+#[utoipa::path(
+    put, path = "/api/v1/dashboard", tag = "dashboard",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Layout saved", body = DashboardSaved),
+        (status = 400, description = "The layout is not a JSON object", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token — the layout is keyed by account, so this stays closed in public-dashboard mode", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+        (status = 404, description = "The session's account no longer exists", body = super::error::ErrorBody),
+        (status = 413, description = "The layout exceeds the document size cap", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn put_dashboard(
     caller: Caller,
     admin: Admin,
     Json(body): Json<Value>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DashboardSaved>> {
     validate_layout(&body)?;
     let saved = admin
         .dashboards
@@ -95,11 +134,20 @@ async fn put_dashboard(
             "no such user account",
         ));
     }
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(DashboardSaved { ok: true }))
 }
 
 /// The global Shared Dashboard layout, or JSON `null` when no admin has saved one. Open-read like
 /// the other dashboard data, so it works in public-dashboard mode; the write side is not.
+#[utoipa::path(
+    get, path = "/api/v1/shared-dashboard", tag = "dashboard",
+    responses(
+        (status = 200, description = "The global opaque layout document, or JSON null when no admin has saved one", body = serde_json::Value),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_shared_dashboard(_guard: RequireView, admin: Admin) -> ApiResult<Json<Value>> {
     let layout = admin.shared_dashboard.get_shared().await.map_err(|e| {
         ApiError::from_internal(
@@ -116,12 +164,24 @@ async fn get_shared_dashboard(_guard: RequireView, admin: Admin) -> ApiResult<Js
 /// Takes `RequireManageConfig` *and* [`Caller`]: the first decides whether the write is allowed, the
 /// second names who made it for the row's attribution. A `ManageConfig` holder always has `View`, so
 /// the second guard never rejects a caller the first admitted.
+#[utoipa::path(
+    put, path = "/api/v1/shared-dashboard", tag = "dashboard",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Layout saved for every user", body = DashboardSaved),
+        (status = 400, description = "The layout is not a JSON object", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 413, description = "The layout exceeds the document size cap", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn put_shared_dashboard(
     _guard: RequireManageConfig,
     caller: Caller,
     admin: Admin,
     Json(body): Json<Value>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<DashboardSaved>> {
     validate_layout(&body)?;
     admin
         .shared_dashboard
@@ -134,7 +194,7 @@ async fn put_shared_dashboard(
                 "failed to save the shared dashboard layout",
             )
         })?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(DashboardSaved { ok: true }))
 }
 
 #[cfg(test)]

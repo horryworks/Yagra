@@ -12,7 +12,7 @@ use uuid::Uuid;
 use yagra_common::{CollectionItem, CollectionKind, MetricKind, ScopeLevel, ScopedCollectionItem};
 
 /// A stored collection item with its id and scope, for the API (the scheduler ignores id).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredCollectionItem {
     pub id: Uuid,
     pub scope_level: ScopeLevel,
@@ -389,7 +389,7 @@ impl CollectionRepo {
 }
 
 /// A collection template row for the API (id + name + description + metric count).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TemplateSummary {
     pub id: Uuid,
     pub name: String,
@@ -398,7 +398,7 @@ pub struct TemplateSummary {
 }
 
 /// One metric in a template, with its id, for the template editor.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TemplateItem {
     pub id: Uuid,
     #[serde(flatten)]

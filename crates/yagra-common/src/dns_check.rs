@@ -50,7 +50,7 @@ const MAX_ANSWERS_PER_HOP: usize = 64;
 ///
 /// `Cname` is a legitimate terminal type: it answers "what is this name an alias for?" without
 /// chasing on to an address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DnsRecordType {
     /// IPv4 address record (the default).
@@ -96,7 +96,7 @@ const fn default_dns_timeout_ms() -> u32 {
 }
 
 /// A node's DNS-monitoring configuration (1:1 with the node).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DnsCheckConfig {
     /// The name to resolve, e.g. `horryworks.net`. Stored normalized (lowercase, no trailing dot).
     pub name: String,
@@ -104,7 +104,9 @@ pub struct DnsCheckConfig {
     #[serde(default)]
     pub record_type: DnsRecordType,
     /// Recursive resolver to query. `None` ⇒ the poller container's system resolver.
+    // utoipa has no schema for `IpAddr`; on the wire it is the serde `Display` form either way.
     #[serde(default)]
+    #[schema(value_type = Option<String>)]
     pub resolver: Option<IpAddr>,
     /// Resolver port (default 53).
     #[serde(default = "default_resolver_port")]
@@ -137,7 +139,9 @@ impl DnsCheckConfig {
 /// Typed rather than a rendered `String` so ordering is **numeric**: `Ipv4Addr`'s `Ord` compares
 /// octets, so `9.9.9.9` sorts before `10.1.2.3`. Text ordering gets that backwards, which would
 /// make the canonical form depend on how the resolver happened to rotate a round-robin RRset.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema,
+)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DnsRecord {
     /// A CNAME alias target (normalized: lowercase, no trailing dot).
@@ -148,11 +152,14 @@ pub enum DnsRecord {
     /// An IPv4 address record.
     A {
         /// The resolved IPv4 address.
+        // utoipa has no schema for `Ipv4Addr`; on the wire it is the serde `Display` form.
+        #[schema(value_type = String)]
         addr: Ipv4Addr,
     },
     /// An IPv6 address record.
     Aaaa {
         /// The resolved IPv6 address.
+        #[schema(value_type = String)]
         addr: Ipv6Addr,
     },
 }
@@ -183,7 +190,7 @@ impl DnsRecord {
 ///
 /// The TTL is **display-only**: it counts down between polls, so including it in the content key
 /// would make every single poll register as a change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DnsAnswer {
     /// The record itself.
     pub record: DnsRecord,
@@ -192,7 +199,7 @@ pub struct DnsAnswer {
 }
 
 /// One hop of a resolution chain: the name asked about and the answers that came back for it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DnsHop {
     /// The name queried at this hop (normalized).
     pub name: String,
@@ -201,7 +208,7 @@ pub struct DnsHop {
 }
 
 /// Why a resolution did not reach a terminal record set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DnsFailure {
     /// Authoritative "no such name" (RCODE 3).
@@ -257,7 +264,7 @@ impl DnsFailure {
 ///
 /// Produced by the transport, carried on `PollResult.dns_chain`, persisted to PostgreSQL. **Never
 /// a TSDB label** (ADR-011); it is the same tier as the interface inventory and `sys_descr`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DnsChain {
     /// The name originally asked for (normalized).
     pub query: String,

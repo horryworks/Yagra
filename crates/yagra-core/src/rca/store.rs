@@ -38,7 +38,7 @@ pub struct ActiveConfig {
 }
 
 /// What `GET /api/v1/llm/config` returns. No secret, by construction.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct LlmConfigView {
     pub provider: String,
     pub model: String,
@@ -55,7 +55,7 @@ pub struct LlmConfigView {
 }
 
 /// The `PUT /api/v1/llm/config` body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct LlmConfigInput {
     pub provider: String,
     pub model: String,
@@ -76,7 +76,7 @@ pub struct LlmConfigInput {
 }
 
 /// A stored report. `body` is the full [`ReportBody`]; `summary` is lifted out for list views.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RcaReport {
     pub id: Uuid,
     pub node_id: Uuid,

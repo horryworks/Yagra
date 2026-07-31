@@ -21,7 +21,7 @@ fn severity_str(s: Severity) -> &'static str {
 }
 
 /// One alert-history row for the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AlertHistoryRow {
     pub node: Uuid,
     pub check: Uuid,

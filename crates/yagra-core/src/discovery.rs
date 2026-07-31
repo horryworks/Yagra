@@ -27,7 +27,7 @@ use crate::classification::Classifier;
 const SCAN_TIMEOUT_MS: u32 = 2000;
 
 /// One device a scan found, with a suggested profile for the operator to confirm on import.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Candidate {
     pub address: String,
     pub reachable: bool,
@@ -50,7 +50,7 @@ pub struct Candidate {
 }
 
 /// A scan's current status returned by the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ScanStatus {
     pub scan_id: Uuid,
     pub done: bool,

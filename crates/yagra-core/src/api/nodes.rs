@@ -42,6 +42,27 @@ use yagra_common::{
     DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, SeriesKey, UrlCheckConfig,
 };
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_nodes,
+    create_node,
+    search_nodes,
+    list_group_nodes,
+    node_names_batch,
+    get_node,
+    delete_node,
+    get_node_status,
+    poll_node_now,
+    set_node_bindings,
+    set_node_group,
+    set_node_pool,
+    set_node_parent,
+    place_node,
+    list_pools
+))]
+pub(super) struct Doc;
+
 /// The node routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -145,7 +166,7 @@ pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /// One inventory row (mirrors the WebUI `NodeSummary`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeSummary {
     id: NodeId,
     name: String,
@@ -168,7 +189,7 @@ pub(crate) struct NodeSummary {
 }
 
 /// One keyset page of the inventory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodePage {
     nodes: Vec<NodeSummary>,
     /// Pass back as `cursor` for the next page; `null` ⇒ this was the last one. Always `null` in
@@ -178,7 +199,7 @@ pub(crate) struct NodePage {
 
 /// One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
 /// so it reports truncation instead of offering a cursor.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct GroupNodes {
     nodes: Vec<NodeSummary>,
     truncated: bool,
@@ -188,7 +209,8 @@ pub(crate) struct GroupNodes {
 /// into server-side name/address search mode (capped, single page, no cursor) — so the Nodes tree's
 /// filter never full-loads the fleet into the browser (ui-conventions: search is server-side at
 /// scale). Both modes return full [`NodeSummary`] rows so the tree can nest and colour them.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct NodePageQuery {
     pub cursor: Option<Uuid>,
     pub limit: Option<i64>,
@@ -236,6 +258,15 @@ async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummar
         .collect()
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes", tag = "nodes",
+    params(NodePageQuery),
+    responses(
+        (status = 200, description = "One keyset page of the inventory, or a single capped page in search mode", body = NodePage),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_nodes(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -276,15 +307,16 @@ async fn list_nodes(
 
 /// Query for the node-picker typeahead: `?q=<substr>&limit=<n>`. Empty/absent `q` returns the
 /// first page ordered by name.
-#[derive(Deserialize)]
-struct NodeSearchQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct NodeSearchQuery {
     q: Option<String>,
     limit: Option<i64>,
 }
 
 /// One node-picker result: id + display name + address. Deliberately excludes credentials and
 /// bindings (security.md — the picker only needs to show and select a node).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeSearchResult {
     id: Uuid,
     name: String,
@@ -295,6 +327,15 @@ pub(crate) struct NodeSearchResult {
 /// address, capped, so a picker never loads the whole inventory into the browser (ui-conventions:
 /// search is server-side at fleet scale). Also backs the Nodes tree name filter and the
 /// Troubleshoot scope picker. Routes through the shared `NodeListing`, so it works in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/search", tag = "nodes",
+    params(NodeSearchQuery),
+    responses(
+        (status = 200, description = "Matching nodes, capped", body = Vec<NodeSearchResult>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn search_nodes(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -319,8 +360,9 @@ async fn search_nodes(
 
 /// Query for the per-group lazy tree load: `?group=<uuid>` returns that group's direct members; an
 /// absent/empty `group` returns the ungrouped nodes (`group_id IS NULL`).
-#[derive(Deserialize)]
-struct GroupNodesQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct GroupNodesQuery {
     group: Option<Uuid>,
 }
 
@@ -333,6 +375,15 @@ const GROUP_NODES_CAP: i64 = 2000;
 /// `group` (or the ungrouped bucket), in tree order, capped. Loaded on demand when a group is
 /// expanded, so the initial page never pulls the whole fleet — it fetches the group skeleton plus
 /// per-group counts (`/fleet/group-summary`) and streams members per open group.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/by-group", tag = "nodes",
+    params(GroupNodesQuery),
+    responses(
+        (status = 200, description = "The group's direct members in tree order, flagged if capped", body = GroupNodes),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_group_nodes(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -375,13 +426,13 @@ async fn list_group_nodes(
 const NODE_NAMES_BATCH_MAX: usize = 1000;
 
 /// Request body for `POST /api/v1/node-names`: the node ids whose display names to resolve.
-#[derive(Deserialize)]
-struct NodeNamesReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeNamesReq {
     ids: Vec<Uuid>,
 }
 
 /// One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeNameEntry {
     id: Uuid,
     name: String,
@@ -391,6 +442,15 @@ pub(crate) struct NodeNameEntry {
 /// any table rendering a node reference by id, use this so names resolve across the **whole**
 /// fleet: the old path resolved against the first page of `list_nodes` (default 100), so a
 /// reference to the 101st node silently degraded to a raw UUID.
+#[utoipa::path(
+    post, path = "/api/v1/node-names", tag = "nodes",
+    request_body = NodeNamesReq,
+    responses(
+        (status = 200, description = "The resolved names; an id with no row is omitted", body = Vec<NodeNameEntry>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn node_names_batch(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -441,7 +501,7 @@ pub(crate) async fn resolve_node_names(
 
 /// One node's configuration detail, including its bindings (profile/credential/parent) so the
 /// node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeDetail {
     id: NodeId,
     name: String,
@@ -475,6 +535,16 @@ pub(crate) struct NodeDetail {
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's configuration, bindings and resolved kind", body = NodeDetail),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or this deployment has no inventory", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_node(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -520,7 +590,7 @@ async fn get_node(
 
 /// One node's live status: its display state plus the alerts currently attributed to it, so node
 /// detail can show *why* it is down without re-deriving from the list.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeStatus {
     node_id: NodeId,
     state: NodeState,
@@ -538,6 +608,15 @@ pub(crate) async fn node_status(st: &ApiState, node_id: Uuid) -> NodeStatus {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/status", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's display state and the alerts attributed to it", body = NodeStatus),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_node_status(
     _perm: RequireView,
     axum::extract::State(st): axum::extract::State<ApiState>,
@@ -549,8 +628,8 @@ async fn get_node_status(
 // ── Writes ───────────────────────────────────────────────────────────────────
 
 /// Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.
-#[derive(Deserialize)]
-struct CreateNode {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateNode {
     name: String,
     address: String,
     pool: Option<String>,
@@ -568,6 +647,17 @@ fn trimmed(s: Option<&String>) -> Option<&str> {
     s.map(|v| v.trim()).filter(|v| !v.is_empty())
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/nodes", tag = "nodes",
+    request_body = CreateNode,
+    responses(
+        (status = 201, description = "Node created", body = CreatedId),
+        (status = 400, description = "Empty name, an address that is not an IP, or an illegal pool name", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_node(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -603,6 +693,17 @@ async fn create_node(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/nodes/{node_id}", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 204, description = "Node deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_node(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -633,8 +734,8 @@ fn node_write_result(found: bool, id: Uuid) -> ApiResult<StatusCode> {
 /// Set/clear a node's profile + bound credential and its descriptive maker/model, and optionally
 /// move it to a different poll-pool. The node-edit UI loads the current values and resends them, so
 /// an unchanged field is preserved.
-#[derive(Deserialize)]
-struct NodeBindings {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeBindings {
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
     #[serde(default)]
@@ -648,6 +749,19 @@ struct NodeBindings {
     pool: Option<String>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/bindings", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NodeBindings,
+    responses(
+        (status = 204, description = "Bindings updated"),
+        (status = 400, description = "Illegal pool name", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_bindings(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -673,11 +787,23 @@ async fn set_node_bindings(
 }
 
 /// Move a node into a group (or `null` to ungroup). Used by the inventory tree (drag/move).
-#[derive(Deserialize)]
-struct NodeGroupAssignment {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeGroupAssignment {
     group_id: Option<Uuid>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/group", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NodeGroupAssignment,
+    responses(
+        (status = 204, description = "Node moved in the folder tree"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_group(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -697,11 +823,24 @@ async fn set_node_group(
 /// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
 /// dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
 /// distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
-#[derive(Deserialize)]
-struct NodeParentAssignment {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeParentAssignment {
     parent_id: Option<Uuid>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/parent", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NodeParentAssignment,
+    responses(
+        (status = 204, description = "Dependency edge set or cleared"),
+        (status = 400, description = "Self-dependency, a parent that does not exist, or an edge that would close a cycle", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_parent(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -755,8 +894,8 @@ async fn set_node_parent(
 /// Drag-reorder a node within (or into) a group, positioning it relative to a sibling node.
 /// `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to
 /// land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
-#[derive(Deserialize)]
-struct NodePlacement {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodePlacement {
     #[serde(default)]
     group_id: Option<Uuid>,
     #[serde(default)]
@@ -765,6 +904,19 @@ struct NodePlacement {
     after: Option<Uuid>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/placement", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NodePlacement,
+    responses(
+        (status = 204, description = "Node repositioned"),
+        (status = 400, description = "Both `before` and `after` were given", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn place_node(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -850,7 +1002,7 @@ pub(crate) fn validate_pool_create(pool: Option<String>) -> Result<Option<String
 
 /// Move a node (or a folder) to a poll-pool, or clear it back to inherited. Absent or `""` ⇒ NULL
 /// (inherit from the folder, else the default pool).
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(crate) struct PoolAssignment {
     #[serde(default)]
     pub pool: Option<String>,
@@ -861,6 +1013,19 @@ pub(crate) struct PoolAssignment {
 /// Deliberately **not** folded into [`set_node_bindings`]: that handler overwrites
 /// profile/credential/vendor/model unconditionally (only its `pool` is three-state-gated), so a
 /// pool-only caller going through it would silently blank all four.
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/pool", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = PoolAssignment,
+    responses(
+        (status = 204, description = "Pool set, or cleared back to inherited"),
+        (status = 400, description = "Illegal pool name", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_node_pool(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -880,7 +1045,7 @@ async fn set_node_pool(
 }
 
 /// One pool offered by the pool picker.
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, utoipa::ToSchema)]
 pub(crate) struct PoolOption {
     /// Pool name.
     name: String,
@@ -891,7 +1056,7 @@ pub(crate) struct PoolOption {
 }
 
 /// The pools that exist, for the assignment picker.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct PoolOptions {
     pools: Vec<PoolOption>,
 }
@@ -930,6 +1095,15 @@ fn build_pool_options(
 ///
 /// Deliberately separate from `GET /pollers`, which scans the whole node table to build its
 /// per-pool counts; this is two indexed `DISTINCT`s and is loaded by an ordinary page.
+#[utoipa::path(
+    get, path = "/api/v1/pools", tag = "nodes",
+    responses(
+        (status = 200, description = "The pools on offer, default first, each flagged with whether a live poller serves it", body = PoolOptions),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_pools(_perm: RequireView, admin: Admin) -> ApiResult<Json<PoolOptions>> {
     // A read error degrades to "fewer suggestions", never to a failed picker — the operator can
     // still type any pool via Custom.
@@ -950,7 +1124,7 @@ async fn list_pools(_perm: RequireView, admin: Admin) -> ApiResult<Json<PoolOpti
 // ── Manual poll ──────────────────────────────────────────────────────────────
 
 /// What an out-of-schedule poll dispatched.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct PollNowResult {
     /// How many poll jobs went to the bus. Results arrive asynchronously on the normal result
     /// path, so this confirms dispatch, not completion.
@@ -991,6 +1165,17 @@ pub(crate) async fn poll_now(
 
 /// `ManageConfig` — an operator action, like a discovery scan. Audited by the mutation middleware.
 /// `202` because the poll is dispatched, not finished, when this returns.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/{node_id}/poll", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 202, description = "Jobs dispatched to the node's effective pool", body = PollNowResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn poll_node_now(
     _perm: RequireManageConfig,
     admin: Admin,

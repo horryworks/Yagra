@@ -609,7 +609,7 @@ fn parse_role(s: &str) -> Role {
 }
 
 /// User-account metadata for the API — never includes the password hash.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct UserSummary {
     pub id: Uuid,
     pub username: String,

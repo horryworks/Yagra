@@ -38,21 +38,37 @@ use yagra_common::{
     is_ssrf_blocked, DnsCheckConfig, NodeKind, NodeRows, ProfileCategory, UrlCheckConfig,
 };
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_url_check,
+    set_url_check,
+    delete_url_check,
+    create_url_monitor,
+    get_dns_check,
+    set_dns_check,
+    delete_dns_check,
+    create_dns_monitor,
+    get_dns_chain,
+    list_dns_chain_history
+))]
+pub(super) struct Doc;
+
 /// The URL- and DNS-check routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route(
             "/api/v1/nodes/:node_id/url-check",
-            get(get_check::<UrlCheck>)
-                .put(set_check::<UrlCheck>)
-                .delete(delete_check::<UrlCheck>),
+            get(get_url_check)
+                .put(set_url_check)
+                .delete(delete_url_check),
         )
         .route("/api/v1/url-monitors", post(create_url_monitor))
         .route(
             "/api/v1/nodes/:node_id/dns-check",
-            get(get_check::<DnsCheck>)
-                .put(set_check::<DnsCheck>)
-                .delete(delete_check::<DnsCheck>),
+            get(get_dns_check)
+                .put(set_dns_check)
+                .delete(delete_dns_check),
         )
         .route("/api/v1/dns-monitors", post(create_dns_monitor))
         // The recorded resolution chain — DNS only; a URL monitor has no equivalent.
@@ -406,12 +422,142 @@ async fn create_monitor<K: CheckKind>(
     Ok(node_id)
 }
 
+// ── The concrete routes ──────────────────────────────────────────────────────
+//
+// One wrapper per route, holding no logic. `#[utoipa::path]` (ADR-035) describes one concrete
+// request/response schema, and the generic operations above have a different pair per kind — so the
+// instantiation `routes()` used to perform inline is written out here and annotated. Guard order is
+// part of the behaviour (`Require*` before `Admin`), so it is repeated verbatim rather than deferred
+// to the generic function.
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/url-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's URL-check configuration", body = UrlCheckConfig),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no URL check", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_url_check(
+    perm: RequireView,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<Json<UrlCheckConfig>> {
+    get_check::<UrlCheck>(perm, admin, Path(node_id)).await
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/url-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = UrlCheckConfig,
+    responses(
+        (status = 204, description = "URL check stored"),
+        (status = 400, description = "The URL is malformed, not http(s), or points at a blocked address", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 409, description = "The node is already a monitor of another kind", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_url_check(
+    perm: RequireManageConfig,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+    Json(cfg): Json<UrlCheckConfig>,
+) -> ApiResult<StatusCode> {
+    set_check::<UrlCheck>(perm, admin, Path(node_id), Json(cfg)).await
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/nodes/{node_id}/url-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 204, description = "URL check removed; the node itself is untouched"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no URL check", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn delete_url_check(
+    perm: RequireManageConfig,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    delete_check::<UrlCheck>(perm, admin, Path(node_id)).await
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/dns-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's DNS-check configuration", body = DnsCheckConfig),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no DNS check", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_dns_check(
+    perm: RequireView,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<Json<DnsCheckConfig>> {
+    get_check::<DnsCheck>(perm, admin, Path(node_id)).await
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/dns-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = DnsCheckConfig,
+    responses(
+        (status = 204, description = "DNS check stored, with the name normalized"),
+        (status = 400, description = "The DNS name, resolver address, port, depth or timeout is not usable", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 409, description = "The node is already a monitor of another kind", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_dns_check(
+    perm: RequireManageConfig,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+    Json(cfg): Json<DnsCheckConfig>,
+) -> ApiResult<StatusCode> {
+    set_check::<DnsCheck>(perm, admin, Path(node_id), Json(cfg)).await
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/nodes/{node_id}/dns-check", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 204, description = "DNS check removed; the node and its recorded chains are untouched"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "The node carries no DNS check", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn delete_dns_check(
+    perm: RequireManageConfig,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    delete_check::<DnsCheck>(perm, admin, Path(node_id)).await
+}
+
 // ── URL monitoring ───────────────────────────────────────────────────────────
 
 /// `name`/`parent_id`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
 /// everything else defaults).
-#[derive(Deserialize)]
-struct CreateUrlMonitor {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateUrlMonitor {
     name: String,
     #[serde(default)]
     parent_id: Option<Uuid>,
@@ -421,6 +567,17 @@ struct CreateUrlMonitor {
     config: UrlCheckConfig,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/url-monitors", tag = "checks",
+    request_body = CreateUrlMonitor,
+    responses(
+        (status = 201, description = "Monitor node created and bound to the built-in URL profile", body = CreatedId),
+        (status = 400, description = "The name is empty, the URL is invalid or blocked, or the pool name is not a legal subject token", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_url_monitor(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -541,8 +698,8 @@ fn validate_dns_check(cfg: &DnsCheckConfig) -> Result<DnsCheckConfig, ApiError> 
 /// The check config is spelled out rather than `#[serde(flatten)]`ed (as [`CreateUrlMonitor`]
 /// does) because both the node and the check have a `name`: flattening would bind them to the same
 /// JSON key and silently force the display label to equal the resolved name.
-#[derive(Deserialize)]
-struct CreateDnsMonitor {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateDnsMonitor {
     /// Display name for the node.
     name: String,
     /// The DNS name to resolve.
@@ -553,7 +710,9 @@ struct CreateDnsMonitor {
     pool: Option<String>,
     #[serde(default)]
     record_type: yagra_common::DnsRecordType,
+    // utoipa has no schema for `IpAddr`; serde renders one as a string, so say so.
     #[serde(default)]
+    #[schema(value_type = Option<String>)]
     resolver: Option<IpAddr>,
     #[serde(default)]
     resolver_port: Option<u16>,
@@ -578,6 +737,17 @@ impl CreateDnsMonitor {
     }
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/dns-monitors", tag = "checks",
+    request_body = CreateDnsMonitor,
+    responses(
+        (status = 201, description = "Monitor node created and bound to the built-in DNS profile", body = CreatedId),
+        (status = 400, description = "The name is empty, the DNS check is not usable, or the pool name is not a legal subject token", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_dns_monitor(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -598,7 +768,7 @@ async fn create_dns_monitor(
 }
 
 /// The node's current resolution chain, plus how long it has held.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct DnsChainCurrent {
     chain: yagra_common::DnsChain,
     resolved: bool,
@@ -607,6 +777,17 @@ pub(crate) struct DnsChainCurrent {
     last_seen: String,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/dns-chain", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's current resolution chain and how long it has held", body = DnsChainCurrent),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "No resolution has been recorded for the node", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_dns_chain(
     _perm: RequireView,
     admin: Admin,
@@ -635,7 +816,7 @@ async fn get_dns_chain(
 }
 
 /// One append-on-change history row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct DnsChainChange {
     id: i64,
     at: String,
@@ -646,22 +827,23 @@ pub(crate) struct DnsChainChange {
 }
 
 /// Keyset cursor for the next page (ADR-019 — never OFFSET).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct DnsHistoryCursor {
     at: String,
     id: i64,
 }
 
 /// One page of chain changes, newest first.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct DnsChainHistory {
     changes: Vec<DnsChainChange>,
     /// Pass back as `before_at`+`before_id` for the next page; `null` ⇒ this was the last one.
     next: Option<DnsHistoryCursor>,
 }
 
-#[derive(Deserialize)]
-struct DnsHistoryQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct DnsHistoryQuery {
     #[serde(default)]
     limit: Option<i64>,
     #[serde(default)]
@@ -693,6 +875,17 @@ impl DnsHistoryQuery {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/dns-chain/history", tag = "checks",
+    params(("node_id" = Uuid, Path, description = "Node id"), DnsHistoryQuery),
+    responses(
+        (status = 200, description = "One page of chain changes, newest first", body = DnsChainHistory),
+        (status = 400, description = "before_at and before_id must be given together, and before_at must be RFC 3339", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_dns_chain_history(
     _perm: RequireView,
     admin: Admin,

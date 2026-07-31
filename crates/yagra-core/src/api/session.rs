@@ -24,6 +24,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use yagra_common::Role;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(login, logout, auth_me))]
+pub(super) struct Doc;
+
 /// The auth routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -33,14 +38,14 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Login request body. Never logged, never echoed.
-#[derive(Deserialize)]
-struct LoginBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct LoginBody {
     username: String,
     password: String,
 }
 
 /// A freshly issued session.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct LoginOk {
     /// The bearer token for subsequent requests.
     token: String,
@@ -49,7 +54,7 @@ pub(crate) struct LoginOk {
 }
 
 /// The caller's own identity.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct AuthMe {
     role: Role,
     username: String,
@@ -60,6 +65,17 @@ pub(crate) struct AuthMe {
 /// Takes `Admin` with no permission guard in front of it — unlike every other handler — because
 /// there is nothing to authenticate yet. A skeleton deployment answering 503 here is correct and
 /// not a disclosure: "there is no user store" is exactly what a would-be logger-in needs to know.
+#[utoipa::path(
+    post, path = "/api/v1/auth/login", tag = "session",
+    security(()),
+    request_body = LoginBody,
+    responses(
+        (status = 200, description = "A bearer token and the role it carries", body = LoginOk),
+        (status = 401, description = "Incorrect username or password — one code for both, so the endpoint is not an account-enumeration oracle", body = super::error::ErrorBody),
+        (status = 429, description = "Too many attempts; `Retry-After` carries the wait in seconds", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no user store, so there is nothing to log in to", body = super::error::ErrorBody),
+    ),
+)]
 async fn login(
     State(st): State<ApiState>,
     admin: Admin,
@@ -105,6 +121,12 @@ async fn login(
 /// Idempotent and unguarded: an absent, expired or already-revoked token still answers 204. Making
 /// logout require a valid session would mean the one action that fixes a suspect token is refused
 /// precisely when the token has gone bad.
+#[utoipa::path(
+    post, path = "/api/v1/auth/logout", tag = "session",
+    responses(
+        (status = 204, description = "Token revoked; an absent, expired or already-revoked token answers 204 too"),
+    ),
+)]
 async fn logout(State(st): State<ApiState>, headers: HeaderMap) -> StatusCode {
     if let Some(token) = bearer(&headers) {
         st.sessions.revoke_token(token);
@@ -114,6 +136,14 @@ async fn logout(State(st): State<ApiState>, headers: HeaderMap) -> StatusCode {
 
 /// Who the bearer token belongs to. [`Caller`] does the work: it demands a real session (not open
 /// in public-dashboard mode, since an anonymous visitor has no identity to report).
+#[utoipa::path(
+    get, path = "/api/v1/auth/me", tag = "session",
+    responses(
+        (status = 200, description = "The bearer holder's role and username", body = AuthMe),
+        (status = 401, description = "No valid bearer token — closed even on a public dashboard", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn auth_me(caller: Caller) -> ApiResult<Json<AuthMe>> {
     Ok(Json(AuthMe {
         role: caller.0.principal.role,

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// scheduler's Meraki short-circuit, the scheduler's URL-beats-DNS resolution, and the node-detail
 /// API — which applied no precedence at all and handed the UI every config it found, so a node the
 /// scheduler polled as Meraki could render a URL-monitor health card next to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     /// Bound to a Cisco Meraki device: polled by the org collector, so it emits **no** per-node job.

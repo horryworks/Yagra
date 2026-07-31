@@ -27,6 +27,11 @@ use yagra_common::Role;
 /// Longest accepted token label, in characters (not bytes — the name is operator-facing text).
 const MAX_TOKEN_NAME_CHARS: usize = 128;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_api_tokens, create_api_token, revoke_api_token))]
+pub(super) struct Doc;
+
 /// The API-token routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -38,8 +43,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Request body for `POST /api/v1/api-tokens`.
-#[derive(Deserialize)]
-struct CreateApiTokenBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateApiTokenBody {
     /// Human label (unique, ≤128 chars).
     name: String,
     /// The role the token grants (`viewer` is the right default for a read-only MCP client).
@@ -53,7 +58,7 @@ struct CreateApiTokenBody {
 /// A named type rather than an inline `json!` because of what the `token` field is: the client has
 /// to store it now, since only its hash is kept and no later call can produce it again. Giving it a
 /// type makes that field visible in one place if this response ever grows a second consumer.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct CreatedApiToken {
     id: Uuid,
     name: String,
@@ -62,6 +67,18 @@ pub(crate) struct CreatedApiToken {
     token: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/api-tokens", tag = "api-tokens",
+    request_body = CreateApiTokenBody,
+    responses(
+        (status = 201, description = "Token minted; `token` is the raw bearer and is returned only here", body = CreatedApiToken),
+        (status = 400, description = "The token name is empty or longer than 128 characters", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 409, description = "An API token with that name already exists", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_api_token(
     _guard: RequireManageUsers,
     caller: Caller,
@@ -106,6 +123,15 @@ async fn create_api_token(
     ))
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/api-tokens", tag = "api-tokens",
+    responses(
+        (status = 200, description = "Token metadata only — never the raw token or its hash", body = Vec<crate::apitokens::ApiTokenInfo>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_api_tokens(
     _guard: RequireManageUsers,
     admin: Admin,
@@ -117,6 +143,16 @@ async fn list_api_tokens(
     Ok(Json(tokens))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/api-tokens/{id}", tag = "api-tokens",
+    params(("id" = Uuid, Path, description = "API token id")),
+    responses(
+        (status = 204, description = "Token revoked; idempotent, so an already-revoked id also answers 204"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
+    ),
+)]
 async fn revoke_api_token(
     _guard: RequireManageUsers,
     admin: Admin,

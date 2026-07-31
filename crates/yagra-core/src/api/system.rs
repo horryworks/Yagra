@@ -22,6 +22,11 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use yagra_common::{DiskUsage, HostSample};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(system_hosts, host_metric_range))]
+pub(super) struct Doc;
+
 /// The self-observability routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -34,7 +39,7 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// One self-monitored host: current resource values for the core process's host (`role="core"`) or
 /// a poller's (`role="poller"`).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct HostInfo {
     /// `core` or the poller id.
     instance: String,
@@ -62,7 +67,7 @@ pub(crate) struct HostInfo {
 }
 
 /// Core plus every poller that reports host telemetry.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct SystemHostsResponse {
     hosts: Vec<HostInfo>,
 }
@@ -97,6 +102,14 @@ fn host_info(
 ///
 /// Reads `st.admin` opportunistically rather than taking the `Admin` extractor: core is answering
 /// the request, so it can always report *itself*. Skeleton mode returns just core rather than 503.
+#[utoipa::path(
+    get, path = "/api/v1/system/hosts", tag = "system",
+    responses(
+        (status = 200, description = "Core plus every poller reporting host telemetry", body = SystemHostsResponse),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn system_hosts(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -150,8 +163,9 @@ fn host_disk_mounts(st: &ApiState, instance: &str) -> Option<Vec<String>> {
 }
 
 /// Query params for the host-metrics range endpoint (all optional; same defaults as node ranges).
-#[derive(Deserialize)]
-struct HostRangeQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct HostRangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     step: Option<u64>,
@@ -159,7 +173,7 @@ struct HostRangeQuery {
 
 /// A per-mount filesystem trend. The frontend derives % from the pair, or shows a bare-bytes trend
 /// when `size_bytes` is all zero (the `database` size proxy has no capacity).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct HostDiskRange {
     mount: String,
     used_bytes: Vec<MetricPoint>,
@@ -168,7 +182,7 @@ pub(crate) struct HostDiskRange {
 
 /// The scalar host trends plus a per-mount filesystem trend, all over one window — one round trip
 /// per instance/range change.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct HostMetricRange {
     instance: String,
     cpu_pct: Vec<MetricPoint>,
@@ -181,6 +195,19 @@ pub(crate) struct HostMetricRange {
 }
 
 /// Host CPU/load/mem/disk trends for one instance over `[from,to]` at `step`.
+#[utoipa::path(
+    get, path = "/api/v1/system/hosts/{instance}/metrics/range", tag = "system",
+    params(
+        ("instance" = String, Path, description = "`core`, or the id of a poller the live registry knows"),
+        HostRangeQuery,
+    ),
+    responses(
+        (status = 200, description = "Scalar host trends plus a per-mount filesystem trend", body = HostMetricRange),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such instance — resolved against the known set before any selector is built", body = super::error::ErrorBody),
+    ),
+)]
 async fn host_metric_range(
     _guard: RequireView,
     State(st): State<ApiState>,

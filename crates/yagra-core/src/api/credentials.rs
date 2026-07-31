@@ -26,6 +26,16 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_credentials,
+    create_credential,
+    update_credential,
+    delete_credential
+))]
+pub(super) struct Doc;
+
 /// The credential routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -56,6 +66,15 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/credentials", tag = "credentials",
+    responses(
+        (status = 200, description = "Credential metadata only — the secret is never returned", body = Vec<crate::secrets::CredentialSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_credentials(
     _guard: RequireManageCredentials,
     admin: Admin,
@@ -68,13 +87,24 @@ async fn list_credentials(
 }
 
 /// Create body. `secret` is sealed before storage and never logged.
-#[derive(Deserialize)]
-struct CreateCredential {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateCredential {
     name: String,
     kind: String,
     secret: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/credentials", tag = "credentials",
+    request_body = CreateCredential,
+    responses(
+        (status = 201, description = "Credential sealed and stored", body = CreatedId),
+        (status = 400, description = "A missing field, or a secret that does not parse for its kind", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_credential(
     _guard: RequireManageCredentials,
     admin: Admin,
@@ -104,8 +134,8 @@ async fn create_credential(
 
 /// Update body. `name` is required; `secret` is optional — see the module doc for why omitting it
 /// is a rename and supplying it requires `kind`.
-#[derive(Deserialize)]
-struct UpdateCredential {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct UpdateCredential {
     name: String,
     #[serde(default)]
     kind: Option<String>,
@@ -113,6 +143,19 @@ struct UpdateCredential {
     secret: Option<String>,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/credentials/{id}", tag = "credentials",
+    params(("id" = Uuid, Path, description = "Credential id")),
+    request_body = UpdateCredential,
+    responses(
+        (status = 204, description = "Credential updated; an omitted secret is a rename, not a clear"),
+        (status = 400, description = "An empty name, a secret without its kind, or a secret that does not parse for its kind", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 404, description = "No such credential", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_credential(
     _guard: RequireManageCredentials,
     admin: Admin,
@@ -164,6 +207,17 @@ async fn update_credential(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/credentials/{id}", tag = "credentials",
+    params(("id" = Uuid, Path, description = "Credential id")),
+    responses(
+        (status = 204, description = "Credential deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
+        (status = 404, description = "No such credential", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_credential(
     _guard: RequireManageCredentials,
     admin: Admin,

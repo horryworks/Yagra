@@ -60,7 +60,7 @@ impl GroupType {
 }
 
 /// One group row returned by the API. `group_type` is the snake_case key.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GroupSummary {
     pub id: Uuid,
     pub name: String,

@@ -44,6 +44,28 @@ use uuid::Uuid;
 /// is why it is now expressed against the shared one.
 const MAX_REPORT_SPEC_BYTES: usize = MAX_JSON_DOC_BYTES;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_report_sections,
+    list_report_definitions,
+    create_report_definition,
+    get_report_definition,
+    update_report_definition,
+    delete_report_definition,
+    run_report_definition,
+    list_report_runs,
+    get_report_run,
+    delete_report_run,
+    export_report_run,
+    list_report_schedules,
+    create_report_schedule,
+    update_report_schedule,
+    delete_report_schedule,
+    stream_report_runs
+))]
+pub(super) struct Doc;
+
 /// The report routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -80,7 +102,7 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// `{"ok": true}` — the body of a successful mutation that has nothing else to say.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct Ok_ {
     ok: bool,
 }
@@ -92,6 +114,14 @@ impl Ok_ {
 }
 
 /// The section catalog that drives the builder. Static, so it answers fully in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/reports/sections", tag = "reports",
+    responses(
+        (status = 200, description = "Every section kind this build can render", body = Vec<reports::SectionDef>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_report_sections(_guard: RequireView) -> Json<Vec<reports::SectionDef>> {
     Json(reports::section_catalog())
 }
@@ -131,6 +161,14 @@ fn validate_report_spec(spec: &Value) -> Result<(), ApiError> {
 
 /// All report definitions. Empty in skeleton mode — "no templates" is the truth when there is no
 /// database, and the builder renders its empty state rather than an error.
+#[utoipa::path(
+    get, path = "/api/v1/reports/definitions", tag = "reports",
+    responses(
+        (status = 200, description = "Every report definition; empty in skeleton mode", body = Vec<reports::ReportDefinition>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_report_definitions(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -160,6 +198,16 @@ fn no_run(id: Uuid) -> ApiError {
 
 /// One report definition. 404 in skeleton mode rather than 503: with no store the definition really
 /// does not exist, and the viewer wants its not-found state.
+#[utoipa::path(
+    get, path = "/api/v1/reports/definitions/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report definition id")),
+    responses(
+        (status = 200, description = "The definition", body = reports::ReportDefinition),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "No such definition, or skeleton mode", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_report_definition(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -183,8 +231,8 @@ async fn get_report_definition(
 }
 
 /// Create/update body for a report definition.
-#[derive(Deserialize)]
-struct ReportDefinitionBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ReportDefinitionBody {
     name: String,
     description: Option<String>,
     spec: Value,
@@ -204,6 +252,18 @@ fn checked_definition(body: &ReportDefinitionBody) -> Result<&str, ApiError> {
     Ok(name)
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/reports/definitions", tag = "reports",
+    request_body = ReportDefinitionBody,
+    responses(
+        (status = 200, description = "The created definition", body = reports::ReportDefinition),
+        (status = 400, description = "The name is blank, the spec is not an object, or it names a section kind this build cannot render", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 413, description = "The spec exceeds the shared JSON-document cap", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_report_definition(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -233,6 +293,20 @@ async fn create_report_definition(
     Ok(Json(def))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/reports/definitions/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report definition id")),
+    request_body = ReportDefinitionBody,
+    responses(
+        (status = 200, description = "Definition updated", body = Ok_),
+        (status = 400, description = "The name is blank, the spec is not an object, or it names a section kind this build cannot render", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such definition", body = super::error::ErrorBody),
+        (status = 413, description = "The spec exceeds the shared JSON-document cap", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_report_definition(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -271,6 +345,17 @@ async fn update_report_definition(
 /// Delete a definition. Schedules cascade; **saved runs are kept** with a null `definition_id` — a
 /// generated report is evidence of what the fleet looked like, and deleting the template it came
 /// from should not destroy that.
+#[utoipa::path(
+    delete, path = "/api/v1/reports/definitions/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report definition id")),
+    responses(
+        (status = 200, description = "Definition deleted; its schedules cascade, its saved runs are kept", body = Ok_),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such definition", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_report_definition(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -296,6 +381,17 @@ async fn delete_report_definition(
 }
 
 /// Generate a report from a definition now. Returns the run row immediately; it progresses over SSE.
+#[utoipa::path(
+    post, path = "/api/v1/reports/definitions/{id}/run", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report definition id")),
+    responses(
+        (status = 200, description = "The freshly created run, still generating", body = reports::ReportRun),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such definition", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn run_report_definition(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -320,6 +416,15 @@ async fn run_report_definition(
 }
 
 /// Saved runs, newest first. Empty in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/reports/runs", tag = "reports",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Saved runs, newest first; empty in skeleton mode", body = Vec<reports::ReportRun>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_report_runs(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -336,6 +441,16 @@ async fn list_report_runs(
 }
 
 /// One run with its rendered result (the viewer).
+#[utoipa::path(
+    get, path = "/api/v1/reports/runs/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report run id")),
+    responses(
+        (status = 200, description = "The run with its rendered result", body = reports::ReportRunDetail),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "No such run, or skeleton mode", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_report_run(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -354,6 +469,17 @@ async fn get_report_run(
         .ok_or_else(|| no_run(id))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/reports/runs/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report run id")),
+    responses(
+        (status = 200, description = "Run deleted", body = Ok_),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such run", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_report_run(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -374,8 +500,9 @@ async fn delete_report_run(
 }
 
 /// Export-format query for a report run.
-#[derive(Deserialize)]
-struct ExportQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct ExportQuery {
     format: Option<String>,
 }
 
@@ -387,6 +514,19 @@ struct ExportQuery {
 /// HTML and CSV are rendered from the stored result; PDF is produced on demand. The run must have
 /// succeeded: an unfinished or failed run has no rendered result, and that is a `409` (come back
 /// later) rather than a 404 (it does not exist).
+#[utoipa::path(
+    get, path = "/api/v1/reports/runs/{id}/export", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report run id"), ExportQuery),
+    responses(
+        (status = 200, description = "The rendered report as an attachment; `text/html` (default), `text/csv`, or `application/pdf` per `format`", content_type = "text/html"),
+        (status = 400, description = "`format` is not html|csv|pdf", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "No such run, or skeleton mode", body = super::error::ErrorBody),
+        (status = 409, description = "The run has no rendered result yet (still running or failed)", body = super::error::ErrorBody),
+        (status = 503, description = "PDF rendering is not available on this server", body = super::error::ErrorBody),
+    ),
+)]
 async fn export_report_run(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -500,6 +640,14 @@ async fn html_to_pdf(html: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 /// All schedules. Empty in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/reports/schedules", tag = "reports",
+    responses(
+        (status = 200, description = "Every schedule; empty in skeleton mode", body = Vec<reports::ReportSchedule>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_report_schedules(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -518,8 +666,8 @@ async fn list_report_schedules(
 }
 
 /// Create/update body for a schedule (preset cadence).
-#[derive(Deserialize)]
-struct ReportScheduleBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ReportScheduleBody {
     definition_id: Uuid,
     frequency: String,
     day_of_week: Option<i16>,
@@ -574,6 +722,17 @@ fn parse_schedule_body(
     Ok((input, next))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/reports/schedules", tag = "reports",
+    request_body = ReportScheduleBody,
+    responses(
+        (status = 200, description = "Schedule created", body = CreatedId),
+        (status = 400, description = "`frequency` is not daily|weekly|monthly", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_report_schedule(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -600,6 +759,19 @@ async fn create_report_schedule(
 
 /// Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the
 /// next fire rather than at the old one.
+#[utoipa::path(
+    put, path = "/api/v1/reports/schedules/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report schedule id")),
+    request_body = ReportScheduleBody,
+    responses(
+        (status = 200, description = "Schedule updated and `next_run_at` recomputed", body = Ok_),
+        (status = 400, description = "`frequency` is not daily|weekly|monthly", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such schedule", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_report_schedule(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -632,6 +804,17 @@ async fn update_report_schedule(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/reports/schedules/{id}", tag = "reports",
+    params(("id" = Uuid, Path, description = "Report schedule id")),
+    responses(
+        (status = 200, description = "Schedule deleted", body = Ok_),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such schedule", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_report_schedule(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -663,6 +846,15 @@ async fn delete_report_schedule(
 ///
 /// A lagged subscriber gets a `resync` event rather than a dropped connection, so the client knows
 /// to refetch instead of silently showing a stale run forever.
+#[utoipa::path(
+    get, path = "/api/v1/stream/report-runs", tag = "reports",
+    responses(
+        (status = 200, description = "Server-sent event stream; each `data` is a run JSON, and a `resync` event means the subscriber lagged", content_type = "text/event-stream"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn stream_report_runs(_guard: RequireView, admin: Admin) -> Response {
     let stream = tokio_stream::wrappers::BroadcastStream::new(admin.reports.subscribe())
         .filter_map(|r| async move {

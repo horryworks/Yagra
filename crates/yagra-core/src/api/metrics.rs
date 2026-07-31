@@ -32,6 +32,20 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::{IfIndex, NodeId, SeriesKey};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_node_metric,
+    get_node_metric_range,
+    get_interface_series,
+    top_metrics,
+    interface_top,
+    interface_delta,
+    interface_heatmap,
+    throughput_range
+))]
+pub(super) struct Doc;
+
 /// The metric routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -57,7 +71,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 // ── One node's series ────────────────────────────────────────────────────────
 
 /// Latest reading for one node metric.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct MetricReading {
     pub node_id: NodeId,
     pub metric: String,
@@ -65,7 +79,7 @@ pub(crate) struct MetricReading {
 }
 
 /// A time-series window for one node metric.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct MetricRange {
     pub node_id: NodeId,
     pub metric: String,
@@ -74,8 +88,9 @@ pub(crate) struct MetricRange {
 
 /// Optional aggregation for the metric reads. `agg=max` collapses a per-entity table gauge
 /// (e.g. CPU% per `entPhysicalIndex`) into one node-level value; absent ⇒ scalar node series.
-#[derive(Deserialize)]
-struct MetricQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct MetricQuery {
     agg: Option<String>,
 }
 
@@ -99,6 +114,21 @@ fn check_metric_name(metric: &str) -> Result<(), ApiError> {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/metrics/{metric}", tag = "metrics",
+    params(
+        ("node_id" = Uuid, Path, description = "Node id"),
+        ("metric" = String, Path, description = "Metric name — a Prometheus identifier"),
+        MetricQuery,
+    ),
+    responses(
+        (status = 200, description = "The latest sample for that series", body = MetricReading),
+        (status = 400, description = "The metric name is not an identifier, or `agg` is unsupported", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 404, description = "The node is not collecting that series", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_node_metric(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -129,8 +159,9 @@ async fn get_node_metric(
 }
 
 /// Query params for the range endpoint (all optional; sensible defaults applied).
-#[derive(Deserialize)]
-struct RangeQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct RangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     step: Option<u64>,
@@ -138,6 +169,20 @@ struct RangeQuery {
     agg: Option<String>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/metrics/{metric}/range", tag = "metrics",
+    params(
+        ("node_id" = Uuid, Path, description = "Node id"),
+        ("metric" = String, Path, description = "Metric name — a Prometheus identifier"),
+        RangeQuery,
+    ),
+    responses(
+        (status = 200, description = "The window's points; empty when the slice has no samples", body = MetricRange),
+        (status = 400, description = "The metric name is not an identifier, or `agg` is unsupported", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_node_metric_range(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -174,7 +219,7 @@ async fn get_node_metric_range(
 /// All four share one `timestamps` axis — the union of returned points, with `null` in the gaps —
 /// so the chart gets aligned series rather than four independently-indexed ones. Derived at query
 /// time (ADR-012); empty when there is no history.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceSeries {
     pub timestamps: Vec<i64>,
     pub in_bps: Vec<Option<f64>>,
@@ -183,6 +228,19 @@ pub(crate) struct InterfaceSeries {
     pub out_errors: Vec<Option<f64>>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/interfaces/{ifindex}/series", tag = "metrics",
+    params(
+        ("node_id" = Uuid, Path, description = "Node id"),
+        ("ifindex" = u32, Path, description = "SNMP ifIndex of the interface"),
+        RangeQuery,
+    ),
+    responses(
+        (status = 200, description = "In/out throughput and error rates on one shared timestamp axis", body = InterfaceSeries),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_interface_series(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -252,8 +310,9 @@ fn align_interface_series(
 // ── Fleet Top-N ──────────────────────────────────────────────────────────────
 
 /// Query for the fleet Top-N endpoint (`GET /api/v1/metrics/top`).
-#[derive(Deserialize)]
-struct TopQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct TopQuery {
     /// Metric to rank by (validated identifier, or a logical alias).
     metric: String,
     /// `now` (default) ⇒ most recent value; `max_1h` ⇒ trailing-hour peak.
@@ -263,7 +322,7 @@ struct TopQuery {
 }
 
 /// One ranked node in a Top-N result.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct TopEntry {
     pub node_id: Uuid,
     /// Display name, joined from PostgreSQL (ADR-011); falls back to the id string if the node has
@@ -325,6 +384,16 @@ fn top_selector(metric: &str) -> Result<String, ApiError> {
 
 /// Fleet-wide Top-N for a metric: the highest-value nodes right now (or by hourly peak). Powers
 /// the dashboard "Top RTT / CPU / memory / …" widgets from one endpoint.
+#[utoipa::path(
+    get, path = "/api/v1/metrics/top", tag = "metrics",
+    params(TopQuery),
+    responses(
+        (status = 200, description = "The highest-value nodes, ranked; empty when the store cannot rank", body = Vec<TopEntry>),
+        (status = 400, description = "`metric` is neither a logical alias nor an identifier, or `agg` is unsupported", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn top_metrics(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -350,8 +419,9 @@ async fn top_metrics(
 // ── Interface rankings ───────────────────────────────────────────────────────
 
 /// Query for the fleet interface Top-N endpoint.
-#[derive(Deserialize)]
-struct InterfaceTopQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct InterfaceTopQuery {
     /// `throughput` | `in_bps` | `out_bps` | `errors` | `discards`.
     metric: String,
     agg: Option<String>,
@@ -359,7 +429,7 @@ struct InterfaceTopQuery {
 }
 
 /// One ranked interface in a fleet interface Top-N.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceTopEntry {
     pub node_id: Uuid,
     pub node_name: String,
@@ -391,6 +461,16 @@ fn parse_interface_metric(metric: &str) -> Result<InterfaceTopMetric, ApiError> 
 
 /// Fleet-wide busiest/erroring interfaces. Ranks `(node,ifindex)` by a query-time rate, then joins
 /// node + interface names (and speed) from PostgreSQL.
+#[utoipa::path(
+    get, path = "/api/v1/metrics/interface-top", tag = "metrics",
+    params(InterfaceTopQuery),
+    responses(
+        (status = 200, description = "The busiest or most-erroring interfaces, ranked", body = Vec<InterfaceTopEntry>),
+        (status = 400, description = "`metric` is not one of throughput|in_bps|out_bps|errors|discards, or `agg` is unsupported", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn interface_top(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -446,8 +526,9 @@ pub(crate) async fn build_interface_entries(
 }
 
 /// Query for the interface rate-delta endpoint (traffic spikes/drops).
-#[derive(Deserialize)]
-struct InterfaceDeltaQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct InterfaceDeltaQuery {
     /// `up` (spikes) | `down` (drops).
     direction: String,
     /// Comparison window in seconds (default 300 = now vs 5m ago).
@@ -457,6 +538,16 @@ struct InterfaceDeltaQuery {
 
 /// Interfaces whose total throughput moved the most vs `window` ago — spikes (`up`) or drops
 /// (`down`). `value` is the signed delta in bits/sec.
+#[utoipa::path(
+    get, path = "/api/v1/metrics/interface-delta", tag = "metrics",
+    params(InterfaceDeltaQuery),
+    responses(
+        (status = 200, description = "Interfaces ranked by signed throughput delta (bits/sec)", body = Vec<InterfaceTopEntry>),
+        (status = 400, description = "`direction` is not 'up' or 'down'", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn interface_delta(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -481,8 +572,9 @@ async fn interface_delta(
 // ── Busiest-links heatmap ────────────────────────────────────────────────────
 
 /// Query for the interface throughput heatmap: `?limit=&from=&to=&step=`.
-#[derive(Deserialize)]
-struct HeatmapQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct HeatmapQuery {
     limit: Option<usize>,
     from: Option<i64>,
     to: Option<i64>,
@@ -491,7 +583,7 @@ struct HeatmapQuery {
 
 /// A links × time grid. `values[i][j]` is link `i`'s throughput at `timestamps[j]`, so every row
 /// is the same length and the client can shade cells without bounds checks.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceHeatmap {
     pub links: Vec<String>,
     pub timestamps: Vec<i64>,
@@ -538,6 +630,15 @@ fn build_heatmap(entries: &[InterfaceTopEntry], ranges: Vec<Vec<MetricPoint>>) -
 
 /// Busiest-links × time heatmap: picks the top interfaces by current throughput, then returns each
 /// link's throughput (bits/sec) over time on a shared timestamp axis.
+#[utoipa::path(
+    get, path = "/api/v1/metrics/interface-heatmap", tag = "metrics",
+    params(HeatmapQuery),
+    responses(
+        (status = 200, description = "A links × time throughput grid on one shared timestamp axis", body = InterfaceHeatmap),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn interface_heatmap(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -565,8 +666,9 @@ async fn interface_heatmap(
 // ── Aggregate throughput ─────────────────────────────────────────────────────
 
 /// Query for the aggregate-throughput range: `?from=&to=&step=` (default last 24h, 300s step).
-#[derive(Deserialize)]
-struct ThroughputRangeQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct ThroughputRangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     step: Option<u64>,
@@ -577,7 +679,7 @@ struct ThroughputRangeQuery {
 /// Both arrays are the same length as `timestamps`, with `null` where that side has no sample.
 /// The chart draws two series against one x-axis, so aligning here rather than client-side is what
 /// keeps a missing ingress point from silently shifting egress by one slot.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct ThroughputRange {
     pub timestamps: Vec<i64>,
     pub in_bps: Vec<Option<f64>>,
@@ -603,6 +705,15 @@ fn align_throughput(in_pts: Vec<MetricPoint>, out_pts: Vec<MetricPoint>) -> Thro
 }
 
 /// Fleet aggregate ingress/egress (bits/sec) over time.
+#[utoipa::path(
+    get, path = "/api/v1/metrics/throughput-range", tag = "metrics",
+    params(ThroughputRangeQuery),
+    responses(
+        (status = 200, description = "Fleet ingress and egress aligned on one timestamp axis", body = ThroughputRange),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn throughput_range(
     _perm: RequireView,
     State(st): State<ApiState>,

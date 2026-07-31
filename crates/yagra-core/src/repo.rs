@@ -20,7 +20,7 @@ use uuid::Uuid;
 use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ProfileSummary {
     pub id: Uuid,
     pub name: String,

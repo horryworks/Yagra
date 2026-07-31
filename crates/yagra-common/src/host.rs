@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// Usage of one watched filesystem (or a store-size proxy, e.g. the PostgreSQL database size which
 /// core cannot `statvfs`). `size_bytes == 0` means "total capacity unknown" — the value is a bare
 /// growing size (used only), not a fraction of a disk.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiskUsage {
     /// Friendly mount label (e.g. `root`, `metrics`, `database`) — a stable, low-cardinality name,
     /// never a raw device path, so it is safe as a TSDB label.

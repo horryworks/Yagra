@@ -12,7 +12,7 @@ use uuid::Uuid;
 use yagra_common::{Direction, ScopeLevel, ThresholdRule};
 
 /// A stored threshold rule with its scope and id (id is for the API; the engine ignores it).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredThreshold {
     pub id: Uuid,
     // Serialized as `scope_level` so the GET response matches the POST body field name.

@@ -26,6 +26,20 @@ use serde::Deserialize;
 use uuid::Uuid;
 use yagra_common::{is_ssrf_blocked, Severity};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_notification_channels,
+    create_notification_channel,
+    set_notification_channel_enabled,
+    delete_notification_channel,
+    list_routing_rules,
+    create_routing_rule,
+    set_routing_rule_enabled,
+    delete_routing_rule
+))]
+pub(super) struct Doc;
+
 /// The notification routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -150,6 +164,15 @@ fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/notification-channels", tag = "notifications",
+    responses(
+        (status = 200, description = "Every channel, without its sealed connection config", body = Vec<crate::notifications::ChannelSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_notification_channels(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -165,12 +188,23 @@ async fn list_notification_channels(
 }
 
 /// Create-channel body: a name plus the (secret-bearing) connection config, tagged by `kind`.
-#[derive(Deserialize)]
-struct CreateChannel {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateChannel {
     name: String,
     config: ChannelConfig,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/notification-channels", tag = "notifications",
+    request_body = CreateChannel,
+    responses(
+        (status = 201, description = "Channel created", body = CreatedId),
+        (status = 400, description = "Empty name, or a connection config whose URL fails the SSRF / vendor-allowlist check", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_notification_channel(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -199,6 +233,18 @@ async fn create_notification_channel(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/notification-channels/{id}", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Channel id")),
+    request_body = EnabledBody,
+    responses(
+        (status = 204, description = "Channel enabled or disabled"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such channel", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_notification_channel_enabled(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -223,6 +269,17 @@ async fn set_notification_channel_enabled(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/notification-channels/{id}", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Channel id")),
+    responses(
+        (status = 204, description = "Channel deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such channel", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_notification_channel(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -242,6 +299,15 @@ async fn delete_notification_channel(
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/routing-rules", tag = "notifications",
+    responses(
+        (status = 200, description = "Every routing rule and the channels it fans out to", body = Vec<crate::notifications::RoutingRule>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_routing_rules(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -257,13 +323,24 @@ async fn list_routing_rules(
 }
 
 /// Create-rule body: a name, an optional severity filter (absent = any), and target channels.
-#[derive(Deserialize)]
-struct CreateRule {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateRule {
     name: String,
     severity: Option<String>,
     channel_ids: Vec<Uuid>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/routing-rules", tag = "notifications",
+    request_body = CreateRule,
+    responses(
+        (status = 201, description = "Rule created", body = CreatedId),
+        (status = 400, description = "Empty name, or a severity outside critical|warning|info|null", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_routing_rule(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -296,6 +373,18 @@ async fn create_routing_rule(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/routing-rules/{id}", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Routing rule id")),
+    request_body = EnabledBody,
+    responses(
+        (status = 204, description = "Rule enabled or disabled"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_routing_rule_enabled(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -316,6 +405,17 @@ async fn set_routing_rule_enabled(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/routing-rules/{id}", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Routing rule id")),
+    responses(
+        (status = 204, description = "Rule deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_routing_rule(
     _guard: RequireManageConfig,
     admin: Admin,

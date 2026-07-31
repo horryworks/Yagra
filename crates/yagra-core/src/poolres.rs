@@ -28,7 +28,7 @@ const MAX_GROUP_DEPTH: usize = 64;
 
 /// Where a node's effective pool came from, so the UI can say "inherited from the Tokyo folder"
 /// rather than just showing a name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PoolSource {
     /// The node carries its own `pool`.

@@ -15,8 +15,9 @@
 //! surfaces as `409 last_admin`.
 
 use super::extract::{Admin, RequireManageUsers, RequireView};
+use super::util::CreatedId;
 use super::{ApiError, ApiResult, ApiState};
-use crate::auth::{UserCreateOutcome, UserMutation};
+use crate::auth::{UserCreateOutcome, UserMutation, UserSummary};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -29,6 +30,19 @@ use yagra_common::{Permission, Role};
 
 /// Minimum password length accepted for a new account or a reset.
 const MIN_PASSWORD_LEN: usize = 8;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_users,
+    create_user,
+    delete_user,
+    set_user_role,
+    set_user_status,
+    set_user_password,
+    list_roles
+))]
+pub(super) struct Doc;
 
 /// The user-administration routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -83,28 +97,49 @@ fn mutation_result(outcome: UserMutation, id: Uuid) -> ApiResult<StatusCode> {
 }
 
 /// `GET /api/v1/users` — every local account (never a password hash).
-async fn list_users(_perm: RequireManageUsers, admin: Admin) -> ApiResult<Json<serde_json::Value>> {
+#[utoipa::path(
+    get, path = "/api/v1/users", tag = "users",
+    responses(
+        (status = 200, description = "Every local account, without its password hash", body = Vec<UserSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_users(_perm: RequireManageUsers, admin: Admin) -> ApiResult<Json<Vec<UserSummary>>> {
     let list =
         admin.users.list().await.map_err(|e| {
             ApiError::from_internal(e.as_ref(), "list users", "failed to list users")
         })?;
-    Ok(Json(serde_json::to_value(list).unwrap_or_default()))
+    Ok(Json(list))
 }
 
 /// Create-user request body. The password is hashed before storage and never logged.
-#[derive(Deserialize)]
-struct CreateUser {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateUser {
     username: String,
     password: String,
     role: String,
 }
 
 /// `POST /api/v1/users` — create a local account.
+#[utoipa::path(
+    post, path = "/api/v1/users", tag = "users",
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "Account created", body = CreatedId),
+        (status = 400, description = "Empty username, a password below the minimum length, or an unknown role", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 409, description = "The username is already taken", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_user(
     _perm: RequireManageUsers,
     admin: Admin,
     Json(body): Json<CreateUser>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let username = body.username.trim();
     if username.is_empty() {
         return Err(ApiError::bad_request(
@@ -115,9 +150,7 @@ async fn create_user(
     check_password(&body.password)?;
     let role = checked_role(&body.role)?;
     match admin.users.create(username, &body.password, role).await {
-        Ok(UserCreateOutcome::Created(id)) => {
-            Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
-        }
+        Ok(UserCreateOutcome::Created(id)) => Ok((StatusCode::CREATED, Json(CreatedId { id }))),
         Ok(UserCreateOutcome::UsernameTaken) => Err(ApiError::conflict(
             "username_taken",
             format!("username {username:?} is already taken"),
@@ -131,6 +164,18 @@ async fn create_user(
 }
 
 /// `DELETE /api/v1/users/:id` — remove an account and cut any sessions it still holds.
+#[utoipa::path(
+    delete, path = "/api/v1/users/{id}", tag = "users",
+    params(("id" = Uuid, Path, description = "User account id")),
+    responses(
+        (status = 204, description = "Account removed and its sessions revoked"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such account", body = super::error::ErrorBody),
+        (status = 409, description = "Refused: this is the last admin account", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_user(
     _perm: RequireManageUsers,
     admin: Admin,
@@ -148,12 +193,26 @@ async fn delete_user(
 }
 
 /// Change-role request body.
-#[derive(Deserialize)]
-struct SetRole {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SetRole {
     role: String,
 }
 
 /// `PUT /api/v1/users/:id/role` — change an account's role.
+#[utoipa::path(
+    put, path = "/api/v1/users/{id}/role", tag = "users",
+    params(("id" = Uuid, Path, description = "User account id")),
+    request_body = SetRole,
+    responses(
+        (status = 204, description = "Role changed and the account's sessions revoked"),
+        (status = 400, description = "Role is not viewer, operator, or admin", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such account", body = super::error::ErrorBody),
+        (status = 409, description = "Refused: this would demote the last admin account", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_user_role(
     _perm: RequireManageUsers,
     admin: Admin,
@@ -173,12 +232,25 @@ async fn set_user_role(
 }
 
 /// Enable/disable-account request body.
-#[derive(Deserialize)]
-struct SetStatus {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SetStatus {
     enabled: bool,
 }
 
 /// `PUT /api/v1/users/:id/enabled` — enable or disable an account.
+#[utoipa::path(
+    put, path = "/api/v1/users/{id}/enabled", tag = "users",
+    params(("id" = Uuid, Path, description = "User account id")),
+    request_body = SetStatus,
+    responses(
+        (status = 204, description = "Status changed; disabling also revokes the account's sessions"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such account", body = super::error::ErrorBody),
+        (status = 409, description = "Refused: this would disable the last admin account", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_user_status(
     _perm: RequireManageUsers,
     admin: Admin,
@@ -207,12 +279,25 @@ async fn set_user_status(
 }
 
 /// Reset-password request body. The password is hashed before storage and never logged.
-#[derive(Deserialize)]
-struct SetPassword {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SetPassword {
     password: String,
 }
 
 /// `PUT /api/v1/users/:id/password` — reset an account's password.
+#[utoipa::path(
+    put, path = "/api/v1/users/{id}/password", tag = "users",
+    params(("id" = Uuid, Path, description = "User account id")),
+    request_body = SetPassword,
+    responses(
+        (status = 204, description = "Password reset and the account's sessions revoked"),
+        (status = 400, description = "Password below the minimum length", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such account", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_user_password(
     _perm: RequireManageUsers,
     admin: Admin,
@@ -245,7 +330,7 @@ async fn set_user_password(
 }
 
 /// One permission in the role/privilege matrix.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct PermissionInfo {
     key: &'static str,
     label: &'static str,
@@ -253,7 +338,7 @@ pub(crate) struct PermissionInfo {
 }
 
 /// One role in the matrix: its metadata and the permission keys it grants.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RoleInfo {
     key: &'static str,
     label: &'static str,
@@ -269,6 +354,14 @@ pub(crate) struct RoleInfo {
 /// Only `View`, unlike the rest of this module: it is the *shape* of the permission model, not
 /// anyone's account. Derived from `Permission::ALL` and `Role::ALL` rather than listed here, so a
 /// new permission appears in the matrix without anyone remembering to add it.
+#[utoipa::path(
+    get, path = "/api/v1/roles", tag = "users",
+    responses(
+        (status = 200, description = "The permission catalogue and what each role grants", body = RolesMatrix),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read access", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_roles(_guard: RequireView) -> ApiResult<Json<RolesMatrix>> {
     let permissions = Permission::ALL
         .into_iter()
@@ -296,7 +389,7 @@ async fn list_roles(_guard: RequireView) -> ApiResult<Json<RolesMatrix>> {
 }
 
 /// The role-vs-privilege matrix.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RolesMatrix {
     permissions: Vec<PermissionInfo>,
     roles: Vec<RoleInfo>,

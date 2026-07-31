@@ -16,7 +16,7 @@ use uuid::Uuid;
 use yagra_secrets::{key_provider_from_file, EnvelopeCipher, SealedSecret, StaticKeyProvider};
 
 /// Credential metadata returned by the API — never includes the secret value.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct CredentialSummary {
     pub id: Uuid,
     pub name: String,

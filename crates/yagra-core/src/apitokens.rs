@@ -40,7 +40,7 @@ pub fn is_api_token_shape(token: &str) -> bool {
 
 /// One API token's metadata for the admin listing — **never** the raw token or its hash
 /// (security.md: a credential is never returned in an API response after issuance).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ApiTokenInfo {
     pub id: Uuid,
     pub name: String,

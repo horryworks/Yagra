@@ -20,7 +20,7 @@ use yagra_common::{Node, NodeId};
 /// hierarchical inventory group (resolved recursively, incl. subgroups, ADR-022) — the scope the
 /// All Nodes right-click uses. It is *not* a threshold concept, so it stays local to maintenance
 /// rather than extending the shared [`yagra_common::ScopeLevel`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowScope {
     Node,
@@ -44,7 +44,7 @@ impl WindowScope {
 }
 
 /// Whether a mute targets a single node or a whole folder group (recursive).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MuteScope {
     Node,
@@ -61,7 +61,7 @@ impl MuteScope {
 }
 
 /// A stored maintenance window (API shape; times are RFC 3339 text at the edge).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredWindow {
     pub id: Uuid,
     pub name: String,
@@ -79,7 +79,7 @@ pub struct StoredWindow {
 /// A stored mute (API shape). A `node` mute silences one node (optionally one check via
 /// `metric_name`); a `group` mute silences every node under a folder group (recursive). Exactly
 /// one of `node_id` / `group_id` is set, per `scope_kind`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredMute {
     pub id: Uuid,
     pub scope_kind: MuteScope,

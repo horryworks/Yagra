@@ -20,6 +20,15 @@
   Reading the rules requires **ManageConfig**, not View — a threshold set describes when and whom
   Yagra will page — so it stays closed on a public dashboard.
 
+### New Features
+- **The API now publishes its own OpenAPI 3.1 document, at `GET /api/v1/openapi.json`.** It is
+  generated from the handlers themselves — every path, query parameter, request body, response shape
+  and error code — so it describes what the server actually does rather than what someone remembered
+  to write down. The endpoint is unauthenticated, like `/api/v1/version` and `/api/v1/config`: it
+  contains no inventory, configuration or state, and is identical on every deployment. Point any
+  OpenAPI client generator at it. The WebUI's own types and API client are now generated from this
+  same document, which removes 3,340 lines of hand-transcribed TypeScript that nothing was checking.
+
 ### Improvements
 - **The app icon now matches the one on the Yagra website.** The browser-tab favicon and the mark in
   the top bar, the mobile top bar and the sign-in panel are the topology fork that also reads as a

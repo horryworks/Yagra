@@ -25,7 +25,7 @@ pub const METRIC_HTTP_STATUS_CODE: &str = "http_status_code";
 pub const METRIC_SSL_CERT_DAYS_TO_EXPIRY: &str = "ssl_cert_days_to_expiry";
 
 /// HTTP request method for a URL check. Stored as an UPPERCASE token (the `method` column).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
     /// `GET` (the default — fetches the body so a content match can run later).
@@ -62,7 +62,7 @@ impl HttpMethod {
 
 /// Which HTTP status codes count as "up". Serialized as a tagged object (the `expected_status`
 /// JSONB column), e.g. `{"kind":"two_xx"}` / `{"kind":"exact","codes":[200,204]}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExpectedStatus {
     /// Any 2xx (the default).
@@ -95,7 +95,7 @@ const fn default_timeout_ms() -> u32 {
 
 /// A node's URL-monitoring configuration (1:1 with the node). No secrets: the optional auth
 /// `credential` is a reference; core resolves/inlines the decrypted value (ADR-018/020).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UrlCheckConfig {
     /// Full URL to probe, e.g. `https://api.example.com/health`.
     pub url: String,

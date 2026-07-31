@@ -33,6 +33,18 @@ use std::time::Instant;
 use uuid::Uuid;
 use yagra_common::{HostSample, NodeId};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    poller_health,
+    list_pollers,
+    poller_nodes,
+    delete_poller,
+    node_assignment,
+    list_monitoring_gaps
+))]
+pub(super) struct Doc;
+
 /// The poller-pool routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -46,6 +58,15 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// Poll-loop self-monitoring: last sweep time, jobs dispatched last round, total results consumed.
 /// The "stat strip" of the poller & collection-health widget.
+#[utoipa::path(
+    get, path = "/api/v1/poller-health", tag = "pollers",
+    responses(
+        (status = 200, description = "Poll-loop counters since core started", body = crate::scheduler::SchedulerStatsSnapshot),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side to read the scheduler from", body = super::error::ErrorBody),
+    ),
+)]
 async fn poller_health(
     _guard: RequireView,
     admin: Admin,
@@ -55,8 +76,8 @@ async fn poller_health(
 
 /// One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current
 /// status/telemetry) and the durable inventory (so an offline poller still lists). No secrets.
-#[derive(Debug, Serialize, PartialEq)]
-struct PollerInfo {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PollerInfo {
     /// Sanitized poller id (stable across restarts).
     id: String,
     /// Pool it serves (live view wins; else the durable row).
@@ -87,8 +108,8 @@ struct PollerInfo {
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
 /// and a warning when it has nodes but no live poller (they would go unmonitored).
-#[derive(Debug, Serialize, PartialEq)]
-struct PoolSummary {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PoolSummary {
     /// Pool name (`default` for unassigned nodes).
     pool: String,
     /// Non-Meraki nodes assigned to this pool.
@@ -102,8 +123,8 @@ struct PoolSummary {
 }
 
 /// The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary.
-#[derive(Debug, Serialize, PartialEq)]
-struct PollersResponse {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PollersResponse {
     pollers: Vec<PollerInfo>,
     pools: Vec<PoolSummary>,
 }
@@ -218,6 +239,15 @@ fn build_pollers_response(
 }
 
 /// The registered poller fleet plus the per-pool summary.
+#[utoipa::path(
+    get, path = "/api/v1/pollers", tag = "pollers",
+    responses(
+        (status = 200, description = "Every known poller (live ∪ durable inventory) and the per-pool summary", body = PollersResponse),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no poller inventory", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_pollers(_guard: RequireView, admin: Admin) -> ApiResult<Json<PollersResponse>> {
     let now = Instant::now();
     // The in-memory registry is the source of truth for liveness (ADR-009).
@@ -253,8 +283,8 @@ async fn list_pollers(_guard: RequireView, admin: Admin) -> ApiResult<Json<Polle
 }
 
 /// Which poller currently polls a node — the node detail's "Polled by" fact.
-#[derive(Debug, Serialize, PartialEq)]
-struct PolledBy {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PolledBy {
     /// One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`.
     state: &'static str,
     /// The owning poller; set only in the `assigned` state.
@@ -263,8 +293,8 @@ struct PolledBy {
 
 /// `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
 /// which poller currently holds it.
-#[derive(Debug, Serialize, PartialEq)]
-struct NodeAssignment {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct NodeAssignment {
     /// Effective pool: the node's own, else the nearest ancestor folder's, else the default.
     pool: String,
     pool_source: PoolSource,
@@ -324,6 +354,17 @@ fn resolve_polled_by(
 }
 
 /// Which pool a node effectively belongs to and which poller is currently polling it.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/assignment", tag = "pollers",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "The node's effective pool, where it came from, and its owning poller", body = NodeAssignment),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no inventory to resolve the node against", body = super::error::ErrorBody),
+    ),
+)]
 async fn node_assignment(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -371,21 +412,22 @@ async fn node_assignment(
 /// like a complete list.
 const POLLER_NODES_MAX: usize = 500;
 
-#[derive(Deserialize)]
-struct PollerNodesQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct PollerNodesQuery {
     limit: Option<usize>,
 }
 
 /// One node in the poller drill-down.
-#[derive(Debug, Serialize, PartialEq)]
-struct PollerNodeRef {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PollerNodeRef {
     id: Uuid,
     name: String,
 }
 
 /// `GET /api/v1/pollers/:id/nodes` body.
-#[derive(Debug, Serialize, PartialEq)]
-struct PollerNodesResponse {
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PollerNodesResponse {
     poller_id: String,
     /// The pool it serves; `null` unless it is live.
     pool: Option<String>,
@@ -403,6 +445,16 @@ struct PollerNodesResponse {
 ///
 /// Served from the coordinator's published working set rather than a database query, so this and
 /// the node detail's "Polled by" read the same data and can never disagree.
+#[utoipa::path(
+    get, path = "/api/v1/pollers/{id}/nodes", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id"), PollerNodesQuery),
+    responses(
+        (status = 200, description = "The poller's published working set, capped to one page", body = PollerNodesResponse),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no coordinator to read the working set from", body = super::error::ErrorBody),
+    ),
+)]
 async fn poller_nodes(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -472,6 +524,15 @@ async fn poller_nodes(
 
 /// Recent core↔poller visibility outages (Phase 3, store-and-forward). Newest first, capped. A read
 /// error degrades to an empty list rather than failing the Pollers page.
+#[utoipa::path(
+    get, path = "/api/v1/monitoring-gaps", tag = "pollers",
+    responses(
+        (status = 200, description = "Recent core↔poller visibility outages, newest first", body = Vec<crate::pollers::MonitoringGapRow>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_monitoring_gaps(
     _guard: RequireView,
     admin: Admin,
@@ -491,6 +552,18 @@ async fn list_monitoring_gaps(
 ///
 /// A currently-online poller is refused: deleting it would achieve nothing, because it re-registers
 /// on its next heartbeat. Better to say so than to appear to work.
+#[utoipa::path(
+    delete, path = "/api/v1/pollers/{id}", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id")),
+    responses(
+        (status = 204, description = "Poller removed from the durable inventory"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such poller", body = super::error::ErrorBody),
+        (status = 409, description = "The poller is online and would re-register on its next heartbeat", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_poller(
     _guard: RequireManageConfig,
     admin: Admin,

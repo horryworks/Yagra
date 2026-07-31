@@ -23,14 +23,21 @@ use axum::{
 };
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct ErrorBody {
+/// The ADR-019 envelope every failure renders as. `pub(crate)` and schema-bearing so the OpenAPI
+/// document can name one error shape for every endpoint (ADR-035) instead of leaving 4xx/5xx bodies
+/// undescribed — a client that has to guess the failure shape ends up parsing the success shape and
+/// reading `undefined`.
+#[derive(Serialize, utoipa::ToSchema)]
+#[schema(as = ApiErrorBody)]
+pub(crate) struct ErrorBody {
     error: ErrorDetail,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail {
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct ErrorDetail {
+    /// Stable machine-readable code. Clients branch on this, never on the message.
     code: String,
+    /// Operator-facing sentence. Safe to display; never carries an internal error's own text.
     message: String,
 }
 

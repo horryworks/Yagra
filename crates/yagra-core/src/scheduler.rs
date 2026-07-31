@@ -688,7 +688,7 @@ pub struct SchedulerStats {
 }
 
 /// A point-in-time view of [`SchedulerStats`] for the API.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct SchedulerStatsSnapshot {
     /// When the last poll round was dispatched (Unix ms), or `None` if none yet.
     pub last_sweep_unix_ms: Option<i64>,

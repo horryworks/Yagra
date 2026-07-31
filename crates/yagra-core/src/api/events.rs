@@ -39,6 +39,24 @@ pub(super) const WEBHOOK_BODY_LIMIT: usize = 64 * 1024;
 /// rejected by the database is truncated here instead of failing the ingest.
 const EVENT_TEXT_MAX_CHARS: usize = 4096;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    ingest_webhook,
+    list_event_sources,
+    create_event_source,
+    update_event_source,
+    delete_event_source,
+    rotate_event_source_token,
+    list_event_rules,
+    create_event_rule,
+    update_event_rule,
+    delete_event_rule,
+    test_event_rule,
+    close_event_alert
+))]
+pub(super) struct Doc;
+
 /// The passive-event routes, merged into `/api/v1` by [`super::router`].
 ///
 /// The ingest route's body limit is applied by [`super::router`], which owns the layering.
@@ -98,7 +116,7 @@ fn extract_webhook_text(body: &[u8]) -> (String, bool) {
 }
 
 /// The accepted event's id.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct IngestedEvent {
     event_id: Uuid,
 }
@@ -109,6 +127,23 @@ pub(crate) struct IngestedEvent {
 /// three token outcomes are deliberately distinct: a wrong token is `401 bad_token`, an unknown or
 /// disabled source is `404`, and a source over its rate is `429`. A sender needs to tell "fix my
 /// token" from "that source is gone" from "slow down".
+#[utoipa::path(
+    post, path = "/api/v1/ingest/webhook/{source_id}", tag = "events",
+    params(("source_id" = Uuid, Path, description = "Webhook source id")),
+    request_body(
+        content = String,
+        description = "Arbitrary sender payload; a JSON object's message/text/summary becomes the event text",
+        content_type = "application/json"
+    ),
+    responses(
+        (status = 202, description = "Event accepted", body = IngestedEvent),
+        (status = 401, description = "Missing or wrong per-source ingest token", body = super::error::ErrorBody),
+        (status = 404, description = "No enabled webhook source with that id", body = super::error::ErrorBody),
+        (status = 413, description = "Body over the per-request ingest cap"),
+        (status = 429, description = "This source is over its ingest rate limit", body = super::error::ErrorBody),
+        (status = 503, description = "Event ingestion is not configured, or this core is not the HA leader", body = super::error::ErrorBody),
+    ),
+)]
 async fn ingest_webhook(
     engine: Events,
     _leader: Leader,
@@ -191,6 +226,15 @@ async fn reload_event_engine(st: &ApiState, admin: &AdminState) {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/event-sources", tag = "events",
+    responses(
+        (status = 200, description = "Every ingest source (never the token hash)", body = Vec<crate::events::EventSourceView>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_event_sources(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -217,8 +261,8 @@ fn checked_source_name(name: &str) -> Result<&str, ApiError> {
     Ok(name)
 }
 
-#[derive(Deserialize)]
-struct CreateEventSource {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateEventSource {
     name: String,
     #[serde(default)]
     node_id: Option<Uuid>,
@@ -228,12 +272,23 @@ struct CreateEventSource {
 ///
 /// **The plaintext token appears here and nowhere else** — only its hash is stored, so this response
 /// and `rotate-token` are the only two places it can ever be read.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct CreatedSource {
     id: Uuid,
     token: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/event-sources", tag = "events",
+    request_body = CreateEventSource,
+    responses(
+        (status = 201, description = "Source created; the plaintext ingest token appears here only", body = CreatedSource),
+        (status = 400, description = "Name is empty or over 120 characters", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_event_source(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -254,8 +309,8 @@ async fn create_event_source(
     Ok((StatusCode::CREATED, Json(CreatedSource { id, token })))
 }
 
-#[derive(Deserialize)]
-struct UpdateEventSource {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct UpdateEventSource {
     name: String,
     enabled: bool,
     #[serde(default)]
@@ -267,6 +322,19 @@ fn no_source(id: Uuid) -> ApiError {
     ApiError::not_found("source_not_found", format!("no event source {id}"))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/event-sources/{id}", tag = "events",
+    params(("id" = Uuid, Path, description = "Event source id")),
+    request_body = UpdateEventSource,
+    responses(
+        (status = 204, description = "Source updated"),
+        (status = 400, description = "Name is empty or over 120 characters", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such event source", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_event_source(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -290,11 +358,22 @@ async fn update_event_source(
 }
 
 /// A freshly rotated ingest token — the second and last place the plaintext appears.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RotatedToken {
     token: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/event-sources/{id}/rotate-token", tag = "events",
+    params(("id" = Uuid, Path, description = "Event source id")),
+    responses(
+        (status = 200, description = "A new ingest token; the plaintext is readable here only", body = RotatedToken),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such event source", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn rotate_event_source_token(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -315,6 +394,17 @@ async fn rotate_event_source_token(
         .ok_or_else(|| no_source(id))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/event-sources/{id}", tag = "events",
+    params(("id" = Uuid, Path, description = "Event source id")),
+    responses(
+        (status = 204, description = "Source deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such event source", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_event_source(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -335,6 +425,15 @@ async fn delete_event_source(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/event-rules", tag = "events",
+    responses(
+        (status = 200, description = "Every stored event rule", body = Vec<crate::events::StoredEventRule>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_event_rules(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -345,8 +444,8 @@ async fn list_event_rules(
     Ok(Json(rules))
 }
 
-#[derive(Deserialize)]
-struct EventRuleBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct EventRuleBody {
     name: String,
     #[serde(default = "default_event_rule_enabled")]
     enabled: bool,
@@ -436,6 +535,17 @@ fn no_rule(id: Uuid) -> ApiError {
     ApiError::not_found("rule_not_found", format!("no event rule {id}"))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/event-rules", tag = "events",
+    request_body = EventRuleBody,
+    responses(
+        (status = 201, description = "Rule created", body = CreatedId),
+        (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_event_rule(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -454,6 +564,19 @@ async fn create_event_rule(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/event-rules/{id}", tag = "events",
+    params(("id" = Uuid, Path, description = "Event rule id")),
+    request_body = EventRuleBody,
+    responses(
+        (status = 204, description = "Rule updated"),
+        (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such event rule", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_event_rule(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -476,6 +599,17 @@ async fn update_event_rule(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/event-rules/{id}", tag = "events",
+    params(("id" = Uuid, Path, description = "Event rule id")),
+    responses(
+        (status = 204, description = "Rule deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such event rule", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_event_rule(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -497,8 +631,8 @@ async fn delete_event_rule(
 }
 
 /// Body for the interactive rule tester.
-#[derive(Deserialize)]
-struct EventRuleTest {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct EventRuleTest {
     match_kind: String,
     pattern: String,
     #[serde(default)]
@@ -509,7 +643,7 @@ struct EventRuleTest {
 /// The tester's answer. A compile failure is reported **in-band** rather than as a 400: the whole
 /// point of the tester is to show the operator what is wrong with the pattern they are typing, and
 /// a 400 would be rendered as a request failure instead of inline next to the field.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RuleTestResult {
     matched: bool,
     clear_matched: Option<bool>,
@@ -530,6 +664,15 @@ impl RuleTestResult {
 ///
 /// A read wearing POST — it compiles a regex and returns, changing nothing — so it is on
 /// `changes_monitoring_config`'s exception list and does not dirty the config generation.
+#[utoipa::path(
+    post, path = "/api/v1/event-rules/test", tag = "events",
+    request_body = EventRuleTest,
+    responses(
+        (status = 200, description = "Whether the sample matched; a pattern that does not compile is reported in-band", body = RuleTestResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+    ),
+)]
 async fn test_event_rule(
     _guard: RequireManageConfig,
     Json(body): Json<EventRuleTest>,
@@ -553,8 +696,8 @@ async fn test_event_rule(
 }
 
 /// Body for the manual event-alert close. The identity mirrors the alert wire shape.
-#[derive(Deserialize)]
-struct CloseEventAlert {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CloseEventAlert {
     #[allow(dead_code)] // carried for parity with the alert identity; close keys on `check`
     node: Uuid,
     check: Uuid,
@@ -564,6 +707,17 @@ struct CloseEventAlert {
 ///
 /// `AckAlerts`, not `ManageConfig`: closing an alert is an operational reaction, and the operator
 /// carrying the pager is who does it. Leader-only — see the module doc.
+#[utoipa::path(
+    post, path = "/api/v1/events/alerts/close", tag = "events",
+    request_body = CloseEventAlert,
+    responses(
+        (status = 204, description = "Alert closed"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator", body = super::error::ErrorBody),
+        (status = 404, description = "No active event alert for that check", body = super::error::ErrorBody),
+        (status = 503, description = "Event ingestion is not configured, or this core is not the HA leader", body = super::error::ErrorBody),
+    ),
+)]
 async fn close_event_alert(
     _guard: RequireAckAlerts,
     engine: Events,

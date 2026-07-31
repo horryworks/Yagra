@@ -28,6 +28,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::Role;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    oidc_authorize,
+    oidc_callback,
+    list_oidc_providers,
+    create_oidc_provider,
+    update_oidc_provider,
+    delete_oidc_provider
+))]
+pub(super) struct Doc;
+
 /// The OIDC routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -44,14 +56,14 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Where to send the browser to start the SSO handshake.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct AuthorizeUrl {
     authorize_url: String,
 }
 
 /// A session minted by a completed SSO login — the same shape local login returns, deliberately, so
 /// the WebUI stores a token the same way whichever path produced it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct OidcSession {
     token: String,
     role: Role,
@@ -73,6 +85,15 @@ async fn enabled_config(oidc: &Oidc) -> Result<crate::oidc::OidcProviderConfig, 
 
 /// Begin an OIDC login: the IdP authorization URL the browser should be sent to. The CSRF `state`,
 /// `nonce` and PKCE verifier are stashed server-side for the flight. Unauthenticated (pre-session).
+#[utoipa::path(
+    get, path = "/api/v1/auth/oidc/authorize", tag = "oidc",
+    security(()),
+    responses(
+        (status = 200, description = "The IdP authorization URL the browser should be sent to", body = AuthorizeUrl),
+        (status = 502, description = "Provider discovery or configuration failed", body = super::error::ErrorBody),
+        (status = 503, description = "No OIDC provider store, or no provider enabled", body = super::error::ErrorBody),
+    ),
+)]
 async fn oidc_authorize(State(st): State<ApiState>, oidc: Oidc) -> ApiResult<Json<AuthorizeUrl>> {
     let config = enabled_config(&oidc).await?;
     let url = crate::oidc::begin_authorize(&config, &st.oidc_flight)
@@ -90,14 +111,24 @@ async fn oidc_authorize(State(st): State<ApiState>, oidc: Oidc) -> ApiResult<Jso
 }
 
 /// OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect.
-#[derive(Deserialize)]
-struct OidcCallbackBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct OidcCallbackBody {
     code: String,
     state: String,
 }
 
 /// Complete an OIDC login: exchange the code, validate the ID token, map IdP groups to a role,
 /// JIT-provision the account, and issue a Yagra session.
+#[utoipa::path(
+    post, path = "/api/v1/auth/oidc/callback", tag = "oidc",
+    security(()),
+    request_body = OidcCallbackBody,
+    responses(
+        (status = 200, description = "A Yagra session for the SSO account", body = OidcSession),
+        (status = 401, description = "The login could not be completed; which step failed stays server-side", body = super::error::ErrorBody),
+        (status = 503, description = "No OIDC provider store, no provider enabled, or skeleton mode", body = super::error::ErrorBody),
+    ),
+)]
 async fn oidc_callback(
     State(st): State<ApiState>,
     oidc: Oidc,
@@ -141,6 +172,15 @@ async fn oidc_callback(
 }
 
 /// Configured providers — **metadata only**, never the client secret.
+#[utoipa::path(
+    get, path = "/api/v1/settings/oidc", tag = "oidc",
+    responses(
+        (status = 200, description = "Every configured provider, without its client secret", body = Vec<crate::oidc::OidcProviderSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageUsers permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment does not persist SSO configuration", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_oidc_providers(
     _guard: RequireManageUsers,
     oidc: Oidc,
@@ -167,6 +207,17 @@ fn validate(input: &crate::oidc::OidcProviderInput) -> Result<(), ApiError> {
         .map_err(|e| ApiError::bad_request("invalid_provider", e.to_string()))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/settings/oidc", tag = "oidc",
+    request_body = crate::oidc::OidcProviderInput,
+    responses(
+        (status = 201, description = "Provider created", body = CreatedId),
+        (status = 400, description = "The provider definition is invalid, or the client secret is missing", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageUsers permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment does not persist SSO configuration", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_oidc_provider(
     _guard: RequireManageUsers,
     oidc: Oidc,
@@ -196,6 +247,19 @@ async fn create_oidc_provider(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/settings/oidc/{id}", tag = "oidc",
+    params(("id" = Uuid, Path, description = "Provider id")),
+    request_body = crate::oidc::OidcProviderInput,
+    responses(
+        (status = 204, description = "Provider updated; an omitted client secret keeps the stored one"),
+        (status = 400, description = "The provider definition is invalid", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageUsers permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such provider", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment does not persist SSO configuration", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_oidc_provider(
     _guard: RequireManageUsers,
     oidc: Oidc,
@@ -220,6 +284,17 @@ async fn update_oidc_provider(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/settings/oidc/{id}", tag = "oidc",
+    params(("id" = Uuid, Path, description = "Provider id")),
+    responses(
+        (status = 204, description = "Provider deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageUsers permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such provider", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment does not persist SSO configuration", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_oidc_provider(
     _guard: RequireManageUsers,
     oidc: Oidc,

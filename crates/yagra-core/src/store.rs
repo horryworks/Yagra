@@ -78,7 +78,7 @@ pub struct InterfaceLive {
 }
 
 /// One point of a time series: Unix-seconds timestamp and value.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct MetricPoint {
     /// Unix timestamp in seconds.
     pub t: i64,

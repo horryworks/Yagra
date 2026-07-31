@@ -17,6 +17,9 @@
 
 use super::extract::RequireView;
 use super::{ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS};
+use crate::flowstore::{
+    FlowAsAgg, FlowConversation, FlowPoint, FlowPortAgg, FlowProtoAgg, FlowTalker,
+};
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
@@ -25,6 +28,24 @@ use axum::{
 };
 use serde::Deserialize;
 use uuid::Uuid;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_node_flow_series,
+    get_node_flow_top_talkers,
+    get_node_flow_conversations,
+    get_node_flow_top_ports,
+    get_node_flow_protocols,
+    get_node_flow_top_as,
+    get_flow_series,
+    get_flow_top_talkers,
+    get_flow_conversations,
+    get_flow_top_ports,
+    get_flow_protocols,
+    get_flow_top_as
+))]
+pub(super) struct Doc;
 
 /// The flow routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -67,7 +88,8 @@ pub(super) fn routes() -> Router<ApiState> {
 /// the trailing hour); `limit` caps top-N rows. `proto`/`port`/`peer` are optional drill-down
 /// filters and `dir` selects the AS side for the top-AS endpoint — all parsed into strong types
 /// (unparseable values are ignored), so no untrusted string reaches the store query.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(super) struct FlowRangeQuery {
     from: Option<i64>,
     to: Option<i64>,
@@ -257,9 +279,25 @@ async fn run_flow_agg(
 /// Define the per-node and fleet handler pair for one aggregation. Both are thin: they exist only
 /// because the two routes need different extractors (`Path<Uuid>` vs none). `RequireView` is an
 /// argument, so neither can be wired up without its read guard.
+///
+/// The `#[utoipa::path]` lives here too (ADR-035). [`run_flow_agg`] erases to `Response` because the
+/// six aggregations return six row types, but each *handler* has exactly one, so the row type is a
+/// macro parameter and the document names the real shape rather than an opaque body. The two paths
+/// and the row type are `tt`/`ident` fragments deliberately: any other fragment kind arrives wrapped
+/// in invisible delimiters, which the attribute parser does not see through.
 macro_rules! flow_endpoints {
-    ($node_fn:ident, $fleet_fn:ident, $agg:expr, $doc:literal) => {
-        #[doc = concat!("`GET /api/v1/nodes/:node_id/flow/", $doc, "` — for one exporter node.")]
+    ($node_fn:ident, $fleet_fn:ident, $agg:expr, $node_path:tt, $fleet_path:tt, $row:ident, $desc:tt) => {
+        #[doc = concat!("`GET ", $node_path, "` — for one exporter node.")]
+        #[utoipa::path(
+            get, path = $node_path, tag = "flow",
+            params(("node_id" = Uuid, Path, description = "Exporter node id"), FlowRangeQuery),
+            responses(
+                (status = 200, description = $desc, body = Vec<$row>),
+                (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+                (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+                (status = 503, description = "Flow monitoring is not enabled (no flow store configured)", body = super::error::ErrorBody),
+            ),
+        )]
         async fn $node_fn(
             _view: RequireView,
             State(st): State<ApiState>,
@@ -269,7 +307,17 @@ macro_rules! flow_endpoints {
             run_flow_agg(&st, Some(node_id), &q, $agg).await
         }
 
-        #[doc = concat!("`GET /api/v1/flow/", $doc, "` — fleet-wide, across every exporter.")]
+        #[doc = concat!("`GET ", $fleet_path, "` — fleet-wide, across every exporter.")]
+        #[utoipa::path(
+            get, path = $fleet_path, tag = "flow",
+            params(FlowRangeQuery),
+            responses(
+                (status = 200, description = $desc, body = Vec<$row>),
+                (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+                (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+                (status = 503, description = "Flow monitoring is not enabled (no flow store configured)", body = super::error::ErrorBody),
+            ),
+        )]
         async fn $fleet_fn(
             _view: RequireView,
             State(st): State<ApiState>,
@@ -284,37 +332,55 @@ flow_endpoints!(
     get_node_flow_series,
     get_flow_series,
     FlowAgg::Series,
-    "series"
+    "/api/v1/nodes/{node_id}/flow/series",
+    "/api/v1/flow/series",
+    FlowPoint,
+    "Traffic trend: bytes and packets per protocol per 5-minute bucket"
 );
 flow_endpoints!(
     get_node_flow_top_talkers,
     get_flow_top_talkers,
     FlowAgg::TopTalkers,
-    "top-talkers"
+    "/api/v1/nodes/{node_id}/flow/top-talkers",
+    "/api/v1/flow/top-talkers",
+    FlowTalker,
+    "Host addresses ranked by traffic"
 );
 flow_endpoints!(
     get_node_flow_conversations,
     get_flow_conversations,
     FlowAgg::Conversations,
-    "conversations"
+    "/api/v1/nodes/{node_id}/flow/conversations",
+    "/api/v1/flow/conversations",
+    FlowConversation,
+    "Source→destination pairs ranked by traffic, AS names resolved"
 );
 flow_endpoints!(
     get_node_flow_top_ports,
     get_flow_top_ports,
     FlowAgg::TopPorts,
-    "top-ports"
+    "/api/v1/nodes/{node_id}/flow/top-ports",
+    "/api/v1/flow/top-ports",
+    FlowPortAgg,
+    "Destination ports ranked by traffic"
 );
 flow_endpoints!(
     get_node_flow_protocols,
     get_flow_protocols,
     FlowAgg::Protocols,
-    "protocols"
+    "/api/v1/nodes/{node_id}/flow/protocols",
+    "/api/v1/flow/protocols",
+    FlowProtoAgg,
+    "IP protocols ranked by traffic"
 );
 flow_endpoints!(
     get_node_flow_top_as,
     get_flow_top_as,
     FlowAgg::TopAs,
-    "top-as"
+    "/api/v1/nodes/{node_id}/flow/top-as",
+    "/api/v1/flow/top-as",
+    FlowAsAgg,
+    "Autonomous systems ranked by traffic, names resolved"
 );
 
 #[cfg(test)]

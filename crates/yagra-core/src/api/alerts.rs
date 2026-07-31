@@ -37,6 +37,20 @@ use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::Severity;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_alerts,
+    list_alert_history,
+    ack_alert,
+    alert_top_nodes,
+    alert_calendar,
+    alert_transitions,
+    stream_alerts,
+    stream_node_states
+))]
+pub(super) struct Doc;
+
 /// The alert routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -53,7 +67,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 // ── Ack decoration ───────────────────────────────────────────────────────────
 
 /// An active alert plus its inbound (read-only) ack state.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct ActiveAlertView {
     #[serde(flatten)]
     pub alert: Alert,
@@ -63,7 +77,7 @@ pub(crate) struct ActiveAlertView {
 
 /// An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all
 /// transitions of one incident share it).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlertHistoryView {
     #[serde(flatten)]
     pub row: AlertHistoryRow,
@@ -164,6 +178,14 @@ pub(crate) async fn apply_ack(
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get, path = "/api/v1/alerts", tag = "alerts",
+    responses(
+        (status = 200, description = "Every active alert, each decorated with its inbound ack state", body = Vec<ActiveAlertView>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_alerts(_perm: RequireView, State(st): State<ApiState>) -> Json<Vec<ActiveAlertView>> {
     let acks = ack_map(&st).await;
     Json(decorate_alerts(st.alerts.active_alerts(), &acks))
@@ -171,12 +193,23 @@ async fn list_alerts(_perm: RequireView, State(st): State<ApiState>) -> Json<Vec
 
 /// Recent alert-history rows: `?limit=` (default 100) + an optional `before` keyset cursor (an
 /// RFC 3339 timestamp — pass the last row's time to page back).
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct HistoryQuery {
     pub limit: Option<i64>,
     pub before: Option<String>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/alerts/history", tag = "alerts",
+    params(HistoryQuery),
+    responses(
+        (status = 200, description = "A page of history rows, newest first; empty when this deployment keeps no history", body = Vec<AlertHistoryView>),
+        (status = 400, description = "`before` is not an RFC 3339 timestamp", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_alert_history(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -220,8 +253,8 @@ fn default_acked() -> bool {
 /// Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity
 /// `(node, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
 /// middleware records the audit entry.
-#[derive(Deserialize)]
-struct AckRequest {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct AckRequest {
     node: Uuid,
     check: Uuid,
     severity: Severity,
@@ -243,13 +276,23 @@ struct AckRequest {
 }
 
 /// What an ack call reports back: the new state, and the stored view when acknowledging.
-#[derive(Debug, Clone, Serialize)]
-struct AckResult {
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(super) struct AckResult {
     acked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ack: Option<AckView>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/alerts/ack", tag = "alerts",
+    request_body = AckRequest,
+    responses(
+        (status = 200, description = "The ack was recorded (or cleared) and broadcast", body = AckResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the alert-acknowledgement permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no ack store", body = super::error::ErrorBody),
+    ),
+)]
 async fn ack_alert(
     _perm: RequireAckAlerts,
     State(st): State<ApiState>,
@@ -275,14 +318,15 @@ async fn ack_alert(
 // ── History aggregations ─────────────────────────────────────────────────────
 
 /// Query for the alert top-nodes aggregation: `?window=<secs>` (default 24h) + `?limit=`.
-#[derive(Deserialize)]
-struct AlertTopQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct AlertTopQuery {
     window: Option<i64>,
     limit: Option<i64>,
 }
 
 /// One chronic-offender row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlertNodeCount {
     pub node_id: Uuid,
     pub name: String,
@@ -290,6 +334,15 @@ pub(crate) struct AlertNodeCount {
 }
 
 /// Nodes generating the most alert fires over a trailing window (chronic offenders).
+#[utoipa::path(
+    get, path = "/api/v1/alerts/top-nodes", tag = "alerts",
+    params(AlertTopQuery),
+    responses(
+        (status = 200, description = "Nodes ranked by alert fires; empty when this deployment keeps no history", body = Vec<AlertNodeCount>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn alert_top_nodes(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -328,13 +381,14 @@ async fn alert_top_nodes(
 }
 
 /// Query for the alert calendar heatmap: `?days=<n>` (default 7) of history.
-#[derive(Deserialize)]
-struct AlertCalendarQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct AlertCalendarQuery {
     days: Option<i64>,
 }
 
 /// One weekday×hour heatmap cell.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct CalendarBucket {
     /// 0 = Sunday … 6 = Saturday (UTC).
     pub dow: i32,
@@ -344,6 +398,15 @@ pub(crate) struct CalendarBucket {
 }
 
 /// Alert fires bucketed weekday×hour over the last `days` (for the calendar heatmap).
+#[utoipa::path(
+    get, path = "/api/v1/alerts/calendar", tag = "alerts",
+    params(AlertCalendarQuery),
+    responses(
+        (status = 200, description = "Weekday×hour fire counts; empty when this deployment keeps no history", body = Vec<CalendarBucket>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn alert_calendar(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -370,7 +433,7 @@ async fn alert_calendar(
 }
 
 /// One recent state-change row (a fire = into an alert state; a resolve = recovery to ok).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlertTransition {
     pub node_id: Uuid,
     pub name: String,
@@ -382,6 +445,18 @@ pub(crate) struct AlertTransition {
 }
 
 /// Recent up/down transitions (latest fires and resolutions), node names joined.
+///
+/// Only `limit` is documented, though the handler borrows the history query type: this endpoint
+/// reads no cursor, and advertising one would promise paging it does not do.
+#[utoipa::path(
+    get, path = "/api/v1/alerts/transitions", tag = "alerts",
+    params(("limit" = Option<i64>, Query, description = "How many transitions to return (default 12)")),
+    responses(
+        (status = 200, description = "The latest fires and resolutions; empty when this deployment keeps no history", body = Vec<AlertTransition>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn alert_transitions(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -446,6 +521,14 @@ fn sse_with_resync(
 
 /// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's `data` is
 /// the alert JSON with a `resolved` flag.
+#[utoipa::path(
+    get, path = "/api/v1/stream/alerts", tag = "alerts",
+    responses(
+        (status = 200, description = "Server-sent event stream of fires and resolutions; a lagged subscriber gets a named `resync` event", content_type = "text/event-stream"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn stream_alerts(_perm: RequireView, State(st): State<ApiState>) -> Response {
     Sse::new(sse_with_resync(st.alerts.subscribe(), "alert"))
         .keep_alive(KeepAlive::default())
@@ -456,6 +539,14 @@ async fn stream_alerts(_perm: RequireView, State(st): State<ApiState>) -> Respon
 /// inventory and topology views seed from REST once, then patch individual nodes off this stream
 /// instead of re-fetching the whole fleet every 15s. Works in skeleton mode — the alert engine is
 /// always present.
+#[utoipa::path(
+    get, path = "/api/v1/stream/node-states", tag = "alerts",
+    responses(
+        (status = 200, description = "Server-sent event stream of rolled-up node display-state changes", content_type = "text/event-stream"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn stream_node_states(_perm: RequireView, State(st): State<ApiState>) -> Response {
     Sse::new(sse_with_resync(
         st.alerts.subscribe_node_states(),

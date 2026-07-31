@@ -35,7 +35,7 @@ const REGEX_SIZE_LIMIT: usize = 1 << 20;
 // ── Config model (serialized into `forward_destinations.filter`, edited by the WebUI) ────────
 
 /// How the conditions combine.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterMode {
     /// Every condition must hold (AND). The default.
@@ -46,7 +46,7 @@ pub enum FilterMode {
 }
 
 /// Which datum a condition inspects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterField {
     /// Datagram source address.
@@ -86,7 +86,7 @@ pub enum FilterField {
 }
 
 /// What a condition does with the datum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
     /// Exact equality.
@@ -117,7 +117,7 @@ pub enum FilterOp {
 
 /// One `field op value` test. `value` is always a string so the config has a single JSON shape;
 /// [`compile`] parses it according to the field's type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Condition {
     /// The datum to inspect.
     pub field: FilterField,
@@ -129,7 +129,7 @@ pub struct Condition {
 }
 
 /// A destination's filter as stored and edited. `{}` deserializes to "match everything".
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FilterExpr {
     /// How [`Self::conditions`] combine.
     #[serde(default)]
@@ -141,7 +141,7 @@ pub struct FilterExpr {
 
 /// Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`
 /// strings, the API validation and the WebUI all agree on one spelling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     /// Received syslog.
@@ -153,7 +153,7 @@ pub enum SourceKind {
 }
 
 /// How a destination is spoken to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DestKind {
     /// RFC 5424 over UDP.

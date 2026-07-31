@@ -123,7 +123,7 @@ impl DestCounters {
 }
 
 /// A destination's runtime status, as the API serializes it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DestStatus {
     /// Destination id.
     pub id: Uuid,

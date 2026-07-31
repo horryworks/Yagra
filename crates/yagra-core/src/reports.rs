@@ -51,7 +51,7 @@ fn now_s() -> i64 {
 // ── Persisted shapes ──────────────────────────────────────────────────────────────────
 
 /// A report definition (reusable template), as served to the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ReportDefinition {
     pub id: Uuid,
     pub name: String,
@@ -63,7 +63,7 @@ pub struct ReportDefinition {
 }
 
 /// A schedule row (joined with its definition's name for display).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ReportSchedule {
     pub id: Uuid,
     pub definition_id: Uuid,
@@ -80,7 +80,7 @@ pub struct ReportSchedule {
 }
 
 /// A run row for the saved-reports list (without the heavy `result_*` payloads).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ReportRun {
     pub id: Uuid,
     pub definition_id: Option<Uuid>,
@@ -99,7 +99,7 @@ pub struct ReportRun {
 }
 
 /// A run plus its rendered result (the viewer / export endpoints).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ReportRunDetail {
     #[serde(flatten)]
     pub run: ReportRun,
@@ -155,14 +155,14 @@ fn setting_str(settings: &serde_json::Value, key: &str, default: &str) -> String
 // ── Section catalog (drives the builder + validates kinds) ────────────────────────────────
 
 /// One selectable choice for a `select` setting.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct SettingOption {
     pub value: &'static str,
     pub label: &'static str,
 }
 
 /// A configurable setting on a section (rendered generically by the builder).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct SectionSetting {
     pub key: &'static str,
     pub label: &'static str,
@@ -174,7 +174,7 @@ pub struct SectionSetting {
 }
 
 /// A report-section type the user can add to a report.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct SectionDef {
     pub kind: &'static str,
     pub title: &'static str,

@@ -18,7 +18,7 @@ use yagra_secrets::{EnvelopeCipher, SealedSecret, StaticKeyProvider};
 use crate::secrets::load_key_provider;
 
 /// A delivery channel kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelKind {
     Webhook,
@@ -52,7 +52,7 @@ impl ChannelKind {
 }
 
 /// The (secret) connection config for a channel — sealed at rest, never returned by the API.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChannelConfig {
     Webhook {
@@ -101,7 +101,7 @@ impl ChannelConfig {
 }
 
 /// Channel metadata for the API — never the secret config.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ChannelSummary {
     pub id: Uuid,
     pub name: String,
@@ -118,7 +118,7 @@ pub struct OpenChannel {
 }
 
 /// A routing rule: enabled alerts of `severity` (None = any) fan out to `channel_ids`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoutingRule {
     pub id: Uuid,
     pub name: String,

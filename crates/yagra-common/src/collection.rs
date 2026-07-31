@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// How a [`CollectionItem`] is collected from the agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CollectionKind {
     /// A single scalar instance OID fetched with SNMP GET (e.g. sysUpTime).
@@ -36,7 +36,7 @@ pub enum CollectionKind {
 
 /// One thing to collect: a stable metric name, the OID to collect it from, how to collect
 /// it (scalar GET vs table walk), and whether it is a gauge or a raw counter.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CollectionItem {
     /// Stable TSDB metric name (e.g. `if_hc_in_octets`). Bounded by convention to keep
     /// label cardinality controlled — never a free-text/device-supplied value (ADR-011).

@@ -13,6 +13,9 @@ repository.workspace = true
 yagra-bus = { path = "../yagra-bus" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Destination kinds and filter expressions are stored, and edited through the northbound API, so
+# they carry their own JSON Schema for the OpenAPI document (ADR-035). Derive-only.
+utoipa = { workspace = true }
 thiserror = { workspace = true }
 # Operator-supplied message patterns. The `regex` crate is linear-time, so a hostile pattern
 # cannot ReDoS the hot path (same rationale as the event-rule matcher).

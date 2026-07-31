@@ -16,7 +16,7 @@ use yagra_common::{
 };
 
 /// One catalog entry returned by the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MibEntry {
     pub id: Uuid,
     pub metric_name: String,

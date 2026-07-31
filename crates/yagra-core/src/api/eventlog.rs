@@ -27,14 +27,19 @@
 
 use super::extract::{Admin, RequireView};
 use super::{ApiError, ApiResult, ApiState};
-use crate::events::{EventFilter, EventRow, EventStatGroup};
+use crate::events::{EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket};
 use axum::{
     extract::{Query, State},
     routing::get,
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_events, events_stats))]
+pub(super) struct Doc;
 
 /// The event-log read routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
@@ -160,8 +165,9 @@ pub(crate) async fn search(
 }
 
 /// Query params for the event log (keyset paging on event time, like alert history).
-#[derive(Deserialize)]
-struct EventsQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct EventsQuery {
     before: Option<String>,
     /// Time-range lower bound (inclusive, RFC 3339). Distinct from `before` (the paging cursor).
     start: Option<String>,
@@ -178,6 +184,17 @@ struct EventsQuery {
     regex: Option<bool>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/events", tag = "eventlog",
+    params(EventsQuery),
+    responses(
+        (status = 200, description = "Matching events, newest first, from whichever store is the source of record", body = Vec<EventRow>),
+        (status = 400, description = "`before` is not RFC 3339, a range bound is malformed, the kind is unknown, or the regex does not compile", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side to resolve node names against", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_events(
     _perm: RequireView,
     admin: Admin,
@@ -202,8 +219,9 @@ async fn list_events(
 /// Query params for `/events/stats`: the event-filter set (no paging cursor) plus the aggregation
 /// controls — `group_by` (kind|action|trap|source|time), `limit` (categorical row cap), and for the
 /// `time` series `bucket_secs` + `split=kind`.
-#[derive(Deserialize)]
-struct EventStatsQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct EventStatsQuery {
     start: Option<String>,
     end: Option<String>,
     kind: Option<String>,
@@ -217,11 +235,36 @@ struct EventStatsQuery {
     split: Option<String>,
 }
 
+/// The two row shapes `/events/stats` answers with, as one type.
+///
+/// `#[serde(untagged)]`, so the bytes are exactly the bare array either arm used to serialize on its
+/// own — the union exists because a `Response` names no shape at all in the generated contract, and
+/// a client that has to guess between two arrays guesses wrong on one of them.
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub(super) enum EventStats {
+    /// `group_by=time`: the volume series.
+    Series(Vec<EventTimeBucket>),
+    /// Every other `group_by`: count-ordered categorical buckets.
+    Grouped(Vec<EventStatBucket>),
+}
+
 /// Fleet passive-event summary aggregates for the dashboard widgets.
 ///
 /// Categorical (`group_by=kind|action|trap|source`) returns count-ordered buckets; `group_by=time`
 /// returns a volume series. Routes to the same store the event log does, so a summary and the list
 /// it summarises can never disagree about which store answered.
+#[utoipa::path(
+    get, path = "/api/v1/events/stats", tag = "eventlog",
+    params(EventStatsQuery),
+    responses(
+        (status = 200, description = "A volume series for `group_by=time`, count-ordered buckets otherwise", body = EventStats),
+        (status = 400, description = "A range bound is malformed, the kind is unknown, the regex does not compile, or `group_by` is not one of kind|action|trap|source|time", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side to resolve node names against", body = super::error::ErrorBody),
+    ),
+)]
 async fn events_stats(
     _perm: RequireView,
     admin: Admin,
@@ -261,7 +304,7 @@ async fn events_stats(
                 "failed to compute event stats",
             )
         })?;
-        return Ok(Json(buckets).into_response());
+        return Ok(Json(EventStats::Series(buckets)).into_response());
     }
 
     let group = EventStatGroup::parse(&group_by).ok_or_else(|| {
@@ -285,7 +328,7 @@ async fn events_stats(
             "failed to compute event stats",
         )
     })?;
-    Ok(Json(buckets).into_response())
+    Ok(Json(EventStats::Grouped(buckets)).into_response())
 }
 
 #[cfg(test)]

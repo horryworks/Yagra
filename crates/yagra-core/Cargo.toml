@@ -66,6 +66,10 @@ openidconnect = { workspace = true }
 # dep only turns on the `uuid1` feature (so `Uuid` fields derive a schema) — one schemars copy total.
 rmcp = { workspace = true }
 schemars = { workspace = true }
+# OpenAPI document for the northbound REST surface (ADR-035). `api/openapi.rs` assembles it from the
+# per-domain `#[derive(OpenApi)]` fragments; `web/src/api/schema.d.ts` is generated from the result,
+# which is what removes the hand-transcribed TS mirror.
+utoipa = { workspace = true }
 # tokio-util (CancellationToken) for the MCP service config — already in the tree; named directly.
 tokio-util = { workspace = true }
 # Syslog-over-TLS forwarding destinations (RFC 5425, ADR-034 Increment 2).

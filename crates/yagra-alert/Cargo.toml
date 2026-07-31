@@ -11,6 +11,9 @@ repository.workspace = true
 [dependencies]
 yagra-common = { path = "../yagra-common" }
 serde = { workspace = true }
+# `Alert` is returned by the northbound API, so it carries its own JSON Schema for the OpenAPI
+# document (ADR-035) rather than being re-described in `yagra-core`. Derive-only.
+utoipa = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }

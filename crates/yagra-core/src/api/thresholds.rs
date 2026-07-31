@@ -29,6 +29,11 @@ use uuid::Uuid;
 /// slow page rather than an unusable one.
 const THRESHOLDS_MAX: i64 = 500;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(list_thresholds, create_threshold, delete_threshold))]
+pub(super) struct Doc;
+
 /// The threshold routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -44,7 +49,7 @@ pub(super) fn routes() -> Router<ApiState> {
 /// `total` is the unfiltered row count, not `items.len()`, so the UI can say *how many* it is not
 /// showing. `truncated` is derived rather than left to the client comparing the two — a client that
 /// forgets the comparison shows a complete-looking list.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ThresholdPage {
     items: Vec<crate::thresholds::StoredThreshold>,
     /// Rules stored in total, ignoring the cap.
@@ -53,6 +58,16 @@ pub(crate) struct ThresholdPage {
     truncated: bool,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/thresholds", tag = "thresholds",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "A capped page of rules, with the unfiltered total", body = ThresholdPage),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin — the ruleset decides when the fleet pages someone", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_thresholds(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -74,8 +89,8 @@ async fn list_thresholds(
 }
 
 /// Create-threshold request body.
-#[derive(Deserialize)]
-struct CreateThreshold {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateThreshold {
     scope_level: String,
     scope_id: String,
     metric: String,
@@ -85,6 +100,17 @@ struct CreateThreshold {
     dwell_samples: Option<i32>,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/thresholds", tag = "thresholds",
+    request_body = CreateThreshold,
+    responses(
+        (status = 201, description = "Rule created", body = CreatedId),
+        (status = 400, description = "The metric is not an identifier, or scope_level/direction is outside its vocabulary", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_threshold(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -122,6 +148,17 @@ async fn create_threshold(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/thresholds/{id}", tag = "thresholds",
+    params(("id" = Uuid, Path, description = "Threshold rule id")),
+    responses(
+        (status = 204, description = "Rule deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_threshold(
     _guard: RequireManageConfig,
     admin: Admin,

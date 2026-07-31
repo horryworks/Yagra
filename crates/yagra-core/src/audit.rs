@@ -12,7 +12,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// One audit row (API shape; `at` is RFC 3339 text at the edge).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AuditRow {
     pub id: Uuid,
     pub at: String,

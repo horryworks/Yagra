@@ -178,7 +178,7 @@ pub fn is_meraki_api_host(host: &str) -> bool {
 
 /// A node's Meraki-device binding (1:1 with the node). No secrets: the org API key is held by the
 /// `meraki_orgs` row's credential and inlined by core at dispatch time (ADR-018/020).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MerakiDeviceConfig {
     /// Internal handle of the owning `meraki_orgs` row.
     pub org_uuid: Uuid,

@@ -23,13 +23,18 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use yagra_common::{NodeId, NodeState};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(get_topology))]
+pub(super) struct Doc;
+
 /// The topology routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/topology", get(get_topology))
 }
 
 /// One node in the dependency/topology graph.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct TopologyNode {
     pub id: Uuid,
     pub name: String,
@@ -42,7 +47,7 @@ pub(crate) struct TopologyNode {
 }
 
 /// One keyset page of the dependency graph.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct TopologyPage {
     pub nodes: Vec<TopologyNode>,
     /// Pass back as `cursor` for the next page; `null` ⇒ this was the last one.
@@ -121,6 +126,16 @@ pub(crate) async fn topology_page(
 ///
 /// The default page is large — the graph views assemble the whole fleet, so fewer round-trips is
 /// better — but bounded, so no single response is a multi-MB blob.
+#[utoipa::path(
+    get, path = "/api/v1/topology", tag = "topology",
+    params(NodePageQuery),
+    responses(
+        (status = 200, description = "One keyset page of the dependency graph; `next_cursor` is null on the last page", body = TopologyPage),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no inventory to build the graph from", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_topology(
     _perm: RequireView,
     admin: Admin,

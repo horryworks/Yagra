@@ -40,7 +40,7 @@ pub enum DestSecret {
 }
 
 /// A destination as the API exposes it — no secrets, ever.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct ForwardDestination {
     /// Stable id.
     pub id: Uuid,

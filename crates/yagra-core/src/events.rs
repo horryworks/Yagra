@@ -88,7 +88,7 @@ fn now_unix_ms() -> i64 {
 // ─── Storage ────────────────────────────────────────────────────────────────────────
 
 /// A webhook ingest source, as served by the API (never includes the token hash).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EventSourceView {
     pub id: Uuid,
     pub name: String,
@@ -99,7 +99,7 @@ pub struct EventSourceView {
 }
 
 /// A stored event rule (API shape; the engine compiles enabled ones).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredEventRule {
     pub id: Uuid,
     pub name: String,
@@ -135,7 +135,7 @@ pub struct RuleParams<'a> {
 }
 
 /// One received event, as served by `GET /api/v1/events`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EventRow {
     pub id: Uuid,
     pub kind: String,
@@ -240,7 +240,7 @@ impl EventStatGroup {
 /// optional display `label` resolved server-side (e.g. a trap's MIB name), an optional `node_id`
 /// (set for source grouping when the source maps to an inventory node, so the UI resolves its name
 /// — no raw UUID rule), and the row count.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct EventStatBucket {
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,7 +252,7 @@ pub struct EventStatBucket {
 
 /// One time bucket for the `/events/stats?group_by=time` volume series: a bucket-start timestamp
 /// (Unix ms), the total count, and — when `split=kind` — the per-kind breakdown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct EventTimeBucket {
     pub ts_unix_ms: i64,
     pub count: i64,

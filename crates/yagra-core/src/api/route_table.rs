@@ -6,9 +6,17 @@
 //! dropped `.route(...)` line would not fail to compile — the endpoint would simply 404 at runtime,
 //! most likely noticed by a user rather than by CI.
 //!
-//! So the inventory is recorded here and checked two ways:
-//!  1. every pair below is actually served by [`super::router`] (nothing was lost in a move), and
-//!  2. no pair is listed twice (a domain module was not merged in twice under a different path).
+//! So the inventory is recorded here and checked three ways:
+//!  1. every pair below is actually served by [`super::router`] (nothing was lost in a move),
+//!  2. no pair is listed twice (a domain module was not merged in twice under a different path), and
+//!  3. every pair is **described by the OpenAPI document** (ADR-035), which is what the WebUI's
+//!     types and client are generated from — an endpoint missing from the document is invisible to
+//!     TypeScript exactly as an endpoint missing from the router is invisible at runtime.
+//!
+//! Check 3 is why this ledger survived the move to generated contracts rather than being replaced
+//! by it. `utoipa-axum` would have paired the route and its `#[utoipa::path]` in one call, but it is
+//! built against axum 0.8; with plain utoipa the two declarations sit in the same file and nothing
+//! in the language ties them together. This does.
 //!
 //! **This list is not a wish list — it is a ledger.** Adding an endpoint means adding its line
 //! here in the same commit; deleting one means deleting its line, deliberately.
@@ -167,6 +175,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/notification-channels"),
     ("DELETE", "/api/v1/notification-channels/:id"),
     ("PUT", "/api/v1/notification-channels/:id"),
+    ("GET", "/api/v1/openapi.json"),
     ("GET", "/api/v1/poller-health"),
     ("GET", "/api/v1/pollers"),
     ("DELETE", "/api/v1/pollers/:id"),
@@ -279,6 +288,73 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "routes not served: {missing:#?}");
+    }
+
+    /// The paths the OpenAPI document describes, in ledger form (`{id}` → `:id`).
+    fn documented() -> std::collections::BTreeSet<(String, String)> {
+        let doc = crate::api::openapi::document();
+        let mut out = std::collections::BTreeSet::new();
+        for (path, item) in &doc.paths.paths {
+            // OpenAPI writes params as `{name}`; the ledger and axum write them as `:name`.
+            let ledger_path = path
+                .split('/')
+                .map(
+                    |seg| match seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                        Some(name) => format!(":{name}"),
+                        None => seg.to_owned(),
+                    },
+                )
+                .collect::<Vec<_>>()
+                .join("/");
+            for (method, op) in [
+                ("GET", &item.get),
+                ("PUT", &item.put),
+                ("POST", &item.post),
+                ("DELETE", &item.delete),
+                ("PATCH", &item.patch),
+                ("HEAD", &item.head),
+            ] {
+                if op.is_some() {
+                    out.insert((method.to_owned(), ledger_path.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_listed_route_is_described_by_the_openapi_document() {
+        // The WebUI's types and client are generated from this document, so an endpoint absent from
+        // it cannot be called from TypeScript at all — the generated `paths` type simply has no key
+        // for it. That is a compile error rather than a 404, but it is the same class of loss, and
+        // like a dropped `.route()` it produces no Rust compile error on its own.
+        let documented = documented();
+        let missing: Vec<_> = ROUTES
+            .iter()
+            .filter(|(m, p)| !documented.contains(&((*m).to_owned(), (*p).to_owned())))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "routes served but absent from the OpenAPI document \
+             (add `#[utoipa::path]` and list the handler in the domain's `Doc`): {missing:#?}"
+        );
+    }
+
+    #[test]
+    fn the_openapi_document_describes_nothing_the_router_does_not_serve() {
+        // The other direction, and the one the ledger test alone cannot catch: a stale
+        // `#[utoipa::path]` left behind after its route moved or was deleted generates a TypeScript
+        // method for an endpoint that answers 404. A client written against it fails at runtime,
+        // which is exactly the failure mode this whole mechanism exists to remove.
+        let served: std::collections::BTreeSet<_> = ROUTES
+            .iter()
+            .map(|(m, p)| ((*m).to_owned(), (*p).to_owned()))
+            .collect();
+        let extra: Vec<_> = documented()
+            .into_iter()
+            .filter(|r| !served.contains(r))
+            .collect();
+        assert!(extra.is_empty(), "documented but not served: {extra:#?}");
     }
 
     #[test]

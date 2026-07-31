@@ -19,6 +19,11 @@ use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(version, get_config, update_config, system_health))]
+pub(super) struct Doc;
+
 /// The self-description routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -28,7 +33,7 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Build version for Settings ▸ About.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct VersionInfo {
     core: &'static str,
 }
@@ -36,6 +41,13 @@ pub(crate) struct VersionInfo {
 /// The running `yagra-core` crate version, which inherits the workspace version (the canonical
 /// source of truth). The WebUI shows its own build version alongside this, so a core/web skew
 /// during a rolling upgrade is visible at a glance.
+#[utoipa::path(
+    get, path = "/api/v1/version", tag = "health",
+    security(()),
+    responses(
+        (status = 200, description = "The running core's build version. Unauthenticated by design", body = VersionInfo),
+    ),
+)]
 async fn version() -> Json<VersionInfo> {
     Json(VersionInfo {
         core: env!("CARGO_PKG_VERSION"),
@@ -43,7 +55,7 @@ async fn version() -> Json<VersionInfo> {
 }
 
 /// Client bootstrap config — no secrets.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ClientConfig {
     /// Whether read endpoints are open to anonymous callers.
     public_dashboard: bool,
@@ -57,6 +69,13 @@ pub(crate) struct ClientConfig {
 
 /// Tells the WebUI whether reads are open and whether login is available, so it can decide up front
 /// whether to gate behind a login screen. Intentionally unauthenticated — see the module doc.
+#[utoipa::path(
+    get, path = "/api/v1/config", tag = "health",
+    security(()),
+    responses(
+        (status = 200, description = "Client bootstrap config — no secrets. Unauthenticated by design", body = ClientConfig),
+    ),
+)]
 async fn get_config(State(st): State<ApiState>) -> Json<ClientConfig> {
     let default_poll_interval_secs = match st.admin.as_ref() {
         Some(admin) => admin
@@ -85,13 +104,24 @@ async fn get_config(State(st): State<ApiState>) -> Json<ClientConfig> {
     })
 }
 
-#[derive(Deserialize)]
-struct ConfigBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ConfigBody {
     default_poll_interval_secs: u32,
 }
 
 /// Update the global default polling interval. The scheduler re-reads it each round, so a change
 /// applies on the next poll round without a restart.
+#[utoipa::path(
+    put, path = "/api/v1/config", tag = "health",
+    request_body = ConfigBody,
+    responses(
+        (status = 204, description = "New default applied from the next poll round"),
+        (status = 400, description = "The interval is outside the configured bounds", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has nowhere to persist the default", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_config(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -121,14 +151,14 @@ async fn update_config(
 
 /// Reachability of one backing dependency. Carries only a boolean and a human label — no connection
 /// strings, no secrets.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct DependencyHealth {
     reachable: bool,
     detail: String,
 }
 
 /// Yagra's own health: the reachability of its backing services.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct SystemHealth {
     /// `"ok"` when every dependency is reachable, else `"degraded"`.
     overall: String,
@@ -170,6 +200,14 @@ fn bus_sweep_is_fresh(
 /// Takes `State` rather than the `Admin` extractor on purpose: in skeleton mode this answers a
 /// `"degraded"` body naming what is missing, not a 503. This is the page you open when something is
 /// already broken.
+#[utoipa::path(
+    get, path = "/api/v1/system-health", tag = "health",
+    responses(
+        (status = 200, description = "Per-dependency reachability; skeleton mode answers a `degraded` body rather than 503", body = SystemHealth),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn system_health(
     _guard: RequireView,
     State(st): State<ApiState>,

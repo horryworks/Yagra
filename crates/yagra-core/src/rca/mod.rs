@@ -120,7 +120,7 @@ impl ProviderKind {
 /// Served from the backend rather than hardcoded in the WebUI so the egress warning cannot drift
 /// from what the code actually does: [`ProviderKind::leaves_operator_boundary`] is the single
 /// definition, and the checkbox that warns about it reads the same value the adapter obeys.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct ProviderChoice {
     pub key: &'static str,
     pub suggested_model: &'static str,

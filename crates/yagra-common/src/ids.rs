@@ -14,7 +14,19 @@ use uuid::Uuid;
 /// Stable identifier for a monitored node.
 ///
 /// A UUID, not a name or address — both of which can change over a node's life.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct NodeId(pub Uuid);
 
@@ -53,7 +65,19 @@ impl From<Uuid> for NodeId {
 /// Stable identifier for a device profile / device-class (e.g. "Cisco router").
 ///
 /// Profiles carry the polling templates and default thresholds a node inherits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct ProfileId(pub Uuid);
 
@@ -91,7 +115,19 @@ impl From<Uuid> for ProfileId {
 
 /// Stable identifier for a single check on a node (e.g. "icmp liveness", a specific
 /// threshold). Part of the alert dedup key `(node, check, severity)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct CheckId(pub Uuid);
 
@@ -128,7 +164,19 @@ impl From<Uuid> for CheckId {
 }
 
 /// Stable identifier for a stored monitoring credential (SNMP community / v3 / token).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct CredentialId(pub Uuid);
 
@@ -165,7 +213,19 @@ impl From<Uuid> for CredentialId {
 }
 
 /// Stable identifier for a node group (a folder in the hierarchical inventory tree).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct GroupId(pub Uuid);
 
@@ -206,7 +266,19 @@ impl From<Uuid> for GroupId {
 /// Identifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,
 /// so the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface
 /// metadata on each discovery (ADR-011); a remap is recorded when it changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct IfIndex(pub u32);
 

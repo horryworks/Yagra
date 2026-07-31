@@ -24,6 +24,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 use yagra_common::{NodeId, NodeState};
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    fleet_summary,
+    fleet_group_summary,
+    fleet_coverage,
+    fleet_state_history
+))]
+pub(super) struct Doc;
+
 /// The fleet routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -40,7 +50,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// The `states` keys are **always all six** and always sum to `total`, so a client can index them
 /// blind. Shared with the MCP `get_fleet_summary` tool, which used to build its own version that
 /// omitted zeroes.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct FleetSummary {
     pub total: i64,
     pub states: BTreeMap<&'static str, i64>,
@@ -73,6 +83,14 @@ pub(crate) async fn state_tally(st: &ApiState) -> FleetSummary {
 ///
 /// View-gated and works without the admin store, so a public dashboard can render its
 /// status-summary / health-ring / nodes-down widgets.
+#[utoipa::path(
+    get, path = "/api/v1/fleet/summary", tag = "fleet",
+    responses(
+        (status = 200, description = "Total node count plus a tally carrying all six states", body = FleetSummary),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn fleet_summary(_perm: RequireView, State(st): State<ApiState>) -> Json<FleetSummary> {
     Json(state_tally(&st).await)
 }
@@ -81,7 +99,7 @@ async fn fleet_summary(_perm: RequireView, State(st): State<ApiState>) -> Json<F
 
 /// Per-group direct-member state tally. All six keys are always present (a missing state is `0`)
 /// and they sum to the group's direct-member count.
-#[derive(Serialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Default, Debug, PartialEq, utoipa::ToSchema)]
 pub(crate) struct GroupStateCounts {
     pub ok: i64,
     pub warning: i64,
@@ -92,7 +110,7 @@ pub(crate) struct GroupStateCounts {
 }
 
 /// The per-group rollup response: `group_id → direct-member state counts`.
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct FleetGroupSummary {
     pub groups: HashMap<Uuid, GroupStateCounts>,
 }
@@ -131,6 +149,14 @@ pub(crate) fn aggregate_group_counts(
 /// View-gated and works without the admin store — the node→group map comes from the shared
 /// `NodeListing`. The client joins these counts to the bounded group tree for names and geo, and
 /// sums descendants for the region rollup.
+#[utoipa::path(
+    get, path = "/api/v1/fleet/group-summary", tag = "fleet",
+    responses(
+        (status = 200, description = "Per-group direct-member state tallies, keyed by group id", body = FleetGroupSummary),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn fleet_group_summary(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -157,14 +183,14 @@ const COVERAGE_FRESH_SECS: u64 = 600;
 const STALE_WATCHLIST_MAX: usize = 50;
 
 /// A node returning no fresh data (silent failure / blind spot).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct StaleNode {
     pub node_id: Uuid,
     pub name: String,
 }
 
 /// Fleet data-coverage summary: fresh vs total nodes + the stale watchlist.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct FleetCoverage {
     pub total: usize,
     pub fresh: usize,
@@ -210,6 +236,15 @@ fn coverage_of(nodes: Vec<yagra_common::Node>, fresh_ids: &HashSet<Uuid>) -> Fle
 
 /// Which nodes have (not) reported ICMP within the freshness window — low coverage means the
 /// monitoring itself is missing data. Admin-only data source (full inventory).
+#[utoipa::path(
+    get, path = "/api/v1/fleet/coverage", tag = "fleet",
+    responses(
+        (status = 200, description = "Fresh vs total node counts plus the capped stale watchlist", body = FleetCoverage),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no inventory to measure coverage against", body = super::error::ErrorBody),
+    ),
+)]
 async fn fleet_coverage(
     _perm: RequireView,
     admin: Admin,
@@ -234,8 +269,9 @@ async fn fleet_coverage(
 // ── State timeline ───────────────────────────────────────────────────────────
 
 /// Query for the fleet state-history timeline: `?from=&to=` Unix seconds (default last 24h).
-#[derive(Deserialize)]
-struct StateHistoryQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct StateHistoryQuery {
     from: Option<i64>,
     to: Option<i64>,
 }
@@ -245,7 +281,7 @@ struct StateHistoryQuery {
 const MAX_HISTORY_SECS: i64 = 90 * 24 * 3600;
 
 /// Node-state counts over time, pivoted into per-state series on a shared timestamp axis.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct FleetStateHistory {
     pub timestamps: Vec<i64>,
     /// One aligned series per state. Keyed off [`NodeState::ALL`], so every state is present with
@@ -280,6 +316,17 @@ fn pivot_state_history(rows: Vec<(i64, String, i64)>) -> FleetStateHistory {
 }
 
 /// The fleet health timeline (stacked/line chart). Admin-only data source.
+#[utoipa::path(
+    get, path = "/api/v1/fleet/state-history", tag = "fleet",
+    params(StateHistoryQuery),
+    responses(
+        (status = 200, description = "One aligned series per state on a shared timestamp axis", body = FleetStateHistory),
+        (status = 400, description = "`to` precedes `from`, or the window exceeds 90 days", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode keeps no state-history snapshots", body = super::error::ErrorBody),
+    ),
+)]
 async fn fleet_state_history(
     _perm: RequireView,
     admin: Admin,

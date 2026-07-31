@@ -74,6 +74,15 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # ADR-035: the API types and client are generated from `src/api/openapi.json`, which the Rust
+      # `backend` job separately proves is current. Regenerating here and demanding no diff is what
+      # closes the second half of the chain — otherwise a committed document could describe one
+      # contract while the checked-in TypeScript still describes the previous one, which is the
+      # hand-maintained mirror this replaced, one file along.
+      - name: API types match the OpenAPI document
+        run: |
+          npm run generate:api
+          git diff --exit-code -- src/api/schema.d.ts
       - name: Test
         run: npm run test
       - name: Build

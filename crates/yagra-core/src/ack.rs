@@ -20,7 +20,7 @@ pub type AckKey = (Uuid, Uuid, String);
 
 /// The acknowledgement view attached to an alert / history row in API responses. Carries who
 /// acked it, when, from which external tool, and an optional note. Never carries a secret.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AckView {
     /// When the external tool recorded the ack (Unix ms, UTC).
     pub at_unix_ms: i64,

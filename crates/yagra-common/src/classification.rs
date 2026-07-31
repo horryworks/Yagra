@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 /// A persisted rule mapping a device signature to a profile. At least one of
 /// `sysobjectid_prefix` / `sysdescr_regex` is set (the DB enforces this with a CHECK).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClassificationRule {
     /// Stable identity.
     pub id: Uuid,

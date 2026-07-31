@@ -11,7 +11,19 @@ use std::fmt;
 
 /// How serious an alert is. Variants are declared low → high so the derived
 /// `Ord` ranks `Critical` above `Warning` above `Info`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// Informational — noteworthy but not a problem.

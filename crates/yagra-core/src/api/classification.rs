@@ -25,6 +25,16 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_classification_rules,
+    create_classification_rule,
+    update_classification_rule,
+    delete_classification_rule
+))]
+pub(super) struct Doc;
+
 /// The classification routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -39,8 +49,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Create/update body. At least one of `sysobjectid_prefix` / `sysdescr_regex` must be present.
-#[derive(Deserialize)]
-struct ClassificationRuleBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ClassificationRuleBody {
     priority: i32,
     #[serde(default)]
     sysobjectid_prefix: Option<String>,
@@ -151,6 +161,15 @@ async fn reload_classifier(admin: &AdminState) {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/classification-rules", tag = "classification",
+    responses(
+        (status = 200, description = "Every rule, in evaluation order", body = Vec<yagra_common::ClassificationRule>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_classification_rules(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -165,6 +184,17 @@ async fn list_classification_rules(
     Ok(Json(rules))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/classification-rules", tag = "classification",
+    request_body = ClassificationRuleBody,
+    responses(
+        (status = 201, description = "Rule created", body = CreatedId),
+        (status = 400, description = "The rule matches nothing, the prefix is not a dotted OID, the regex does not compile, or the profile does not exist", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_classification_rule(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -194,6 +224,19 @@ async fn create_classification_rule(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/classification-rules/{id}", tag = "classification",
+    params(("id" = Uuid, Path, description = "Rule id")),
+    request_body = ClassificationRuleBody,
+    responses(
+        (status = 204, description = "Rule updated"),
+        (status = 400, description = "The submitted rule is invalid", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_classification_rule(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -231,6 +274,17 @@ async fn update_classification_rule(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/classification-rules/{id}", tag = "classification",
+    params(("id" = Uuid, Path, description = "Rule id")),
+    responses(
+        (status = 204, description = "Rule deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_classification_rule(
     _guard: RequireManageConfig,
     admin: Admin,

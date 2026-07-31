@@ -34,6 +34,24 @@ use yagra_common::resolve_collection_set;
 /// shows the row either way — a switch that stopped answering SNMP still has ports.
 const INTERFACE_STALE_SECS: i64 = 900;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_node_collection,
+    create_node_collection,
+    delete_collection_item,
+    list_node_interfaces,
+    list_collection_templates,
+    create_collection_template,
+    delete_collection_template,
+    list_template_items,
+    create_template_item,
+    delete_template_item,
+    list_profile_templates,
+    set_profile_templates
+))]
+pub(super) struct Doc;
+
 /// The collection routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -72,8 +90,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Create body for a collection item — the same shape whether it lands on a node or a template.
-#[derive(Deserialize)]
-struct CreateCollectionItem {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateCollectionItem {
     metric_name: String,
     oid: String,
     collection: String,
@@ -111,13 +129,25 @@ fn validate_item(body: &CreateCollectionItem) -> Result<(), ApiError> {
 }
 
 /// `?resolved=true` returns the effective set rather than the node's own overrides.
-#[derive(Deserialize)]
-struct CollectionQuery {
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct CollectionQuery {
     resolved: Option<bool>,
 }
 
 /// A node's collection items: its own overrides, or — with `?resolved=true` — the effective set
 /// after the profile's defaults are overridden by them. The resolved view is what the poller sees.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/collection", tag = "collection",
+    params(("node_id" = Uuid, Path, description = "Node id"), CollectionQuery),
+    responses(
+        (status = 200, description = "The node's own stored items, or — with `?resolved=true` — the effective set the poller sees, which carries no item ids", body = serde_json::Value),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node (resolved view only)", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_node_collection(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -162,6 +192,18 @@ async fn list_node_collection(
     Ok(Json(serde_json::to_value(resolved).unwrap_or(Value::Null)))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/nodes/{node_id}/collection", tag = "collection",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = CreateCollectionItem,
+    responses(
+        (status = 201, description = "Item created", body = CreatedId),
+        (status = 400, description = "The metric name is not an identifier, the OID is not dotted-numeric, or collection/metric_kind is out of vocabulary", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_node_collection(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -191,6 +233,17 @@ async fn create_node_collection(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/collection/{item_id}", tag = "collection",
+    params(("item_id" = Uuid, Path, description = "Collection item id")),
+    responses(
+        (status = 204, description = "Item deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such collection item", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_collection_item(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -211,18 +264,27 @@ async fn delete_collection_item(
 }
 
 /// Create-template body.
-#[derive(Deserialize)]
-struct CreateTemplate {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateTemplate {
     name: String,
     description: Option<String>,
 }
 
 /// Replace-all body for a profile's attached templates.
-#[derive(Deserialize)]
-struct SetProfileTemplates {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SetProfileTemplates {
     template_ids: Vec<Uuid>,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/collection-templates", tag = "collection",
+    responses(
+        (status = 200, description = "Every collection template with its item count", body = Vec<crate::collection::TemplateSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_collection_templates(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -237,6 +299,18 @@ async fn list_collection_templates(
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/collection-templates", tag = "collection",
+    request_body = CreateTemplate,
+    responses(
+        (status = 201, description = "Template created", body = CreatedId),
+        (status = 400, description = "The template name is blank", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 409, description = "A template with that name already exists", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_collection_template(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -268,6 +342,17 @@ async fn create_collection_template(
     }
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/collection-templates/{id}", tag = "collection",
+    params(("id" = Uuid, Path, description = "Collection template id")),
+    responses(
+        (status = 204, description = "Template deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such template", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_collection_template(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -287,6 +372,16 @@ async fn delete_collection_template(
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/collection-templates/{id}/items", tag = "collection",
+    params(("id" = Uuid, Path, description = "Collection template id")),
+    responses(
+        (status = 200, description = "The template's items", body = Vec<crate::collection::TemplateItem>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_template_items(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -306,6 +401,18 @@ async fn list_template_items(
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/collection-templates/{id}/items", tag = "collection",
+    params(("id" = Uuid, Path, description = "Collection template id")),
+    request_body = CreateCollectionItem,
+    responses(
+        (status = 201, description = "Item created", body = CreatedId),
+        (status = 400, description = "The metric name is not an identifier, the OID is not dotted-numeric, or collection/metric_kind is out of vocabulary", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_template_item(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -334,6 +441,20 @@ async fn create_template_item(
     Ok((StatusCode::CREATED, Json(CreatedId { id: item_id })))
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/collection-templates/{id}/items/{item_id}", tag = "collection",
+    params(
+        ("id" = Uuid, Path, description = "Collection template id"),
+        ("item_id" = Uuid, Path, description = "Item id within that template"),
+    ),
+    responses(
+        (status = 204, description = "Item deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such item in that template", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_template_item(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -353,6 +474,16 @@ async fn delete_template_item(
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/profiles/{id}/templates", tag = "collection",
+    params(("id" = Uuid, Path, description = "Device profile id")),
+    responses(
+        (status = 200, description = "The templates attached to this profile", body = Vec<crate::collection::TemplateSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_profile_templates(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -372,6 +503,17 @@ async fn list_profile_templates(
     Ok(Json(list))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/profiles/{id}/templates", tag = "collection",
+    params(("id" = Uuid, Path, description = "Device profile id")),
+    request_body = SetProfileTemplates,
+    responses(
+        (status = 204, description = "The profile's attached templates now are exactly `template_ids`"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_profile_templates(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -394,7 +536,7 @@ async fn set_profile_templates(
 
 /// One interface row for the node-detail Interfaces tab: stored metadata joined with query-time
 /// `rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceRow {
     ifindex: u32,
     if_name: Option<String>,
@@ -414,6 +556,15 @@ pub(crate) struct InterfaceRow {
 /// `View`, not `ManageConfig` — unlike the rest of this module. An interface list is device state
 /// an operator reads, not a setting they author. Skeleton mode answers an empty list rather than
 /// 503: the interface inventory is PostgreSQL-only, so "none known" is the truthful answer.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/interfaces", tag = "collection",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "Interfaces known for this node with query-time utilization; empty in skeleton mode", body = Vec<InterfaceRow>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_node_interfaces(
     _guard: RequireView,
     State(st): State<ApiState>,

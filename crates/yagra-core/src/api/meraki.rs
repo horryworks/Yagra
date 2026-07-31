@@ -29,13 +29,30 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
 /// Timeout for a control-plane Meraki API call (discover/enumerate) from core.
 const MERAKI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_meraki_orgs,
+    create_meraki_orgs,
+    meraki_discover,
+    delete_meraki_org,
+    set_meraki_org_enabled,
+    set_meraki_org_cadence,
+    list_meraki_networks,
+    set_meraki_networks_monitored,
+    enumerate_meraki_org,
+    import_meraki_devices,
+    get_meraki_polling,
+    set_meraki_polling
+))]
+pub(super) struct Doc;
 
 /// The Meraki routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -107,14 +124,14 @@ fn meraki_upstream_error(context: &str, e: &yagra_transport::TransportError) -> 
     )
 }
 
-#[derive(Deserialize)]
-struct MerakiDiscoverReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiDiscoverReq {
     api_key: String,
     #[serde(default)]
     base_url: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiOrgOption {
     id: String,
     name: String,
@@ -122,6 +139,18 @@ pub(crate) struct MerakiOrgOption {
 
 /// List the organizations an API key can access, so the operator can multi-select which to monitor.
 /// Read-only upstream (`GET /organizations`) and persists nothing.
+#[utoipa::path(
+    post, path = "/api/v1/meraki/orgs/discover", tag = "meraki",
+    request_body = MerakiDiscoverReq,
+    responses(
+        (status = 200, description = "The organizations the key can access", body = Vec<MerakiOrgOption>),
+        (status = 400, description = "The key is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn meraki_discover(
     _guard: RequireManageConfig,
     _admin: Admin,
@@ -147,7 +176,7 @@ async fn meraki_discover(
     ))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiOrgView {
     id: Uuid,
     org_id: String,
@@ -182,6 +211,15 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg) -> MerakiOrgView {
     }
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/meraki/orgs", tag = "meraki",
+    responses(
+        (status = 200, description = "Every onboarded organization; the credential reference is not included", body = Vec<MerakiOrgView>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_meraki_orgs(
     _guard: RequireView,
     admin: Admin,
@@ -196,8 +234,8 @@ async fn list_meraki_orgs(
     Ok(Json(orgs.iter().map(meraki_org_view).collect()))
 }
 
-#[derive(Deserialize)]
-struct CreateMerakiOrgsReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateMerakiOrgsReq {
     api_key: String,
     #[serde(default)]
     base_url: Option<String>,
@@ -205,7 +243,7 @@ struct CreateMerakiOrgsReq {
 }
 
 /// How many organizations an onboarding batch created.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiCreated {
     created: u32,
 }
@@ -218,6 +256,18 @@ pub(crate) struct MerakiCreated {
 ///
 /// A per-org create failure is logged and skipped rather than failing the batch: the count says how
 /// many landed, and retrying is harmless.
+#[utoipa::path(
+    post, path = "/api/v1/meraki/orgs", tag = "meraki",
+    request_body = CreateMerakiOrgsReq,
+    responses(
+        (status = 201, description = "How many organizations the batch created; a per-org failure is skipped, not fatal", body = MerakiCreated),
+        (status = 400, description = "The key or org list is empty, or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 502, description = "The Dashboard API rejected the key or was unreachable", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_meraki_orgs(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -271,6 +321,17 @@ fn no_org(id: Uuid) -> ApiError {
 }
 
 /// Delete an organization: removes its device nodes, config, and folder tree.
+#[utoipa::path(
+    delete, path = "/api/v1/meraki/orgs/{id}", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    responses(
+        (status = 204, description = "Organization, its device nodes and its folder tree removed"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_meraki_org(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -287,12 +348,24 @@ async fn delete_meraki_org(
     }
 }
 
-#[derive(Deserialize)]
-struct MerakiEnabledReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiEnabledReq {
     enabled: bool,
 }
 
 /// Enable/disable an org — pauses collection without losing its config or history.
+#[utoipa::path(
+    put, path = "/api/v1/meraki/orgs/{id}/enabled", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    request_body = MerakiEnabledReq,
+    responses(
+        (status = 204, description = "Collection paused or resumed; config and history are kept"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_meraki_org_enabled(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -310,8 +383,8 @@ async fn set_meraki_org_enabled(
     }
 }
 
-#[derive(Deserialize)]
-struct MerakiCadenceReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiCadenceReq {
     availability_secs: i32,
     uplink_secs: i32,
     traffic_secs: i32,
@@ -370,6 +443,19 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
 }
 
 /// Update an org's per-tier cadence, enabled tiers, and rate budget.
+#[utoipa::path(
+    put, path = "/api/v1/meraki/orgs/{id}/cadence", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    request_body = MerakiCadenceReq,
+    responses(
+        (status = 204, description = "Cadence, enabled tiers and rate budget updated"),
+        (status = 400, description = "A cadence value is outside its band, target_rps is outside the cap, or a tier is unknown", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_meraki_org_cadence(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -400,7 +486,7 @@ async fn set_meraki_org_cadence(
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiNetworkView {
     network_id: String,
     name: String,
@@ -408,6 +494,16 @@ pub(crate) struct MerakiNetworkView {
 }
 
 /// The org's networks with their monitored (in-scope) flag.
+#[utoipa::path(
+    get, path = "/api/v1/meraki/orgs/{id}/networks", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    responses(
+        (status = 200, description = "The org's known networks and whether each is in scope", body = Vec<MerakiNetworkView>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_meraki_networks(
     _guard: RequireView,
     admin: Admin,
@@ -431,13 +527,24 @@ async fn list_meraki_networks(
     ))
 }
 
-#[derive(Deserialize)]
-struct MerakiMonitoredReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiMonitoredReq {
     network_ids: Vec<String>,
     monitored: bool,
 }
 
 /// Set the monitored (watch/skip) flag for a set of the org's networks.
+#[utoipa::path(
+    put, path = "/api/v1/meraki/orgs/{id}/networks", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    request_body = MerakiMonitoredReq,
+    responses(
+        (status = 204, description = "Network scope updated"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_meraki_networks_monitored(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -458,7 +565,7 @@ async fn set_meraki_networks_monitored(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiCandidate {
     serial: String,
     name: String,
@@ -469,16 +576,37 @@ pub(crate) struct MerakiCandidate {
     lan_ip: Option<String>,
 }
 
+/// What the import wizard reads in one call: the org's network scope, and the devices not yet
+/// imported.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct MerakiEnumeration {
+    networks: Vec<MerakiNetworkView>,
+    devices: Vec<MerakiCandidate>,
+}
+
 /// Enumerate an org's networks and devices from the Dashboard API, for the import wizard.
 ///
 /// Read-only upstream. It upserts the network scope (**preserving monitored flags** — re-enumerating
 /// must not silently un-watch networks an operator chose) and returns the devices not already
 /// imported.
+#[utoipa::path(
+    post, path = "/api/v1/meraki/orgs/{id}/enumerate", tag = "meraki",
+    params(("id" = Uuid, Path, description = "Organization row id")),
+    responses(
+        (status = 200, description = "The org's networks and the devices not already imported", body = MerakiEnumeration),
+        (status = 400, description = "The org's stored API key could not be resolved", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 502, description = "The Dashboard API call failed; the detail is logged, never returned", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn enumerate_meraki_org(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<MerakiEnumeration>> {
     let org = admin
         .meraki_orgs
         .get(id)
@@ -554,21 +682,22 @@ async fn enumerate_meraki_org(
             monitored,
         })
         .collect();
-    Ok(Json(
-        serde_json::json!({ "networks": networks_view, "devices": candidates }),
-    ))
+    Ok(Json(MerakiEnumeration {
+        networks: networks_view,
+        devices: candidates,
+    }))
 }
 
-#[derive(Deserialize)]
-struct MerakiImportReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiImportReq {
     org_uuid: Uuid,
     #[serde(default)]
     monitored_network_ids: Vec<String>,
     devices: Vec<MerakiImportDeviceReq>,
 }
 
-#[derive(Deserialize)]
-struct MerakiImportDeviceReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiImportDeviceReq {
     serial: String,
     #[serde(default)]
     name: String,
@@ -583,7 +712,7 @@ struct MerakiImportDeviceReq {
 }
 
 /// How many devices an import created.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiImported {
     imported: u32,
 }
@@ -592,6 +721,17 @@ pub(crate) struct MerakiImported {
 ///
 /// Already-imported serials are skipped rather than rejected, so re-running the wizard after a
 /// partial selection does the obvious thing instead of erroring on the ones already there.
+#[utoipa::path(
+    post, path = "/api/v1/meraki/import", tag = "meraki",
+    request_body = MerakiImportReq,
+    responses(
+        (status = 201, description = "How many devices became nodes; already-imported serials are skipped", body = MerakiImported),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn import_meraki_devices(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -685,17 +825,26 @@ async fn import_meraki_devices(
     ))
 }
 
-#[derive(Deserialize)]
-struct MerakiPollingReq {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct MerakiPollingReq {
     enabled: bool,
 }
 
 /// The global Meraki polling kill switch.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiPolling {
     enabled: bool,
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/meraki/polling", tag = "meraki",
+    responses(
+        (status = 200, description = "Whether Meraki collection is running at all", body = MerakiPolling),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_meraki_polling(_guard: RequireView, admin: Admin) -> ApiResult<Json<MerakiPolling>> {
     let enabled = admin.repo.get_meraki_polling_enabled().await;
     Ok(Json(MerakiPolling { enabled }))
@@ -703,6 +852,16 @@ async fn get_meraki_polling(_guard: RequireView, admin: Admin) -> ApiResult<Json
 
 /// Set the global kill switch — the one control that instantly halts all Meraki collection without
 /// losing any configuration, for when the Dashboard API budget needs to be given back at once.
+#[utoipa::path(
+    put, path = "/api/v1/meraki/polling", tag = "meraki",
+    request_body = MerakiPollingReq,
+    responses(
+        (status = 204, description = "Collection halted or resumed globally; no configuration is lost"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
 async fn set_meraki_polling(
     _guard: RequireManageConfig,
     admin: Admin,

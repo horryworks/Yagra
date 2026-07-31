@@ -27,7 +27,7 @@ pub(crate) const MAX_JSON_DOC_BYTES: usize = 262_144;
 /// Deliberately one shape for every creator. The `json!({"id": …})` literal it replaces was written
 /// out per handler, which is how `{"id": …}` and `{"node_id": …}` both ended up in this API for the
 /// same idea; a client then needs to know which creator it called to read the id back.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct CreatedId {
     pub id: Uuid,
 }
@@ -37,7 +37,8 @@ pub(crate) struct CreatedId {
 /// Several of these used to borrow the alert-history query struct, which also carries a `before`
 /// cursor they never read. Sharing a shape you only half-use makes it look, at the call site, like
 /// the endpoint supports paging when it does not.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub(crate) struct ListQuery {
     pub limit: Option<i64>,
 }
@@ -67,7 +68,7 @@ pub(crate) async fn audit_record(
 /// Shared rather than per-domain because it already was: the maintenance module reached across for
 /// `super::EnabledBody` while it was declared inside the notifications block, which is the same
 /// cross-domain reach that keeps turning up as a migration tripwire.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(crate) struct EnabledBody {
     pub enabled: bool,
 }

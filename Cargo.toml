@@ -176,6 +176,18 @@ rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-
 # single copy so MCP tool-param structs can derive `JsonSchema` for their `Uuid` fields (node ids).
 # Features unify across the one schemars version — no second copy. Code uses `rmcp::schemars`.
 schemars = { version = "1", features = ["uuid1", "chrono04"] }
+# OpenAPI generation for the northbound REST surface (ADR-035). The generated document is the
+# **source of truth** for the WebUI's types and client — `web/src/api/schema.d.ts` is generated from
+# it, so a Rust DTO change propagates instead of being transcribed by hand.
+#
+# Derive-only, deliberately: the companion `utoipa-axum` crate (which pairs `.route()` with the
+# `#[utoipa::path]` attribute in one call) is built against **axum 0.8** and pulls a second axum into
+# the tree. Upgrading the web framework is a separate decision, so routes stay registered with plain
+# axum 0.7 and `api/route_table.rs` is what pins the router and the document to each other.
+#
+# `axum_extras` teaches the `#[utoipa::path]` macro to read `Path`/`Query` extractors; `chrono` and
+# `uuid` map those types to their JSON Schema `format`s instead of an opaque string.
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 
 [profile.release]
 lto = "thin"

@@ -27,12 +27,16 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
 /// Longest model reply echoed back by the provider test. It is rendered in a toast, and a model
 /// that ignores "reply with ok" must not be able to paste an essay into the settings page.
 const TEST_REPLY_MAX_CHARS: usize = 200;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(get_llm_config, put_llm_config, test_llm_provider, create_rca, get_rca))]
+pub(super) struct Doc;
 
 /// The RCA routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -47,8 +51,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// The `POST /api/v1/rca` body.
-#[derive(Deserialize)]
-struct RcaBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct RcaBody {
     /// The alerting node. May be a symptom of an upstream failure — the context builder follows
     /// `root_cause` to the incident before assembling anything.
     node: Uuid,
@@ -68,7 +72,7 @@ struct RcaBody {
 /// The provider-test outcome. `ok: false` is a *successful* request reporting a failed probe — the
 /// provider configuration is the caller's, and the typed error is what tells them which part of it
 /// is wrong, so this is not a 5xx.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct LlmTestResult {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +117,19 @@ fn rca_error(e: &crate::rca::orchestrator::RcaError) -> ApiError {
 }
 
 /// Generate (or serve from cache) an explanation of one incident.
+#[utoipa::path(
+    post, path = "/api/v1/rca", tag = "rca",
+    request_body = RcaBody,
+    responses(
+        (status = 200, description = "The explanation and the evidence it was grounded in", body = crate::rca::store::RcaReport),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
+        (status = 404, description = "No incident matches that node and check", body = super::error::ErrorBody),
+        (status = 429, description = "Rate or concurrency cap reached; carries `Retry-After`", body = super::error::ErrorBody),
+        (status = 502, description = "The provider failed or the model refused", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode, or no LLM provider configured / configured wrongly", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_rca(
     _guard: RequireAckAlerts,
     State(st): State<ApiState>,
@@ -134,6 +151,17 @@ async fn create_rca(
 
 /// Read a stored report. The explanation is display-only text, so showing it to everyone who can
 /// see the alert costs nothing and keeps the incident channel on one shared account.
+#[utoipa::path(
+    get, path = "/api/v1/rca/{id}", tag = "rca",
+    params(("id" = Uuid, Path, description = "Report id")),
+    responses(
+        (status = 200, description = "The stored report", body = crate::rca::store::RcaReport),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such report", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no report store", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_rca(
     _guard: RequireView,
     State(st): State<ApiState>,
@@ -150,8 +178,29 @@ async fn get_rca(
     }
 }
 
+/// The `GET /api/v1/llm/config` body.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct LlmConfigResponse {
+    /// `null` until a provider has been configured — the normal state of a fresh installation.
+    config: Option<crate::rca::store::LlmConfigView>,
+    /// Every provider the operator may choose, with its placeholders and its egress warning.
+    providers: Vec<crate::rca::ProviderChoice>,
+}
+
 /// The active provider's configuration — never the credential.
-async fn get_llm_config(_guard: RequireManageConfig, admin: Admin) -> ApiResult<Json<Value>> {
+#[utoipa::path(
+    get, path = "/api/v1/llm/config", tag = "rca",
+    responses(
+        (status = 200, description = "The stored configuration (or null) and the provider choices", body = LlmConfigResponse),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no configuration store", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_llm_config(
+    _guard: RequireManageConfig,
+    admin: Admin,
+) -> ApiResult<Json<LlmConfigResponse>> {
     let view = admin.llm.view().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -163,13 +212,24 @@ async fn get_llm_config(_guard: RequireManageConfig, admin: Admin) -> ApiResult<
     // to render its empty self, not an error. `providers` ships the choices with their placeholders
     // and their egress warning, so the UI reads the data-boundary classification off the same code
     // the adapters obey instead of restating it.
-    Ok(Json(serde_json::json!({
-        "config": view,
-        "providers": crate::rca::provider_choices(),
-    })))
+    Ok(Json(LlmConfigResponse {
+        config: view,
+        providers: crate::rca::provider_choices(),
+    }))
 }
 
 /// Create or replace the provider configuration.
+#[utoipa::path(
+    put, path = "/api/v1/llm/config", tag = "rca",
+    request_body = crate::rca::store::LlmConfigInput,
+    responses(
+        (status = 204, description = "Configuration saved; an omitted `api_key` keeps the stored one"),
+        (status = 400, description = "A field of the configuration is invalid", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no configuration store", body = super::error::ErrorBody),
+    ),
+)]
 async fn put_llm_config(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -189,6 +249,15 @@ async fn put_llm_config(
 ///
 /// Deliberately ignores `enabled`: validating a provider *before* switching it on is the whole point
 /// of the button (the same reasoning as the forwarding-destination test).
+#[utoipa::path(
+    post, path = "/api/v1/llm/test", tag = "rca",
+    responses(
+        (status = 200, description = "The probe ran; `ok` says whether the provider answered", body = LlmTestResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no provider to test", body = super::error::ErrorBody),
+    ),
+)]
 async fn test_llm_provider(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,

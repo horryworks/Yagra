@@ -121,7 +121,7 @@ pub struct FlowSeriesQuery {
 }
 
 /// A top-talker: one host address with summed traffic.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowTalker {
     /// Host address (v4 or v6, normalized from ClickHouse's v4-mapped form).
     pub addr: String,
@@ -136,7 +136,7 @@ pub struct FlowTalker {
 /// A conversation: a src→dst pair with summed traffic. `src_asn`/`dst_asn` are the stored
 /// per-flow AS numbers (0 = unknown); the `*_as_name` fields are resolved from the IP→ASN table
 /// at the API layer (the store leaves them `None`), mirroring [`FlowAsAgg`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowConversation {
     /// Source address.
     pub src: String,
@@ -159,7 +159,7 @@ pub struct FlowConversation {
 }
 
 /// A destination-port aggregate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowPortAgg {
     /// Destination port.
     pub port: u16,
@@ -172,7 +172,7 @@ pub struct FlowPortAgg {
 }
 
 /// A protocol aggregate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowProtoAgg {
     /// IP protocol number.
     pub proto: u8,
@@ -186,7 +186,7 @@ pub struct FlowProtoAgg {
 
 /// An autonomous-system aggregate. `asn = 0` means unknown (the UI labels it accordingly). `name`
 /// is resolved from the IP→ASN table at the API layer (the store leaves it `None`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowAsAgg {
     /// Autonomous-system number (0 = unknown).
     pub asn: u32,
@@ -218,7 +218,7 @@ pub struct FlowFanout {
 }
 
 /// A trend point: bytes/packets for one protocol at one 5-minute bucket.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FlowPoint {
     /// Bucket start, Unix ms.
     pub ts_unix_ms: i64,

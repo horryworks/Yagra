@@ -12,7 +12,7 @@ use crate::state::NodeState;
 use serde::{Deserialize, Serialize};
 
 /// Which way a metric breaches its bound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     /// Breaches when the value rises to/above the bound (e.g. CPU %, temperature).
@@ -36,7 +36,19 @@ impl Direction {
 
 /// The scope a threshold is defined at, ordered least → most specific so the derived
 /// `Ord` makes `Node` win over `Group` win over `Profile`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeLevel {
     /// Defined on a device-class/profile (broadest).
@@ -48,7 +60,7 @@ pub enum ScopeLevel {
 }
 
 /// A threshold rule for a single metric.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ThresholdRule {
     /// Stable metric name this rule applies to (e.g. `cpu_util`).
     pub metric: String,

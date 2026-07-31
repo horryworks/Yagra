@@ -53,6 +53,7 @@ mod mib;
 pub(crate) mod nodes;
 mod notifications;
 mod oidc;
+pub mod openapi;
 mod pollers;
 mod profiles;
 mod rca;
@@ -317,6 +318,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(system::routes())
         .merge(collection::routes())
         .merge(classification::routes())
+        // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
+        .merge(openapi::routes())
         .merge(discovery::routes())
         .merge(notifications::routes())
         .merge(rca::routes())
@@ -402,7 +405,11 @@ fn changes_monitoring_config(path: &str) -> bool {
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
 /// standbys answer this so their containers stay healthy while a standby waits for leadership.
-async fn healthz() -> &'static str {
+#[utoipa::path(
+    get, path = "/healthz", tag = "meta", security(()),
+    responses((status = 200, description = "This process is alive", content_type = "text/plain")),
+)]
+pub(super) async fn healthz() -> &'static str {
     "ok"
 }
 
@@ -410,7 +417,14 @@ async fn healthz() -> &'static str {
 /// coordinator + ingest and can serve live status. A standby returns `503` so a load balancer /
 /// orchestrator routes traffic only to the active core. With HA off this core is always the leader,
 /// so it always returns `200`. No auth, no store access (mirrors `/healthz`).
-async fn readyz(State(st): State<ApiState>) -> StatusCode {
+#[utoipa::path(
+    get, path = "/readyz", tag = "meta", security(()),
+    responses(
+        (status = 200, description = "This core holds HA leadership and can serve live status"),
+        (status = 503, description = "This core is a standby — route traffic elsewhere"),
+    ),
+)]
+pub(super) async fn readyz(State(st): State<ApiState>) -> StatusCode {
     if st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
         StatusCode::OK
     } else {

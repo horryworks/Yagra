@@ -11,7 +11,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// Predefined roles, ordered least → most privileged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Read-only: inventory, metrics, alerts.
@@ -152,7 +164,7 @@ impl Permission {
 
 /// The set of groups a principal may see. Soft scoping (ADR-014): a node is visible if it
 /// belongs to any allowed group. `All` is unrestricted (typically admins / global operators).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum Scope {
     /// Unrestricted visibility.
     All,

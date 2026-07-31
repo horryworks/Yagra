@@ -263,7 +263,7 @@ impl JobParams {
 
 /// A job row, as served to the API / SSE. Timestamps are epoch-millis so the WebUI formats
 /// relative times without a date dependency.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AnalysisJob {
     pub id: Uuid,
     pub tool: String,
@@ -283,7 +283,7 @@ pub struct AnalysisJob {
 }
 
 /// One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AnalysisFinding {
     pub id: Uuid,
     pub score: f64,

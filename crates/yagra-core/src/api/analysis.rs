@@ -31,6 +31,18 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use uuid::Uuid;
 
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_analysis_jobs,
+    create_analysis_job,
+    get_analysis_job,
+    analysis_findings,
+    cancel_analysis_job,
+    stream_analysis
+))]
+pub(super) struct Doc;
+
 /// The analysis routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
@@ -211,6 +223,15 @@ pub(crate) async fn report(
 ///
 /// Skeleton mode has no runner, so this answers an empty list rather than a 503: the runs list is
 /// a panel on a page that otherwise works, and an error there would break the page.
+#[utoipa::path(
+    get, path = "/api/v1/analysis/jobs", tag = "analysis",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Recent runs, newest first; empty when this deployment has no runner", body = Vec<AnalysisJob>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_analysis_jobs(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -231,6 +252,16 @@ async fn list_analysis_jobs(
 }
 
 /// One analysis job by id.
+#[utoipa::path(
+    get, path = "/api/v1/analysis/jobs/{id}", tag = "analysis",
+    params(("id" = Uuid, Path, description = "Analysis job id")),
+    responses(
+        (status = 200, description = "The job row, including its state and progress", body = AnalysisJob),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such job — also the answer when this deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
 async fn get_analysis_job(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -258,6 +289,15 @@ async fn get_analysis_job(
 }
 
 /// A job's findings (the report list). Empty in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/analysis/jobs/{id}/findings", tag = "analysis",
+    params(("id" = Uuid, Path, description = "Analysis job id")),
+    responses(
+        (status = 200, description = "The run's findings; empty for a job that has not succeeded", body = Vec<crate::analysis::AnalysisFinding>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
 async fn analysis_findings(
     _perm: RequireView,
     State(st): State<ApiState>,
@@ -277,8 +317,8 @@ async fn analysis_findings(
 }
 
 /// Request body to launch an analysis (launch drawer / report config bar).
-#[derive(Deserialize)]
-struct CreateAnalysisJob {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct CreateAnalysisJob {
     tool: String,
     scope_kind: String,
     scope_id: Option<Uuid>,
@@ -292,6 +332,18 @@ struct CreateAnalysisJob {
 }
 
 /// Launch a background analysis job (operator+).
+#[utoipa::path(
+    post, path = "/api/v1/analysis/jobs", tag = "analysis",
+    request_body = CreateAnalysisJob,
+    responses(
+        (status = 200, description = "The queued job row; it progresses over `/api/v1/stream/analysis`", body = AnalysisJob),
+        (status = 400, description = "Unknown tool, unknown scope kind, or a group/node scope with no `scope_id`", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the monitoring-configuration permission", body = super::error::ErrorBody),
+        (status = 429, description = "The runner is at its concurrency or rate limit — retryable", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_analysis_job(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -318,12 +370,23 @@ async fn create_analysis_job(
 }
 
 /// What cancelling a run reports.
-#[derive(Debug, Serialize)]
-struct Cancelled {
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct Cancelled {
     cancelled: bool,
 }
 
 /// Cancel a running analysis job (operator+). The task observes the flag between phases.
+#[utoipa::path(
+    post, path = "/api/v1/analysis/jobs/{id}/cancel", tag = "analysis",
+    params(("id" = Uuid, Path, description = "Analysis job id")),
+    responses(
+        (status = 200, description = "The run was flagged for cancellation", body = Cancelled),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the monitoring-configuration permission", body = super::error::ErrorBody),
+        (status = 404, description = "No job by that id is currently running", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
 async fn cancel_analysis_job(
     _perm: RequireManageConfig,
     admin: Admin,
@@ -344,6 +407,15 @@ async fn cancel_analysis_job(
 ///
 /// Returns a bare `Response` rather than `ApiResult`: an SSE body is not a `Json<T>`, and the
 /// guards still run as extractors, which is where the safety was.
+#[utoipa::path(
+    get, path = "/api/v1/stream/analysis", tag = "analysis",
+    responses(
+        (status = 200, description = "Server-sent event stream of job state and progress; a lagged subscriber gets a named `resync` event", content_type = "text/event-stream"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
 async fn stream_analysis(_perm: RequireView, admin: Admin) -> Response {
     let stream = tokio_stream::wrappers::BroadcastStream::new(admin.analysis.subscribe())
         .filter_map(|r| async move {

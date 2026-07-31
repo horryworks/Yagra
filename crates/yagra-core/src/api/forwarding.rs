@@ -30,8 +30,19 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
+
+/// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_forward_destinations,
+    create_forward_destination,
+    update_forward_destination,
+    delete_forward_destination,
+    test_forward_destination,
+    forwarding_status
+))]
+pub(super) struct Doc;
 
 /// The forwarding routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
@@ -52,8 +63,8 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Request body for creating/updating a forwarding destination.
-#[derive(Deserialize)]
-struct ForwardDestinationBody {
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ForwardDestinationBody {
     /// Human label (unique, 1–120 chars).
     name: String,
     /// Whether the forwarder should send to it. Defaults to enabled.
@@ -344,7 +355,7 @@ fn target_is_local(target: &str) -> bool {
 /// destination's configuration is the caller's, and the transport error is what tells them which
 /// part of it is wrong. The error text is the transport's, never a payload — syslog bodies carry
 /// credentials.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct TestResult {
     delivered: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -365,6 +376,15 @@ fn write_error(e: &anyhow::Error, what: &'static str, msg: &'static str) -> ApiE
     ApiError::from_internal(e.as_ref(), what, msg)
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/forwarding/destinations", tag = "forwarding",
+    responses(
+        (status = 200, description = "Every destination, without its stored secret", body = Vec<crate::forward_store::ForwardDestination>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
+    ),
+)]
 async fn list_forward_destinations(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -379,6 +399,18 @@ async fn list_forward_destinations(
     Ok(Json(rows))
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/forwarding/destinations", tag = "forwarding",
+    request_body = ForwardDestinationBody,
+    responses(
+        (status = 201, description = "Destination created", body = CreatedId),
+        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, rate limit, or the destination cap)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 409, description = "A destination with that name already exists", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
+    ),
+)]
 async fn create_forward_destination(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -414,6 +446,20 @@ async fn create_forward_destination(
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/forwarding/destinations/{id}", tag = "forwarding",
+    params(("id" = Uuid, Path, description = "Destination id")),
+    request_body = ForwardDestinationBody,
+    responses(
+        (status = 204, description = "Destination updated; an omitted secret keeps the stored one"),
+        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, or rate limit)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such destination", body = super::error::ErrorBody),
+        (status = 409, description = "A destination with that name already exists", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
+    ),
+)]
 async fn update_forward_destination(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
@@ -439,6 +485,16 @@ async fn update_forward_destination(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    delete, path = "/api/v1/forwarding/destinations/{id}", tag = "forwarding",
+    params(("id" = Uuid, Path, description = "Destination id")),
+    responses(
+        (status = 204, description = "Destination deleted, or was already gone"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
+    ),
+)]
 async fn delete_forward_destination(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -462,6 +518,17 @@ async fn delete_forward_destination(
 /// Deliberately independent of the running senders, so a still-disabled destination can be
 /// validated before it is switched on — and so the caller gets the transport error itself rather
 /// than "check the logs".
+#[utoipa::path(
+    post, path = "/api/v1/forwarding/destinations/{id}/test", tag = "forwarding",
+    params(("id" = Uuid, Path, description = "Destination id")),
+    responses(
+        (status = 200, description = "The probe ran; `delivered` says whether it arrived", body = TestResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such destination", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
+    ),
+)]
 async fn test_forward_destination(
     _guard: RequireManageConfig,
     admin: Admin,
@@ -493,13 +560,36 @@ async fn test_forward_destination(
     }))
 }
 
+/// The `GET /api/v1/forwarding/status` body.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct ForwardingStatus {
+    /// Runtime counters, one entry per running destination.
+    destinations: Vec<crate::forward::DestStatus>,
+    /// Online pollers that cannot attach the original bytes, so their traffic degrades to rendered.
+    pollers_without_raw_capture: Vec<String>,
+    /// Online pollers that relay no flow datagrams at all, so a flow destination fed only by these
+    /// receives nothing.
+    pollers_without_flow_relay: Vec<String>,
+    /// False on an HA standby, whose dispatcher is not running (destination CRUD still works).
+    sending: bool,
+}
+
 /// Live forwarding status: per-destination counters plus any online poller that cannot supply the
 /// original bytes, so a byte-exact destination silently degrading is visible in the UI.
+#[utoipa::path(
+    get, path = "/api/v1/forwarding/status", tag = "forwarding",
+    responses(
+        (status = 200, description = "Per-destination counters and the pollers that cannot feed them", body = ForwardingStatus),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no forwarder", body = super::error::ErrorBody),
+    ),
+)]
 async fn forwarding_status(
     _guard: RequireManageConfig,
     State(st): State<ApiState>,
     admin: Admin,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ForwardingStatus>> {
     let destinations = admin.forward_handle.status();
     let now = std::time::Instant::now();
     let pollers_without_raw_capture = admin
@@ -511,13 +601,12 @@ async fn forwarding_status(
     let pollers_without_flow_relay = admin
         .coordinator
         .pollers_missing_cap(yagra_bus::CAP_FLOW_RELAY, now);
-    Ok(Json(serde_json::json!({
-        "destinations": destinations,
-        "pollers_without_raw_capture": pollers_without_raw_capture,
-        "pollers_without_flow_relay": pollers_without_flow_relay,
-        // False on an HA standby, whose dispatcher is not running (destination CRUD still works).
-        "sending": st.is_leader.load(std::sync::atomic::Ordering::Acquire),
-    })))
+    Ok(Json(ForwardingStatus {
+        destinations,
+        pollers_without_raw_capture,
+        pollers_without_flow_relay,
+        sending: st.is_leader.load(std::sync::atomic::Ordering::Acquire),
+    }))
 }
 
 #[cfg(test)]
