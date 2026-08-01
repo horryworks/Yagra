@@ -16,7 +16,7 @@ import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { TextInput } from '../ui/Field';
 import { MetricChart, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
-import { operState } from './OverviewTab';
+import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
 import { usePrefsStore } from '../../prefs';

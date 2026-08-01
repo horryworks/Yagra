@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
-use uuid::Uuid;
 use yagra_common::{CheckId, NodeId};
 
 use super::answer;
@@ -168,14 +167,6 @@ impl RcaOrchestrator {
     /// button at all, so an operator is not shown an action that can only 503.
     pub async fn available(&self) -> bool {
         matches!(self.repo.active().await, Ok(Some(_)))
-    }
-
-    /// The stored report with this id (no generation, no provider call).
-    ///
-    /// # Errors
-    /// [`RcaError::Internal`] when the store fails.
-    pub async fn get(&self, id: Uuid) -> Result<Option<RcaReport>, RcaError> {
-        Ok(self.repo.get(id).await?)
     }
 
     /// Explain the incident containing `req.node`/`req.check`.
@@ -434,6 +425,7 @@ mod tests {
     use crate::rca::context::{AlertFacts, Dependents, NodeFacts};
     use crate::rca::{ProviderConfig, ProviderKind};
     use std::net::IpAddr;
+    use uuid::Uuid;
 
     fn node_facts(name: &str) -> NodeFacts {
         NodeFacts {

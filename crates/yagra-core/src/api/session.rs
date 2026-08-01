@@ -123,6 +123,7 @@ async fn login(
 /// precisely when the token has gone bad.
 #[utoipa::path(
     post, path = "/api/v1/auth/logout", tag = "session",
+    security(()),
     responses(
         (status = 204, description = "Token revoked; an absent, expired or already-revoked token answers 204 too"),
     ),
@@ -141,7 +142,6 @@ async fn logout(State(st): State<ApiState>, headers: HeaderMap) -> StatusCode {
     responses(
         (status = 200, description = "The bearer holder's role and username", body = AuthMe),
         (status = 401, description = "No valid bearer token — closed even on a public dashboard", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
     ),
 )]
 async fn auth_me(caller: Caller) -> ApiResult<Json<AuthMe>> {

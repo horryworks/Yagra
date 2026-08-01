@@ -327,18 +327,6 @@ impl RcaRepo {
         row.as_ref().map(row_to_report).transpose()
     }
 
-    /// One report by id.
-    pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<RcaReport>> {
-        let row = sqlx::query(
-            "SELECT id, node_id, check_id, provider, model, summary, body, generated_at, created_by \
-             FROM rca_reports WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.as_ref().map(row_to_report).transpose()
-    }
-
     /// Insert a generated report and return it as stored.
     pub async fn insert(&self, new: &NewReport<'_>) -> anyhow::Result<RcaReport> {
         let id = Uuid::new_v4();

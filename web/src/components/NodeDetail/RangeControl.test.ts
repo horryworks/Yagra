@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   formatCompactRange,
+  localInputToIso,
   localInputToUnix,
   rangeInputsValid,
   readRangeParam,
@@ -127,5 +128,28 @@ describe('range URL params', () => {
     expect(readRangeParam(new URLSearchParams('r=0'))).toBeNull();
     expect(readRangeParam(new URLSearchParams('r=-5'))).toBeNull();
     expect(readRangeParam(new URLSearchParams('r=abc'))).toBeNull();
+  });
+});
+
+describe('localInputToIso', () => {
+  it('renders a parseable local input as RFC 3339 UTC', () => {
+    const iso = localInputToIso('2024-03-01T12:30');
+    expect(iso).toBeDefined();
+    // Same instant as the seconds conversion its sibling produces — one parse rule, two shapes.
+    expect(iso).toBe(new Date((localInputToUnix('2024-03-01T12:30') as number) * 1000).toISOString());
+    expect(iso).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it('is undefined for an empty or unparseable input, so the filter is simply omitted', () => {
+    // `undefined` (not an empty string) is what lets the caller drop the bound from the query
+    // rather than sending a malformed one.
+    expect(localInputToIso('')).toBeUndefined();
+    expect(localInputToIso('not a date')).toBeUndefined();
+  });
+
+  it('round-trips with the local-input formatter', () => {
+    const secs = Math.floor(Date.UTC(2024, 5, 15, 8, 45) / 1000);
+    const iso = localInputToIso(unixToLocalInput(secs));
+    expect(iso).toBe(new Date(secs * 1000).toISOString());
   });
 });

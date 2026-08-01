@@ -48,6 +48,33 @@ pub struct ChainChange {
     pub prev_chain_key: Option<String>,
 }
 
+/// Build the config from its stored columns, degrading rather than failing.
+///
+/// Split out of [`DnsCheckRepo::get`] so the degradation rules are reachable without a database:
+/// every one of them decides what a *live monitor* does when a column is outside what this build
+/// understands, and "silently poll with a different record type" is not something to leave untested.
+/// A row is written only through [`DnsCheckRepo::upsert`], so out-of-range values mean an older or
+/// newer binary wrote them — the reader's job is to keep monitoring, not to refuse.
+fn config_from_columns(
+    name: String,
+    record_type: &str,
+    resolver_text: Option<&str>,
+    resolver_port: i32,
+    max_depth: i16,
+    timeout_ms: i32,
+) -> DnsCheckConfig {
+    DnsCheckConfig {
+        name,
+        record_type: DnsRecordType::from_token(record_type).unwrap_or_default(),
+        // An unparseable address reads as "no resolver configured", i.e. the poller's own —
+        // which is the same thing a NULL column means.
+        resolver: resolver_text.and_then(|s| s.parse::<IpAddr>().ok()),
+        resolver_port: u16::try_from(resolver_port).unwrap_or(53),
+        max_depth: u8::try_from(max_depth).unwrap_or(8),
+        timeout_ms: u32::try_from(timeout_ms).unwrap_or(3000),
+    }
+}
+
 /// PostgreSQL-backed store for DNS monitors: config, current chain, and change history.
 pub struct DnsCheckRepo {
     pool: PgPool,
@@ -76,20 +103,14 @@ impl DnsCheckRepo {
         let Some(row) = row else {
             return Ok(None);
         };
-        let record_type: String = row.try_get("record_type")?;
-        let resolver_text: Option<String> = row.try_get("resolver_ip")?;
-        let resolver: Option<IpAddr> = resolver_text.and_then(|s| s.parse().ok());
-        let resolver_port: i32 = row.try_get("resolver_port")?;
-        let max_depth: i16 = row.try_get("max_depth")?;
-        let timeout_ms: i32 = row.try_get("timeout_ms")?;
-        Ok(Some(DnsCheckConfig {
-            name: row.try_get("name")?,
-            record_type: DnsRecordType::from_token(&record_type).unwrap_or_default(),
-            resolver,
-            resolver_port: u16::try_from(resolver_port).unwrap_or(53),
-            max_depth: u8::try_from(max_depth).unwrap_or(8),
-            timeout_ms: u32::try_from(timeout_ms).unwrap_or(3000),
-        }))
+        Ok(Some(config_from_columns(
+            row.try_get("name")?,
+            &row.try_get::<String, _>("record_type")?,
+            row.try_get::<Option<String>, _>("resolver_ip")?.as_deref(),
+            row.try_get("resolver_port")?,
+            row.try_get("max_depth")?,
+            row.try_get("timeout_ms")?,
+        )))
     }
 
     /// Create or replace a node's DNS check (idempotent upsert).
@@ -287,5 +308,120 @@ impl DnsCheckRepo {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
+    /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
+    /// changes their meaning — the peer stores (`events.rs`, `logstore.rs`, `flowstore.rs`,
+    /// `reports.rs`) all pin their statements the same way.
+    const SRC: &str = include_str!("dns_check.rs");
+
+    /// The executable code above this test module, comments stripped.
+    ///
+    /// Two things would otherwise make a "this pattern must not appear" assertion useless: a test
+    /// that reads its own file matches its own needles (testing.md's self-match trap), and a doc
+    /// comment *naming* the banned pattern — "never OFFSET" — reads as the pattern itself.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_unknown_record_type_reads_as_the_default_rather_than_failing() {
+        // Written by a newer binary, read by this one: keep monitoring with the default type.
+        let c = config_from_columns("a.test".into(), "SRV", None, 53, 8, 3000);
+        assert_eq!(c.record_type, DnsRecordType::default());
+        // A known token is honoured, so the fallback is not swallowing everything.
+        let c = config_from_columns("a.test".into(), "AAAA", None, 53, 8, 3000);
+        assert_eq!(c.record_type, DnsRecordType::Aaaa);
+    }
+
+    #[test]
+    fn an_unusable_resolver_column_means_the_pollers_own_resolver() {
+        // NULL and garbage must land on the same behaviour — "resolve however the poller does" —
+        // because the alternative is a monitor that silently queries nothing.
+        assert_eq!(
+            config_from_columns("a.test".into(), "A", None, 53, 8, 3000).resolver,
+            None
+        );
+        assert_eq!(
+            config_from_columns("a.test".into(), "A", Some("not-an-ip"), 53, 8, 3000).resolver,
+            None
+        );
+        let v6 = config_from_columns("a.test".into(), "A", Some("2001:db8::1"), 53, 8, 3000);
+        assert_eq!(v6.resolver, Some("2001:db8::1".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn out_of_range_numeric_columns_fall_back_to_the_documented_defaults() {
+        // Each `try_from` guards a column whose SQL type is wider than the config's. A negative
+        // port is not "port 0", it is a row this build cannot honour — so use the default.
+        let c = config_from_columns("a.test".into(), "A", None, -1, -1, -1);
+        assert_eq!((c.resolver_port, c.max_depth, c.timeout_ms), (53, 8, 3000));
+        let c = config_from_columns("a.test".into(), "A", None, 70_000, 300, 9_000);
+        assert_eq!((c.resolver_port, c.max_depth, c.timeout_ms), (53, 8, 9_000));
+    }
+
+    #[test]
+    fn in_range_values_survive_unchanged() {
+        let c = config_from_columns("a.test".into(), "CNAME", Some("9.9.9.9"), 5353, 4, 1500);
+        assert_eq!(c.name, "a.test");
+        assert_eq!(c.record_type, DnsRecordType::Cname);
+        assert_eq!(c.resolver_port, 5353);
+        assert_eq!(c.max_depth, 4);
+        assert_eq!(c.timeout_ms, 1500);
+    }
+
+    #[test]
+    fn history_is_appended_only_when_the_chain_key_actually_moved() {
+        // The whole point of the CTE: an unchanged poll writes no history row. Losing this guard
+        // turns a once-per-change table into one row per poll per node — which at fleet scale is
+        // the difference between a readable timeline and an unusable one.
+        assert!(SRC.contains("WHERE up.prev_chain_key IS DISTINCT FROM up.chain_key"));
+        // And the append reads the keys the upsert just returned, not the caller's guess.
+        assert!(SRC.contains("RETURNING prev_chain_key, chain_key"));
+    }
+
+    #[test]
+    fn first_seen_survives_an_unchanged_observation() {
+        // "How long has this chain held" is the column's only purpose; resetting it on every poll
+        // would make every chain look brand new. Matched on the distinctive fragments rather than
+        // the whole clause, so re-wrapping the string literal does not fail the test.
+        assert!(SRC.contains("first_seen = CASE WHEN dns_chains.chain_key = EXCLUDED.chain_key"));
+        assert!(SRC.contains("THEN dns_chains.first_seen ELSE now() END"));
+    }
+
+    #[test]
+    fn change_paging_is_keyset_and_never_offset() {
+        // ADR-019. The tuple comparison is what makes the cursor stable across inserts.
+        assert!(SRC.contains("WHERE node_id = $1 AND (at, id) < ($2, $3)"));
+        assert!(SRC.contains("ORDER BY at DESC, id DESC LIMIT"));
+        assert!(
+            !production_source().contains("OFFSET"),
+            "OFFSET paging reintroduced — rows shift under the reader as history is appended"
+        );
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // The cursor and the retention window are caller-supplied and the node id is a path
+        // parameter, so none of them may ever be concatenated into a statement.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
     }
 }

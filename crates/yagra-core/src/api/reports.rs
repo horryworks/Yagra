@@ -50,7 +50,6 @@ const MAX_REPORT_SPEC_BYTES: usize = MAX_JSON_DOC_BYTES;
     list_report_sections,
     list_report_definitions,
     create_report_definition,
-    get_report_definition,
     update_report_definition,
     delete_report_definition,
     run_report_definition,
@@ -76,9 +75,7 @@ pub(super) fn routes() -> Router<ApiState> {
         )
         .route(
             "/api/v1/reports/definitions/:id",
-            get(get_report_definition)
-                .put(update_report_definition)
-                .delete(delete_report_definition),
+            axum::routing::put(update_report_definition).delete(delete_report_definition),
         )
         .route(
             "/api/v1/reports/definitions/:id/run",
@@ -194,40 +191,6 @@ fn no_definition(id: Uuid) -> ApiError {
 /// The not-found error the run reads answer with.
 fn no_run(id: Uuid) -> ApiError {
     ApiError::not_found("run_not_found", format!("no report run {id}"))
-}
-
-/// One report definition. 404 in skeleton mode rather than 503: with no store the definition really
-/// does not exist, and the viewer wants its not-found state.
-#[utoipa::path(
-    get, path = "/api/v1/reports/definitions/{id}", tag = "reports",
-    params(("id" = Uuid, Path, description = "Report definition id")),
-    responses(
-        (status = 200, description = "The definition", body = reports::ReportDefinition),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
-        (status = 404, description = "No such definition, or skeleton mode", body = super::error::ErrorBody),
-    ),
-)]
-async fn get_report_definition(
-    _guard: RequireView,
-    State(st): State<ApiState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<reports::ReportDefinition>> {
-    let admin = st.admin.as_ref().ok_or_else(|| no_definition(id))?;
-    admin
-        .reports
-        .repo()
-        .get_definition(id)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "get report definition",
-                "failed to load report definition",
-            )
-        })?
-        .map(Json)
-        .ok_or_else(|| no_definition(id))
 }
 
 /// Create/update body for a report definition.
@@ -518,7 +481,11 @@ pub(super) struct ExportQuery {
     get, path = "/api/v1/reports/runs/{id}/export", tag = "reports",
     params(("id" = Uuid, Path, description = "Report run id"), ExportQuery),
     responses(
-        (status = 200, description = "The rendered report as an attachment; `text/html` (default), `text/csv`, or `application/pdf` per `format`", content_type = "text/html"),
+        (status = 200, description = "The rendered report as an attachment, per `format`", content(
+            (String = "text/html"),
+            (String = "text/csv"),
+            (String = "application/pdf"),
+        )),
         (status = 400, description = "`format` is not html|csv|pdf", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
@@ -977,8 +944,10 @@ mod tests {
                 "{path}"
             );
         }
+        // `GET /reports/definitions/{id}` is deliberately absent from this list: it was removed
+        // (nothing called it — the builder edits from the list it already has), so asserting a 404
+        // on it would be asserting axum's unrouted 404, not a handler's typed one.
         for path in [
-            format!("/api/v1/reports/definitions/{ID}"),
             format!("/api/v1/reports/runs/{ID}"),
             format!("/api/v1/reports/runs/{ID}/export"),
         ] {

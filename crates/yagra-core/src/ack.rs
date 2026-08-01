@@ -111,3 +111,71 @@ impl AckRepo {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    const SRC: &str = include_str!("ack.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_ack_identity_is_the_alerts_dedup_key_on_every_statement() {
+        // An ack belongs to (node, check, severity) — the same triple the alert engine dedups on.
+        // If any statement keyed on fewer columns, acknowledging a warning would silently also
+        // acknowledge the critical that follows it, which is the page an operator must still get.
+        let src = production_source();
+        assert!(src.contains("ON CONFLICT (node, check_id, severity) DO UPDATE SET"));
+        assert!(src.contains(
+            "DELETE FROM alert_acks WHERE node = $1 AND check_id = $2 AND severity = $3"
+        ));
+    }
+
+    #[test]
+    fn re_acking_refreshes_the_record_rather_than_failing_or_duplicating() {
+        // The external tool re-sends an ack whenever its incident changes, so the write has to be
+        // idempotent: same key ⇒ update who/when/source/note in place.
+        let src = production_source();
+        for column in [
+            "acked_at_unix_ms = EXCLUDED.acked_at_unix_ms",
+            "acked_by = EXCLUDED.acked_by",
+            "source = EXCLUDED.source",
+            "note = EXCLUDED.note",
+        ] {
+            assert!(src.contains(column), "re-ack does not refresh {column}");
+        }
+    }
+
+    #[test]
+    fn the_in_memory_key_matches_the_columns_the_row_is_read_from() {
+        // `all()` builds its map key positionally from three reads; a column renamed on one side
+        // only would produce a key the alert lookup can never hit, so acks would silently vanish
+        // from the UI while still being stored.
+        let src = production_source();
+        assert!(src.contains(r#"row.try_get("node")"#));
+        assert!(src.contains(r#"row.try_get("check_id")"#));
+        assert!(src.contains(r#"row.try_get("severity")"#));
+        assert!(src.contains("out.insert((node, check, severity), view)"));
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // `source` and `note` are free text from an external incident tool.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
+}

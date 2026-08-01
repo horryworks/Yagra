@@ -92,3 +92,76 @@ impl AuditRepo {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("audit.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_page_limit_is_clamped_in_both_directions() {
+        // `?limit=` is operator-supplied on an admin-only screen, but an unbounded or zero/negative
+        // value must still never reach the query.
+        let clamp = |n: i64| n.clamp(1, MAX_LIMIT);
+        assert_eq!(clamp(0), 1);
+        assert_eq!(clamp(-5), 1);
+        assert_eq!(clamp(50), 50);
+        assert_eq!(clamp(i64::MAX), MAX_LIMIT);
+        const {
+            assert!(
+                DEFAULT_LIMIT <= MAX_LIMIT,
+                "the default must fit inside the cap"
+            );
+        };
+    }
+
+    #[test]
+    fn audit_paging_is_keyset_and_never_offset() {
+        // The audit log is append-only and read newest-first, so OFFSET would shift rows under a
+        // reader the moment anything is audited mid-page — in a log whose purpose is completeness.
+        let src = production_source();
+        assert!(src.contains("WHERE at < $1 ORDER BY at DESC LIMIT $2"));
+        assert!(src.contains("ORDER BY at DESC LIMIT $1"));
+        assert!(
+            !src.contains("OFFSET"),
+            "OFFSET paging reintroduced — entries shift under the reader as actions are audited"
+        );
+    }
+
+    #[test]
+    fn both_cursor_shapes_select_the_same_columns_in_the_same_order() {
+        // Two prepared statements feed one positional row reader; if their SELECT lists drifted,
+        // the "before" page would map columns differently from the first page.
+        let src = production_source();
+        assert_eq!(
+            src.matches("SELECT id, at, username, action, status FROM audit_log")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // `username` and `action` are attacker-influenceable — a failed login records the
+        // submitted username verbatim.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
+}

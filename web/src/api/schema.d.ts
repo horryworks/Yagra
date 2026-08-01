@@ -187,8 +187,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Every issued personal access token, as metadata.
+         * @description Neither the raw token nor its hash is returned — a token's value exists only in the response
+         *     that created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.
+         */
         get: operations["list_api_tokens"];
         put?: never;
+        /**
+         * Mint a personal access token for the MCP tool surface at `/mcp`.
+         * @description The raw token is in this response and nowhere else — only its hash is stored, so no later call
+         *     can produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with
+         *     `401` and wants a session token from `POST /api/v1/auth/login`.
+         */
         post: operations["create_api_token"];
         delete?: never;
         options?: never;
@@ -206,6 +217,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /**
+         * Revoke a personal access token, so it stops authenticating `/mcp` immediately.
+         * @description Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator
+         *     reaches for when a token may be compromised, so "it was already gone" is success, not `404`.
+         */
         delete: operations["revoke_api_token"];
         options?: never;
         head?: never;
@@ -719,27 +735,6 @@ export interface paths {
         get: operations["list_events"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/events/alerts/close": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Close an event-raised alert by hand.
-         * @description `AckAlerts`, not `ManageConfig`: closing an alert is an operational reaction, and the operator
-         *     carrying the pager is who does it. Leader-only — see the module doc.
-         */
-        post: operations["close_event_alert"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1502,22 +1497,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/node-groups/{id}/geo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: operations["set_node_group_geo"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/node-groups/{id}/placement": {
         parameters: {
             query?: never;
@@ -2254,26 +2233,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/rca/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read a stored report. The explanation is display-only text, so showing it to everyone who can
-         *     see the alert costs nothing and keeps the incident channel on one shared account.
-         */
-        get: operations["get_rca"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/reports/definitions": {
         parameters: {
             query?: never;
@@ -2301,11 +2260,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * One report definition. 404 in skeleton mode rather than 503: with no store the definition really
-         *     does not exist, and the viewer wants its not-found state.
-         */
-        get: operations["get_report_definition"];
+        get?: never;
         put: operations["update_report_definition"];
         post?: never;
         /**
@@ -3367,13 +3322,6 @@ export interface components {
             rca_enabled: boolean;
             sso_enabled: boolean;
         };
-        /** @description Body for the manual event-alert close. The identity mirrors the alert wire shape. */
-        CloseEventAlert: {
-            /** Format: uuid */
-            check: string;
-            /** Format: uuid */
-            node: string;
-        };
         /**
          * @description One thing to collect: a stable metric name, the OID to collect it from, how to collect
          *     it (scalar GET vs table walk), and whether it is a gauge or a raw counter.
@@ -4400,13 +4348,6 @@ export interface components {
              *     else the default pool), otherwise it moves the folder's nodes to that pool.
              */
             pool?: string | null;
-        };
-        /** @description Set or clear a group's map pin. `null` for both clears it. */
-        GroupGeo: {
-            /** Format: double */
-            latitude?: number | null;
-            /** Format: double */
-            longitude?: number | null;
         };
         /**
          * @description One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
@@ -6958,15 +6899,6 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the view permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
         };
     };
     oidc_authorize: {
@@ -9033,64 +8965,6 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side to resolve node names against */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    close_event_alert: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CloseEventAlert"];
-            };
-        };
-        responses: {
-            /** @description Alert closed */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role below Operator */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No active event alert for that check */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Event ingestion is not configured, or this core is not the HA leader */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12035,76 +11909,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role below Admin */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such group */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    set_node_group_geo: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Group id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GroupGeo"];
-            };
-        };
-        responses: {
-            /** @description Map pin set or cleared */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Only one of latitude/longitude given, or a coordinate out of range */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
             };
             /** @description No valid bearer token */
             401: {
@@ -15235,65 +15039,6 @@ export interface operations {
             };
         };
     };
-    get_rca: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Report id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The stored report */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RcaReport"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the View permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such report */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Skeleton mode: no report store */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     list_report_definitions: {
         parameters: {
             query?: never;
@@ -15392,56 +15137,6 @@ export interface operations {
             };
             /** @description Skeleton mode: no write side */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    get_report_definition: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Report definition id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The definition */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReportDefinition"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks View */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such definition, or skeleton mode */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15809,13 +15504,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The rendered report as an attachment; `text/html` (default), `text/csv`, or `application/pdf` per `format` */
+            /** @description The rendered report as an attachment, per `format` */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": unknown;
+                    "text/html": string;
+                    "text/csv": string;
+                    "application/pdf": string;
                 };
             };
             /** @description `format` is not html|csv|pdf */
@@ -17123,7 +16820,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description The metric is not an identifier, or scope_level/direction is outside its vocabulary */
+            /** @description The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound) */
             400: {
                 headers: {
                     [name: string]: unknown;

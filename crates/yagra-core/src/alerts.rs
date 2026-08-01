@@ -38,8 +38,8 @@ use yagra_alert::{
 };
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
-    is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, NodeId, NodeState,
-    ScopeLevel, ScopedThreshold, Severity,
+    is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, MetricKind, NodeId,
+    NodeState, ScopeLevel, ScopedThreshold, Severity,
 };
 use yagra_topology::Topology;
 
@@ -413,6 +413,14 @@ impl AlertManager {
             if let Some(eff) = eff {
                 let raw = if in_maintenance {
                     NodeState::Maintenance
+                } else if sample.kind == MetricKind::Counter {
+                    // A raw monotonic counter has no meaningful fixed bound: `above` latches
+                    // permanently once crossed and `below` fires across every reboot's counter
+                    // reset — rates are derived at query time instead (ADR-012). Creation now
+                    // rejects counter metrics; observing `Ok` here (rather than skipping) lets
+                    // a rule that predates that rejection drain its latched alert through the
+                    // normal recovery path.
+                    NodeState::Ok
                 } else {
                     eff.evaluate(sample.value)
                 };
@@ -1699,6 +1707,56 @@ mod tests {
         let actions = mgr.observe(&reachable_ok);
         assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn counter_sample_never_fires_and_drains_a_latched_alert() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        // A rule that predates the create-side counter rejection: octets "above 1000".
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(AlertConfig::new(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "if_hc_in_octets".into(),
+                    direction: Direction::Above,
+                    warning: None,
+                    critical: Some(1000.0),
+                    dwell_samples: 1,
+                },
+            }],
+            meta,
+        ));
+
+        // Simulate the pre-fix latched alert: the same metric observed as a gauge breaches.
+        let mut latched = result(node, CheckOutcome::Reachable, 0);
+        latched.samples = vec![Sample::gauge("if_hc_in_octets", 5_000.0)];
+        assert!(matches!(
+            mgr.observe(&latched).as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+
+        // A counter observation reads Ok at any magnitude — it resolves the latched alert
+        // through the normal recovery path instead of firing or zombie-ing.
+        let mut counter = result(node, CheckOutcome::Reachable, 1_000);
+        counter.samples = vec![Sample::counter("if_hc_in_octets", 1.0e12)];
+        assert!(matches!(
+            mgr.observe(&counter).as_slice(),
+            [NotifyAction::Resolve(_)]
+        ));
+        assert!(mgr.active_alerts().is_empty());
+
+        // And it stays quiet from then on, monotonic growth and all.
+        let mut counter2 = result(node, CheckOutcome::Reachable, 2_000);
+        counter2.samples = vec![Sample::counter("if_hc_in_octets", 2.0e12)];
+        assert!(mgr.observe(&counter2).is_empty());
     }
 
     #[test]

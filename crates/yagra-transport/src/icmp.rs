@@ -226,7 +226,7 @@ fn probe_exhausted(received: usize, elapsed: Duration, deadline: Duration) -> bo
 /// count, which equals the requested count unless [`probe_exhausted`] cut the sweep short. Pure —
 /// unit-tested.
 #[must_use]
-pub fn summarize(count: u8, rtts_ms: &[f64]) -> IcmpProbe {
+pub(crate) fn summarize(count: u8, rtts_ms: &[f64]) -> IcmpProbe {
     let sent = f64::from(count.max(1));
     let received = rtts_ms.len();
     let loss_pct = ((sent - received as f64) / sent) * 100.0;

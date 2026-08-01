@@ -22,7 +22,7 @@ mod icmp;
 mod meraki;
 mod snmp;
 mod snmp_v3;
-pub use icmp::{summarize, SurgePingTransport};
+pub use icmp::SurgePingTransport;
 pub use meraki::{
     list_devices, list_networks, list_organizations, MerakiDeviceInfo, MerakiNetworkInfo,
     MerakiOrgInfo,

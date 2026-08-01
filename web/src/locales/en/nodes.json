@@ -318,6 +318,49 @@
     "noUpstream": "— No upstream (top-level) —",
     "hint": "When this upstream is down, {{name}}'s alert is suppressed and rolled up under it."
   },
+  "checkEdit": {
+    "urlTitle": "Edit URL monitor",
+    "dnsTitle": "Edit DNS monitor",
+    "saving": "Saving…",
+    "remove": "Remove monitoring",
+    "removeConfirm": "Stop probing this target? The node stays in the inventory but is no longer checked, and its recorded history is kept.",
+    "url": "URL",
+    "method": "Method",
+    "expectedStatus": "Healthy when the status is",
+    "statusMode": {
+      "two_xx": "Any 2xx",
+      "exact": "One of these codes",
+      "range": "Within a range"
+    },
+    "statusCodes": "Status codes",
+    "statusCodesHint": "Comma-separated, e.g. 200, 204.",
+    "statusLo": "From",
+    "statusHi": "To",
+    "timeoutMs": "Timeout (ms)",
+    "verifyTls": "Verify the TLS certificate",
+    "verifyTlsWarning": "With verification off, an intercepted or expired certificate is reported as healthy.",
+    "followRedirects": "Follow redirects",
+    "dnsName": "Name to resolve",
+    "recordType": "Record type",
+    "resolver": "Resolver",
+    "resolverHint": "Leave empty to use the poller's own resolver.",
+    "resolverPlaceholder": "1.1.1.1",
+    "resolverPort": "Port",
+    "maxDepth": "Max CNAME hops",
+    "maxDepthHint": "How far a CNAME chain may be followed.",
+    "err": {
+      "urlRequired": "A URL is required.",
+      "urlScheme": "The URL must start with http:// or https://.",
+      "timeout": "The timeout must be a whole number of milliseconds, at least 1.",
+      "statusCodes": "Give one or more status codes between 100 and 599.",
+      "statusRange": "Give a range between 100 and 599, with the first value no higher than the second.",
+      "dnsNameRequired": "A name to resolve is required.",
+      "resolverPort": "The port must be between 1 and 65535.",
+      "maxDepth": "The hop limit must be a whole number, at least 1.",
+      "save": "Could not save the monitor configuration.",
+      "remove": "Could not remove the monitor configuration."
+    }
+  },
   "dns": {
     "failure": {
       "nx_domain": "No such name (NXDOMAIN)",

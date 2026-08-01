@@ -101,6 +101,14 @@ export function localInputToUnix(v: string): number | null {
   return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
 }
 
+/** 'YYYY-MM-DDTHH:MM' (local wall-clock) → RFC 3339 (UTC), or undefined when empty or
+ *  unparseable. The event log's filter bar had its own copy of this; it is the same conversion as
+ *  [] with a different output shape, so it lives beside it rather than drifting. */
+export function localInputToIso(local: string): string | undefined {
+  const secs = localInputToUnix(local);
+  return secs == null ? undefined : new Date(secs * 1000).toISOString();
+}
+
 /** Whether the From/To draft inputs form a valid absolute window (both parse, from < to). */
 export function rangeInputsValid(fromStr: string, toStr: string): boolean {
   const from = localInputToUnix(fromStr);

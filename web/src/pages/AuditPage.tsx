@@ -23,6 +23,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
+import { csvField, parseAction } from './auditRow';
 
 const PAGE_SIZE = 100;
 
@@ -33,22 +34,6 @@ const RANGE_MS: Record<string, number> = {
   '30d': 30 * 86_400_000,
   all: 0,
 };
-
-interface ParsedAction {
-  method: string;
-  path: string | null;
-  login: boolean;
-}
-
-function parseAction(action: string): ParsedAction {
-  if (action === 'auth.login') return { method: 'SIGN IN', path: null, login: true };
-  const sp = action.indexOf(' ');
-  if (sp < 0) return { method: action, path: null, login: false };
-  return { method: action.slice(0, sp), path: action.slice(sp + 1), login: false };
-}
-
-/** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
-const csvField = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
 /** Columns for the virtualized table. Stateless renderers, but the headers + synthetic "sign in"
  *  label are localized, so build them from the calling component's `t` (rebuild on language
@@ -218,7 +203,7 @@ export function AuditPage() {
             </Button>
           </TableToolbar>
 
-          {error && <p className="form-error audit-error">{error}</p>}
+          {error && <p className="form-error">{error}</p>}
 
           <DataTable
             rows={list}

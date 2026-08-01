@@ -11,7 +11,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.18"
+    "version": "0.1.19"
   },
   "paths": {
     "/api/v1/alerts": {
@@ -697,6 +697,8 @@
         "tags": [
           "api-tokens"
         ],
+        "summary": "Every issued personal access token, as metadata.",
+        "description": "Neither the raw token nor its hash is returned — a token's value exists only in the response\nthat created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.",
         "operationId": "list_api_tokens",
         "responses": {
           "200": {
@@ -748,6 +750,8 @@
         "tags": [
           "api-tokens"
         ],
+        "summary": "Mint a personal access token for the MCP tool surface at `/mcp`.",
+        "description": "The raw token is in this response and nowhere else — only its hash is stored, so no later call\ncan produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with\n`401` and wants a session token from `POST /api/v1/auth/login`.",
         "operationId": "create_api_token",
         "requestBody": {
           "content": {
@@ -828,6 +832,8 @@
         "tags": [
           "api-tokens"
         ],
+        "summary": "Revoke a personal access token, so it stops authenticating `/mcp` immediately.",
+        "description": "Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator\nreaches for when a token may be compromised, so \"it was already gone\" is success, not `404`.",
         "operationId": "revoke_api_token",
         "parameters": [
           {
@@ -1037,7 +1043,10 @@
           "204": {
             "description": "Token revoked; an absent, expired or already-revoked token answers 204 too"
           }
-        }
+        },
+        "security": [
+          {}
+        ]
       }
     },
     "/api/v1/auth/me": {
@@ -1060,16 +1069,6 @@
           },
           "401": {
             "description": "No valid bearer token — closed even on a public dashboard",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the view permission",
             "content": {
               "application/json": {
                 "schema": {
@@ -3552,71 +3551,6 @@
           },
           "503": {
             "description": "This deployment has no write side to resolve node names against",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/events/alerts/close": {
-      "post": {
-        "tags": [
-          "events"
-        ],
-        "summary": "Close an event-raised alert by hand.",
-        "description": "`AckAlerts`, not `ManageConfig`: closing an alert is an operational reaction, and the operator\ncarrying the pager is who does it. Leader-only — see the module doc.",
-        "operationId": "close_event_alert",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CloseEventAlert"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Alert closed"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role below Operator",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No active event alert for that check",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Event ingestion is not configured, or this core is not the HA leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -7589,91 +7523,6 @@
         "responses": {
           "204": {
             "description": "Group deleted"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role below Admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such group",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/node-groups/{id}/geo": {
-      "put": {
-        "tags": [
-          "groups"
-        ],
-        "operationId": "set_node_group_geo",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Group id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GroupGeo"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Map pin set or cleared"
-          },
-          "400": {
-            "description": "Only one of latitude/longitude given, or a coordinate out of range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
           },
           "401": {
             "description": "No valid bearer token",
@@ -11941,79 +11790,6 @@
         }
       }
     },
-    "/api/v1/rca/{id}": {
-      "get": {
-        "tags": [
-          "rca"
-        ],
-        "summary": "Read a stored report. The explanation is display-only text, so showing it to everyone who can\nsee the alert costs nothing and keeps the incident channel on one shared account.",
-        "operationId": "get_rca",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Report id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The stored report",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RcaReport"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the View permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such report",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Skeleton mode: no report store",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/reports/definitions": {
       "get": {
         "tags": [
@@ -12137,67 +11913,6 @@
       }
     },
     "/api/v1/reports/definitions/{id}": {
-      "get": {
-        "tags": [
-          "reports"
-        ],
-        "summary": "One report definition. 404 in skeleton mode rather than 503: with no store the definition really\ndoes not exist, and the viewer wants its not-found state.",
-        "operationId": "get_report_definition",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Report definition id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The definition",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReportDefinition"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks View",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such definition, or skeleton mode",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      },
       "put": {
         "tags": [
           "reports"
@@ -12647,9 +12362,23 @@
         ],
         "responses": {
           "200": {
-            "description": "The rendered report as an attachment; `text/html` (default), `text/csv`, or `application/pdf` per `format`",
+            "description": "The rendered report as an attachment, per `format`",
             "content": {
-              "text/html": {}
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "400": {
@@ -14156,7 +13885,7 @@
             }
           },
           "400": {
-            "description": "The metric is not an identifier, or scope_level/direction is outside its vocabulary",
+            "description": "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16077,24 +15806,6 @@
           },
           "sso_enabled": {
             "type": "boolean"
-          }
-        }
-      },
-      "CloseEventAlert": {
-        "type": "object",
-        "description": "Body for the manual event-alert close. The identity mirrors the alert wire shape.",
-        "required": [
-          "node",
-          "check"
-        ],
-        "properties": {
-          "check": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "node": {
-            "type": "string",
-            "format": "uuid"
           }
         }
       },
@@ -18585,26 +18296,6 @@
               "null"
             ],
             "description": "Poll-pool this folder assigns to its nodes (ADR-009/020). Same three-state contract as a\nnode's: **absent** leaves it unchanged, `\"\"` clears it (inherit from the nearest ancestor,\nelse the default pool), otherwise it moves the folder's nodes to that pool."
-          }
-        }
-      },
-      "GroupGeo": {
-        "type": "object",
-        "description": "Set or clear a group's map pin. `null` for both clears it.",
-        "properties": {
-          "latitude": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "longitude": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
           }
         }
       },

@@ -88,6 +88,16 @@ async fn list_thresholds(
     }))
 }
 
+/// Whether the built-in catalog declares `metric` a raw counter. Pure (no store) so the
+/// rejection below is testable without a database; custom collection items are the async
+/// half, via [`crate::collection::CollectionRepo::metric_declared_counter`].
+fn is_builtin_counter(metric: &str) -> bool {
+    match yagra_common::builtin_metric_kind(metric) {
+        Some(yagra_common::MetricKind::Counter) => true,
+        Some(yagra_common::MetricKind::Gauge) | None => false,
+    }
+}
+
 /// Create-threshold request body.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateThreshold {
@@ -105,7 +115,7 @@ pub(super) struct CreateThreshold {
     request_body = CreateThreshold,
     responses(
         (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "The metric is not an identifier, or scope_level/direction is outside its vocabulary", body = super::error::ErrorBody),
+        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -128,6 +138,28 @@ async fn create_threshold(
         return Err(ApiError::bad_request(
             "invalid_threshold",
             "scope_level must be profile|group|node and direction above|below",
+        ));
+    }
+    // A raw counter's sampled value only ever increases (until it wraps or the device reboots),
+    // so a fixed bound cannot be evaluated against it: `above` latches permanently and `below`
+    // fires on every reset. Rates come from the TSDB at query time (ADR-012). The engine also
+    // refuses to evaluate counter samples, so this is the operator-facing half of one rule.
+    let is_counter = is_builtin_counter(&body.metric)
+        || admin
+            .collection
+            .metric_declared_counter(&body.metric)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "create threshold",
+                    "failed to create threshold",
+                )
+            })?;
+    if is_counter {
+        return Err(ApiError::bad_request(
+            "counter_metric",
+            "the metric is a raw counter; its sampled value only ever increases, so a fixed threshold cannot be evaluated against it",
         ));
     }
     let id = admin
@@ -252,6 +284,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn builtin_counters_are_rejected_gauges_and_unknowns_pass() {
+        // The catalog's counters can never take a threshold — the sampled value is monotonic.
+        assert!(is_builtin_counter("if_hc_in_octets"));
+        assert!(is_builtin_counter("if_out_errors"));
+        // sysUpTime is deliberately a gauge: reboot detection via `below` must keep working.
+        assert!(!is_builtin_counter("snmp_sys_uptime_ticks"));
+        // A name outside the catalog is not rejected here — the stored-item check owns it.
+        assert!(!is_builtin_counter("icmp_rtt_ms"));
     }
 
     #[test]

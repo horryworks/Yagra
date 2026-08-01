@@ -6,6 +6,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { stateColorValue, stateColorVar, stateLabel } from '../../lib/format';
+import { HARD_DOWN_STATES } from '../../lib/nodeState';
 import { api } from '../../services/api';
 import { MetricChart } from '../../components/MetricChart/MetricChart';
 import { StatusSummary } from '../../widgets/StatusSummary';
@@ -31,7 +32,11 @@ export function HealthRingWidget() {
   const segments = [
     { label: t('widgets.healthRing.healthy'), value: c.ok, color: stateColorVar('ok') },
     { label: stateLabel('warning'), value: c.warning, color: stateColorVar('warning') },
-    { label: stateLabel('critical'), value: c.critical + c.unreachable, color: stateColorVar('critical') },
+    {
+      label: stateLabel('critical'),
+      value: HARD_DOWN_STATES.reduce((n, s) => n + c[s], 0),
+      color: stateColorVar('critical'),
+    },
     { label: stateLabel('unknown'), value: c.unknown, color: stateColorVar('unknown') },
     { label: stateLabel('maintenance'), value: c.maintenance, color: stateColorVar('maintenance') },
   ].filter((s) => s.value > 0);
@@ -49,8 +54,8 @@ export function NodesDownWidget() {
   const { t } = useTranslation('dashboard');
   const { summary, loading } = useFleetSummary();
   if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
-  // Hard-down = critical + unreachable, over the whole fleet.
-  const down = summary ? summary.states.critical + summary.states.unreachable : 0;
+  // Hard-down over the whole fleet (the one HARD_DOWN_STATES definition).
+  const down = summary ? HARD_DOWN_STATES.reduce((n, s) => n + summary.states[s], 0) : 0;
   return <KpiTile value={String(down)} caption={t('widgets.nodesDown.caption')} />;
 }
 
@@ -65,8 +70,8 @@ export function FleetHealthTimelineWidget() {
   }
   const s = data?.series ?? {};
   const at = (k: string, i: number) => s[k]?.[i] ?? 0;
-  // "Down" merges critical + unreachable (both hard-down) into one problem line.
-  const down = ts.map((_, i) => at('critical', i) + at('unreachable', i));
+  // "Down" merges the hard-down states into one problem line.
+  const down = ts.map((_, i) => HARD_DOWN_STATES.reduce((n, s) => n + at(s, i), 0));
   // Series colors go to the canvas (uPlot can't read CSS vars), so resolve the *active theme's*
   // status palette to concrete colors — keeping the timeline's Down/Warning/Unknown identical to
   // the table/donut/tree in both light and dark, instead of freezing the dark-theme hex.

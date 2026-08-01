@@ -94,6 +94,17 @@
   width: 100%;
 }
 
+/* Multi-field row: side-by-side fields sharing one line (e.g. match kind + severity). */
+.modal-field-row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.modal-field-row .modal-field {
+  flex: 1;
+  min-width: 0;
+}
+
 .modal-hint {
   font-size: var(--font-xs);
   color: var(--text-tertiary);

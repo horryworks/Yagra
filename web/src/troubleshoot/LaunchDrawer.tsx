@@ -13,13 +13,10 @@ import { Segmented } from './Segmented';
 import { ScopePicker } from './ScopePicker';
 import { allScope, type ScopeValue } from './scope';
 import { METHODS, toolById, type Tool, reportPathFor } from './data';
+// The slider→σ mapping lives (tested) in report/format.ts — the reports read the same scale back.
+import { sigmaFor } from './report/format';
 import { useTroubleshootStore } from './store';
 import type { AnalysisJobInput } from '../types/api';
-
-/** Map the 1–5 sensitivity slider to a σ threshold (looser = higher σ = fewer flags). */
-function sigmaFor(slider: number): number {
-  return 4.5 - 0.5 * slider;
-}
 
 const BASELINE_SECS = 14 * 86_400;
 

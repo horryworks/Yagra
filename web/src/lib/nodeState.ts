@@ -42,6 +42,11 @@ export const PROBLEM_STATES: ReadonlySet<NodeState> = new Set<NodeState>([
   'unreachable',
 ]);
 
+/** The "hard-down" states every down-KPI merges (nodes-down tile, fleet timeline's Down line,
+ *  the availability ratio's denominator on the backend): a hard failure or an unreachable node.
+ *  Subset of {@link PROBLEM_STATES}, which adds `warning`. */
+export const HARD_DOWN_STATES: readonly NodeState[] = ['critical', 'unreachable'];
+
 /** Narrow an untrusted string (SSE payload, URL param) to a `NodeState`. */
 export function isNodeState(s: string): s is NodeState {
   return (SEVERITY_ORDER as readonly string[]).includes(s);

@@ -25,8 +25,9 @@ import { KeyIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './UsersPage.css';
 
 const MIN_PW = 8;
-// Role filter segments. The filter key drives the query; the label is resolved with `t` in render.
-const SEGMENTS = ['all', 'admin', 'operator', 'viewer'] as const;
+// Role filter segments, derived from the one ROLES enumeration (reversed: most-privileged first,
+// matching the identity list). The filter key drives the query; the label resolves with `t`.
+const SEGMENTS: readonly ('all' | Role)[] = ['all', ...[...ROLES].reverse()];
 
 export function UsersPage() {
   const { t } = useTranslation('access');

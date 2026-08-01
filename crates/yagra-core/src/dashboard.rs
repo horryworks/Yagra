@@ -103,3 +103,73 @@ impl SharedDashboardRepo {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    const SRC: &str = include_str!("dashboard.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_unknown_username_writes_nothing_instead_of_erroring() {
+        // The `INSERT … SELECT … FROM users` is what turns "no such account" into zero rows
+        // affected. A literal VALUES would raise a foreign-key violation instead, which the API
+        // would have to render as a 500 rather than the 404 the caller deserves.
+        let src = production_source();
+        assert!(src.contains("SELECT id, $2 FROM users WHERE username = $1"));
+        assert!(src.contains("Ok(res.rows_affected() > 0)"));
+    }
+
+    #[test]
+    fn a_users_layout_is_resolved_by_name_through_a_subquery() {
+        // Same reason on the read side: an unknown username yields no row rather than an error.
+        assert!(production_source()
+            .contains("WHERE user_id = (SELECT id FROM users WHERE username = $1)"));
+    }
+
+    #[test]
+    fn every_layout_write_replaces_the_row_wholesale() {
+        // The WebUI always sends the full document, so both writers upsert. Without this a second
+        // save would fail on the primary key and the operator's edit would silently not persist.
+        let src = production_source();
+        assert_eq!(src.matches("ON CONFLICT").count(), 2);
+        assert_eq!(
+            src.matches("SET layout_json = EXCLUDED.layout_json")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn the_shared_dashboard_is_a_single_row_keyed_true() {
+        // One global layout, not one per admin: the boolean primary key is what makes "there is
+        // exactly one" a database fact rather than a convention.
+        let src = production_source();
+        assert!(src.contains("FROM shared_dashboard WHERE id = TRUE"));
+        assert!(src.contains(
+            "INSERT INTO shared_dashboard (id, layout_json, updated_by) VALUES (TRUE, $1, $2)"
+        ));
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // The layout is an opaque operator-authored JSON document.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
+}

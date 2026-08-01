@@ -58,12 +58,13 @@ pub(super) fn routes() -> Router<ApiState> {
 /// Validate a role string against `yagra_common::Role` (snake_case), returning the `400` a bad one
 /// deserves. Kept as a parse rather than a bare predicate so no unchecked string reaches the store.
 fn checked_role(role: &str) -> ApiResult<&str> {
-    if matches!(role, "viewer" | "operator" | "admin") {
+    if Role::ALL.iter().any(|r| r.key() == role) {
         Ok(role)
     } else {
+        let allowed = Role::ALL.map(Role::key).join(", ");
         Err(ApiError::bad_request(
             "invalid_role",
-            "role must be viewer, operator, or admin",
+            format!("role must be one of: {allowed}"),
         ))
     }
 }

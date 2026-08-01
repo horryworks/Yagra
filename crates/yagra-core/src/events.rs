@@ -1765,25 +1765,6 @@ impl EventEngine {
         self.update_active_gauge();
     }
 
-    /// Manually close an event alert by its check id. Removes from both active sets under
-    /// the runtime lock; resolves in the manager even if the engine lost its own entry
-    /// (core-restart drift) so the close always lands.
-    pub async fn close_alert(&self, check: CheckId) -> bool {
-        let action = {
-            let mut runtime = self.runtime.lock().expect("runtime mutex poisoned");
-            runtime.active.remove(&check);
-            self.alerts.resolve_event_alert(check)
-        };
-        match action {
-            Some(action) => {
-                self.dispatch_action(action, "manual").await;
-                self.update_active_gauge();
-                true
-            }
-            None => false,
-        }
-    }
-
     /// The persistence handle (shared with the API's CRUD handlers).
     #[must_use]
     pub fn repo(&self) -> &Arc<EventRepo> {
@@ -2690,24 +2671,6 @@ mod tests {
         assert_eq!(p.row_action, EventAction::Fired);
         assert_eq!(fires(&p).len(), 1);
         assert_eq!(engine.alerts.active_alerts().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn close_alert_resolves_both_active_sets() {
-        let engine = engine_for_plan();
-        let node = Uuid::new_v4();
-        let stored = stored_rule("disk full", "warning");
-        set_rules(&engine, vec![compile_rule(&stored).unwrap()]);
-
-        let p = engine.plan(&syslog_msg("disk full on /var"), None, node, 0);
-        let check = match &p.actions[0].0 {
-            NotifyAction::Fire(a) => a.check,
-            NotifyAction::Resolve(_) | NotifyAction::Suppress(_) => panic!("expected a fire"),
-        };
-        assert!(engine.close_alert(check).await);
-        assert!(engine.alerts.active_alerts().is_empty());
-        // A second close is a no-op (nothing active).
-        assert!(!engine.close_alert(check).await);
     }
 
     #[test]

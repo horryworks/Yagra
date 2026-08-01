@@ -10,16 +10,14 @@
 //! It is also exempt from the audit middleware, because the events table *is* the record; auditing
 //! every ingested event would duplicate the whole stream into the audit log.
 //!
-//! **Two endpoints must run on the HA leader** ([`Leader`]). The engine's persist and action
-//! channels are drained by leader-only writers and its active-alert map is fed by the leader-only
-//! pipeline, so ingesting on a standby enqueues to a channel nobody drains and closing there acts on
-//! an empty map while reporting success.
+//! **Ingest must run on the HA leader** ([`Leader`]). The engine's persist and action channels are
+//! drained by leader-only writers, so ingesting on a standby enqueues to a channel nobody drains.
 //!
 //! Rule patterns are compiled at the edge. A rule that does not compile would otherwise be stored,
 //! loaded into the engine snapshot, and silently match nothing forever.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{bearer, Admin, Events, Leader, RequireAckAlerts, RequireManageConfig};
+use super::extract::{bearer, Admin, Events, Leader, RequireManageConfig};
 use super::util::CreatedId;
 use super::{AdminState, ApiState};
 use axum::{
@@ -52,8 +50,7 @@ const EVENT_TEXT_MAX_CHARS: usize = 4096;
     create_event_rule,
     update_event_rule,
     delete_event_rule,
-    test_event_rule,
-    close_event_alert
+    test_event_rule
 ))]
 pub(super) struct Doc;
 
@@ -83,7 +80,6 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/event-rules/:id",
             axum::routing::put(update_event_rule).delete(delete_event_rule),
         )
-        .route("/api/v1/events/alerts/close", post(close_event_alert))
 }
 
 /// The ingest route on its own, so [`super::router`] can attach the body limit to just this path.
@@ -483,8 +479,14 @@ fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams
     if name.is_empty() || name.len() > 120 {
         return Err(bad("name must be 1..=120 characters".to_owned()));
     }
-    if !matches!(body.match_kind.as_str(), "substring" | "regex") {
-        return Err(bad("match_kind must be substring or regex".to_owned()));
+    // Token vocabularies come from the enums' own `from_token`/`from_stored` (one source, no
+    // re-typed lists). `Unknown` is the reader's shrug for a token this build doesn't recognise —
+    // an operator cannot author a rule with it, so garbage and the literal "unknown" both reject.
+    match crate::events::EventMatchKind::from_stored(&body.match_kind) {
+        crate::events::EventMatchKind::Unknown => {
+            return Err(bad("match_kind must be substring or regex".to_owned()));
+        }
+        crate::events::EventMatchKind::Substring | crate::events::EventMatchKind::Regex => {}
     }
     crate::events::compile_matcher(&body.match_kind, &body.pattern)
         .map_err(|e| bad(format!("pattern: {e}")))?;
@@ -492,14 +494,14 @@ fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams
         crate::events::compile_matcher(&body.match_kind, clear)
             .map_err(|e| bad(format!("clear_pattern: {e}")))?;
     }
-    if !matches!(body.severity.as_str(), "info" | "warning" | "critical") {
-        return Err(bad("severity must be info, warning, or critical".to_owned()));
+    if yagra_common::Severity::from_token(&body.severity).is_none() {
+        let allowed = yagra_common::Severity::ALL.map(|s| s.as_str()).join(", ");
+        return Err(bad(format!("severity must be one of: {allowed}")));
     }
     if let Some(kind) = body.source_kind.as_deref() {
-        if !matches!(kind, "syslog" | "trap" | "webhook") {
-            return Err(bad(
-                "source_kind must be syslog, trap, or webhook".to_owned()
-            ));
+        if yagra_bus::EventKind::from_token(kind).is_none() {
+            let allowed = yagra_bus::EventKind::ALL.map(|k| k.as_str()).join(", ");
+            return Err(bad(format!("source_kind must be one of: {allowed}")));
         }
     }
     let ttl_secs = body.ttl_secs.unwrap_or(1800);
@@ -693,48 +695,6 @@ async fn test_event_rule(
         clear_matched,
         error: None,
     })
-}
-
-/// Body for the manual event-alert close. The identity mirrors the alert wire shape.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct CloseEventAlert {
-    #[allow(dead_code)] // carried for parity with the alert identity; close keys on `check`
-    node: Uuid,
-    check: Uuid,
-}
-
-/// Close an event-raised alert by hand.
-///
-/// `AckAlerts`, not `ManageConfig`: closing an alert is an operational reaction, and the operator
-/// carrying the pager is who does it. Leader-only — see the module doc.
-#[utoipa::path(
-    post, path = "/api/v1/events/alerts/close", tag = "events",
-    request_body = CloseEventAlert,
-    responses(
-        (status = 204, description = "Alert closed"),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Operator", body = super::error::ErrorBody),
-        (status = 404, description = "No active event alert for that check", body = super::error::ErrorBody),
-        (status = 503, description = "Event ingestion is not configured, or this core is not the HA leader", body = super::error::ErrorBody),
-    ),
-)]
-async fn close_event_alert(
-    _guard: RequireAckAlerts,
-    engine: Events,
-    _leader: Leader,
-    Json(body): Json<CloseEventAlert>,
-) -> ApiResult<StatusCode> {
-    if engine
-        .close_alert(yagra_common::CheckId::from(body.check))
-        .await
-    {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found(
-            "alert_not_found",
-            format!("no active event alert for check {}", body.check),
-        ))
-    }
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { windowStatus } from './maintenanceStatus';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
@@ -36,14 +37,6 @@ const fmtTime = (iso: string) =>
     hour: '2-digit',
     minute: '2-digit',
   });
-
-/** Language-agnostic status key + badge tone; the label is resolved at the call site. */
-function windowStatus(w: MaintenanceWindow): { labelKey: string; tone: 'info' | 'neutral' } {
-  if (!w.enabled) return { labelKey: 'disabled', tone: 'neutral' };
-  if (w.active) return { labelKey: 'active', tone: 'info' };
-  if (new Date(w.ends_at).getTime() < Date.now()) return { labelKey: 'ended', tone: 'neutral' };
-  return { labelKey: 'scheduled', tone: 'neutral' };
-}
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
 function DeleteWindowModal({

@@ -11,7 +11,7 @@ import type {
   TopologyNode,
 } from '../../types/api';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
-import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
+import { HARD_DOWN_STATES, SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
 
 /** The worst (most severe) state in a set, or `ok` when empty. Used for site/region tiles. */
 export function worstState(states: NodeState[]): NodeState {
@@ -45,9 +45,9 @@ export function stateCounts(nodes: NodeSummary[]): Record<NodeState, number> {
   return counts;
 }
 
-/** Nodes considered "down" for the KPI tile: hard-down states only (critical + unreachable). */
+/** Nodes considered "down" for the KPI tile: the shared hard-down set only. */
 export function downCount(nodes: NodeSummary[]): number {
-  return nodes.reduce((n, x) => (x.state === 'critical' || x.state === 'unreachable' ? n + 1 : n), 0);
+  return nodes.reduce((n, x) => (HARD_DOWN_STATES.includes(x.state) ? n + 1 : n), 0);
 }
 
 /** Percent of nodes in `ok`, rounded; 0 when there are no nodes. */

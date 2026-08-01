@@ -86,3 +86,67 @@ impl UrlCheckRepo {
         Ok(res.rows_affected() > 0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("url_check.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_unknown_method_reads_as_the_default_rather_than_failing() {
+        // Written by a newer binary, read by this one: keep probing with the default verb instead
+        // of dropping the monitor.
+        assert_eq!(HttpMethod::from_token("PATCH"), None);
+        assert_eq!(
+            HttpMethod::from_token("PATCH").unwrap_or_default(),
+            HttpMethod::default()
+        );
+        // Known tokens still resolve, so the fallback is not swallowing everything.
+        assert_eq!(HttpMethod::from_token("HEAD"), Some(HttpMethod::Head));
+    }
+
+    #[test]
+    fn an_out_of_range_timeout_falls_back_on_both_the_read_and_the_write() {
+        // The column is i32 and the config is u32, so the conversion can fail in either
+        // direction. Both sides land on the same documented 5000 ms — otherwise a row written
+        // with a fallback would read back as a different timeout than the one stored.
+        assert_eq!(u32::try_from(-1_i32).unwrap_or(5000), 5000);
+        assert_eq!(u32::try_from(2_500_i32).unwrap_or(5000), 2_500);
+        assert_eq!(i32::try_from(u32::MAX).unwrap_or(5000), 5000);
+        let src = production_source();
+        assert_eq!(src.matches("unwrap_or(5000)").count(), 2);
+    }
+
+    #[test]
+    fn the_config_is_one_row_per_node_so_saving_twice_edits_rather_than_duplicates() {
+        // `PUT .../url-check` is a replace; without the upsert a second save would either fail on
+        // the primary key or leave two configs for one node, only one of which is ever polled.
+        let src = production_source();
+        assert!(src.contains("ON CONFLICT (node_id) DO UPDATE SET"));
+        assert!(src.contains("DELETE FROM url_checks WHERE node_id = $1"));
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // The URL is operator-supplied text that reaches this store directly.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
+}

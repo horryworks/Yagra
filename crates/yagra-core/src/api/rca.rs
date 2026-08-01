@@ -18,10 +18,10 @@
 //! something an unauthenticated prober should be able to read off a 503-vs-403.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{current_username, Admin, RequireAckAlerts, RequireManageConfig, RequireView};
+use super::extract::{current_username, Admin, RequireAckAlerts, RequireManageConfig};
 use super::ApiState;
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -35,7 +35,7 @@ const TEST_REPLY_MAX_CHARS: usize = 200;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(get_llm_config, put_llm_config, test_llm_provider, create_rca, get_rca))]
+#[openapi(paths(get_llm_config, put_llm_config, test_llm_provider, create_rca))]
 pub(super) struct Doc;
 
 /// The RCA routes, merged into `/api/v1` by [`super::router`].
@@ -47,7 +47,6 @@ pub(super) fn routes() -> Router<ApiState> {
         )
         .route("/api/v1/llm/test", post(test_llm_provider))
         .route("/api/v1/rca", post(create_rca))
-        .route("/api/v1/rca/:id", get(get_rca))
 }
 
 /// The `POST /api/v1/rca` body.
@@ -147,35 +146,6 @@ async fn create_rca(
     };
     let report = rca.explain(&req).await.map_err(|e| rca_error(&e))?;
     Ok(Json(report))
-}
-
-/// Read a stored report. The explanation is display-only text, so showing it to everyone who can
-/// see the alert costs nothing and keeps the incident channel on one shared account.
-#[utoipa::path(
-    get, path = "/api/v1/rca/{id}", tag = "rca",
-    params(("id" = Uuid, Path, description = "Report id")),
-    responses(
-        (status = 200, description = "The stored report", body = crate::rca::store::RcaReport),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
-        (status = 404, description = "No such report", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode: no report store", body = super::error::ErrorBody),
-    ),
-)]
-async fn get_rca(
-    _guard: RequireView,
-    State(st): State<ApiState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<crate::rca::store::RcaReport>> {
-    let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
-    match rca.get(id).await {
-        Ok(Some(report)) => Ok(Json(report)),
-        Ok(None) => Err(ApiError::not_found(
-            "not_found",
-            format!("no analysis {id}"),
-        )),
-        Err(e) => Err(rca_error(&e)),
-    }
 }
 
 /// The `GET /api/v1/llm/config` body.
@@ -303,7 +273,6 @@ mod tests {
             ("PUT", "/api/v1/llm/config".to_owned()),
             ("POST", "/api/v1/llm/test".to_owned()),
             ("POST", "/api/v1/rca".to_owned()),
-            ("GET", format!("/api/v1/rca/{ID}")),
         ]
     }
 
@@ -344,12 +313,9 @@ mod tests {
                 "anon {method} {path}"
             );
         }
-        // Reading a report is `View`, so a public dashboard reaches availability (503) — but the
-        // four that spend money or expose configuration stay closed even there.
-        assert_eq!(
-            status_of(public_state(), "GET", &format!("/api/v1/rca/{ID}"), None).await,
-            StatusCode::SERVICE_UNAVAILABLE,
-        );
+        // Every remaining route either spends money or exposes provider configuration, so all of
+        // them stay closed on a public dashboard too. (The one `View`-gated read, `GET /rca/{id}`,
+        // was removed — nothing called it.)
         for (method, path) in [
             ("GET", "/api/v1/llm/config"),
             ("PUT", "/api/v1/llm/config"),
@@ -380,17 +346,7 @@ mod tests {
             "o",
         );
 
-        // Viewer: may read a report (past the guard ⇒ 503), may not generate.
-        assert_eq!(
-            status_of(
-                st.clone(),
-                "GET",
-                &format!("/api/v1/rca/{ID}"),
-                Some(&viewer)
-            )
-            .await,
-            StatusCode::SERVICE_UNAVAILABLE,
-        );
+        // Viewer: may not generate.
         assert_eq!(
             status_of(st.clone(), "POST", "/api/v1/rca", Some(&viewer)).await,
             StatusCode::FORBIDDEN,

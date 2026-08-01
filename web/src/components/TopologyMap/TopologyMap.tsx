@@ -11,32 +11,8 @@ import { useNavigate } from 'react-router-dom';
 import { stateColorVar, stateLabel } from '../../lib/format';
 import type { PlacedNode, TopologyLayout } from './layout';
 import { NODE_H, NODE_W } from './layout';
+import { clampScale, fitView, MAX_SCALE, MIN_SCALE, type View } from './fitView';
 import './TopologyMap.css';
-
-interface View {
-  /** Pan offset in screen px. */
-  tx: number;
-  ty: number;
-  scale: number;
-}
-
-const MIN_SCALE = 0.25;
-const MAX_SCALE = 2.5;
-
-/** Fit the diagram into the viewport with a little margin, centered. Pure so it's predictable. */
-function fitView(layout: TopologyLayout, vw: number, vh: number): View {
-  if (layout.width === 0 || layout.height === 0 || vw === 0 || vh === 0) {
-    return { tx: 0, ty: 0, scale: 1 };
-  }
-  const margin = 0.92;
-  const scale = Math.min(
-    MAX_SCALE,
-    Math.max(MIN_SCALE, Math.min((vw / layout.width) * margin, (vh / layout.height) * margin)),
-  );
-  const tx = (vw - layout.width * scale) / 2;
-  const ty = (vh - layout.height * scale) / 2;
-  return { tx, ty, scale };
-}
 
 function NodeBox({
   node,
@@ -131,7 +107,7 @@ export function TopologyMap({ layout }: { layout: TopologyLayout }) {
     setView((v) => {
       if (!v) return v;
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale * factor));
+      const scale = clampScale(v.scale * factor);
       const k = scale / v.scale;
       // Keep the point under the cursor fixed while zooming.
       return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
@@ -179,7 +155,7 @@ export function TopologyMap({ layout }: { layout: TopologyLayout }) {
       const my = (p1.y + p2.y) / 2 - rect.top;
       setView((v) => {
         if (!v) return v;
-        const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, p.scale * (dist / p.dist)));
+        const scale = clampScale(p.scale * (dist / p.dist));
         const k = scale / p.scale;
         // Zoom anchored on the pinch's start midpoint (keeps that world point fixed), then translate
         // by however far the live midpoint has drifted since — that's the two-finger pan.

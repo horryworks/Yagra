@@ -2654,11 +2654,20 @@ fn anomaly_usable(metric: &str) -> bool {
 }
 
 /// Raw counters (rate-derived elsewhere) — excluded from level-based anomaly/capacity reads.
+/// The built-in catalog's declared [`yagra_common::MetricKind`] is authoritative; the substring
+/// heuristic survives only for custom metrics outside the catalog (there is no DB handle here,
+/// and a counter-ish name is the best remaining signal).
 fn is_counter(metric: &str) -> bool {
-    metric.contains("octets")
-        || metric.contains("errors")
-        || metric.contains("discards")
-        || metric.contains("packets")
+    match yagra_common::builtin_metric_kind(metric) {
+        Some(yagra_common::MetricKind::Counter) => true,
+        Some(yagra_common::MetricKind::Gauge) => false,
+        None => {
+            metric.contains("octets")
+                || metric.contains("errors")
+                || metric.contains("discards")
+                || metric.contains("packets")
+        }
+    }
 }
 
 /// Percent-like utilization gauges the capacity forecast can extrapolate toward 100%.

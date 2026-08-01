@@ -43,18 +43,7 @@
   min-width: 0;
 }
 
-/* Multi-field row in the add/edit modal (priority + maker + model). */
-.modal-field-row {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.modal-field-row .modal-field {
-  flex: 1;
-  min-width: 0;
-}
-
-/* Enabled checkbox row in the modal. */
+/* Enabled checkbox row in the modal. (.modal-field-row is shared — see ui/Modal.css.) */
 .classrules-enabled {
   display: flex;
   align-items: center;

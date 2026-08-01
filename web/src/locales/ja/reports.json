@@ -65,6 +65,9 @@
     "deleteRun": "保存済みレポート「{{name}}」を削除しますか？",
     "deleteSchedule": "「{{name}}」のスケジュールを削除しますか？"
   },
+  "err": {
+    "delete": "削除できませんでした。"
+  },
   "builder": {
     "newTitle": "新規レポート",
     "editTitle": "レポートを編集",

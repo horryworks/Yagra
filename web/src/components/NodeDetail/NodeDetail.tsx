@@ -215,6 +215,8 @@ export function NodeDetail({
         status={status}
         series={series}
         unreachable={state === 'unreachable'}
+        canEdit={canEdit}
+        onChanged={() => setRefreshNonce((v) => v + 1)}
       />
     ),
     interfaces: (

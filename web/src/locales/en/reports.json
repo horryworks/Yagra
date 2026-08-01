@@ -67,6 +67,9 @@
     "deleteRun": "Delete saved report \"{{name}}\"?",
     "deleteSchedule": "Delete the schedule for \"{{name}}\"?"
   },
+  "err": {
+    "delete": "Could not delete."
+  },
   "builder": {
     "newTitle": "New report",
     "editTitle": "Edit report",

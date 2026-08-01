@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DIRECTIONS,
   FORWARD_DEST_KINDS,
+  FORWARD_FILTER_MODES,
   FORWARD_SOURCE_KINDS,
   GROUP_TYPES,
   ROLES,
@@ -34,6 +35,8 @@ import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES } from './reports/runStatus';
+import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
+import { TERMINAL_JOB_STATES } from './troubleshoot/data';
 
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -55,6 +58,8 @@ import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import jaSettingsForwarding from './locales/ja/settings-forwarding.json';
+import enTroubleshoot from './locales/en/troubleshoot.json';
+import jaTroubleshoot from './locales/ja/troubleshoot.json';
 
 type Json = Record<string, unknown>;
 
@@ -113,6 +118,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSettingsForwarding, ja: jaSettingsForwarding };
     expectKeys('source kind', locales, 'source.', FORWARD_SOURCE_KINDS);
     expectKeys('dest kind', locales, 'dest.', FORWARD_DEST_KINDS);
+  });
+
+  it('every forwarding filter field, operator and mode has a label (settings-forwarding)', () => {
+    // The filter builder renders `field.${f}` / `op.${op}` and the destinations table renders
+    // `filter.mode.${mode}` — a FilterField variant added without strings shipped as a raw key
+    // with nothing failing. (`valuePlaceholder.*` passes `defaultValue: ''` — deliberately
+    // partial, so it is not demanded here.)
+    const locales = { en: enSettingsForwarding, ja: jaSettingsForwarding };
+    expectKeys('filter field', locales, 'field.', FORWARD_FILTER_FIELDS);
+    const ops = [...new Set(FORWARD_FILTER_FIELDS.flatMap((f) => opsForField(f)))];
+    expectKeys('filter op', locales, 'op.', ops);
+    expectKeys('filter mode', locales, 'filter.mode.', FORWARD_FILTER_MODES);
   });
 
   it('every device-profile category has a label (monitoring:categories.*)', () => {
@@ -180,6 +197,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
 
   it('every RCA confidence level has a label (rca:confidence.*)', () => {
     expectKeys('confidence', { en: enRca, ja: jaRca }, 'confidence.', RCA_CONFIDENCES);
+  });
+
+  it('every terminal analysis-job state has a label (troubleshoot:runs.state.*)', () => {
+    // `AnalysisJob.state` is a bare string in the schema; the report shell and the runs list only
+    // build `runs.state.${state}` for the terminal subset, so that subset is what must resolve.
+    expectKeys(
+      'terminal job state',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'runs.state.',
+      TERMINAL_JOB_STATES,
+    );
   });
 
   it('every addable monitor kind has its three strings (nodes:add.*/err.*)', () => {

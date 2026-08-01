@@ -38,17 +38,7 @@
   min-width: 0;
 }
 
-/* Multi-field row in the add/edit modal (match kind + severity, or the TTL trio). */
-.modal-field-row {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.modal-field-row .modal-field {
-  flex: 1;
-  min-width: 0;
-}
-
+/* (.modal-field-row is shared — see ui/Modal.css.) */
 .eventrules-enabled {
   display: flex;
   align-items: center;

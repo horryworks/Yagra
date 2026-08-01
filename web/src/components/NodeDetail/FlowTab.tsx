@@ -22,49 +22,19 @@ import type {
   FlowTalker,
   NodeDetail,
 } from '../../types/api';
-import { MetricChart, PALETTE, type ChartSeries } from '../MetricChart/MetricChart';
+import { MetricChart, PALETTE } from '../MetricChart/MetricChart';
 import { RankedBars, type RankedRow } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
 import { Select, TextInput } from '../ui/Field';
 import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
 import { buildFlowFilters, toggleFilterValue } from './flowFilters';
+// The protocol-series grouping is shared with the fleet-wide throughput widget — one tested
+// implementation rather than a second copy that has to be fixed twice.
+import { flowTrendSeries } from '../../dashboard/widgets/util';
 import './FlowTab.css';
 
 const TOP_N = 10;
-
-/** Group flow points by protocol into aligned chart series (top-N protocols by total bytes). */
-function buildTrend(points: FlowPoint[]): { timestamps: number[]; series: ChartSeries[] } {
-  if (points.length === 0) return { timestamps: [], series: [] };
-  const tsSet = new Set<number>();
-  const byProto = new Map<number, Map<number, number>>();
-  const totals = new Map<number, number>();
-  for (const p of points) {
-    const ts = Math.floor(p.ts_unix_ms / 1000);
-    tsSet.add(ts);
-    let m = byProto.get(p.proto);
-    if (!m) {
-      m = new Map();
-      byProto.set(p.proto, m);
-    }
-    m.set(ts, (m.get(ts) ?? 0) + p.bytes);
-    totals.set(p.proto, (totals.get(p.proto) ?? 0) + p.bytes);
-  }
-  const timestamps = [...tsSet].sort((a, b) => a - b);
-  const topProtos = [...totals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, PALETTE.length)
-    .map(([proto]) => proto);
-  const series: ChartSeries[] = topProtos.map((proto, i) => {
-    const m = byProto.get(proto) ?? new Map<number, number>();
-    return {
-      label: protoName(proto),
-      values: timestamps.map((ts) => m.get(ts) ?? null),
-      color: PALETTE[i % PALETTE.length],
-    };
-  });
-  return { timestamps, series };
-}
 
 const toRows = <T,>(items: T[], label: (x: T) => string, value: (x: T) => number): RankedRow[] =>
   items.map((x) => ({ label: label(x), value: value(x), valueText: formatBytes(value(x)) }));
@@ -183,7 +153,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     };
   }, [node.id, range, tick, t, proto, port, peer, asn, asDir]);
 
-  const trend = useMemo(() => buildTrend(series), [series]);
+  const trend = useMemo(() => flowTrendSeries(series, protoName, PALETTE), [series]);
   const talkerRows = useMemo(() => toRows(talkers, (x) => x.addr, (x) => x.bytes), [talkers]);
   const protoRows = useMemo(
     () => toRows(protos, (x) => protoName(x.proto), (x) => x.bytes),

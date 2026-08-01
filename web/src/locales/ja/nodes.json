@@ -318,6 +318,49 @@
     "noUpstream": "— 上流なし (トップレベル) —",
     "hint": "この上流がダウンしているとき、{{name}} のアラートは抑制され、上流の下にロールアップされます。"
   },
+  "checkEdit": {
+    "urlTitle": "URL 監視を編集",
+    "dnsTitle": "DNS 監視を編集",
+    "saving": "保存中…",
+    "remove": "監視設定を削除",
+    "removeConfirm": "この対象の監視を停止しますか？ノードはインベントリに残りますが、以後チェックされません。記録済みの履歴は保持されます。",
+    "url": "URL",
+    "method": "メソッド",
+    "expectedStatus": "正常とみなすステータス",
+    "statusMode": {
+      "two_xx": "2xx すべて",
+      "exact": "次のコードのいずれか",
+      "range": "範囲で指定"
+    },
+    "statusCodes": "ステータスコード",
+    "statusCodesHint": "カンマ区切り（例: 200, 204）。",
+    "statusLo": "開始",
+    "statusHi": "終了",
+    "timeoutMs": "タイムアウト（ミリ秒）",
+    "verifyTls": "TLS 証明書を検証する",
+    "verifyTlsWarning": "検証を無効にすると、傍受された証明書や期限切れの証明書でも正常と報告されます。",
+    "followRedirects": "リダイレクトを追跡する",
+    "dnsName": "解決する名前",
+    "recordType": "レコード種別",
+    "resolver": "リゾルバ",
+    "resolverHint": "空欄にするとポーラー自身のリゾルバを使います。",
+    "resolverPlaceholder": "1.1.1.1",
+    "resolverPort": "ポート",
+    "maxDepth": "CNAME 追跡の上限",
+    "maxDepthHint": "CNAME チェーンをどこまで辿るか。",
+    "err": {
+      "urlRequired": "URL は必須です。",
+      "urlScheme": "URL は http:// または https:// で始まる必要があります。",
+      "timeout": "タイムアウトは 1 以上の整数（ミリ秒）で指定してください。",
+      "statusCodes": "100〜599 のステータスコードを 1 つ以上指定してください。",
+      "statusRange": "100〜599 の範囲で、開始が終了以下になるよう指定してください。",
+      "dnsNameRequired": "解決する名前は必須です。",
+      "resolverPort": "ポートは 1〜65535 で指定してください。",
+      "maxDepth": "追跡上限は 1 以上の整数で指定してください。",
+      "save": "監視設定を保存できませんでした。",
+      "remove": "監視設定を削除できませんでした。"
+    }
+  },
   "dns": {
     "failure": {
       "nx_domain": "名前が存在しない（NXDOMAIN）",

@@ -187,3 +187,78 @@ fn ms_to_rfc3339(ms: i64) -> String {
         .map(|d| d.to_rfc3339())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("pollers.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_timestamp_renders_as_rfc3339_utc() {
+        assert_eq!(ms_to_rfc3339(0), "1970-01-01T00:00:00+00:00");
+        assert!(ms_to_rfc3339(1_700_000_000_000).starts_with("2023-11-14T"));
+    }
+
+    #[test]
+    fn an_unrepresentable_timestamp_renders_empty_rather_than_panicking() {
+        // The column is an i64 written by a poller, so a clock fault or a corrupt row can land
+        // outside what a DateTime can hold. The Pollers page showing a blank cell beats core
+        // panicking on a list read.
+        assert_eq!(ms_to_rfc3339(i64::MAX), "");
+        assert_eq!(ms_to_rfc3339(i64::MIN), "");
+    }
+
+    #[test]
+    fn a_gaps_duration_is_never_negative() {
+        // `started`/`ended` are both poller-supplied, so a clock stepping backwards mid-gap would
+        // otherwise report a negative outage — which reads as nonsense in the UI and sorts wrong.
+        let duration = |started: i64, ended: i64| (ended - started).max(0) / 1000;
+        assert_eq!(duration(1_000, 61_000), 60);
+        assert_eq!(duration(61_000, 1_000), 0);
+        assert_eq!(duration(1_000, 1_000), 0);
+        // Sub-second gaps floor to zero rather than rounding up to a second that did not happen.
+        assert_eq!(duration(1_000, 1_999), 0);
+        assert!(production_source().contains("(ended - started).max(0) / 1000"));
+    }
+
+    #[test]
+    fn the_inventory_lists_deterministically_and_the_gap_log_newest_first() {
+        // Without an ORDER BY the same page can come back in a different order each fetch, which
+        // reads as pollers shuffling on every refresh.
+        let src = production_source();
+        assert!(src.contains("FROM pollers ORDER BY id"));
+        assert!(src.contains("FROM monitoring_gaps ORDER BY recorded_at DESC LIMIT $1"));
+    }
+
+    #[test]
+    fn heartbeats_upsert_rather_than_accumulating_a_row_per_beat() {
+        // A poller heartbeats continuously; an INSERT per beat would grow the table without bound.
+        let src = production_source();
+        assert!(src.contains("ON CONFLICT"));
+        assert!(src.contains("last_seen = now()"));
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // The poller id is caller-supplied (`YAGRA_POLLER_ID`) and reaches this store unvalidated.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
+}

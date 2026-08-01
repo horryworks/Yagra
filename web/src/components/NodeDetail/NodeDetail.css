@@ -251,6 +251,21 @@
   gap: 12px;
 }
 
+/* The title claims the slack so any number of trailing controls (range picker, the URL/DNS
+   monitor's ⋮ menu) stay grouped on the right instead of being spread apart by space-between. */
+.nd-section-head > .nd-section-t {
+  margin-right: auto;
+}
+
+/* Checkbox row inside the check-config dialogs (verify TLS / follow redirects). */
+.nd-check-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
 /* ---------------- Overview ---------------- */
 .nd-overview {
   padding: 16px 20px 22px;

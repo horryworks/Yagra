@@ -1523,13 +1523,4 @@ describe('api client', () => {
       status: 503,
     });
   });
-
-  it('url-encodes the report id on read-back', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'r/1' }) } as Response);
-    globalThis.fetch = spy;
-    await api.getRca('r/1');
-    expect(spy.mock.calls[0][0]).toBe('/api/v1/rca/r%2F1');
-  });
 });

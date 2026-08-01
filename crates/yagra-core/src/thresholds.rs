@@ -148,3 +148,115 @@ impl ThresholdStore {
         Ok(res.rows_affected() > 0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("thresholds.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_unreadable_scope_or_direction_degrades_to_the_broadest_safest_reading() {
+        // Neither column can be trusted to hold only what this build knows: a newer core may have
+        // written a scope level or direction this one has never heard of. The fallbacks are chosen,
+        // not incidental — `Profile` is the *broadest* scope, so a mis-read rule still applies to
+        // something rather than silently binding to one node; `Above` is the common direction.
+        assert_eq!(parse_level("nonsense"), ScopeLevel::Profile);
+        assert_eq!(parse_direction("nonsense"), Direction::Above);
+        // Known tokens still resolve, so the fallback is not swallowing everything.
+        assert_eq!(parse_level("node"), ScopeLevel::Node);
+        assert_eq!(parse_level("group"), ScopeLevel::Group);
+        assert_eq!(parse_level("profile"), ScopeLevel::Profile);
+        assert_eq!(parse_direction("below"), Direction::Below);
+        assert_eq!(parse_direction("above"), Direction::Above);
+    }
+
+    #[test]
+    fn the_parsers_accept_exactly_the_vocabulary_the_api_admits() {
+        // `create` stores the caller's string verbatim, and `POST /api/v1/thresholds` admits only
+        // these tokens. If the writer's vocabulary and this reader ever disagreed, every stored
+        // rule would silently read back as the fallback — a node override behaving as a
+        // fleet-wide profile rule.
+        for (token, level) in [
+            ("profile", ScopeLevel::Profile),
+            ("group", ScopeLevel::Group),
+            ("node", ScopeLevel::Node),
+        ] {
+            assert_eq!(parse_level(token), level, "{token} does not round-trip");
+        }
+        for dir in [Direction::Above, Direction::Below] {
+            assert_eq!(
+                parse_direction(dir.as_str()),
+                dir,
+                "{dir:?} does not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dwell_of_zero_is_lifted_to_one_sample() {
+        // Dwell is the anti-flap guard: zero would mean "commit on the first sample", which is the
+        // hysteresis being switched off by a value the API never intended to allow. The floor is
+        // applied through a binding rather than on literals so it is the *rule* being exercised
+        // and not something the compiler folds away.
+        let floor = |dwell: i32| dwell.max(1);
+        assert_eq!(floor(0), 1);
+        assert_eq!(floor(-5), 1);
+        assert_eq!(floor(3), 3);
+        // Reading it back converts rather than re-flooring: a stored 0 is honoured as 0 (the write
+        // side is where the floor belongs), while a negative — which the column should never hold —
+        // cannot convert and falls back to one sample.
+        let read = |stored: i32| u32::try_from(stored).unwrap_or(1);
+        assert_eq!(read(0), 0);
+        assert_eq!(read(-1), 1);
+        assert_eq!(read(3), 3);
+        assert!(production_source().contains("dwell_samples.max(1)"));
+    }
+
+    #[test]
+    fn the_engines_snapshot_is_never_capped_but_the_api_page_is() {
+        let src = production_source();
+        // A LIMIT on `list_all` would not shorten a list — it would stop the alert engine
+        // evaluating some rules, invisibly. The comment says so; this asserts it.
+        let all = src
+            .split_once("pub async fn list_all")
+            .expect("list_all exists")
+            .1;
+        let all_body = all.split_once("pub async fn").map_or(all, |(b, _)| b);
+        assert!(
+            !all_body.contains("LIMIT"),
+            "list_all must stay uncapped — a truncated snapshot silently stops alerting"
+        );
+        // The API page is capped and bound, never interpolated.
+        assert!(src.contains("metric, scope_id LIMIT $1"));
+    }
+
+    #[test]
+    fn the_page_is_ordered_broadest_scope_first_so_it_is_stable() {
+        // Without an ORDER BY, PostgreSQL may return a different arbitrary subset for the same
+        // page each time, which reads as rules appearing and disappearing.
+        assert!(production_source().contains(
+            "ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END"
+        ));
+    }
+
+    #[test]
+    fn the_column_list_is_named_once_and_used_by_every_read() {
+        // Both reads build their SELECT from `COLUMNS`, so the positional `row_to_threshold`
+        // cannot drift from what was selected.
+        let src = production_source();
+        assert_eq!(src.matches("Self::COLUMNS").count(), 2);
+        assert_eq!(ThresholdStore::COLUMNS.matches(',').count() + 1, 8);
+    }
+}

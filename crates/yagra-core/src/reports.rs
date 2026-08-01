@@ -571,8 +571,9 @@ fn availability_from_snapshots(rows: &[(i64, String, i64)]) -> (Option<f64>, Vec
         *by_state.entry(state.clone()).or_insert(0) += *count;
     }
     let get = |s: &str| -> i64 { by_state.get(s).copied().unwrap_or(0) };
-    let up = get("ok") + get("warning");
-    let down = get("critical") + get("unreachable");
+    let sum = |states: &[NodeState]| -> i64 { states.iter().map(|s| get(s.as_str())).sum() };
+    let up = sum(&[NodeState::Ok, NodeState::Warning]);
+    let down = sum(&[NodeState::Critical, NodeState::Unreachable]);
     let denom = up + down;
     let uptime = if denom > 0 {
         Some(up as f64 / denom as f64 * 100.0)

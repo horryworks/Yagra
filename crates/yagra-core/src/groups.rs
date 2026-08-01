@@ -189,23 +189,6 @@ impl GroupRepo {
             .collect()
     }
 
-    /// Set (or clear, with `None`) a group's geo coordinates. Returns whether the group exists.
-    /// Coordinate-range validation happens at the API edge.
-    pub async fn set_geo(
-        &self,
-        id: Uuid,
-        latitude: Option<f64>,
-        longitude: Option<f64>,
-    ) -> anyhow::Result<bool> {
-        let res = sqlx::query("UPDATE node_groups SET latitude = $2, longitude = $3 WHERE id = $1")
-            .bind(id)
-            .bind(latitude)
-            .bind(longitude)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
     /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.
     /// Feeds [`placement_order`] when a drag drops a group before/after a sibling.
     pub async fn ordered_siblings(&self, parent: Option<Uuid>) -> anyhow::Result<Vec<(Uuid, f64)>> {

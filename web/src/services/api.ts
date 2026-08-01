@@ -74,7 +74,6 @@ import type {
   NodePage,
   NodeSearchResult,
   NodeStatus,
-  NodeSummary,
   MonitoringGap,
   NodeAssignment,
   NotificationChannel,
@@ -411,9 +410,6 @@ export const api = {
       query: { direction, window: opts?.window, limit: opts?.limit },
     }),
 
-  /** Inventory listing (first page; the response is keyset-paginated). */
-  listNodes: (): Promise<NodeSummary[]> => apiGet('/api/v1/nodes').then((r) => r.nodes),
-
   /** Resolve a batch of node ids → display names across the whole fleet (not just the first list
    *  page). Backs the shared `useEntityNames` resolver so a reference to any node — not only the
    *  first 100 — shows its name instead of a raw UUID (S12). Unresolved ids are omitted. */
@@ -746,10 +742,6 @@ export const api = {
   /** All report definitions (templates). */
   listReportDefinitions: (): Promise<ReportDefinition[]> => apiGet('/api/v1/reports/definitions'),
 
-  /** One report definition by id. */
-  getReportDefinition: (id: string): Promise<ReportDefinition> =>
-    apiGet('/api/v1/reports/definitions/{id}', { path: { id } }),
-
   /** Create a report definition (admin only). */
   createReportDefinition: (body: ReportDefinitionInput): Promise<ReportDefinition> =>
     apiPost('/api/v1/reports/definitions', { body }),
@@ -841,12 +833,6 @@ export const api = {
     id: string,
     body: { parent_id: string | null; before?: string; after?: string },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/placement', { path: { id }, body }),
-
-  /** Set (or clear, with both `null`) a group's geo coordinates for the dashboard map. */
-  setNodeGroupGeo: (
-    id: string,
-    body: { latitude: number | null; longitude: number | null },
-  ): Promise<void> => apiPut('/api/v1/node-groups/{id}/geo', { path: { id }, body }),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
@@ -1260,10 +1246,6 @@ export const api = {
       },
     }),
 
-  /** Manually close an active event alert (identity mirrors the alert wire shape). */
-  closeEventAlert: (node: string, check: string): Promise<void> =>
-    apiPost('/api/v1/events/alerts/close', { body: { node, check } }),
-
   /** Categorical passive-event summary counts (kind/action/trap/source), ordered by count desc.
    *  Backed by the log store when enabled, else PostgreSQL — same filter as the event log. */
   getEventStats: (
@@ -1575,7 +1557,4 @@ export const api = {
 
   /** Explain one incident. Serves the cached report for identical evidence unless `force`. */
   createRca: (body: RcaRequestInput): Promise<RcaReport> => apiPost('/api/v1/rca', { body }),
-
-  /** Read a stored report back by id (`View` — display-only text). */
-  getRca: (id: string): Promise<RcaReport> => apiGet('/api/v1/rca/{id}', { path: { id } }),
 };

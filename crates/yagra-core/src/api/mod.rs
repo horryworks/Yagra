@@ -283,7 +283,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(flow::routes())
         // Local user accounts + roles (admin-only), in `api/users.rs`.
         .merge(users::routes())
-        // API tokens (PATs) for non-browser clients / the MCP tool surface (ADR-028). Admin-only;
+        // API tokens (PATs) for the MCP tool surface at `/mcp` (ADR-028) — this REST API rejects
+        // them, so they are not a second way to call these endpoints. Admin-only;
         // issuance/revocation are audited by `audit_mw`. The raw token is returned once on create.
         // Forwarding ("tee", ADR-034): relay received syslog/traps to external collectors.
         // `ManageConfig`-gated and audited by `audit_mw` — a destination sends log bodies, which
@@ -1346,7 +1347,6 @@ mod tests {
                 "/api/v1/rca".to_owned(),
                 Some(format!(r#"{{"node":"{node}","check":"{node}"}}"#)),
             ),
-            ("GET", format!("/api/v1/rca/{node}"), None),
         ];
         for (method, uri, body) in cases {
             let mut req = Request::builder()
@@ -1452,9 +1452,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reading_a_stored_report_is_open_to_viewers() {
-        // Deliberate: the explanation is display-only text, so anyone who can see the alert can
-        // see the analysis of it. Only *producing* one costs anything.
+    async fn a_stored_report_is_no_longer_readable_by_id() {
+        // `GET /api/v1/rca/{id}` was removed: nothing ever called it — the modal renders the report
+        // returned by the `POST` that generated it, and there is no history view to open one from.
+        // It now 404s like any other unrouted path, which is what this pins; the report itself is
+        // still stored and still comes back from `POST /api/v1/rca` (its cache hit re-serves it).
         let (state, token) = state_with_role_token(yagra_common::Role::Viewer);
         let resp = router(state)
             .oneshot(
@@ -1466,8 +1468,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // Authorized (not 403) — unavailable only because nothing is configured.
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

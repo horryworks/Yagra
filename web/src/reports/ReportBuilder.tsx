@@ -122,7 +122,9 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>{t('common:actions.cancel')}</Button>
+          <Button onClick={onClose} disabled={saving}>
+            {t('common:actions.cancel')}
+          </Button>
           <Button variant="primary" disabled={saving} onClick={save}>
             {saving ? t('builder.saving') : t('builder.save')}
           </Button>

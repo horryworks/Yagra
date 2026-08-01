@@ -23,7 +23,7 @@ import {
   ReportToolbar,
   RightRail,
 } from '../kit';
-import { detailNum, fmtCount, sevOf, sortByDetail, sortCommon } from '../format';
+import { detailNum, fmtCount, ratioBucket, sevOf, sortByDetail, sortCommon } from '../format';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -36,12 +36,6 @@ const ratioOf = (f: AnalysisFinding) => {
 };
 
 /** Ratio bucket — the filter axis that makes a storm comparable across differently-busy nodes. */
-function ratioBucket(r: number): 'x10' | 'x3' | 'low' {
-  if (r >= 10) return 'x10';
-  if (r >= 3) return 'x3';
-  return 'low';
-}
-
 function StormRow({ finding }: { finding: AnalysisFinding }) {
   const { t } = useTranslation('troubleshoot');
   const bucketSecs = detailNum(finding, 'bucket_secs') ?? 300;

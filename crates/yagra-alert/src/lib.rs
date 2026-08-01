@@ -8,13 +8,18 @@
 //! external — Yagra produces the quality signal and forwards its lifecycle (ADR-015).
 
 pub mod alert;
-pub mod flapping;
-pub mod hysteresis;
 pub mod notify;
 
+// The dwell and flap primitives are `CheckState`'s internals, not part of this crate's surface:
+// `CheckState::new` takes primitives and nothing outside constructs either directly. Their tests
+// are the load-bearing hysteresis/flap coverage — the modules stay, only the export narrows.
+mod flapping;
+mod hysteresis;
+
+use flapping::FlapDetector;
+use hysteresis::DwellTracker;
+
 pub use alert::{Alert, Breach, DedupKey};
-pub use flapping::FlapDetector;
-pub use hysteresis::DwellTracker;
 pub use notify::{
     DispatchOutcome, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
 };

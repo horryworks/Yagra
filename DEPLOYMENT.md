@@ -353,7 +353,9 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_SNMP_COMMUNITY` | unset | Fallback SNMP v2c community for nodes without a bound credential |
 | `YAGRA_MERAKI_POOL` | `default` | Poller pool that Meraki cloud-collect jobs route to |
 | `YAGRA_WEBHOOK_URL` | unset ⇒ off | Default alert webhook channel |
-| `YAGRA_SMTP_HOST` / `_PORT` / `_FROM` / `_TO` / `_USER` / `_PASS` | unset ⇒ email off | Env-configured SMTP alert channel (host present enables it) |
+| `YAGRA_SMTP_HOST` / `_FROM` / `_TO` | unset ⇒ email off | Env-configured SMTP alert channel. All three are required — the channel is skipped unless every one is set and `_FROM`/`_TO` parse as mailboxes |
+| `YAGRA_SMTP_PORT` | `465` (implicit TLS) | SMTP port |
+| `YAGRA_SMTP_USER` / `_PASS` | unset ⇒ no auth | SMTP credentials; applied only when **both** are set |
 | **Traffic flow & AS enrichment** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days (ClickHouse TTL) |
 | `YAGRA_IPASN_DB` | unset ⇒ enrichment off | Path to an offline iptoasn.com TSV for flow IP→ASN enrichment |

@@ -49,6 +49,7 @@ const schemaEnumPins: {
   Direction: AssertEqual<Direction, components['schemas']['Direction']>;
   ForwardSourceKind: AssertEqual<ForwardSourceKind, components['schemas']['SourceKind']>;
   ForwardDestKind: AssertEqual<ForwardDestKind, components['schemas']['DestKind']>;
+  ForwardFilterMode: AssertEqual<ForwardFilterMode, components['schemas']['FilterMode']>;
   NodeKind: AssertEqual<NodeKind, components['schemas']['NodeKind']>;
   ReportRunState: AssertEqual<ReportRunState, components['schemas']['ReportRunState']>;
   ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
@@ -64,6 +65,7 @@ const schemaEnumPins: {
   Direction: true,
   ForwardSourceKind: true,
   ForwardDestKind: true,
+  ForwardFilterMode: true,
   NodeKind: true,
   ReportRunState: true,
   ReportTrigger: true,
@@ -256,6 +258,13 @@ export type ForwardFilterField = components['schemas']['FilterField'];
 
 /** A filter condition's comparison. */
 export type ForwardFilterOp = components['schemas']['FilterOp'];
+
+/** How a filter's conditions combine. Runtime array so `i18nEnumKeys.test.ts` can demand the
+ *  `filter.mode.*` strings the destinations table interpolates. */
+export const FORWARD_FILTER_MODES = ['all', 'any'] as const;
+
+/** How a filter's conditions combine. Pinned to `schemas.FilterMode`. */
+export type ForwardFilterMode = (typeof FORWARD_FILTER_MODES)[number];
 
 /** One `field op value` test. `value` is always a string; core parses it per field type. */
 export type ForwardCondition = components['schemas']['Condition'];

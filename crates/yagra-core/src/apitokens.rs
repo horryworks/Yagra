@@ -181,13 +181,12 @@ fn row_to_info(row: sqlx::postgres::PgRow) -> anyhow::Result<ApiTokenInfo> {
 }
 
 /// Parse the stored snake_case role key back into a [`Role`] (the mirror of [`Role::key`]).
+/// Derived from [`Role::ALL`] so the token list lives in one place.
 fn parse_role(key: &str) -> anyhow::Result<Role> {
-    match key {
-        "viewer" => Ok(Role::Viewer),
-        "operator" => Ok(Role::Operator),
-        "admin" => Ok(Role::Admin),
-        other => anyhow::bail!("unknown role key {other:?}"),
-    }
+    Role::ALL
+        .into_iter()
+        .find(|r| r.key() == key)
+        .ok_or_else(|| anyhow::anyhow!("unknown role key {key:?}"))
 }
 
 #[cfg(test)]

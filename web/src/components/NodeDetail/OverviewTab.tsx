@@ -32,7 +32,6 @@ import type {
   NodeAssignment,
   NodeDetail,
   NodeGroup,
-  NodeState,
   NodeStatus,
   NodeSummary,
 } from '../../types/api';
@@ -47,8 +46,10 @@ import {
   type ResolvedMem,
   type ResolvedMetric,
 } from './metricCards';
+import { certTone, httpToneVar } from './healthTone';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
+import { CheckConfigActions } from './CheckConfigActions';
 import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 
@@ -60,9 +61,22 @@ interface Props {
   /** RTT history (last ~30 min), shared with the header's "seen" line. */
   series: { timestamps: number[]; values: number[] };
   unreachable: boolean;
+  /** Whether the viewer may reconfigure monitoring (ManageConfig). Gates the check-config edit. */
+  canEdit?: boolean;
+  /** Re-fetch the node after its check config changed, so the card shows what was just saved. */
+  onChanged?: () => void;
 }
 
-export function OverviewTab({ node, groups, nodes, status, series, unreachable }: Props) {
+export function OverviewTab({
+  node,
+  groups,
+  nodes,
+  status,
+  series,
+  unreachable,
+  canEdit = false,
+  onChanged,
+}: Props) {
   const { t } = useTranslation('nodes');
   const facts = useFacts(node, groups, nodes, unreachable);
   return (
@@ -126,10 +140,36 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
           configs rendered a health card for every row, so a Meraki node could show a URL-monitor
           card whose metrics never arrive. The config check that follows is type narrowing. */}
       {node.kind === 'url' && node.url_check && (
-        <UrlHealth nodeId={node.id} url={node.url_check.url} />
+        <UrlHealth
+          nodeId={node.id}
+          url={node.url_check.url}
+          actions={
+            canEdit ? (
+              <CheckConfigActions
+                nodeId={node.id}
+                kind="url"
+                config={node.url_check}
+                onChanged={onChanged}
+              />
+            ) : null
+          }
+        />
       )}
       {node.kind === 'dns' && node.dns_check && (
-        <DnsHealth nodeId={node.id} check={node.dns_check} />
+        <DnsHealth
+          nodeId={node.id}
+          check={node.dns_check}
+          actions={
+            canEdit ? (
+              <CheckConfigActions
+                nodeId={node.id}
+                kind="dns"
+                config={node.dns_check}
+                onChanged={onChanged}
+              />
+            ) : null
+          }
+        />
       )}
       {node.kind === 'meraki' && node.meraki_device && (
         <MerakiHealth nodeId={node.id} device={node.meraki_device} />
@@ -140,24 +180,18 @@ export function OverviewTab({ node, groups, nodes, status, series, unreachable }
   );
 }
 
-/** CSS status-palette variable for an HTTP tone (up/warning/critical). */
-function httpToneVar(tone: 'up' | 'warning' | 'critical'): string {
-  if (tone === 'up') return 'var(--status-ok)';
-  if (tone === 'warning') return 'var(--status-warning)';
-  return 'var(--status-critical)';
-}
-
-/** Tone for a TLS cert's days-to-expiry against the built-in URL thresholds (warn < 30, crit < 7). */
-function certTone(days: number): 'up' | 'warning' | 'critical' {
-  if (days < 7) return 'critical';
-  if (days < 30) return 'warning';
-  return 'up';
-}
-
 /** URL-monitor health: availability (`http_up`), the last HTTP status code, and (for HTTPS) the
  *  TLS certificate's days-to-expiry. Mirrors the Device-health card layout; self-refreshes. Shown
  *  only for URL-monitor nodes (the caller guards on `node.url_check`). */
-function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
+function UrlHealth({
+  nodeId,
+  url,
+  actions,
+}: {
+  nodeId: string;
+  url: string;
+  actions?: React.ReactNode;
+}) {
   const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
@@ -205,6 +239,7 @@ function UrlHealth({ nodeId, url }: { nodeId: string; url: string }) {
       <div className="nd-section-head">
         <div className="nd-section-t">{t('overview.urlMonitor')}</div>
         <RangeControl value={range} onChange={setRange} />
+        {actions}
       </div>
       <div className="nd-fact-v mono nd-url-target">{url}</div>
       <div className="nd-health-metrics">
@@ -468,10 +503,6 @@ function useFacts(
 
 /** ifOperStatus (1 = up) → a node-state colour for status dots/charts. (Shared with the
  *  Interfaces tab via a re-export.) */
-export function operState(oper: number | null): NodeState {
-  if (oper == null) return 'unknown';
-  return oper === 1 ? 'ok' : 'critical';
-}
 
 /** A bounded gauge's Y range — CPU/Mem read as 0–100%, so the chart baseline is 0, not the
  *  window's min. Module-level + stable so MetricChart isn't rebuilt on every refresh. */

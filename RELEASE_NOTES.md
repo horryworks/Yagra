@@ -10,7 +10,26 @@
 
 ## Unreleased
 
+## v0.1.19
+
+**Ask why, and see who polls what.** Two additions lead this release. **AI-assisted root-cause
+analysis** runs from a live alert: Yagra already assembles the incident — the cascade's root cause,
+the metric anomaly, the passive events and the dominant traffic around it — and now asks a language
+model for the sentence a human writes at the end. It is off until you configure a provider, and
+nothing in the alert path depends on it. Alongside it, **node→poller visibility**: every node says
+which pool it belongs to and which poller is actually polling it, and pools are assignable from the
+inventory tree — including on a folder, which is the only bulk assignment the tree has. Underneath
+both, the northbound API now **publishes its own OpenAPI 3.1 document**, generated from the handlers,
+with the WebUI's types generated from that — which removed 3,340 lines of hand-transcribed
+TypeScript and closed a class of contract drift for good.
+
 ### Breaking changes
+- **An unauthenticated request now answers 401 across the whole API, not 503.** Yagra answers 503
+  when a subsystem an endpoint needs is not configured ("skeleton mode"), and roughly a hundred
+  handlers ran that availability check *before* the permission guard — so an anonymous caller could
+  tell a configured deployment from an unconfigured one without holding any credential. Guard order
+  is now uniform API-wide: authenticate and authorize first, check availability second. Authenticated
+  callers see no change; only anonymous requests to an unconfigured subsystem move from 503 to 401.
 - **`VITE_API_BASE` is now an origin, not a base path.** It used to default to `/api/v1` and be
   prepended to relative paths; it now defaults to empty and the `/api/v1` prefix is part of every
   path. Only a WebUI build that overrides it is affected, and only to drop the `/api/v1` suffix:
@@ -57,7 +76,59 @@
   their findings is unchanged and still open to Viewers. **Viewer-scoped API tokens can no longer
   launch analyses over `/mcp`.**
 
+- **Four endpoints nothing called have been removed.** `GET /api/v1/rca/{id}`,
+  `GET /api/v1/reports/definitions/{id}`, `PUT /api/v1/node-groups/{id}/geo` and
+  `POST /api/v1/events/alerts/close` were reachable but called by neither the WebUI, the MCP tool
+  surface, nor any documented automation — each answering requests, appearing in the published
+  contract and carrying tests for a feature that had no way in. They now `404`. The data each read
+  is still served: an RCA report comes back from the `POST /api/v1/rca` that produced it, and a
+  report definition from `GET /api/v1/reports/definitions`. **Two are a capability loss, not a
+  cleanup:** group map coordinates can no longer be set at all — the Sites map widget reads them
+  and nothing writes them any more — and an event-raised alert can no longer be closed by hand; it
+  clears on its rule's TTL as before. Say so if either mattered to you and it can come back with a
+  UI attached.
+
 ### New Features
+- **AI-assisted root-cause analysis, on demand.** Yagra already assembles the evidence for an
+  incident: dependency suppression attributes a cascade to its root cause, and the incident timeline
+  gathers the metric anomaly, the passive events and the dominant traffic around it. What no amount
+  of correlation produces is the sentence a human writes at the end. **Active alerts** gains a button
+  that asks a language model for that sentence, grounded in exactly that evidence, and returns a
+  summary, a probable root cause, the dependents it explains and suggested next steps — with a
+  confidence, and the model's raw answer kept beside it.
+  **It is off until you configure it.** With no provider row there is no client, no credential and no
+  egress. Nothing in the alert path calls into it, so hysteresis, suppression, dedup and notification
+  behave identically whether the provider answers, times out, or was never set up. Choose one
+  provider — **Vertex AI**, **Gemini** or **Claude** — whose credential is sealed with the same
+  envelope cipher as every other stored secret and is write-only once saved. Generating a report
+  takes **Operator** (the people carrying the pager are the ones who need the explanation) and is
+  bounded by a concurrency limit, a rate window and a context cache rather than by a narrower role;
+  reading one back takes View; configuring the provider takes Admin. Device output quoted into the
+  prompt is fenced, each provider's endpoint is a compiled-in constant rather than a settings field
+  so a configuration screen cannot become an exfiltration channel, and **Yagra still has no way to
+  configure a network device**.
+- **Every node says which poller polls it, and pools are assignable from the inventory tree.**
+  Node→poller assignment existed but was effectively invisible: answering "which poller polls this
+  node?" meant running `redis-cli`, and a node's pool was writable only through an API field no
+  screen sent. Node detail now shows **Pool** and **Polled by** — the latter a five-state answer
+  (assigned / pending / legacy fan-out / Meraki / unknown) read from the working set core actually
+  published rather than re-derived from the hash ring, so a node's answer and a poller's node list
+  cannot disagree. **Settings ▸ Pollers** drills into any poller's node set inline. Pool is now
+  editable on a node and on a folder, and **right-clicking either in the inventory tree offers a
+  pool chip row** — the pools that exist, plus Inherit and Custom — which is the only bulk assignment
+  the tree has, since it has no multi-select. A node's effective pool resolves as its own → nearest
+  ancestor folder → `default`, and every chip says whether that pool has a **live poller**: assigning
+  to a pool with none publishes its jobs to a subject nothing subscribes to, and the node silently
+  stops being monitored.
+- **A URL or DNS monitor's configuration can be edited and removed after it is created.** Until now
+  the add-node dialog could create one and the node detail could display it, but changing a URL, a
+  timeout, a resolver or a record type meant deleting the node and making it again — the endpoints
+  existed the whole time with nothing calling them. The node's URL/DNS health card gains a ⋮ menu
+  with **Edit** and **Remove monitoring**; the editor covers every field including the expected
+  HTTP status (any 2xx, an explicit code list, or a range). Removing the configuration leaves the
+  node in the inventory and its recorded history intact, and simply stops probing it. Requires the
+  same permission as any other monitoring change (Admin).
+
 - **The API now publishes its own OpenAPI 3.1 document, at `GET /api/v1/openapi.json`.** It is
   generated from the handlers themselves — every path, query parameter, request body, response shape
   and error code — so it describes what the server actually does rather than what someone remembered
@@ -65,24 +136,6 @@
   contains no inventory, configuration or state, and is identical on every deployment. Point any
   OpenAPI client generator at it. The WebUI's own types and API client are now generated from this
   same document, which removes 3,340 lines of hand-transcribed TypeScript that nothing was checking.
-
-### Bug Fixes
-- **A report run in a state the WebUI didn't recognise was shown as "Failed".** The status badge
-  ended in a catch-all that painted anything unfamiliar critical-red, so a run that had actually
-  succeeded could read as broken — most visibly during a rolling upgrade, where an older WebUI sees
-  rows written by a newer core. Run state, trigger and schedule cadence are now closed sets in the
-  API contract (`queued`/`running`/`succeeded`/`failed`/`unknown` and so on), the badge is a
-  per-state map with no catch-all, and a genuinely unrecognised state renders neutrally as "Unknown
-  state" rather than as a failure. **No wire change** — the same strings, now described.
-- **A DNS monitor's failure reason was shown as a raw internal token.** Node ▸ DNS rendered
-  `nx_domain`, `serv_fail`, `depth_exceeded` and six others verbatim, untranslated — so a Japanese
-  operator got English snake_case in the resolution column. All nine now read as sentences in both
-  languages ("No such name (NXDOMAIN)", "名前が存在しない（NXDOMAIN）").
-- **An alerting rule scoped to one event stream could silently widen to all of them.** An event rule
-  naming a source kind this build did not recognise parsed to "no kind filter", which the matcher
-  reads as *any* kind — so the rule fired on syslog, traps and webhooks alike, rather than the one
-  stream it was written for. Such a rule is now left out of the engine and logged until the core
-  understands it.
 
 ### Improvements
 - **Active alerts now say which device and what broke, instead of two UUIDs.** A triage row read
@@ -112,8 +165,65 @@
   time-ordered logs: when a remote poller reconnects and replays buffered results
   (store-and-forward), older events can land *behind* a page you have already scrolled past — which
   is how the VictoriaLogs path has always behaved.
+- **The Flapping watchlist names its nodes.** The dashboard widget showed raw node and check UUIDs;
+  it now resolves the node's name (UUID on hover) and shows what the flapping check measures, the
+  same way the Active alerts list does.
 
 ### Bug Fixes
+- **A report run in a state the WebUI didn't recognise was shown as "Failed".** The status badge
+  ended in a catch-all that painted anything unfamiliar critical-red, so a run that had actually
+  succeeded could read as broken — most visibly during a rolling upgrade, where an older WebUI sees
+  rows written by a newer core. Run state, trigger and schedule cadence are now closed sets in the
+  API contract (`queued`/`running`/`succeeded`/`failed`/`unknown` and so on), the badge is a
+  per-state map with no catch-all, and a genuinely unrecognised state renders neutrally as "Unknown
+  state" rather than as a failure. **No wire change** — the same strings, now described.
+- **A DNS monitor's failure reason was shown as a raw internal token.** Node ▸ DNS rendered
+  `nx_domain`, `serv_fail`, `depth_exceeded` and six others verbatim, untranslated — so a Japanese
+  operator got English snake_case in the resolution column. All nine now read as sentences in both
+  languages ("No such name (NXDOMAIN)", "名前が存在しない（NXDOMAIN）").
+- **An alerting rule scoped to one event stream could silently widen to all of them.** An event rule
+  naming a source kind this build did not recognise parsed to "no kind filter", which the matcher
+  reads as *any* kind — so the rule fired on syslog, traps and webhooks alike, rather than the one
+  stream it was written for. Such a rule is now left out of the engine and logged until the core
+  understands it.
+- **A poller went on polling nodes that had moved to another pool.** The scheduler built its pool map
+  from node rows alone, so a pool whose last node moved away vanished from the map and was never
+  reconciled again — its poller kept polling the stale working set for the life of the core process,
+  double-polling every node that had left. Recovery took a poller restart. Every live pool is now
+  seeded into the map before the node pass. Until this release it took a hand-written database edit
+  to reach; making pool editable from the WebUI turns it into the first thing an operator does.
+- **A filtered flow destination dropped the template datagrams its collector needed.** A forwarding
+  destination with a filter tests the decoded flow records, and a NetFlow v9 datagram carrying only
+  template definitions has none — so an exporter that refreshes templates in their own record-free
+  datagrams left a filtered collector holding data sets it could never decode, silently and
+  permanently. A datagram with template definitions and no flow records now bypasses the filter. The
+  rule is deliberately "templates and no records", not "no records": a data set whose template is
+  unknown also decodes to zero records but teaches a collector nothing, so there the filter still
+  decides. Exporters that inline templates in every export were never affected. Found by on-metal
+  validation against a real collector.
+- **A node could hold both a URL and a DNS monitor, and the DNS one would never run.** The "a node is
+  exactly one kind" guard was enforced on the DNS writer only, so attaching a URL check to a
+  DNS-monitored node was accepted and stored — and the scheduler, which resolves URL first, then
+  never ran the DNS check. Both writers now ask the same guard, and the precedence is stated once
+  rather than twice.
+- **`get_fleet_summary` over MCP left out node states it had not seen.** The REST rollup pre-seeds all
+  six states; the MCP tool inserted only the ones present in the fleet, so an AI client reading
+  `states["warning"]` got a missing key where the WebUI got a zero — and reported, confidently, that
+  there was no warning data. Both surfaces now return the same tally. Relatedly, an empty fleet's
+  data coverage reads as 100% rather than 0%, so the blind-spot widget no longer lights up on every
+  fresh install and gets tuned out.
+- **A broken key or an unreachable database told the operator their OIDC settings were invalid.**
+  Saving an identity provider rendered *every* failure as `400 invalid_provider` with the internal
+  error text attached, so a key-encryption problem or a failed database write was reported as bad
+  input — and the internal message went out on the wire. A bad submission is now a 400 that says
+  which field, a fault is an opaque 500 with the cause in the log, and an IdP that cannot be reached
+  during sign-in is a 502 rather than a 500.
+- **A regular-expression event search was case-sensitive on VictoriaLogs, case-insensitive on
+  PostgreSQL.** The same regex matched different rows depending on which log store was enabled; both
+  are now case-insensitive. A *plain* search term still matches whole tokens on VictoriaLogs and
+  substrings on PostgreSQL — an inverted word index cannot serve a leading substring without scanning
+  every block, measured at 30s against 0.22s on the live fleet — so that one difference is deliberate,
+  and the search box's regex toggle is the escape hatch when you need to reach inside a token.
 - **The poller's store-and-forward buffer can use its disk again.** The container image never
   created the spill directory, and `/var/lib` is not writable by the non-root runtime user, so the
   buffer fell back to memory-only after a single startup warning. A bus outage lasting longer than
@@ -138,6 +248,27 @@
 - **Three chart colors were unreadable in dark mode.** The palette's fourth, fifth and sixth
   entries kept their light-theme values on the dark surface — which covered most Troubleshoot
   report bodies and the passive-event and capacity dashboard widgets, not just charts.
+- **Thresholds no longer judge raw counters.** A threshold on a counter metric (`if_hc_in_octets`,
+  errors, discards — anything the collection catalog declares a counter) compared the raw monotonic
+  total against the bound, so an `above` rule latched permanently once the counter passed it and a
+  `below` rule fired a phantom alert at every reboot's counter reset. Counter samples are now read
+  as OK — which also drains any alert such a rule had latched, through the normal recovery path —
+  and `POST /api/v1/thresholds` on a counter metric answers **400 `counter_metric`**. Rates stay a
+  query-time concern (ADR-012); set thresholds on gauges.
+- **A failed report delete no longer closes silently.** Deleting a report template, saved run or
+  schedule swallowed the error and closed the dialog looking like success; the confirmation now
+  stays open and shows the message, like every other delete dialog. The report builder and schedule
+  dialog also disable Cancel while a save is in flight.
+
+### Security
+- **A URL monitor accepted an IPv6 loopback or link-local target.** The edge validator blocked
+  SSRF-prone destinations by parsing the URL's host as an IP address — but a URL parser returns an
+  IPv6 literal *with* its brackets (`[::1]`), which the address parser rejects, so every IPv6 target
+  fell through to the hostname path and skipped the block entirely. `http://[::1]/` and
+  `http://[fe80::1]/` were accepted when creating or editing a URL monitor. **This was a check that
+  silently did nothing rather than an exfiltration path** — the poller refused the same addresses at
+  probe time, so no request was ever made to one. Three other places parse a URL host and each had
+  its own correct copy; all four now share one implementation.
 
 ## v0.1.18
 

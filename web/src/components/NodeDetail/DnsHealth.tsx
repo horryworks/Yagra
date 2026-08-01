@@ -29,7 +29,15 @@ import './DnsHealth.css';
 /** How many history rows to show. Append-on-change keeps this list short in practice. */
 const HISTORY_LIMIT = 50;
 
-export function DnsHealth({ nodeId, check }: { nodeId: string; check: DnsCheckConfig }) {
+export function DnsHealth({
+  nodeId,
+  check,
+  actions,
+}: {
+  nodeId: string;
+  check: DnsCheckConfig;
+  actions?: React.ReactNode;
+}) {
   const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
@@ -109,6 +117,7 @@ export function DnsHealth({ nodeId, check }: { nodeId: string; check: DnsCheckCo
       <div className="nd-section-head">
         <div className="nd-section-t">{t('overview.dnsMonitor')}</div>
         <RangeControl value={range} onChange={setRange} />
+        {actions}
       </div>
 
       <div className="dns-target">

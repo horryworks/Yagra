@@ -353,7 +353,9 @@ export RUST_LOG=info
 | `YAGRA_SNMP_COMMUNITY` | 未設定 | 資格情報が未バインドのノードに使うフォールバック SNMP v2c コミュニティ |
 | `YAGRA_MERAKI_POOL` | `default` | Meraki クラウド収集ジョブを振り分けるポーラプール |
 | `YAGRA_WEBHOOK_URL` | 未設定 ⇒ 無効 | 既定のアラート Webhook チャネル |
-| `YAGRA_SMTP_HOST` / `_PORT` / `_FROM` / `_TO` / `_USER` / `_PASS` | 未設定 ⇒ メール無効 | 環境変数による SMTP アラートチャネル（host があれば有効） |
+| `YAGRA_SMTP_HOST` / `_FROM` / `_TO` | 未設定 ⇒ メール無効 | 環境変数による SMTP アラートチャネル。3 つとも必須で、いずれかが欠けるか `_FROM`/`_TO` がメールアドレスとして解釈できない場合はチャネルを作りません |
+| `YAGRA_SMTP_PORT` | `465`（暗黙 TLS） | SMTP ポート |
+| `YAGRA_SMTP_USER` / `_PASS` | 未設定 ⇒ 認証なし | SMTP 認証情報。**両方**設定されたときのみ適用 |
 | **トラフィックフローと IP→ASN 補完** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30`（1–3650 にクランプ） | フローの保持期間（日数。ClickHouse の TTL） |
 | `YAGRA_IPASN_DB` | 未設定 ⇒ 補完無効 | フローの IP→ASN 補完に使うオフライン iptoasn.com TSV へのパス |

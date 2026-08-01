@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Personal access tokens (Settings ▸ API tokens) — the durable credential for the MCP tool
-//! surface and for external automation (ADR-028).
+//! surface at `/mcp` (ADR-028).
+//!
+//! **A PAT authenticates `/mcp` and nothing else.** This REST API's auth edge takes session tokens
+//! alone and answers `401` to a `yat_…` bearer, so these are not general-purpose API credentials —
+//! external REST automation logs in via `POST /api/v1/auth/login`. The published `bearer` scheme
+//! says the same thing; keep the two in step.
 //!
 //! Admin-only throughout, under `ManageUsers` rather than `ManageConfig`: a token carries a role and
 //! a scope, so minting one hands out an identity. That is a user-management act however it is
@@ -111,6 +116,11 @@ fn validate_create(body: &CreateApiTokenBody) -> Result<(&str, yagra_common::Sco
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
     ),
 )]
+/// Mint a personal access token for the MCP tool surface at `/mcp`.
+///
+/// The raw token is in this response and nowhere else — only its hash is stored, so no later call
+/// can produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with
+/// `401` and wants a session token from `POST /api/v1/auth/login`.
 async fn create_api_token(
     _guard: RequireManageUsers,
     caller: Caller,
@@ -156,6 +166,10 @@ async fn create_api_token(
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
     ),
 )]
+/// Every issued personal access token, as metadata.
+///
+/// Neither the raw token nor its hash is returned — a token's value exists only in the response
+/// that created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.
 async fn list_api_tokens(
     _guard: RequireManageUsers,
     admin: Admin,
@@ -177,6 +191,10 @@ async fn list_api_tokens(
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
     ),
 )]
+/// Revoke a personal access token, so it stops authenticating `/mcp` immediately.
+///
+/// Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator
+/// reaches for when a token may be compromised, so "it was already gone" is success, not `404`.
 async fn revoke_api_token(
     _guard: RequireManageUsers,
     admin: Admin,

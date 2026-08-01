@@ -6,7 +6,6 @@
 //! stable [`NodeId`]; `name`/`tags` are mutable metadata. Poller assignment uses the
 //! `pool` attribute (location-affinity pools, ADR-009).
 
-use crate::address::AddressFamily;
 use crate::ids::{CredentialId, GroupId, NodeId, ProfileId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -70,12 +69,6 @@ impl Node {
         self.parent.is_none()
     }
 
-    /// The address family (v4/v6) of the management address.
-    #[must_use]
-    pub fn address_family(&self) -> AddressFamily {
-        AddressFamily::of(&self.address)
-    }
-
     /// Look up a grouping tag value.
     #[must_use]
     pub fn tag(&self, key: &str) -> Option<&str> {
@@ -115,12 +108,14 @@ mod tests {
     }
 
     #[test]
-    fn address_family_tracks_v4_and_v6() {
+    fn a_node_carries_either_address_family() {
+        // IPv4 and IPv6 are both in scope from the start (coding-conventions / NFR): the address
+        // is an `IpAddr` throughout, never a v4-shaped field.
         let n4 = v4("a");
-        assert_eq!(n4.address_family(), AddressFamily::V4);
+        assert!(n4.address.is_ipv4());
 
         let n6 = Node::new(NodeId::new(), "b", IpAddr::V6(Ipv6Addr::LOCALHOST));
-        assert_eq!(n6.address_family(), AddressFamily::V6);
+        assert!(n6.address.is_ipv6());
     }
 
     #[test]

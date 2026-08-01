@@ -76,7 +76,8 @@ export function sumDetail(findings: AnalysisFinding[], key: string): number {
   return total;
 }
 
-/** 1–5 sensitivity slider → σ threshold (looser = higher σ). Mirrors the launch drawer. */
+/** 1–5 sensitivity slider → σ threshold (looser = higher σ). The single definition — the launch
+ *  drawer imports this one when submitting the job. */
 export function sigmaFor(slider: number): number {
   return 4.5 - 0.5 * slider;
 }
@@ -272,4 +273,29 @@ export function toCsv(
   const head = columns.map((c) => csvField(c.header)).join(',');
   const rows = findings.map((f) => columns.map((c) => csvField(c.cell(f))).join(','));
   return [head, ...rows].join('\r\n');
+}
+
+/** Severity band for a "how many times normal" ratio, shared by the event-storm and
+ *  traffic-anomaly report bodies.
+ *
+ *  Both had their own byte-identical copy. The thresholds decide which colour an operator sees
+ *  against a spike, so two copies is two places a tuning change has to land — and the one that is
+ *  missed silently keeps the old bands. */
+export function ratioBucket(r: number): 'x10' | 'x3' | 'low' {
+  if (r >= 10) return 'x10';
+  if (r >= 3) return 'x3';
+  return 'low';
+}
+
+/** Split the backend's synthetic `kind: 'info'` tier-unavailable rows out of the real findings.
+ *
+ *  Every report descriptor's contract depends on this: a body is written assuming it never sees a
+ *  notice row, so a notice leaking through renders as a finding with no metric and no severity. */
+export function splitNotices<T extends { kind: string }>(
+  rows: T[],
+): { findings: T[]; notices: T[] } {
+  return {
+    findings: rows.filter((f) => f.kind !== 'info'),
+    notices: rows.filter((f) => f.kind === 'info'),
+  };
 }

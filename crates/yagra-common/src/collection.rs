@@ -198,6 +198,17 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
     ]
 }
 
+/// The declared [`MetricKind`] of a built-in catalog metric, or `None` when `name` is not
+/// in the built-in catalog. This is how the API layer asks "is this metric a raw counter?"
+/// without re-spelling the catalog's names anywhere else.
+#[must_use]
+pub fn builtin_metric_kind(name: &str) -> Option<MetricKind> {
+    builtin_catalog()
+        .into_iter()
+        .find(|i| i.metric_name == name)
+        .map(|i| i.metric_kind)
+}
+
 /// The standard interface-metadata columns (ifName, ifAlias, ifSpeed) and their OID bases.
 ///
 /// Walked alongside the numeric columns to populate the PostgreSQL `interfaces` table; these
@@ -975,6 +986,25 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_metric_kind_reads_the_catalog_not_a_second_list() {
+        // Counters and gauges resolve from the one catalog; an unknown name is None, not a guess.
+        assert_eq!(
+            builtin_metric_kind("if_hc_in_octets"),
+            Some(MetricKind::Counter)
+        );
+        assert_eq!(
+            builtin_metric_kind("if_in_errors"),
+            Some(MetricKind::Counter)
+        );
+        // sysUpTime is deliberately a gauge (reboot detection via `below` must keep working).
+        assert_eq!(
+            builtin_metric_kind("snmp_sys_uptime_ticks"),
+            Some(MetricKind::Gauge)
+        );
+        assert_eq!(builtin_metric_kind("icmp_rtt_ms"), None);
+    }
 
     #[test]
     fn builtin_profile_names_are_unique() {

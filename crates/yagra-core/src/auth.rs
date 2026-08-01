@@ -590,22 +590,13 @@ pub fn generate_bootstrap_password() -> String {
 /// binary still reads a valid `String` it simply can't verify against.
 pub const OIDC_PASSWORD_SENTINEL: &str = "!oidc-no-local-login";
 
-/// The stored text form of a role (matches [`parse_role`]).
-fn role_text(role: Role) -> &'static str {
-    match role {
-        Role::Admin => "admin",
-        Role::Operator => "operator",
-        Role::Viewer => "viewer",
-    }
-}
-
-/// Parse a stored role string (defaults to the least-privileged role on garbage).
+/// Parse a stored role string via [`Role::key`] (defaults to the least-privileged role on
+/// garbage). Derived from [`Role::ALL`] so the token list lives in one place.
 fn parse_role(s: &str) -> Role {
-    match s {
-        "admin" => Role::Admin,
-        "operator" => Role::Operator,
-        _ => Role::Viewer,
-    }
+    Role::ALL
+        .into_iter()
+        .find(|r| r.key() == s)
+        .unwrap_or(Role::Viewer)
 }
 
 /// User-account metadata for the API — never includes the password hash.
@@ -794,7 +785,7 @@ impl UserStore {
         username: &str,
         role: Role,
     ) -> anyhow::Result<(Uuid, Principal)> {
-        let role_str = role_text(role);
+        let role_str = role.key();
         // Existing identity → refresh role + last_login.
         let existing: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM users WHERE oidc_provider_id = $1 AND oidc_subject = $2",

@@ -15,27 +15,8 @@ import { AnalysisRuns } from './AnalysisRuns';
 import { ToolCard } from './ToolCard';
 import { LaunchDrawer } from './LaunchDrawer';
 import { TroubleshootToast } from './TroubleshootToast';
-import type { AnalysisJob } from '../types/api';
+import { avgRuntime, runsToday } from './catalogStats';
 import './troubleshoot.css';
-
-/** Count of jobs created in the last 24h. */
-function runsToday(jobs: AnalysisJob[]): number {
-  const since = Date.now() - 86_400_000;
-  return jobs.filter((j) => j.created_ms >= since).length;
-}
-
-/** Mean runtime of finished jobs, formatted "Nm Ns" (or "—" if none have completed). */
-function avgRuntime(jobs: AnalysisJob[]): string {
-  const durs = jobs
-    .filter((j) => j.started_ms != null && j.finished_ms != null)
-    .map((j) => (j.finished_ms as number) - (j.started_ms as number))
-    .filter((d) => d >= 0);
-  if (durs.length === 0) return '—';
-  const avg = durs.reduce((a, b) => a + b, 0) / durs.length / 1000;
-  const m = Math.floor(avg / 60);
-  const s = Math.round(avg % 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
 
 export function TroubleshootCatalogPage() {
   const { t } = useTranslation('troubleshoot');
@@ -77,11 +58,7 @@ export function TroubleshootCatalogPage() {
       <Card
         title={t('nav:troubleshoot.runs')}
         actions={
-          <Button
-            variant="ghost"
-            className="btn-sm"
-            onClick={() => navigate('/troubleshoot/runs')}
-          >
+          <Button variant="ghost" onClick={() => navigate('/troubleshoot/runs')}>
             {t('catalog.viewAll')}
           </Button>
         }

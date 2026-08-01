@@ -190,6 +190,22 @@ impl CollectionRepo {
         Ok(row.try_get("id")?)
     }
 
+    /// Whether any stored collection item or template item declares `metric_name` as a raw
+    /// counter. Consulted by threshold creation: a counter's sampled value is monotonic, so a
+    /// fixed bound cannot be evaluated against it (rates are query-time derived, ADR-012).
+    pub async fn metric_declared_counter(&self, metric_name: &str) -> anyhow::Result<bool> {
+        let row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM collection_items \
+                    WHERE metric_name = $1 AND metric_kind = 'counter') \
+                 OR EXISTS(SELECT 1 FROM collection_template_items \
+                    WHERE metric_name = $1 AND metric_kind = 'counter') AS is_counter",
+        )
+        .bind(metric_name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("is_counter")?)
+    }
+
     /// Delete a collection item by id. Returns whether a row was removed.
     pub async fn delete_item(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM collection_items WHERE id = $1")
@@ -410,4 +426,114 @@ pub struct TemplateItem {
 pub enum CreateTemplateOutcome {
     Created(Uuid),
     NameTaken,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("collection.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn an_unknown_stored_token_degrades_to_the_safe_default() {
+        // These columns carry what some build wrote, and a newer core may use a token this one has
+        // never seen. Each fallback is the conservative reading: a `Scalar` collection fetches one
+        // OID instead of walking a table, and a `Gauge` is used as-is rather than being treated as
+        // a counter — the direction that cannot fabricate a rate.
+        assert_eq!(parse_collection_kind("nonsense"), CollectionKind::Scalar);
+        assert_eq!(parse_metric_kind("nonsense"), MetricKind::Gauge);
+        assert_eq!(parse_scope_level("nonsense"), ScopeLevel::Profile);
+    }
+
+    #[test]
+    fn the_parsers_round_trip_every_token_the_writers_store() {
+        // `create_item` / `create_template_item` bind the caller's string straight into the column,
+        // so reader and writer must agree on the whole vocabulary or a stored row reads back as
+        // something else entirely.
+        assert_eq!(parse_collection_kind("table"), CollectionKind::Table);
+        assert_eq!(parse_collection_kind("scalar"), CollectionKind::Scalar);
+        assert_eq!(parse_metric_kind("counter"), MetricKind::Counter);
+        assert_eq!(parse_metric_kind("gauge"), MetricKind::Gauge);
+        assert_eq!(parse_scope_level("node"), ScopeLevel::Node);
+        assert_eq!(parse_scope_level("group"), ScopeLevel::Group);
+        assert_eq!(parse_scope_level("profile"), ScopeLevel::Profile);
+    }
+
+    #[test]
+    fn the_counter_probe_asks_both_tables_because_a_metric_can_live_in_either() {
+        // A metric is a counter if *any* stored item says so — ad-hoc node items and template
+        // items are two independent places an operator can declare one, and the threshold guard
+        // that consumes this must not be fooled by checking only one of them.
+        let src = production_source();
+        assert!(src.contains("FROM collection_items"));
+        assert!(src.contains("FROM collection_template_items"));
+        let probe = src
+            .split_once("pub async fn metric_declared_counter")
+            .expect("the counter probe exists")
+            .1;
+        let body = probe.split_once("pub async fn").map_or(probe, |(b, _)| b);
+        assert_eq!(
+            body.matches("metric_kind = 'counter'").count(),
+            2,
+            "both item tables must be consulted, or a counter threshold slips through"
+        );
+        assert!(
+            body.contains("$1"),
+            "the metric name must be bound, never interpolated"
+        );
+    }
+
+    #[test]
+    fn deleting_a_template_item_is_scoped_to_its_template() {
+        // Without the template_id in the WHERE, a wrong id would reach across and delete another
+        // template's row — a cross-tenant delete by typo.
+        assert!(production_source()
+            .contains("DELETE FROM collection_template_items WHERE id = $1 AND template_id = $2"));
+    }
+
+    #[test]
+    fn replacing_a_profiles_templates_is_transactional() {
+        // The delete-then-insert would otherwise be able to land half-applied, leaving a profile
+        // collecting nothing at all.
+        let src = production_source();
+        let replace = src
+            .split_once("pub async fn set_profile_templates")
+            .expect("the replace exists")
+            .1;
+        assert!(replace.contains("self.pool.begin()"));
+        assert!(replace.contains("tx.commit()"));
+        assert!(replace.contains("DELETE FROM profile_collection_templates WHERE profile_id = $1"));
+    }
+
+    #[test]
+    fn a_duplicate_template_name_is_a_named_outcome_not_an_opaque_error() {
+        // 23505 is the unique violation on `collection_templates.name`; mapping it here is what
+        // lets the API answer 409 instead of 500.
+        let src = production_source();
+        assert!(src.contains(r#"e.code().as_deref() == Some("23505")"#));
+        assert!(src.contains("CreateTemplateOutcome::NameTaken"));
+    }
+
+    #[test]
+    fn every_statement_binds_its_values_instead_of_interpolating_them() {
+        // Metric names, OIDs and scope levels all arrive from the API edge.
+        let src = production_source();
+        for builder in ["format!(", "push_str("] {
+            assert!(
+                !src.contains(builder),
+                "SQL may be being built by string concatenation ({builder}); bind the value instead"
+            );
+        }
+    }
 }

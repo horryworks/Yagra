@@ -28,13 +28,19 @@ import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../componen
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
 import type { ComponentType } from 'react';
+import {
+  buildV3Secret,
+  emptyV3,
+  v3Ready,
+  V3_AUTH_PROTOCOLS,
+  V3_LEVELS,
+  V3_PRIV_PROTOCOLS,
+  type V3State,
+} from './v3Credential';
 import './CredentialsPage.css';
 
 const KINDS = ['snmp_v2c', 'snmp_v3', 'api_token'] as const;
 type Kind = (typeof KINDS)[number];
-const V3_LEVELS = ['authpriv', 'auth', 'noauth'] as const;
-const V3_AUTH_PROTOCOLS = ['sha', 'sha224', 'sha256', 'sha384', 'sha512', 'md5'];
-const V3_PRIV_PROTOCOLS = ['aes', 'aes192', 'aes256', 'des'];
 
 // Kind → { i18n label key, icon }. The label is resolved with `t` at the call site (never at
 // module load) so it follows the active language.
@@ -56,43 +62,6 @@ const kindLabel = (kind: string, t: TFunction) => {
 const usageLabel = (n: number, t: TFunction) =>
   n === 0 ? t('cred.usage.unused') : t('cred.usage.count', { count: n });
 
-/** SNMPv3 (USM) structured form state — shared by the add and edit modals. */
-interface V3State {
-  user: string;
-  level: (typeof V3_LEVELS)[number];
-  authProto: string;
-  authKey: string;
-  privProto: string;
-  privKey: string;
-}
-
-const emptyV3 = (): V3State => ({
-  user: '',
-  level: 'authpriv',
-  authProto: V3_AUTH_PROTOCOLS[0],
-  authKey: '',
-  privProto: V3_PRIV_PROTOCOLS[0],
-  privKey: '',
-});
-
-/** Whether the v3 form has the keys its declared security level requires. */
-const v3Ready = (v: V3State): boolean => {
-  const needsAuth = v.level !== 'noauth';
-  const needsPriv = v.level === 'authpriv';
-  return v.user.trim() !== '' && (!needsAuth || v.authKey !== '') && (!needsPriv || v.privKey !== '');
-};
-
-/** Serialize the v3 form into the USM JSON document the backend validates and seals. */
-const buildV3Secret = (v: V3State): string => {
-  const needsAuth = v.level !== 'noauth';
-  const needsPriv = v.level === 'authpriv';
-  return JSON.stringify({
-    user: v.user.trim(),
-    security_level: v.level,
-    ...(needsAuth ? { auth_protocol: v.authProto, auth_key: v.authKey } : {}),
-    ...(needsPriv ? { priv_protocol: v.privProto, priv_key: v.privKey } : {}),
-  });
-};
 
 /** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
 function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) => void }) {

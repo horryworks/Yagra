@@ -13,8 +13,10 @@ import {
   groupByRule,
   humanDays,
   maxDetail,
+  ratioBucket,
   scanPattern,
   sevOf,
+  splitNotices,
   sumDetail,
   toCsv,
   totalLabel,
@@ -197,5 +199,47 @@ describe('toCsv', () => {
 
   it('emits a header even with no rows', () => {
     expect(toCsv([{ header: 'a', cell: () => 'x' }], [])).toBe('"a"');
+  });
+});
+
+describe('ratioBucket', () => {
+  it('bands a ratio at the documented thresholds, inclusive', () => {
+    // The boundaries are the whole point: 3× and 10× are "at least", not "more than".
+    expect(ratioBucket(10)).toBe('x10');
+    expect(ratioBucket(10.1)).toBe('x10');
+    expect(ratioBucket(9.99)).toBe('x3');
+    expect(ratioBucket(3)).toBe('x3');
+    expect(ratioBucket(2.99)).toBe('low');
+    expect(ratioBucket(0)).toBe('low');
+  });
+
+  it('treats a negative ratio as low rather than banding it', () => {
+    expect(ratioBucket(-5)).toBe('low');
+  });
+});
+
+describe('splitNotices', () => {
+  it('keeps notices out of the findings a report body renders', () => {
+    // A body assumes it never sees a notice row; one leaking through renders as a finding with no
+    // metric and no severity.
+    const rows = [
+      { kind: 'anomaly', id: 1 },
+      { kind: 'info', id: 2 },
+      { kind: 'capacity', id: 3 },
+      { kind: 'info', id: 4 },
+    ];
+    const { findings, notices } = splitNotices(rows);
+    expect(findings.map((f) => f.id)).toEqual([1, 3]);
+    expect(notices.map((f) => f.id)).toEqual([2, 4]);
+  });
+
+  it('partitions completely — every row lands on exactly one side', () => {
+    const rows = [{ kind: 'a' }, { kind: 'info' }, { kind: 'b' }];
+    const { findings, notices } = splitNotices(rows);
+    expect(findings.length + notices.length).toBe(rows.length);
+  });
+
+  it('handles an empty result set', () => {
+    expect(splitNotices([])).toEqual({ findings: [], notices: [] });
   });
 });

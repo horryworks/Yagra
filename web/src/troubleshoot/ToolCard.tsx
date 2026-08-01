@@ -96,7 +96,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
           <div className="ts-run-split" ref={menuRef}>
             <Button
               variant="primary"
-              className="btn-sm ts-run-main"
+              className="ts-run-main"
               onClick={(e) => {
                 e.stopPropagation();
                 configure();
@@ -106,7 +106,7 @@ export function ToolCard({ tool }: { tool: Tool }) {
             </Button>
             <Button
               variant="primary"
-              className="btn-sm ts-run-caret"
+              className="ts-run-caret"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               aria-label={t('toolCard.moreOptions')}

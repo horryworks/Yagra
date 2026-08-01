@@ -22,12 +22,12 @@ import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
 import { formatBytes, formatUtil, pointsToSeries } from '../lib/format';
+import { alignTo, pctSeries } from '../lib/seriesMath';
 import type {
   DependencyHealth,
   DiskUsage,
   HostInfo,
   HostMetricRange,
-  MetricPoint,
 } from '../types/api';
 import './SystemHealthPage.css';
 
@@ -90,29 +90,6 @@ function DependencyHealthCard() {
       )}
     </Card>
   );
-}
-
-/** Align one series onto a base timestamp axis (missing points → null, drawn as a gap). */
-function alignTo(base: number[], points: MetricPoint[]): (number | null)[] {
-  const byT = new Map(points.map((p) => [p.t, p.v]));
-  return base.map((t) => byT.get(t) ?? null);
-}
-
-/** Derive a used-% series by aligning used/size point arrays on shared timestamps. */
-function pctSeries(
-  used: MetricPoint[],
-  size: MetricPoint[],
-): { timestamps: number[]; values: number[] } {
-  const sizeByT = new Map(size.map((p) => [p.t, p.v]));
-  const timestamps: number[] = [];
-  const values: number[] = [];
-  for (const p of used) {
-    const s = sizeByT.get(p.t);
-    if (s == null || s <= 0) continue;
-    timestamps.push(p.t);
-    values.push((p.v / s) * 100);
-  }
-  return { timestamps, values };
 }
 
 /** Human label for an instance in the selector: "Core" or the poller id (with its pool). `t` is

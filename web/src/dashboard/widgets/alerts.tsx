@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/Button';
 import {
+  alertWhatOf,
   relativeTime,
   severityColorVar,
   severityLabel,
@@ -14,7 +15,9 @@ import {
 } from '../../lib/format';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
+import { EntityName, useEntityNames } from '../../components/ui/EntityName';
 import { AlertRows } from '../../widgets/AlertRows';
+import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Donut } from '../primitives/Donut';
 import { Heatmap } from '../primitives/Heatmap';
 import { RankedBars } from '../primitives/RankedBars';
@@ -61,6 +64,9 @@ export function SeverityMixWidget() {
 export function FlappingWatchlistWidget() {
   const { t } = useTranslation('dashboard');
   const alerts = useAlertStore((s) => s.alerts);
+  // Same resolution rules as AlertRows: the node shows its name (UUID on hover), and the check
+  // id — a one-way hash with no name — shows what it measures, id recoverable on hover.
+  const { nodeName } = useEntityNames();
   const flapping = sortedAlerts(alerts).filter((a) => a.flapping);
   if (flapping.length === 0) {
     return <p className="muted">{t('widgets.flapping.empty')}</p>;
@@ -70,8 +76,12 @@ export function FlappingWatchlistWidget() {
       {flapping.map((a) => (
         <li className="dwl-row" key={`${a.node}|${a.check}|${a.severity}`}>
           <span className="dwl-dot" style={{ background: severityColorVar(a.severity) }} />
-          <span className="dwl-name mono">{a.node}</span>
-          <span className="dwl-sub">{a.check}</span>
+          <span className="dwl-name">
+            <EntityName name={nodeName(a.node)} id={a.node} />
+          </span>
+          <span className="dwl-sub" title={a.check}>
+            <AlertWhatText what={alertWhatOf(a)} />
+          </span>
         </li>
       ))}
     </ul>

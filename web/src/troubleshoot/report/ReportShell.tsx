@@ -19,27 +19,17 @@ import { ScopePicker } from '../ScopePicker';
 import { allScope, type ScopeValue } from '../scope';
 import { TroubleshootToast } from '../TroubleshootToast';
 import { relTime } from '../format';
-import { reportPathFor, toolById } from '../data';
+import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
 import { useTroubleshootStream } from '../useTroubleshootStream';
 import { NoticeRow } from './kit';
-import { sigmaFor, toCsv } from './format';
+import { sigmaFor, splitNotices, toCsv } from './format';
 import { buildJobInput } from './jobInput';
 import type { ControlState, ReportDescriptor } from './types';
 import type { AnalysisFinding, AnalysisJob } from '../../types/api';
 import '../troubleshoot.css';
 import './report.css';
 
-/** Split the backend's synthetic `kind: 'info'` tier-unavailable rows out of the real findings. */
-function splitNotices(rows: AnalysisFinding[]): {
-  findings: AnalysisFinding[];
-  notices: AnalysisFinding[];
-} {
-  return {
-    findings: rows.filter((f) => f.kind !== 'info'),
-    notices: rows.filter((f) => f.kind === 'info'),
-  };
-}
 
 function Processing({
   pct,
@@ -72,7 +62,7 @@ function Processing({
             </div>
           ))}
         </div>
-        <Button className="btn-sm" style={{ marginTop: 8 }} onClick={onCancel}>
+        <Button style={{ marginTop: 8 }} onClick={onCancel}>
           {t('common:actions.cancel')}
         </Button>
       </div>
@@ -207,12 +197,8 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
         note={t(`${descriptor.i18nKey}.note`)}
         actions={
           <>
-            <Button className="btn-sm" onClick={() => void run()}>
-              {t('actions.rerun')}
-            </Button>
-            <Button className="btn-sm" onClick={exportCsv}>
-              {t('actions.export')}
-            </Button>
+            <Button onClick={() => void run()}>{t('actions.rerun')}</Button>
+            <Button onClick={exportCsv}>{t('actions.export')}</Button>
           </>
         }
       />
@@ -308,7 +294,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
         />
       )}
 
-      {job && (job.state === 'failed' || job.state === 'cancelled') && (
+      {job && (TERMINAL_JOB_STATES as readonly string[]).includes(job.state) && (
         <Card>
           <div className="ts-empty-note">
             {t('report.common.terminal', {

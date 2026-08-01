@@ -9,7 +9,6 @@
 //! ADR-011), counters stored raw with rates derived at query time (ADR-012), and an
 //! explicit, exhaustive node state machine (monitoring-conventions).
 
-pub mod address;
 pub mod classification;
 pub mod collection;
 pub mod dns_check;
@@ -27,14 +26,14 @@ pub mod thresholds;
 pub mod trap;
 pub mod url_check;
 
-pub use address::AddressFamily;
 pub use classification::{
     builtin_classification_rules, BuiltinClassificationRule, ClassificationRule,
 };
 pub use collection::{
-    builtin_catalog, builtin_interface_meta_columns, builtin_profiles, builtin_templates,
-    resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
-    InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED, TEMPLATE_STANDARD_SNMP,
+    builtin_catalog, builtin_interface_meta_columns, builtin_metric_kind, builtin_profiles,
+    builtin_templates, resolve_collection_set, BuiltinProfile, BuiltinTemplate, CollectionItem,
+    CollectionKind, InterfaceField, ScopedCollectionItem, OID_IF_HIGH_SPEED,
+    TEMPLATE_STANDARD_SNMP,
 };
 pub use dns_check::{
     is_resolver_blocked, normalize_dns_name, validate_dns_name, DnsAnswer, DnsChain,
@@ -48,8 +47,7 @@ pub use meraki::{
     uplink_ifindex, uplink_name, uplink_status_value, MerakiDeviceConfig, MerakiTier,
     METRIC_MERAKI_CLIENT_COUNT, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS,
     METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_STATUS,
-    METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB, PROFILE_MERAKI_MR_API,
-    PROFILE_MERAKI_MS_API, PROFILE_MERAKI_MX_API,
+    METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB,
 };
 pub use metric::{is_valid_metric_name, MetricKind, SeriesKey};
 pub use node::Node;

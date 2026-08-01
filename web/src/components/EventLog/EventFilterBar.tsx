@@ -16,7 +16,7 @@ import type { EventKind } from '../../types/api';
 import { Select } from '../ui/Field';
 import { SearchInput } from '../ui/TableToolbar';
 import { NodePicker } from '../NodePicker/NodePicker';
-import { localInputToUnix } from '../NodeDetail/RangeControl';
+import { localInputToIso } from '../NodeDetail/RangeControl';
 import './EventFilterBar.css';
 
 export type KindFilter = '' | EventKind;
@@ -38,12 +38,6 @@ interface Props {
   nodeId?: string | null;
   nodeLabel?: string;
   onNodeChange?: (node: { id: string; name: string } | null) => void;
-}
-
-/** local-wall-clock 'YYYY-MM-DDTHH:MM' → RFC 3339 (UTC), or undefined if empty/unparseable. */
-function localInputToIso(local: string): string | undefined {
-  const secs = localInputToUnix(local);
-  return secs == null ? undefined : new Date(secs * 1000).toISOString();
 }
 
 export function EventFilterBar({

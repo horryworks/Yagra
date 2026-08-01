@@ -16,7 +16,7 @@ import { RankedBars, type RankedRow } from '../../../dashboard/primitives/Ranked
 import { formatBytes } from '../../../lib/format';
 import { relTime } from '../../format';
 import { Chips, EmptyList, FindingRow, NodeRef, RatioMeter, ReportToolbar, RightRail } from '../kit';
-import { detailNum, sevOf, sortByDetail, sortCommon } from '../format';
+import { detailNum, ratioBucket, sevOf, sortByDetail, sortCommon } from '../format';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -26,12 +26,6 @@ const ratioOf = (f: AnalysisFinding) => {
   const b = baseOf(f);
   return b > 0 ? peakOf(f) / b : Infinity;
 };
-
-function ratioBucket(r: number): 'x10' | 'x3' | 'low' {
-  if (r >= 10) return 'x10';
-  if (r >= 3) return 'x3';
-  return 'low';
-}
 
 function sevColor(f: AnalysisFinding): string {
   const s = sevOf(f);

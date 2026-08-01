@@ -17,27 +17,30 @@ use std::sync::Mutex;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use yagra_common::{DiskUsage, HostSample};
 
+// The watch-path cluster is how `from_env` reads its configuration, not a surface for callers:
+// both binaries construct the collector with `HostCollector::from_env()` and never name a path.
+
 /// Environment variable naming the filesystems to watch. Comma-separated entries, each either a
 /// bare `path` or `path=alias` (the alias is the low-cardinality TSDB `mount` label). Unset ⇒
 /// [`DEFAULT_WATCH_SPEC`].
-pub const ENV_DISK_WATCH_PATHS: &str = "YAGRA_DISK_WATCH_PATHS";
+pub(crate) const ENV_DISK_WATCH_PATHS: &str = "YAGRA_DISK_WATCH_PATHS";
 
 /// Default when [`ENV_DISK_WATCH_PATHS`] is unset: the root filesystem, labelled `root`.
-pub const DEFAULT_WATCH_SPEC: &str = "/=root";
+pub(crate) const DEFAULT_WATCH_SPEC: &str = "/=root";
 
 /// One filesystem to watch: a path to `statvfs` and the friendly `mount` label reported for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatchPath {
+pub(crate) struct WatchPath {
     /// Filesystem path to measure.
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Low-cardinality label used as the TSDB `mount` value (e.g. `root`, `metrics`).
-    pub alias: String,
+    pub(crate) alias: String,
 }
 
 /// Parse a [`ENV_DISK_WATCH_PATHS`]-style spec into watch paths. Blank entries are skipped; an entry
 /// without `=alias` derives its alias from the last path segment (`/` ⇒ `root`).
 #[must_use]
-pub fn parse_watch_paths(spec: &str) -> Vec<WatchPath> {
+pub(crate) fn parse_watch_paths(spec: &str) -> Vec<WatchPath> {
     spec.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -80,9 +83,9 @@ pub struct HostCollector {
 }
 
 impl HostCollector {
-    /// Build a collector for the given watch paths.
+    /// Build a collector for the given watch paths. Crate-internal — callers use [`Self::from_env`].
     #[must_use]
-    pub fn new(watch: Vec<WatchPath>) -> Self {
+    pub(crate) fn new(watch: Vec<WatchPath>) -> Self {
         let sys = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())

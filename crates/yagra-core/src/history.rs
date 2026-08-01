@@ -36,6 +36,23 @@ pub struct AlertHistoryRow {
     pub recorded_at: String,
 }
 
+/// The four alert fields whose column value is a *decision* rather than a copy: a liveness check
+/// has no metric worth storing and no breach, so each becomes NULL.
+///
+/// Shared by both writers so the two cannot drift on what an empty metric or an absent breach
+/// means — the failure mode being one writer storing `""` where the other stores NULL, which the
+/// reader then renders as a blank metric name instead of "—".
+fn breach_columns(alert: &Alert) -> (Option<String>, Option<f64>, Option<f64>, Option<Direction>) {
+    let (value, threshold, direction) = match &alert.breach {
+        Some(b) => (Some(b.value), b.threshold, Some(b.direction)),
+        None => (None, None, None),
+    };
+    // The liveness sentinel is stored as NULL, not as its internal token: the column is what the
+    // operator reads as "what fired".
+    let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
+    (metric, value, threshold, direction)
+}
+
 /// PostgreSQL-backed alert history.
 pub struct AlertHistoryStore {
     pool: PgPool,
@@ -50,11 +67,7 @@ impl AlertHistoryStore {
     /// Append a fire (`resolved=false`) or recovery (`resolved=true`) record. Captures the
     /// metric (and numeric breach detail, if a threshold check) so the history is human-readable.
     pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
-        let (value, threshold, direction) = match &alert.breach {
-            Some(b) => (Some(b.value), b.threshold, Some(b.direction)),
-            None => (None, None, None),
-        };
-        let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
+        let (metric, value, threshold, direction) = breach_columns(alert);
         sqlx::query(
             "INSERT INTO alert_history \
              (id, node, check_id, severity, state, at_unix_ms, resolved, \
@@ -91,11 +104,7 @@ impl AlertHistoryStore {
               metric, observed_value, threshold_value, direction) ",
         );
         qb.push_values(records.iter(), |mut b, (alert, resolved)| {
-            let (value, threshold, direction) = match &alert.breach {
-                Some(br) => (Some(br.value), br.threshold, Some(br.direction)),
-                None => (None, None, None),
-            };
-            let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
+            let (metric, value, threshold, direction) = breach_columns(alert);
             b.push_bind(Uuid::new_v4())
                 .push_bind(alert.node.as_uuid())
                 .push_bind(alert.check.as_uuid())
@@ -218,5 +227,170 @@ impl AlertHistoryStore {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yagra_alert::Breach;
+    use yagra_common::{CheckId, NodeId};
+
+    const SRC: &str = include_str!("history.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn alert(metric: &str, breach: Option<Breach>) -> Alert {
+        Alert {
+            node: NodeId::new(),
+            check: CheckId::from(Uuid::new_v4()),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 1_000,
+            metric: metric.to_owned(),
+            breach,
+            flapping: false,
+            root_cause: None,
+        }
+    }
+
+    #[test]
+    fn a_liveness_alert_stores_null_rather_than_an_empty_metric() {
+        // `""` would render as a blank cell where the UI expects "—"; NULL is the shape the reader
+        // already handles for legacy rows.
+        let (metric, value, threshold, direction) = breach_columns(&alert("", None));
+        assert_eq!(metric, None);
+        assert_eq!((value, threshold, direction), (None, None, None));
+    }
+
+    #[test]
+    fn a_threshold_alert_stores_its_breach_detail() {
+        let (metric, value, threshold, direction) = breach_columns(&alert(
+            "icmp_rtt_ms",
+            Some(Breach {
+                value: 150.0,
+                threshold: Some(100.0),
+                direction: Direction::Above,
+            }),
+        ));
+        assert_eq!(metric.as_deref(), Some("icmp_rtt_ms"));
+        assert_eq!(value, Some(150.0));
+        assert_eq!(threshold, Some(100.0));
+        assert_eq!(direction, Some(Direction::Above));
+    }
+
+    #[test]
+    fn a_breach_with_no_crossed_bound_keeps_its_observed_value() {
+        // `threshold` is optional inside a breach (the committed severity may have no bound of its
+        // own), but the observed value and direction are always known — dropping them would leave
+        // the history saying "something fired" with nothing to read.
+        let (_, value, threshold, direction) = breach_columns(&alert(
+            "cpu_util",
+            Some(Breach {
+                value: 91.0,
+                threshold: None,
+                direction: Direction::Above,
+            }),
+        ));
+        assert_eq!(value, Some(91.0));
+        assert_eq!(threshold, None);
+        assert_eq!(direction, Some(Direction::Above));
+    }
+
+    /// Collapse every run of whitespace to one space and drop the `\` line-continuations, so a
+    /// statement's meaning is compared rather than how its string literal happens to be wrapped.
+    /// (`include_str!` hands back the raw source, backslashes and all.)
+    fn squash(s: &str) -> String {
+        s.split_whitespace()
+            .filter(|t| *t != "\\")
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn both_writers_insert_the_same_columns_in_the_same_order() {
+        // There are two writers — the per-alert `record` and the batch `record_batch` — and a
+        // multi-row INSERT binds positionally. If their column lists ever drifted apart, every
+        // value in the batch would land one column over: severities into `state`, timestamps into
+        // `resolved`. Nothing would error; the history would just be wrong. So the two lists are
+        // compared to *each other* rather than to a third copy that could itself go stale.
+        let src = squash(&production_source());
+        let lists: Vec<&str> = src
+            .match_indices("INSERT INTO alert_history")
+            .filter_map(|(i, m)| {
+                let rest = &src[i + m.len()..];
+                let open = rest.find('(')?;
+                let close = rest.find(')')?;
+                (open < close).then(|| rest[open..=close].trim())
+            })
+            .collect();
+        assert_eq!(
+            lists.len(),
+            2,
+            "expected the single-row and the batch writer"
+        );
+        assert_eq!(
+            lists[0], lists[1],
+            "the two alert_history INSERTs name different columns — the batch writer will file \
+             every value under its neighbour's column"
+        );
+        // And the bind list is as long as the column list, so a column added to one without a
+        // matching `push_bind` fails here rather than at runtime.
+        assert_eq!(lists[0].matches(',').count() + 1, 11);
+        assert!(src.contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"));
+    }
+
+    #[test]
+    fn an_unreadable_severity_or_state_degrades_instead_of_failing_the_page() {
+        // Neither column has a DB CHECK, so a newer core's token reaches this reader. Losing one
+        // row's precision beats 500-ing the history screen an operator is mid-incident on.
+        assert_eq!(
+            Severity::from_token("nonsense").unwrap_or(Severity::Info),
+            Severity::Info
+        );
+        assert_eq!(
+            NodeState::from_token("nonsense").unwrap_or(NodeState::Unknown),
+            NodeState::Unknown
+        );
+        // The fallbacks are the least-assertive member of each set, not an arbitrary pick.
+        assert_eq!(Severity::ALL[0], Severity::Info);
+        // A known token still round-trips, so the fallback is not swallowing everything.
+        assert_eq!(Severity::from_token("critical"), Some(Severity::Critical));
+        assert_eq!(
+            NodeState::from_token("unreachable"),
+            Some(NodeState::Unreachable)
+        );
+    }
+
+    #[test]
+    fn history_paging_is_keyset_and_every_limit_is_clamped() {
+        let src = production_source();
+        // The cursor is a bound timestamptz compared with `<`, never an offset.
+        assert!(src.contains("WHERE ($2::timestamptz IS NULL OR recorded_at < $2)"));
+        assert!(src.contains("ORDER BY recorded_at DESC LIMIT $1"));
+        assert!(
+            !src.contains("OFFSET"),
+            "OFFSET paging reintroduced — rows shift under the reader as alerts fire"
+        );
+        // Both caller-supplied limits are clamped: an unbounded top-N is a DoS vector.
+        assert!(src.contains("limit.clamp(1, 1000)"));
+        assert!(src.contains("limit.clamp(1, 100)"));
+    }
+
+    #[test]
+    fn the_calendar_buckets_in_utc_so_they_do_not_move_with_the_session_timezone() {
+        // Without the explicit zone the buckets would depend on whatever the DB session is set to,
+        // so the same fleet would render a different heatmap from two cores.
+        let src = production_source();
+        assert_eq!(src.matches("at time zone 'UTC'").count(), 2);
     }
 }

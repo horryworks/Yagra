@@ -89,3 +89,95 @@ pub async fn run_auth_callout(
     }
     tracing::info!("auth-callout responder stopped");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = include_str!("authcallout.rs");
+
+    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_clock_never_panics_and_never_goes_backwards_into_a_negative() {
+        // The signed JWT's issued-at comes from here. A clock before the epoch would otherwise
+        // panic the responder — taking every poller's authentication down with it — so it
+        // saturates at 0 and lets the signer reject on its own terms.
+        let now = unix_now_secs();
+        assert!(now > 1_600_000_000, "the wall clock should be past 2020");
+        assert_eq!(
+            SystemTime::UNIX_EPOCH
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            0
+        );
+    }
+
+    #[test]
+    fn the_responder_is_queue_subscribed_so_a_failover_still_authenticates() {
+        // Every core runs this, not just the leader: if it were a plain subscribe, all of them
+        // would answer the same request, and if it were leader-gated a failover would leave
+        // pollers unable to connect at exactly the moment the fleet needs them.
+        let src = production_source();
+        assert!(src.contains("queue_subscribe(AUTH_SUBJECT, AUTH_QUEUE.to_owned())"));
+        assert_eq!(AUTH_SUBJECT, "$SYS.REQ.USER.AUTH");
+        assert_eq!(AUTH_QUEUE, "yagra-authz");
+    }
+
+    #[test]
+    fn no_secret_or_minted_credential_is_ever_logged() {
+        // security.md: the bootstrap secret and the minted JWT are the crown jewels on this path.
+        // Only the pool name and counts may be recorded, so a `%request_jwt` or `%bootstrap_secret`
+        // reaching a tracing macro is the failure this pins.
+        let src = production_source();
+        for forbidden in [
+            "%request_jwt",
+            "?request_jwt",
+            "%bootstrap_secret",
+            "?bootstrap_secret",
+            "response_jwt = ",
+            "%handled.response_jwt",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "a credential ({forbidden}) is being logged — security.md forbids it"
+            );
+        }
+    }
+
+    #[test]
+    fn every_rejection_path_is_counted_with_a_bounded_reason_label() {
+        // The reason becomes a metric label, so it must come from a closed set — a free-text
+        // reason here would be an unbounded label, the cardinality trap monitoring-conventions
+        // names as the single biggest risk in this codebase.
+        let src = production_source();
+        for reason in ["\"bad_utf8\"", "\"parse_error\""] {
+            assert!(
+                src.contains(reason),
+                "the {reason} denial is no longer counted"
+            );
+        }
+        assert!(
+            src.contains("reason.as_str()"),
+            "the signer's reason must stay a typed token"
+        );
+        assert!(src.contains("yagra_core_authz_issued_total"));
+    }
+
+    #[test]
+    fn a_request_without_a_reply_subject_is_skipped_rather_than_answered() {
+        // Anything on this subject without a reply is not a callout request; answering it would
+        // publish a signed credential to a subject nobody asked on.
+        assert!(production_source().contains("let Some(reply) = msg.reply.clone() else"));
+    }
+}

@@ -67,6 +67,12 @@ export function reportPathFor(id: AnalysisToolKey): string {
   return `/troubleshoot/report/${id}`;
 }
 
+/** The terminal analysis-job states whose `runs.state.*` label reaches the operator.
+ *  `AnalysisJob.state` is a bare string in the schema, so this subset is the only pinnable
+ *  surface — the runtime array lets `i18nEnumKeys.test.ts` demand the strings in both locales,
+ *  and the report shell guards on it before building the key. */
+export const TERMINAL_JOB_STATES = ['failed', 'cancelled'] as const;
+
 export const TOOLS: Tool[] = [
   {
     id: 'anomaly',
