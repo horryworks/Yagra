@@ -15,7 +15,7 @@ New to Yagra? Start with **[A](#a--single-node-docker-build)** (one command) or 
 
 ## Topology & backing services
 
-Yagra is two long-running binaries plus a static WebUI, backed by four stores/bus:
+Yagra is two long-running binaries plus a static WebUI, backed by five stores plus the bus:
 
 - **Yagra-core** (`yagra-core`) — orchestration, scheduler, northbound REST API (`/api/v1`) + Prometheus `/metrics`. **Requires PostgreSQL + NATS + VictoriaMetrics; Redis is optional** (best-effort poller-liveness/assignment mirror — its absence only degrades, never blocks startup). If any of the three required URLs is unset, core drops to an in-memory **skeleton** mode instead of running live.
 - **Yagra-poller** (`yagra-poller`) — stateless ICMP/SNMP/API worker. **Talks to NATS only.** Device credentials, job specs, and results all flow over the bus; the poller never touches PostgreSQL/Redis/VictoriaMetrics. This is what makes it horizontally scalable and remotely deployable.
@@ -27,6 +27,8 @@ Yagra is two long-running binaries plus a static WebUI, backed by four stores/bu
 | **NATS** (JetStream) | core⇄poller bus: jobs, working sets, results, events | core + poller (required) |
 | **VictoriaMetrics** | TSDB: metrics body store | core (required) |
 | **Redis** | Ephemeral: poller liveness/assignment mirror | core (optional) |
+| **VictoriaLogs** | Passive-event log store: powers passive-event search | core (optional) |
+| **ClickHouse** | Traffic-flow store: powers the traffic-flow features | core (optional) |
 
 > **Golden rule for scale-out:** distributing polling is a *config change*, not a rewrite. The single-node compositions and the distributed ones run the same images — you add remote pollers and, for a WAN bus, turn on NATS TLS+auth.
 
@@ -38,9 +40,13 @@ Yagra is two long-running binaries plus a static WebUI, backed by four stores/bu
 | `8080` (web nginx) | `3000` | `YAGRA_WEB_PORT` | WebUI | yes |
 | `1514/udp` | `514` | `YAGRA_SYSLOG_BIND` / `YAGRA_SYSLOG_PORT` | syslog intake (poller) | opt-in |
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP trap intake (poller) | opt-in |
+| `2055/udp` | `2055` | `YAGRA_FLOW_BIND` / `YAGRA_FLOW_PORT` | NetFlow v5/v9 / IPFIX intake (poller) | opt-in |
+| `6343/udp` | `6343` | `YAGRA_SFLOW_BIND` / `YAGRA_SFLOW_PORT` | sFlow v5 intake (poller) | opt-in |
 | `9100` | — | (fixed) | poller Prometheus `/metrics` | native only |
 | `4222` | — | `YAGRA_NATS_PORT` | NATS bus | internal; published **only** with TLS+auth (D) |
-| `5432` / `6379` / `8428` / `9428` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs | internal only |
+| `5432` / `6379` / `8428` / `9428` / `8123` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs / ClickHouse | internal only |
+
+> The MCP tool surface (`/mcp`, opt-in via `YAGRA_ENABLE_MCP`) is served on the API port `8080` — it does not open a separate port.
 
 > **Outbound (forwarding).** Settings ▸ Forwarding relays received syslog / SNMP traps / flow
 > exports on to external collectors, or streams them into **Google BigQuery** as queryable rows.
@@ -60,13 +66,13 @@ Yagra is two long-running binaries plus a static WebUI, backed by four stores/bu
 >
 > **Bus bandwidth cost.** So that forwarding can relay what a device actually sent, pollers carry the
 > original bytes to core whether or not any destination exists today: passive events gain a base64
-> `raw` field (**≈1.3× on `yagra.events`** — about +1.4 MB/s at 5000 msg/s), and every received flow
-> datagram is relayed verbatim on `yagra.flows.raw`, on top of the aggregated `yagra.flows` stream.
-> The flow cost depends on how densely your exporter packs its datagrams, and the spread is wide:
-> a densely packed NetFlow v9 export (~1400 B, ~30 records) works out to **≈370 kbit/s at 1000
-> flows/s**, while a device that emits small frequent datagrams — measured on a real UniFi gateway at
-> ~330 B and ~3.6 records — costs about twice that, **≈730 kbit/s**. Budget **0.4–0.8 Mbit/s per 1000
-> flows/s** and scale linearly (≈4–8 Mbit/s at 10 000). This carriage is deliberate — a capture toggle
+> `raw` field (**1.45–1.64× on `yagra.events`**, measured on real device traffic), and every received
+> flow datagram is relayed verbatim on `yagra.flows.raw`, on top of the aggregated `yagra.flows`
+> stream. The flow cost depends on how densely your exporter packs its datagrams, and the spread is
+> wide: a densely packed NetFlow v9 export (~1400 B, ~30 records) works out to **≈370 kbit/s at 1000
+> flows/s**, while a device that emits small frequent datagrams — measured on a real UniFi gateway —
+> costs about **~1.0 Mbit/s**. Budget **0.4–1.0 Mbit/s per 1000
+> flows/s** and scale linearly (≈4–10 Mbit/s at 10 000). This carriage is deliberate — a capture toggle
 > would make forwarding fidelity depend on configuration rather than being a property of the system —
 > but it is real WAN traffic for a **remote-site poller**, so size the site link accordingly. Core
 > itself pays nothing per message when no destination is configured.
@@ -178,7 +184,7 @@ export YAGRA_DATABASE_URL="postgres://yagra:yagra@localhost:5432/yagra"
 export YAGRA_BUS_URL="nats://localhost:4222"
 export YAGRA_TSDB_URL="http://localhost:8428"
 export YAGRA_REDIS_URL="redis://localhost:6379"     # optional
-export YAGRA_LOGS_URL="http://localhost:9428"       # optional (ADR-024; else events stay in PostgreSQL)
+export YAGRA_LOGS_URL="http://localhost:9428"       # optional (else events stay in PostgreSQL)
 export YAGRA_KEK_FILE="/etc/yagra/kek"
 export YAGRA_API_ADDR="0.0.0.0:8080"                # default
 # export YAGRA_ADMIN_PASSWORD="choose-a-strong-password"   # else a one-time random one is logged
@@ -219,9 +225,9 @@ The poller exposes its own Prometheus `/metrics` on `0.0.0.0:9100`.
 
 ## D — Distributed pollers, Docker<a id="d--distributed-pollers-docker"></a>
 
-Run the full stack centrally (as in **B**) and add pollers at remote sites. Each poller polls its site's devices locally and streams results back over the bus. Nodes carry a `pool` attribute; core's coordinator assigns each pool's nodes across its live pollers by consistent hashing and fails them over automatically (ADR-009/020).
+Run the full stack centrally (as in **B**) and add pollers at remote sites. Each poller polls its site's devices locally and streams results back over the bus. Nodes carry a `pool` attribute; core's coordinator assigns each pool's nodes across its live pollers by consistent hashing and fails them over automatically.
 
-> **The bus carries plaintext device credentials (ADR-020).** On one host that's fine (internal Docker network, nothing exposed). The moment the bus crosses a trust boundary to a remote site, it **must** be TLS-encrypted and authenticated first. Do **not** publish `:4222` plaintext.
+> **The bus carries plaintext device credentials.** On one host that's fine (internal Docker network, nothing exposed). The moment the bus crosses a trust boundary to a remote site, it **must** be TLS-encrypted and authenticated first. Do **not** publish `:4222` plaintext.
 
 ### Step 1 — Turn on NATS TLS + auth on the central stack
 
@@ -264,7 +270,7 @@ and on **both** add `YAGRA_BUS_CA_FILE: /etc/nats/certs/server-cert.pem` plus a 
 
 Bring the central stack back up (`docker compose -f docker-compose.deploy.yml up -d`).
 
-The `nats-server.conf` gives `core` full access and the `poller` account least privilege (publish only results/events/heartbeat; subscribe only to its jobs + working-set assignments). Note the documented MVP limitation: there is **one shared `poller` account**, so any authenticated poller can read any pool's assignments — it is not a tenant boundary (Phase-3 hardening = per-poller scoped credentials).
+The `nats-server.conf` gives `core` full access and the `poller` account least privilege (publish only results/events/heartbeat; subscribe only to its jobs + working-set assignments). Note the limitation of the static accounts: there is **one shared `poller` account**, so any authenticated poller can read any pool's assignments — it is not a tenant boundary. To scope bus credentials per poller, enable the optional **NATS Auth Callout** integration (the `auth_callout` block in `docker/nats/nats-server.conf` plus the `YAGRA_NATS_CALLOUT_*` / `YAGRA_CALLOUT_SEED_DIR` variables in `.env.example`): core then mints each connecting poller a credential scoped to exactly its own pool's subjects.
 
 ### Step 2 — Register the poller in the WebUI
 
@@ -329,19 +335,48 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 
 | Variable | Default | Purpose |
 |---|---|---|
+| **Stores & bus** | | |
 | `YAGRA_DATABASE_URL` | — (required for live) | PostgreSQL connection string |
 | `YAGRA_BUS_URL` | — (required for live) | NATS bus URL (`nats://…` or `tls://user:pass@host:4222`) |
 | `YAGRA_TSDB_URL` | — (required for live) | VictoriaMetrics base URL |
 | `YAGRA_REDIS_URL` | unset ⇒ disabled | Redis URL for poller liveness/assignment mirror (best-effort) |
+| `YAGRA_LOGS_URL` | unset ⇒ events stay in PostgreSQL | VictoriaLogs base URL — opt-in passive-event log store |
+| `YAGRA_CLICKHOUSE_URL` | unset ⇒ flow store off | ClickHouse HTTP URL — opt-in traffic-flow store (without it the flow API returns 503) |
+| `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL connection-pool ceiling (the HA leader holds +1 advisory-lock connection on top) |
+| **API & security** | | |
 | `YAGRA_KEK_FILE` | unset ⇒ ephemeral dev key | Path to the mounted 32-byte key-encryption key |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` bind address |
 | `YAGRA_ADMIN_PASSWORD` | unset ⇒ one-time random (logged) | Bootstrap `admin` password, first boot only |
 | `YAGRA_PUBLIC_DASHBOARD` | `false` | `true` = read-only dashboards without login |
+| **Polling & notifications** | | |
 | `YAGRA_POLL_INTERVAL_SECS` | `30` (clamp 10–3600) | Initial default poll interval (seeded on first boot; DB-authoritative after) |
-| `YAGRA_SNMP_COMMUNITY` | unset | Default SNMP v2c community for the resolved collection set |
+| `YAGRA_SNMP_COMMUNITY` | unset | Fallback SNMP v2c community for nodes without a bound credential |
 | `YAGRA_MERAKI_POOL` | `default` | Poller pool that Meraki cloud-collect jobs route to |
 | `YAGRA_WEBHOOK_URL` | unset ⇒ off | Default alert webhook channel |
 | `YAGRA_SMTP_HOST` / `_PORT` / `_FROM` / `_TO` / `_USER` / `_PASS` | unset ⇒ email off | Env-configured SMTP alert channel (host present enables it) |
+| **Traffic flow & AS enrichment** | | |
+| `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days (ClickHouse TTL) |
+| `YAGRA_IPASN_DB` | unset ⇒ enrichment off | Path to an offline iptoasn.com TSV for flow IP→ASN enrichment |
+| `YAGRA_IPASN_RELOAD_SECS` | `0` ⇒ load once at startup | Hot-reload period (seconds) for the IP→ASN file; `>0` reloads without a restart |
+| **High availability** | | |
+| `YAGRA_ENABLE_HA` | `false` | Opt-in active/passive leader election via a PostgreSQL advisory lock |
+| `YAGRA_CORE_ID` | unset | Human-readable id of this core instance in HA logs |
+| `YAGRA_SESSION_KEY_FILE` | unset ⇒ per-process tokens | Path to the mounted HMAC session-signing key (sessions valid on any core and across restarts); set but unreadable/invalid ⇒ startup fails |
+| **MCP (AI clients)** | | |
+| `YAGRA_ENABLE_MCP` | `false` | Mount the MCP tool surface at `/mcp` on the API port (auth always required) |
+| `YAGRA_MCP_ALLOWED_HOSTS` | unset ⇒ any `Host` accepted | Comma-separated `Host`-header allowlist for `/mcp` (DNS-rebinding hardening) |
+| **Analysis & RCA rate caps** | | |
+| `YAGRA_ANALYSIS_MAX_CONCURRENT` | `4` | Max concurrently-running Troubleshoot analyses |
+| `YAGRA_ANALYSIS_RATE_PER_MIN` | `30` | Max new analyses admitted per minute |
+| `YAGRA_RCA_MAX_CONCURRENT` | `2` | Max simultaneous LLM root-cause generations (billed external calls) |
+| `YAGRA_RCA_RATE_PER_MIN` | `10` | Max new root-cause generations per minute |
+| `YAGRA_RCA_CACHE_SECS` | `900` | RCA report cache lifetime (seconds); `force` bypasses the cache but not the caps |
+| **NATS Auth Callout (per-poller bus credentials)** | | |
+| `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ callout off | Path to the mounted NATS account nkey seed; core then mints per-poller scoped bus users |
+| `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into (must match the server's `auth_callout` account) |
+| `YAGRA_NATS_POLLER_PASSWORD` | unset ⇒ callout off | Shared poller bootstrap secret the callout validates (also consumed by the NATS server config) |
+| **Observability** | | |
+| `YAGRA_DISK_WATCH_PATHS` | `/=root` | Filesystems host self-metrics report capacity for (comma-separated `path` or `path=alias`); read by core **and** poller |
 | `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for OpenTelemetry trace export (falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`) |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; use `parentbased_traceidratio` + arg (e.g. `0.01`) at scale |
 | `RUST_LOG` | `info` | Log level (e.g. `info,yagra_core=debug`) |
@@ -350,22 +385,49 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 
 | Variable | Default | Purpose |
 |---|---|---|
+| **Identity & bus** | | |
 | `YAGRA_BUS_URL` | unset ⇒ idle | NATS bus URL (only backing-service connection the poller makes) |
 | `YAGRA_POLLER_ID` | hostname, else `poller-<hex>` | Stable, unique, subject-safe poller identity |
 | `YAGRA_POLLER_POOL` | `default` | Pool this poller serves |
 | `YAGRA_BUS_CA_FILE` | unset ⇒ plaintext | CA/server cert pinned for the `tls://` bus |
 | `YAGRA_MAX_CONCURRENT_POLLS` | `64` | Max concurrent in-flight probes |
 | `YAGRA_POLLER_QUEUE` | `pollers` | NATS queue-group for load-balanced job consumption |
+| **Passive events (syslog / SNMP traps)** | | |
 | `YAGRA_SYSLOG_BIND` | unset ⇒ off | UDP bind for syslog intake (e.g. `0.0.0.0:1514`) |
 | `YAGRA_TRAP_BIND` | unset ⇒ off | UDP bind for SNMP trap intake (v1/v2c) |
 | `YAGRA_TRAP_COMMUNITY` | unset ⇒ no filter | Drop traps whose community doesn't match (never logged) |
-| `YAGRA_EVENT_RATE_PER_SOURCE` | `50` | Passive-event rate limit per source IP (events/sec) |
-| `YAGRA_EVENT_RATE_GLOBAL` | `500` | Passive-event rate limit across all sources (events/sec) |
+| `YAGRA_EVENT_RATE_PER_SOURCE` | `200` | Passive-event rate limit per source IP (events/sec) |
+| `YAGRA_EVENT_RATE_GLOBAL` | `5000` | Passive-event rate limit across all sources (events/sec) |
+| **Traffic flow (NetFlow / IPFIX / sFlow)** | | |
+| `YAGRA_FLOW_BIND` | unset ⇒ off | UDP bind for NetFlow v5/v9 / IPFIX intake (e.g. `0.0.0.0:2055`) |
+| `YAGRA_SFLOW_BIND` | unset ⇒ off | UDP bind for sFlow v5 intake (e.g. `0.0.0.0:6343`) |
+| `YAGRA_FLOW_RATE_PER_SOURCE` | `1000` | Flow rate limit per exporter (datagrams/sec; separate budget from syslog/traps) |
+| `YAGRA_FLOW_RATE_GLOBAL` | `20000` | Flow rate limit across all exporters (datagrams/sec) |
+| `YAGRA_FLOW_BUCKET_SECS` | `60` | Flow aggregation bucket width (seconds) |
+| `YAGRA_FLOW_TOP_N` | `500` | Top flows (by bytes) kept per bucket per exporter — the cardinality control |
+| **Edge listener tuning** | | |
+| `YAGRA_LISTENER_WORKERS` | CPU count, clamped 1–4 | Parallel reader sockets per UDP listener (Linux `SO_REUSEPORT`; 1 socket elsewhere) |
+| `YAGRA_LISTENER_RCVBUF_BYTES` | `4194304` (4 MiB) | Socket receive-buffer size per listener |
+| **Store-and-forward result buffer** | | |
+| `YAGRA_STORE_FORWARD` | on (`off`/`false`/`0`/`no` disables) | Buffer poll results during bus outages and replay them when it returns |
+| `YAGRA_STORE_FORWARD_DIR` | `/var/lib/yagra/buffer` | On-disk spill directory (falls back to memory-only if unwritable) |
+| `YAGRA_STORE_FORWARD_MEM_MAX` | `20000` | In-memory ring size (results) before spilling to disk |
+| `YAGRA_STORE_FORWARD_DISK_MAX_MB` | `512` | Max total on-disk spill (oldest segments dropped first) |
+| `YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB` | `1024` | Stop spilling when filesystem free space drops below this |
+| `YAGRA_STORE_FORWARD_MAX_AGE_SECS` | `86400` | Buffered results older than this are dropped at replay |
+| `YAGRA_STORE_FORWARD_SEGMENT_MB` | `16` | Spill-segment roll size (the granularity of the disk cap) |
+| **Observability** | | |
 | `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for trace export (same collector as core) |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; sample (`parentbased_traceidratio`) at scale |
 | `RUST_LOG` | `info` | Log level |
 
-> **Compose-only vars** (`YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`, `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_NATS_PORT`, `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`) are consumed by Docker/NATS, not by the Rust binaries — the binaries only ever see the final assembled `YAGRA_BUS_URL` etc. See `.env.example`.
+> **Compose-only vars** are consumed by Docker Compose / the NATS config, never by the Rust binaries — the binaries only ever see the final assembled `YAGRA_BUS_URL` etc. See `.env.example`:
+>
+> - Images & stores: `YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`
+> - Host port mappings: `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
+> - Bus TLS + auth (D): `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD` (also read by core as the Auth Callout bootstrap secret), `YAGRA_NATS_CALLOUT_ISSUER` (account public key the NATS server verifies core's callout JWTs against)
+> - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`), `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`)
+> - IP→ASN updater sidecar: `YAGRA_IPASN_URL` (dataset URL), `YAGRA_IPASN_REFRESH_SECS` (fetch cadence; default `604800` = weekly)
 
 ---
 
@@ -381,7 +443,7 @@ Every binary emits structured logs and a Prometheus `/metrics` endpoint out of t
 
 ## Upgrades & backups<a id="upgrades--backups"></a>
 
-Upgrades are designed to be low-effort and **never** lose or corrupt data (ADR-017):
+Upgrades are designed to be low-effort and **never** lose or corrupt data:
 
 - **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; there is no manual migration CLI.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
