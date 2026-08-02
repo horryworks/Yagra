@@ -227,11 +227,11 @@ cd web && npm install && npm run dev   # frontend (Vite dev server)
 
 ## License
 
-Yagra is licensed under the **GNU Affero General Public License v3.0 only**
-(`AGPL-3.0-only`) — see [LICENSE](LICENSE). Because Yagra is typically operated as a
-network service, note AGPL **§13**: if you run a **modified** version and let users
-interact with it over a network, you must offer those users the Corresponding Source of
-your modified version.
+Copyright (C) 2026 horryworks. Yagra is licensed under the **GNU Affero General Public
+License v3.0 only** (`AGPL-3.0-only`) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Because Yagra is typically operated as a network service, note AGPL **§13**: if you run a
+**modified** version and let users interact with it over a network, you must offer those
+users the Corresponding Source of your modified version.
 
 **What this means in practice.** The AGPL is more often avoided on reputation than on what it
 actually says, so, in plain language — [LICENSE](LICENSE) is the text that governs, and the

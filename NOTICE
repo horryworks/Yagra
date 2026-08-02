@@ -1,0 +1,36 @@
+Yagra — network monitoring system
+Copyright (C) 2026 horryworks <horryworks@gmail.com>
+
+Source: https://github.com/horryworks/Yagra
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3 only, as published by the
+Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along with
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full licence text is in LICENSE.  Individual source files carry the SPDX
+identifier `AGPL-3.0-only` rather than repeating this notice.
+
+For use under terms other than the AGPL, contact horryworks@gmail.com.
+
+
+THIRD-PARTY COMPONENTS
+----------------------
+
+vendor/snmp2/
+    A vendored copy of the `snmp2` crate, patched only to fix a build failure.  It is
+    dual-licensed MIT OR Apache-2.0, and the upstream copyright notices and licence
+    texts are retained verbatim in vendor/snmp2/LICENSE (Apache-2.0) and
+    vendor/snmp2/LICENSE-MIT.  The patch and the condition for dropping it are
+    documented in vendor/snmp2/PATCH_NOTE.md.
+
+Other dependencies
+    Rust crates and npm packages retain their own licences; see Cargo.toml,
+    Cargo.lock, web/package.json and web/package-lock.json.  The permitted-licence
+    policy applied to Rust dependencies is in deny.toml.

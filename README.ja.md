@@ -223,10 +223,11 @@ cd web && npm install && npm run dev   # フロントエンド（Vite 開発サ�
 
 ## ライセンス
 
-Yagra は **GNU Affero General Public License v3.0 only**（`AGPL-3.0-only`）で提供されます
-— [LICENSE](LICENSE) を参照してください。Yagra は通常ネットワークサービスとして運用される
-ため、AGPL の **§13** に注意してください: **改変版**をネットワーク越しに利用者へ提供する場合、
-その改変版の対応ソース（Corresponding Source）を利用者へ提示する義務があります。
+Copyright (C) 2026 horryworks. Yagra は **GNU Affero General Public License v3.0 only**
+（`AGPL-3.0-only`）で提供されます — [LICENSE](LICENSE) と [NOTICE](NOTICE) を参照してください。
+Yagra は通常ネットワークサービスとして運用されるため、AGPL の **§13** に注意してください:
+**改変版**をネットワーク越しに利用者へ提供する場合、その改変版の対応ソース（Corresponding
+Source）を利用者へ提示する義務があります。
 
 **実際に何が求められるか。** AGPL は条文の中身よりも評判で敬遠されがちなので、平易な言葉で整理します
 （正文は [LICENSE](LICENSE) であり、以下は要約であって法的助言ではありません）:

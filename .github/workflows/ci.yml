@@ -1,11 +1,12 @@
 # Continuous integration: validate the workspace on every push / PR. The `images` job builds the
 # Docker images (pushing to GHCR only on main) so build breakage — including the Dockerfile's pinned
-# Rust version (MSRV) — is caught here; `deploy` publishes to the test server on main.
+# Rust version (MSRV) — is caught here. CI does NOT deploy: see the note where the `deploy` job
+# used to be, at the bottom of this file.
 #
-# Compute runs on SELF-HOSTED runners (label `yagra-build` for build/test/images, `yagra-test` for
-# deploy) to avoid GitHub-hosted Actions-minute billing — the repo, images (GHCR) and deploy stay on
-# GitHub, only the execution is local. A runner host needs: rustup, Node (setup-node fetches it),
-# and Docker + buildx. See the runner setup notes if a job fails with a missing toolchain.
+# Compute runs on SELF-HOSTED runners (label `yagra-build`) to avoid GitHub-hosted Actions-minute
+# billing — the repo and images (GHCR) stay on GitHub, only the execution is local. A runner host
+# needs: rustup, Node (setup-node fetches it), and Docker + buildx. See the runner setup notes if a
+# job fails with a missing toolchain.
 
 name: ci
 
@@ -184,30 +185,15 @@ jobs:
           # No type=gha cache: on the persistent self-hosted runner the local docker layer cache is
           # reused anyway, and the GHA cache service was hanging the build (stuck importing, no CPU).
 
-  deploy:
-    name: deploy to test server
-    needs: images
-    if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, yagra-test]
-    permissions:
-      contents: read
-      packages: read           # pull from GHCR
-    steps:
-      - uses: actions/checkout@v6
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-      - name: Pull & deploy (latest)
-        env:
-          YAGRA_IMAGE_TAG: latest
-          # Optional override; empty secret falls back to the compose default.
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          # MCP server (ADR-028): toggled by the `YAGRA_ENABLE_MCP` repo variable (unset ⇒ empty ⇒
-          # compose default `false`). The test server is the MCP validation channel; flip the variable
-          # to turn it off without a code change.
-          YAGRA_ENABLE_MCP: ${{ vars.YAGRA_ENABLE_MCP }}
-        run: |
-          docker compose -f docker-compose.deploy.yml pull
-          docker compose -f docker-compose.deploy.yml up -d --remove-orphans
-      - name: Reclaim disk
-        if: always()
-        run: docker image prune -f
+  # There is deliberately no `deploy` job. CI's responsibility ends at publishing the images;
+  # deployment to the test server is an explicit act, run from a workstation over SSH by the
+  # `/deploy` command. Three reasons this was split out:
+  #
+  #   1. A deploy job means the target host runs a GitHub-controlled agent. For a public
+  #      repository that is a standing inbound path into a private network.
+  #   2. Every push to `main` rewrote a live environment, whether or not that was the intent.
+  #   3. The deploy procedure was only reachable through CI, so a broken pipeline meant no
+  #      deploy and no rollback either.
+  #
+  # Server-side configuration (`YAGRA_ENABLE_MCP`, `POSTGRES_PASSWORD`, …) now lives in
+  # `~/yagra-deploy/.env` on the test server rather than in Actions secrets/variables.
