@@ -443,7 +443,7 @@ async fn create_analysis_job(
     Scoped(scope): Scoped,
     admin: Admin,
     State(st): State<ApiState>,
-    headers: axum::http::HeaderMap,
+    actor: super::extract::Actor,
     Json(body): Json<CreateAnalysisJob>,
 ) -> ApiResult<Json<AnalysisJob>> {
     // A run's scope is resolved server-side and its findings are read back later, so an
@@ -473,7 +473,7 @@ async fn create_analysis_job(
             )),
         }
     }
-    let user = super::current_username(&st, &headers);
+    let user = actor.0;
     let req = AnalysisRequest {
         tool: body.tool,
         scope_kind: body.scope_kind,

@@ -366,6 +366,7 @@ export RUST_LOG=info
 | `YAGRA_ENABLE_HA` | `false` | PostgreSQL advisory lock によるオプトインのアクティブ/パッシブ リーダー選出 |
 | `YAGRA_CORE_ID` | 未設定 | HA ログに出すこの core インスタンスの人間可読な識別子 |
 | `YAGRA_SESSION_KEY_FILE` | 未設定 ⇒ プロセス内トークン | マウントした HMAC セッション署名鍵へのパス（セッションがどの core でも・再起動をまたいでも有効になる）。設定済みで読めない/不正なら起動失敗 |
+| `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | **SSO でプロビジョニングされた**アカウントが所有する API トークンが、所有者がサインインしないまま有効な日数。IdP 側でのアカウント無効化は Yagra に通知されないため、所有者の沈黙が唯一の手がかり。ローカル/サービスアカウント所有のトークンは対象外。1〜365 にクランプ |
 | **MCP（AI クライアント）** | | |
 | `YAGRA_ENABLE_MCP` | `false` | API ポート上の `/mcp` に MCP ツールサーフェスをマウント（認証は常に必須） |
 | `YAGRA_MCP_ALLOWED_HOSTS` | 未設定 ⇒ 任意の `Host` を受理 | `/mcp` の `Host` ヘッダ許可リスト（カンマ区切り。DNS リバインディング対策） |

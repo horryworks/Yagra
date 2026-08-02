@@ -18,7 +18,7 @@ use sqlx::{PgPool, Row};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 use yagra_bus::AuthRevoke;
-use yagra_common::{Permission, Principal, Role, Scope};
+use yagra_common::{Permission, Principal, Role, Scope, UserKind};
 use yagra_secrets::password::{hash_password, verify_password};
 
 use crate::token::{self, Claims, TokenSigner};
@@ -590,6 +590,12 @@ pub fn generate_bootstrap_password() -> String {
 /// binary still reads a valid `String` it simply can't verify against.
 pub const OIDC_PASSWORD_SENTINEL: &str = "!oidc-no-local-login";
 
+/// Placeholder stored in `users.password_hash` for **service accounts**, which have no password by
+/// design. Same construction and same reasoning as [`OIDC_PASSWORD_SENTINEL`]: not a valid Argon2
+/// PHC string, so it cannot verify even if the `auth_source` guard were somehow bypassed, and the
+/// column stays NOT NULL so an N-1 binary reads a `String` it simply cannot match.
+pub const SERVICE_PASSWORD_SENTINEL: &str = "!service-account-no-login";
+
 /// Parse a stored role string via [`Role::key`] (defaults to the least-privileged role on
 /// garbage). Derived from [`Role::ALL`] so the token list lives in one place.
 fn parse_role(s: &str) -> Role {
@@ -692,10 +698,12 @@ impl UserStore {
         if !enabled {
             return Ok(None);
         }
-        // OIDC accounts have no local password — they must sign in via the IdP. Reject before the
-        // password check (their stored hash is a non-verifiable sentinel anyway).
+        // Only a local account has a password to check. An OIDC account signs in through the IdP; a
+        // service account cannot sign in at all. Reject before the password check — their stored
+        // hashes are non-verifiable sentinels anyway, so this is defence in depth rather than the
+        // only gate.
         let auth_source: String = row.try_get("auth_source")?;
-        if auth_source == "oidc" {
+        if UserKind::parse(&auth_source) != UserKind::Local {
             return Ok(None);
         }
         let hash: String = row.try_get("password_hash")?;
@@ -743,7 +751,7 @@ impl UserStore {
             .collect()
     }
 
-    /// Create an account. The password is Argon2id-hashed before it touches the database and
+    /// Create a local account. The password is Argon2id-hashed before it touches the database and
     /// is never logged. A duplicate username surfaces as [`UserCreateOutcome::UsernameTaken`]
     /// (the `users.username` UNIQUE constraint), not an opaque 500.
     pub async fn create(
@@ -753,14 +761,44 @@ impl UserStore {
         role: &str,
     ) -> anyhow::Result<UserCreateOutcome> {
         let hash = hash_password(password).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
+        self.insert(username, &hash, role, UserKind::Local).await
+    }
+
+    /// Create a **service account**: a machine identity with `role`, no password, and no way to sign
+    /// in ([`UserKind::Service`]).
+    ///
+    /// It exists to own API tokens. Binding an unattended integration to a person means the
+    /// credential dies when they change teams — and leaving it bound to nobody is what let a
+    /// departed admin's token outlive the account. A service account is the third option.
+    pub async fn create_service(
+        &self,
+        username: &str,
+        role: &str,
+    ) -> anyhow::Result<UserCreateOutcome> {
+        self.insert(username, SERVICE_PASSWORD_SENTINEL, role, UserKind::Service)
+            .await
+    }
+
+    /// Insert one account row. Shared by [`Self::create`] and [`Self::create_service`], which differ
+    /// only in what goes in the password column and the `auth_source` — writing the INSERT twice is
+    /// how the two would come to disagree about, say, the default `enabled`.
+    async fn insert(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+        kind: UserKind,
+    ) -> anyhow::Result<UserCreateOutcome> {
         let id = Uuid::new_v4();
         let res = sqlx::query(
-            "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO users (id, username, password_hash, role, auth_source) \
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(id)
         .bind(username)
-        .bind(hash)
+        .bind(password_hash)
         .bind(role)
+        .bind(kind.key())
         .execute(&self.pool)
         .await;
         match res {
@@ -787,14 +825,23 @@ impl UserStore {
     ) -> anyhow::Result<(Uuid, Principal)> {
         let role_str = role.key();
         // Existing identity → refresh role + last_login.
-        let existing: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users WHERE oidc_provider_id = $1 AND oidc_subject = $2",
+        let existing: Option<(Uuid, bool)> = sqlx::query_as(
+            "SELECT id, enabled FROM users WHERE oidc_provider_id = $1 AND oidc_subject = $2",
         )
         .bind(provider_id)
         .bind(subject)
         .fetch_optional(&self.pool)
         .await?;
-        if let Some(id) = existing {
+        if let Some((id, enabled)) = existing {
+            // A disabled account cannot sign in — including through the IdP. This is checked here
+            // rather than only in `verify` because the two login paths are separate: the local one
+            // has always honoured `enabled`, while this one went straight from "the IdP says who you
+            // are" to issuing a session. Disabling an SSO account therefore revoked its sessions and
+            // then let the next SSO login mint a fresh one, which made the control a no-op for
+            // exactly the accounts an operator is least able to switch off at the source.
+            if !enabled {
+                anyhow::bail!("account is disabled");
+            }
             sqlx::query("UPDATE users SET role = $2, last_login_at = now() WHERE id = $1")
                 .bind(id)
                 .bind(role_str)
@@ -923,12 +970,23 @@ impl UserStore {
     }
 }
 
+/// SQL fragment restricting a count to accounts a **person** can sign in with.
+///
+/// Both lock-out guards below ask "would this leave nobody able to administer the system", and the
+/// answer has to be about humans. A service account can hold the Admin role — that is how an
+/// automation gets write access — but nobody can log into it, so counting one would let the last
+/// human admin be deleted or disabled and leave the WebUI unreachable with no way back in. Written
+/// once because two guards that disagree about who counts is precisely that bug, half-fixed.
+const CAN_LOG_IN: &str = "auth_source <> 'service'";
+
 /// Count of admin accounts within an open transaction (lock-out guard helper).
 async fn admin_count(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> anyhow::Result<i64> {
-    let n: i64 = sqlx::query("SELECT count(*) AS n FROM users WHERE role = 'admin'")
-        .fetch_one(&mut **tx)
-        .await?
-        .try_get("n")?;
+    let n: i64 = sqlx::query(&format!(
+        "SELECT count(*) AS n FROM users WHERE role = 'admin' AND {CAN_LOG_IN}"
+    ))
+    .fetch_one(&mut **tx)
+    .await?
+    .try_get("n")?;
     Ok(n)
 }
 
@@ -937,10 +995,12 @@ async fn admin_count(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> anyhow::
 async fn enabled_admin_count(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> anyhow::Result<i64> {
-    let n: i64 = sqlx::query("SELECT count(*) AS n FROM users WHERE role = 'admin' AND enabled")
-        .fetch_one(&mut **tx)
-        .await?
-        .try_get("n")?;
+    let n: i64 = sqlx::query(&format!(
+        "SELECT count(*) AS n FROM users WHERE role = 'admin' AND enabled AND {CAN_LOG_IN}"
+    ))
+    .fetch_one(&mut **tx)
+    .await?
+    .try_get("n")?;
     Ok(n)
 }
 

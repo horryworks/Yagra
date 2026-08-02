@@ -54,6 +54,113 @@ pub enum Permission {
     ViewAudit,
 }
 
+/// Which authentication surface a credential may be presented at.
+///
+/// A personal access token authenticated `/mcp` and nothing else, so there was never a choice to
+/// express. Now that the REST API accepts one too the two surfaces differ enough that "may
+/// authenticate here" has to be recorded per token: `/mcp` is a curated, mostly-read tool surface,
+/// while REST is the entire configuration API. A token minted for an AI client must not become a
+/// configuration credential because the server learned a new trick — so the surfaces are named on
+/// the token, and anything that does not name [`TokenSurface::Rest`] cannot reach `/api/v1`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenSurface {
+    /// The MCP tool surface at `/mcp` (ADR-028).
+    Mcp,
+    /// The northbound REST API under `/api/v1`.
+    Rest,
+}
+
+impl TokenSurface {
+    /// Every surface, in display order.
+    pub const ALL: [TokenSurface; 2] = [TokenSurface::Mcp, TokenSurface::Rest];
+
+    /// Stable snake_case key — the `api_tokens.surfaces` element and the serde representation.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            TokenSurface::Mcp => "mcp",
+            TokenSurface::Rest => "rest",
+        }
+    }
+
+    /// Parse a stored key. An unrecognised value yields `None` and is **dropped** by the caller
+    /// rather than guessed at: a token written by a newer core must not widen itself when an older
+    /// one reads it (N-1, `extensibility.md` §6).
+    #[must_use]
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.key() == key)
+    }
+}
+
+/// How an account authenticates, which decides whether it can log in interactively at all.
+///
+/// `Service` is the reason this enum exists. An API token needs an owner so that disabling or
+/// deleting the owner takes the token with it — but binding an unattended integration to a *person*
+/// means it dies when they change teams. A service account is a machine identity: no password, no
+/// IdP subject, and therefore no way to sign in. It exists to own tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UserKind {
+    /// A local account with a password.
+    Local,
+    /// Provisioned from an external IdP (ADR-010); the password column holds a sentinel that can
+    /// never verify.
+    Oidc,
+    /// A machine account that owns credentials and cannot sign in.
+    Service,
+}
+
+impl UserKind {
+    /// Every kind, in display order.
+    pub const ALL: [UserKind; 3] = [UserKind::Local, UserKind::Oidc, UserKind::Service];
+
+    /// Stable snake_case key — the `users.auth_source` value and the serde representation.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            UserKind::Local => "local",
+            UserKind::Oidc => "oidc",
+            UserKind::Service => "service",
+        }
+    }
+
+    /// Parse a stored `auth_source`. Unknown values read as [`UserKind::Local`], matching the column
+    /// default that predates this enum — an old row without the column is a local account.
+    #[must_use]
+    pub fn parse(key: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|k| k.key() == key)
+            .unwrap_or(UserKind::Local)
+    }
+
+    /// Whether this kind can authenticate interactively (password or SSO).
+    ///
+    /// Load-bearing beyond display: the "would this leave nobody able to administer the system"
+    /// guard must count only accounts a human can actually sign in with, or the last enabled admin
+    /// becoming a service account locks every person out of the WebUI.
+    #[must_use]
+    pub const fn can_log_in(self) -> bool {
+        match self {
+            UserKind::Local | UserKind::Oidc => true,
+            UserKind::Service => false,
+        }
+    }
+}
+
 impl Role {
     /// Every predefined role, least → most privileged (for the role/privilege matrix).
     pub const ALL: [Role; 3] = [Role::Viewer, Role::Operator, Role::Admin];
@@ -365,5 +472,49 @@ mod tests {
             .group_uuids()
             .expect("a group scope names groups");
         assert_eq!(ids, vec![a]);
+    }
+
+    // `key()` is what lands in a database column and `#[serde(rename_all)]` is what lands in JSON.
+    // Nothing makes the two agree, so a disagreement means the writer produces rows the reader
+    // cannot parse (testing.md). Both directions, for both enums.
+    #[test]
+    fn every_token_surface_round_trips_through_its_key_and_through_serde() {
+        for s in TokenSurface::ALL {
+            assert_eq!(TokenSurface::parse(s.key()), Some(s));
+            assert_eq!(
+                serde_json::to_value(s).expect("a surface serializes"),
+                serde_json::Value::String(s.key().to_owned()),
+            );
+        }
+        assert_eq!(TokenSurface::parse("kafka"), None);
+    }
+
+    #[test]
+    fn every_user_kind_round_trips_through_its_key_and_through_serde() {
+        for k in UserKind::ALL {
+            assert_eq!(UserKind::parse(k.key()), k);
+            assert_eq!(
+                serde_json::to_value(k).expect("a kind serializes"),
+                serde_json::Value::String(k.key().to_owned()),
+            );
+        }
+    }
+
+    // The `auth_source` column predates this enum and defaults to 'local', so an unknown value has
+    // to read as a local account rather than panic or invent a kind.
+    #[test]
+    fn an_unknown_auth_source_reads_as_a_local_account() {
+        assert_eq!(UserKind::parse("ldap"), UserKind::Local);
+        assert_eq!(UserKind::parse(""), UserKind::Local);
+    }
+
+    // The guard that keeps humans from being locked out counts only accounts a human can sign in
+    // with. If a service account ever counted, promoting one to admin and disabling the last person
+    // would leave the WebUI unreachable with no way back in.
+    #[test]
+    fn only_a_service_account_cannot_log_in() {
+        assert!(UserKind::Local.can_log_in());
+        assert!(UserKind::Oidc.can_log_in());
+        assert!(!UserKind::Service.can_log_in());
     }
 }

@@ -28,6 +28,8 @@ import {
   EVENT_MATCH_KINDS,
   DNS_FAILURE_KINDS,
   RCA_CONFIDENCES,
+  TOKEN_SURFACES,
+  USER_KINDS,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -40,6 +42,8 @@ import { TERMINAL_JOB_STATES } from './troubleshoot/data';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 
 import enAccess from './locales/en/access.json';
+import enSettingsTokens from './locales/en/settings-tokens.json';
+import jaSettingsTokens from './locales/ja/settings-tokens.json';
 import jaAccess from './locales/ja/access.json';
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -229,5 +233,31 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // now. A kind added without strings would put a raw key in the dropdown an operator picks from.
     const keys = MONITOR_KINDS.flatMap((k) => [k.optionKey, k.titleKey, k.errorKey]);
     expectKeys('monitor kind', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every token surface has a label and a hint (settings-tokens:surface.*)', () => {
+    // The label names the surface in the list and the dialog; the hint is what tells an admin what
+    // they are handing out. A surface added without either would offer an operator a raw key at the
+    // exact moment they decide how much power a credential carries.
+    const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
+    expectKeys('token surface', locales, 'surface.', TOKEN_SURFACES);
+    expectKeys('token surface hint', locales, 'surfaceHint.', TOKEN_SURFACES);
+  });
+
+  it('every token state has an explanation (settings-tokens:state.*)', () => {
+    // A token can be dead for four independent reasons and the operator needs the real one — "the
+    // owner is disabled" and "this expired" call for different actions.
+    expectKeys(
+      'token state',
+      { en: enSettingsTokens, ja: jaSettingsTokens },
+      'state.',
+      ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'],
+    );
+  });
+
+  it('every account kind has a label (access:users.kind.*)', () => {
+    // The users list badges each account by kind, and the add-user dialog offers the creatable
+    // ones. A kind without strings shows an operator a raw key while they decide what an account is.
+    expectKeys('user kind', { en: enAccess, ja: jaAccess }, 'users.kind.', USER_KINDS);
   });
 });

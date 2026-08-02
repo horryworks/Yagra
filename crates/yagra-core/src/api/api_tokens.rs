@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Personal access tokens (Settings ▸ API tokens) — the durable credential for the MCP tool
-//! surface at `/mcp` (ADR-028).
+//! Personal access tokens (Settings ▸ API tokens) — the durable credential for unattended clients,
+//! on both the MCP tool surface at `/mcp` (ADR-028) and the northbound REST API.
 //!
-//! **A PAT authenticates `/mcp` and nothing else.** This REST API's auth edge takes session tokens
-//! alone and answers `401` to a `yat_…` bearer, so these are not general-purpose API credentials —
-//! external REST automation logs in via `POST /api/v1/auth/login`. The published `bearer` scheme
-//! says the same thing; keep the two in step.
+//! **A token names the surfaces it may be presented at**, and defaults to `mcp` alone. That default
+//! is what makes opening REST to tokens safe to ship: every token that existed before carries it, so
+//! an upgrade cannot turn a credential minted for an AI assistant into one that can reconfigure
+//! monitoring. Reaching `/api/v1` is an explicit choice made when the token is issued.
 //!
 //! Admin-only throughout, under `ManageUsers` rather than `ManageConfig`: a token carries a role and
 //! a scope, so minting one hands out an identity. That is a user-management act however it is
 //! spelled, and an operator who may reconfigure monitoring still must not be able to issue
-//! themselves an admin credential.
+//! themselves an admin credential. For the same reason a **token cannot mint another** — user
+//! administration is closed to token-authenticated callers (`extract::TOKEN_DENIED_PERMISSIONS`),
+//! or a credential could issue its own successor and outlive every revocation of the original.
 //!
 //! **The raw token exists in one response and nowhere else.** Only its hash is stored, so create
 //! returns it once and no later read can. It must never be logged or echoed back — the listing
@@ -25,9 +27,10 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::Role;
+use yagra_common::{Role, TokenSurface};
 
 /// Longest accepted token label, in characters (not bytes — the name is operator-facing text).
 const MAX_TOKEN_NAME_CHARS: usize = 128;
@@ -52,12 +55,23 @@ pub(super) fn routes() -> Router<ApiState> {
 pub(super) struct CreateApiTokenBody {
     /// Human label (unique, ≤128 chars).
     name: String,
-    /// The role the token grants (`viewer` is the right default for a read-only MCP client).
+    /// The role the token grants (`viewer` is the right default for a read-only client). Capped at
+    /// the owner's role on every use, so this is a ceiling rather than a promise.
     role: Role,
     /// Visibility scope; defaults to `All` when omitted. Only `"All"` is accepted today — a
-    /// group scope is rejected with `400 unsupported_scope` rather than stored, because nothing
-    /// enforces it yet.
+    /// group scope is rejected with `400 unsupported_scope` rather than stored, because no account
+    /// can hold one yet.
     scope: Option<yagra_common::Scope>,
+    /// Which surfaces the token may authenticate. Defaults to `["mcp"]` when omitted, matching what
+    /// every token issued before this field existed can do.
+    #[serde(default)]
+    surfaces: Option<Vec<TokenSurface>>,
+    /// When the token stops working. Omit for no expiry — appropriate for a service account driving
+    /// an integration, and deliberately still allowed.
+    expires_at: Option<DateTime<Utc>>,
+    /// The account the token acts as. Omit to own it yourself; name a service account for anything
+    /// unattended, so the credential outlives whoever set it up.
+    owner_user_id: Option<Uuid>,
 }
 
 /// The one and only response carrying a usable token.
@@ -70,16 +84,30 @@ pub(crate) struct CreatedApiToken {
     id: Uuid,
     name: String,
     role: Role,
+    surfaces: Vec<TokenSurface>,
+    expires_at: Option<DateTime<Utc>>,
     /// The raw bearer token, returned **once**. Never stored, never logged.
     token: String,
 }
 
-/// Check the request fields that need no store, returning the trimmed name and resolved scope.
+/// What [`validate_create`] resolved out of the request body.
+#[derive(Debug)]
+struct NewToken<'a> {
+    name: &'a str,
+    scope: yagra_common::Scope,
+    surfaces: Vec<TokenSurface>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+/// Check the request fields that need no store.
 ///
 /// Split out of the handler because the handler's body is only reachable past the `Admin`
 /// extractor, so a skeleton-mode test answers `503` and can never see these rules. Keeping the
 /// judgement in a plain function is what makes them testable at all.
-fn validate_create(body: &CreateApiTokenBody) -> Result<(&str, yagra_common::Scope), ApiError> {
+fn validate_create<'a>(
+    body: &'a CreateApiTokenBody,
+    now: DateTime<Utc>,
+) -> Result<NewToken<'a>, ApiError> {
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > MAX_TOKEN_NAME_CHARS {
         return Err(ApiError::bad_request(
@@ -89,19 +117,42 @@ fn validate_create(body: &CreateApiTokenBody) -> Result<(&str, yagra_common::Sco
     }
     // Absent scope means the whole fleet, matching what the UI offers by default.
     let scope = body.scope.clone().unwrap_or(yagra_common::Scope::All);
-    // A group-scoped token would be a credential that works nowhere. `/mcp` refuses a non-`All`
-    // principal outright (fail-closed, because its read tools return unfiltered data), and the REST
-    // handlers never consult `Scope` at all — `Principal::can_see` has no caller under `api/`. So
-    // storing one hands an admin a credential they believe is least-privileged while it is in fact
-    // either rejected or unrestricted, depending on which surface they point it at. Refuse it until
-    // scope filtering lands (ADR-014 / ADR-028 WS-F), applying the rule the MCP gate already does.
+    // Group scoping is now enforced across the read surface, but no account can be *issued* one
+    // yet, and `/mcp` still refuses a non-`All` principal outright because its tools return
+    // unfiltered data. Minting one here would hand an admin a credential that is either rejected or
+    // silently unrestricted depending on where they point it. Refuse until issuance lands.
     if scope != yagra_common::Scope::All {
         return Err(ApiError::bad_request(
             "unsupported_scope",
             "group-scoped tokens are not supported yet — omit `scope` or send \"All\"",
         ));
     }
-    Ok((name, scope))
+    // Absent surfaces means MCP alone: the narrow, read-mostly surface, and what every token minted
+    // before this field existed is limited to. Widening is opt-in in both directions.
+    let surfaces = body
+        .surfaces
+        .clone()
+        .unwrap_or_else(|| vec![TokenSurface::Mcp]);
+    if surfaces.is_empty() {
+        return Err(ApiError::bad_request(
+            "no_surface",
+            "a token must name at least one surface it can authenticate",
+        ));
+    }
+    // An already-past expiry mints a credential that is dead on arrival — always a mistake, and one
+    // the admin would only discover when the integration failed.
+    if body.expires_at.is_some_and(|t| t <= now) {
+        return Err(ApiError::bad_request(
+            "expiry_in_the_past",
+            "the expiry must be in the future",
+        ));
+    }
+    Ok(NewToken {
+        name,
+        scope,
+        surfaces,
+        expires_at: body.expires_at,
+    })
 }
 
 #[utoipa::path(
@@ -109,40 +160,58 @@ fn validate_create(body: &CreateApiTokenBody) -> Result<(&str, yagra_common::Sco
     request_body = CreateApiTokenBody,
     responses(
         (status = 201, description = "Token minted; `token` is the raw bearer and is returned only here", body = CreatedApiToken),
-        (status = 400, description = "The token name is empty or over 128 characters, or the scope is not `All`", body = super::error::ErrorBody),
+        (status = 400, description = "Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 409, description = "An API token with that name already exists", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
     ),
 )]
-/// Mint a personal access token for the MCP tool surface at `/mcp`.
+/// Mint a personal access token.
 ///
 /// The raw token is in this response and nowhere else — only its hash is stored, so no later call
-/// can produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with
-/// `401` and wants a session token from `POST /api/v1/auth/login`.
+/// can produce it again.
+///
+/// The token acts as an **account** (`owner_user_id`, defaulting to the caller): disabling or
+/// deleting that account stops the token, and its role is capped at the owner's current role on
+/// every use. For anything unattended, own it with a service account rather than a person — see
+/// `POST /api/v1/users` — so the credential does not depend on who happened to create it.
 async fn create_api_token(
     _guard: RequireManageUsers,
     caller: Caller,
     admin: Admin,
     Json(body): Json<CreateApiTokenBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedApiToken>)> {
-    let (name, scope) = validate_create(&body)?;
+    let new = validate_create(&body, Utc::now())?;
+    // Default the owner to the person minting it. Naming somebody else is how a token is handed to
+    // a service account; the FK below is what makes an unknown id a 400 rather than an orphan.
+    let owner = body.owner_user_id.unwrap_or(caller.0.user_id);
     let (id, raw) = admin
         .api_tokens
-        .create(name, body.role, &scope, &caller.0.username)
+        .create(
+            new.name,
+            body.role,
+            &new.scope,
+            &new.surfaces,
+            new.expires_at,
+            owner,
+            &caller.0.username,
+        )
         .await
         .map_err(|e| {
-            // The unique index on the label is the only expected failure; everything else is a
-            // fault the caller cannot act on.
-            if e.downcast_ref::<sqlx::Error>()
-                .and_then(sqlx::Error::as_database_error)
-                .is_some_and(|db| db.is_unique_violation())
-            {
+            // Two expected failures, both the caller's to fix: a duplicate label, and an owner id
+            // that names no account (the FK). Everything else is a fault they cannot act on.
+            let db = e
+                .downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error);
+            if db.is_some_and(|db| db.is_unique_violation()) {
                 return ApiError::conflict(
                     "duplicate_name",
                     "an API token with that name already exists",
                 );
+            }
+            if db.is_some_and(|db| db.is_foreign_key_violation()) {
+                return ApiError::bad_request("unknown_owner", "no account with that id");
             }
             ApiError::from_internal(e.as_ref(), "create API token", "failed to create API token")
         })?;
@@ -150,8 +219,10 @@ async fn create_api_token(
         StatusCode::CREATED,
         Json(CreatedApiToken {
             id,
-            name: name.to_owned(),
+            name: new.name.to_owned(),
             role: body.role,
+            surfaces: new.surfaces,
+            expires_at: new.expires_at,
             token: raw,
         }),
     ))
@@ -169,7 +240,8 @@ async fn create_api_token(
 /// Every issued personal access token, as metadata.
 ///
 /// Neither the raw token nor its hash is returned — a token's value exists only in the response
-/// that created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.
+/// that created it. These credentials authenticate whichever surfaces each token names — `/mcp`,
+/// this REST API, or both.
 async fn list_api_tokens(
     _guard: RequireManageUsers,
     admin: Admin,
@@ -191,7 +263,7 @@ async fn list_api_tokens(
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
     ),
 )]
-/// Revoke a personal access token, so it stops authenticating `/mcp` immediately.
+/// Revoke a personal access token, so it stops authenticating every surface immediately.
 ///
 /// Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator
 /// reaches for when a token may be compromised, so "it was already gone" is success, not `404`.
@@ -291,14 +363,26 @@ mod tests {
             name: name.to_owned(),
             role: Role::Viewer,
             scope,
+            surfaces: None,
+            expires_at: None,
+            owner_user_id: None,
         }
+    }
+
+    /// A fixed "now" so the expiry rules are tested against an instant, not against the clock.
+    fn now() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_800_000_000, 0).expect("a valid instant")
+    }
+
+    fn check(body: &CreateApiTokenBody) -> Result<NewToken<'_>, ApiError> {
+        validate_create(body, now())
     }
 
     #[test]
     fn a_group_scoped_token_is_refused_rather_than_minted() {
-        // It would authenticate nowhere: `/mcp` rejects a non-`All` principal (fail-closed) and the
-        // REST edge never reads `Scope`. Minting one looks like least privilege and is not.
-        let err = validate_create(&body("ro", Some(Scope::groups(["tokyo"])))).unwrap_err();
+        // It would authenticate nowhere: `/mcp` rejects a non-`All` principal (fail-closed), and no
+        // account can be issued a scope yet. Minting one looks like least privilege and is not.
+        let err = check(&body("ro", Some(Scope::groups(["tokyo"])))).unwrap_err();
         assert_eq!(err.code(), "unsupported_scope");
     }
 
@@ -307,22 +391,70 @@ mod tests {
         // Both spellings must survive: the WebUI omits the field, an API client may send "All".
         for scope in [None, Some(Scope::All)] {
             let req = body("  ro  ", scope);
-            let (name, resolved) = validate_create(&req).unwrap();
-            assert_eq!(name, "ro", "the name is trimmed");
-            assert_eq!(resolved, Scope::All);
+            let new = check(&req).unwrap();
+            assert_eq!(new.name, "ro", "the name is trimmed");
+            assert_eq!(new.scope, Scope::All);
         }
     }
 
     #[test]
     fn a_blank_or_oversized_name_is_refused() {
         for name in ["", "   ", &"x".repeat(MAX_TOKEN_NAME_CHARS + 1)] {
-            assert_eq!(
-                validate_create(&body(name, None)).unwrap_err().code(),
-                "invalid_name"
-            );
+            assert_eq!(check(&body(name, None)).unwrap_err().code(), "invalid_name");
         }
         // The boundary itself is allowed, and counts characters rather than bytes.
-        assert!(validate_create(&body(&"あ".repeat(MAX_TOKEN_NAME_CHARS), None)).is_ok());
+        assert!(check(&body(&"あ".repeat(MAX_TOKEN_NAME_CHARS), None)).is_ok());
+    }
+
+    // The default is the whole reason opening REST to tokens is safe to ship: every token that
+    // exists today was minted without this field, and must stay confined to `/mcp` across the
+    // upgrade. A client that omits `surfaces` is asking for what it has always got.
+    #[test]
+    fn an_omitted_surface_list_means_mcp_alone() {
+        let req = body("ro", None);
+        let new = check(&req).unwrap();
+        assert_eq!(new.surfaces, vec![TokenSurface::Mcp]);
+    }
+
+    #[test]
+    fn a_token_naming_no_surface_is_refused() {
+        // It would authenticate nowhere at all — always a mistake, never a narrow token.
+        let mut req = body("ro", None);
+        req.surfaces = Some(Vec::new());
+        assert_eq!(check(&req).unwrap_err().code(), "no_surface");
+    }
+
+    #[test]
+    fn rest_is_granted_only_when_asked_for() {
+        let mut req = body("ci", None);
+        req.surfaces = Some(vec![TokenSurface::Rest]);
+        assert_eq!(check(&req).unwrap().surfaces, vec![TokenSurface::Rest]);
+
+        req.surfaces = Some(vec![TokenSurface::Mcp, TokenSurface::Rest]);
+        assert_eq!(
+            check(&req).unwrap().surfaces,
+            vec![TokenSurface::Mcp, TokenSurface::Rest],
+            "both is a legitimate ask — an assistant that also drives the API"
+        );
+    }
+
+    #[test]
+    fn an_expiry_in_the_past_is_refused_but_no_expiry_is_fine() {
+        let mut req = body("ci", None);
+        req.expires_at = Some(now() - chrono::Duration::seconds(1));
+        assert_eq!(check(&req).unwrap_err().code(), "expiry_in_the_past");
+
+        // The boundary counts as past: a token expiring exactly now is already dead.
+        req.expires_at = Some(now());
+        assert_eq!(check(&req).unwrap_err().code(), "expiry_in_the_past");
+
+        req.expires_at = Some(now() + chrono::Duration::days(90));
+        assert_eq!(check(&req).unwrap().expires_at, req.expires_at);
+
+        // No expiry stays allowed — a service account driving CI should not die on a date nobody
+        // wrote down.
+        req.expires_at = None;
+        assert_eq!(check(&req).unwrap().expires_at, None);
     }
 
     #[tokio::test]

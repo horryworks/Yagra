@@ -110,6 +110,7 @@ import type {
   DnsChainCurrent,
   DnsChainHistoryPage,
   DnsRecordType,
+  UserKind,
   UserSummary,
   OidcProviderSummary,
   OidcProviderInput,
@@ -1420,8 +1421,14 @@ export const api = {
   listUsers: (): Promise<UserSummary[]> => apiGet('/api/v1/users'),
 
   /** Create a user account. The password is hashed server-side and never returned. */
-  createUser: (body: { username: string; password: string; role: Role }): Promise<{ id: string }> =>
-    apiPost('/api/v1/users', { body }),
+  /** Create an account. `password` is required for a local account and refused for a service one
+   *  (a machine account cannot sign in), so it is optional here and validated by the caller. */
+  createUser: (body: {
+    username: string;
+    password?: string;
+    role: Role;
+    kind?: UserKind;
+  }): Promise<{ id: string }> => apiPost('/api/v1/users', { body }),
 
   /** Delete a user account. Refused (409 `last_admin`) for the last admin. */
   deleteUser: (id: string): Promise<void> => apiDelete('/api/v1/users/{id}', { path: { id } }),

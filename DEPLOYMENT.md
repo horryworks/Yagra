@@ -366,6 +366,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_ENABLE_HA` | `false` | Opt-in active/passive leader election via a PostgreSQL advisory lock |
 | `YAGRA_CORE_ID` | unset | Human-readable id of this core instance in HA logs |
 | `YAGRA_SESSION_KEY_FILE` | unset ⇒ per-process tokens | Path to the mounted HMAC session-signing key (sessions valid on any core and across restarts); set but unreadable/invalid ⇒ startup fails |
+| `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | Days an API token owned by an **SSO-provisioned** account survives its owner not signing in — an identity provider disabling an account is not something Yagra is told about, so the owner going quiet is the only signal. Local/service-account-owned tokens are unaffected. Clamped 1–365 |
 | **MCP (AI clients)** | | |
 | `YAGRA_ENABLE_MCP` | `false` | Mount the MCP tool surface at `/mcp` on the API port (auth always required) |
 | `YAGRA_MCP_ALLOWED_HOSTS` | unset ⇒ any `Host` accepted | Comma-separated `Host`-header allowlist for `/mcp` (DNS-rebinding hardening) |

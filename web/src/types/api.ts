@@ -222,6 +222,14 @@ export type RoleMatrix = components['schemas']['RolesMatrix'];
  *  RFC 3339 text; `last_login_at` is RFC 3339 text or null (the account has never logged in). */
 export type UserSummary = components['schemas']['UserSummary'];
 
+/** How an account authenticates. `service` is a machine account: no password, no IdP subject, and
+ *  therefore no way to sign in — it exists to own API tokens so an unattended integration outlives
+ *  the person who set it up. `oidc` accounts are provisioned by signing in, never created by hand. */
+export const USER_KINDS = ['local', 'oidc', 'service'] as const;
+
+/** How an account authenticates (snake_case). Pinned to `schemas.UserKind`. */
+export type UserKind = (typeof USER_KINDS)[number];
+
 /** A configured OIDC provider (`GET /api/v1/settings/oidc`). The client_secret is write-only and
  *  never returned; `has_secret` signals one is stored. */
 export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];
@@ -230,13 +238,21 @@ export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];
  *  update to keep the stored secret. */
 export type OidcProviderInput = components['schemas']['OidcProviderInput'];
 
-/** An API token (`GET /api/v1/api-tokens`) — a long-lived credential for non-browser/MCP clients
+/** An API token (`GET /api/v1/api-tokens`) — a long-lived credential for unattended clients
  *  (ADR-028). The raw token is write-only: shown once on create, never returned again; only
  *  metadata is listed. */
 export type ApiTokenSummary = components['schemas']['ApiTokenInfo'];
 
+/** The surfaces a token can be presented at. A token names its own, and one issued before this
+ *  existed carries `mcp` alone — which is why upgrading cannot turn an assistant's credential into
+ *  one that reconfigures monitoring. */
+export const TOKEN_SURFACES = ['mcp', 'rest'] as const;
+
+/** An auth surface (snake_case). Pinned to `schemas.TokenSurface`. */
+export type TokenSurface = (typeof TOKEN_SURFACES)[number];
+
 /** Create payload for an API token. `scope` is omitted for global (`"All"`) visibility — the only
- *  scope the MCP tool surface accepts in Increment 1. */
+ *  scope either surface accepts today. */
 export type ApiTokenInput = components['schemas']['CreateApiTokenBody'];
 
 /** Create response: the raw `token` is shown once and never returned again. */

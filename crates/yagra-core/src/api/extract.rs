@@ -24,7 +24,7 @@ use axum::{
     http::{request::Parts, HeaderMap},
 };
 use std::sync::Arc;
-use yagra_common::Permission;
+use yagra_common::{Permission, TokenSurface};
 
 /// Extract the `Authorization: Bearer <token>` value, if present.
 pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -35,12 +35,100 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
-/// The caller's username from the bearer session, if any (for audit attribution).
-pub(crate) fn current_username(st: &ApiState, headers: &HeaderMap) -> Option<String> {
-    bearer(headers)
-        .and_then(|t| st.sessions.lookup(t))
-        .map(|s| s.username)
+/// What a valid bearer token turned out to be.
+///
+/// Two credentials reach `/api/v1` now: an interactive **session** from `POST /auth/login`, and a
+/// long-lived **API token** owned by an account. They authenticate the same routes but are not
+/// interchangeable — an API token has no interactive identity, so anything account-scoped
+/// ([`Caller`]) is closed to it, and it may not administer users.
+#[derive(Clone)]
+pub(crate) enum Authenticated {
+    /// An interactive login.
+    Session(crate::auth::Session),
+    /// A personal access token, resolved together with the account it acts as.
+    Token(crate::apitokens::TokenAuth),
 }
+
+impl Authenticated {
+    /// Role and scope, however the caller authenticated.
+    pub(crate) fn principal(&self) -> &yagra_common::Principal {
+        match self {
+            Self::Session(s) => &s.principal,
+            Self::Token(t) => &t.principal,
+        }
+    }
+
+    /// How this caller is written into the audit log.
+    pub(crate) fn audit_actor(&self) -> String {
+        match self {
+            Self::Session(s) => s.username.clone(),
+            Self::Token(t) => t.audit_actor(),
+        }
+    }
+}
+
+/// Resolve the request's bearer token **once**, for everything downstream.
+///
+/// Session tokens verify in memory, so the guards used to resolve one independently in every
+/// extractor and again in `audit_mw` and nobody noticed the repetition. An API token is a database
+/// round-trip, which makes repetition both wasteful and — worse — divergent: `audit_mw` looked
+/// bearers up in the *session* store alone, so a mutating call authenticated by a token would have
+/// been recorded as anonymous. One resolution, stashed in the request extensions, keeps the actor
+/// and the authorization decision reading the same credential.
+///
+/// This deliberately **does not reject**. A missing or invalid token leaves the extension absent and
+/// the extractors answer `401`/`403` in their own order, so the "authenticate before reporting
+/// availability" rule (`api-conventions.md`) stays where it is enforced today.
+pub(crate) async fn resolve_auth(st: &ApiState, headers: &HeaderMap) -> Option<Authenticated> {
+    let token = bearer(headers)?;
+    if crate::apitokens::is_api_token_shape(token) {
+        // API tokens live in PostgreSQL, so they exist in live mode only.
+        let admin = st.admin.as_ref()?;
+        return admin
+            .api_tokens
+            .verify(token, TokenSurface::Rest)
+            .await
+            .map(Authenticated::Token);
+    }
+    st.sessions.lookup(token).map(Authenticated::Session)
+}
+
+/// The caller's audit label, resolved earlier in the request by [`resolve_auth`].
+pub(crate) fn current_actor(parts: &Parts) -> Option<String> {
+    parts
+        .extensions
+        .get::<Authenticated>()
+        .map(Authenticated::audit_actor)
+}
+
+/// Who to record on a row this handler writes — a report definition's author, an analysis job's
+/// requester, an RCA's asker.
+///
+/// A handler argument rather than a `HeaderMap` plus a lookup, for the reason the rest of this
+/// module exists: the lookup used to read the *session* store directly, so the same call made with
+/// an API token recorded nobody. Taking the resolved answer means a handler cannot ask the wrong
+/// question.
+///
+/// Never rejects — authorization is the `Require*` guard's job, and a public-dashboard read has no
+/// actor to name. `None` is "we genuinely do not know", which callers render as they see fit.
+pub struct Actor(pub Option<String>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Actor {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &ApiState) -> Result<Self, Self::Rejection> {
+        Ok(Self(current_actor(parts)))
+    }
+}
+
+/// Permissions an API token may never exercise, however privileged its owner.
+///
+/// Minting a token is a user-management act — it hands out an identity. A token that could mint
+/// another would be able to issue its own successor, which quietly defeats both expiry and the
+/// owner binding: revoke the credential you know about and the one it made lives on. So user
+/// administration stays something a person does while signed in.
+const TOKEN_DENIED_PERMISSIONS: [Permission; 1] = [Permission::ManageUsers];
 
 /// The permission a [`Require`] guard demands. Implemented by the marker types below so the
 /// permission is part of the handler's type, visible in its signature.
@@ -128,20 +216,39 @@ impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
         if P::OPEN_ON_PUBLIC_DASHBOARD && st.public_dashboard {
             return Ok(Self(std::marker::PhantomData));
         }
-        match st.sessions.authorize(bearer(&parts.headers), P::PERMISSION) {
-            Ok(_) => Ok(Self(std::marker::PhantomData)),
-            Err(crate::auth::AuthError::Forbidden) => Err(ApiError::forbidden()),
-            Err(_) => Err(ApiError::unauthorized()),
+        let Some(auth) = parts.extensions.get::<Authenticated>() else {
+            return Err(ApiError::unauthorized());
+        };
+        // An API token is refused the user-administration permissions before its role is even
+        // consulted, so an Admin-role token is still not a way to mint another credential.
+        if matches!(auth, Authenticated::Token(_))
+            && TOKEN_DENIED_PERMISSIONS.contains(&P::PERMISSION)
+        {
+            return Err(ApiError::forbidden_code(
+                "token_not_permitted",
+                "an API token cannot administer users — sign in to do this",
+            ));
+        }
+        if auth.principal().can(P::PERMISSION) {
+            Ok(Self(std::marker::PhantomData))
+        } else {
+            Err(ApiError::forbidden())
         }
     }
 }
 
-/// The caller's authenticated session — for handlers that need *who* is asking, not merely whether
-/// they may.
+/// The caller's authenticated **session** — for handlers that need *who* is asking, not merely
+/// whether they may.
 ///
 /// Deliberately **not** open in public-dashboard mode, unlike [`RequireView`]: an endpoint scoped to
 /// "this account" (My Dashboard) has no meaning without an account, and an anonymous public-mode
 /// visitor would otherwise share one nameless layout with every other visitor.
+///
+/// For the same reason it is closed to an **API token**. A token is an unattended credential: it has
+/// an owner, but no interactive identity to scope a saved layout to, and no person present to be
+/// asked. The handlers that take this — a personal dashboard, "who am I", the issuer recorded on a
+/// new token — are all things a script has no business doing on someone's behalf, so a token gets a
+/// typed `403` rather than a silent stand-in identity.
 ///
 /// It demands only [`Permission::View`], so a handler needing a stronger permission *and* the
 /// username lists its `Require*` guard first and this second.
@@ -151,14 +258,17 @@ pub struct Caller(pub crate::auth::Session);
 impl FromRequestParts<ApiState> for Caller {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        match st
-            .sessions
-            .authorize(bearer(&parts.headers), Permission::View)
-        {
-            Ok(session) => Ok(Self(session)),
-            Err(crate::auth::AuthError::Forbidden) => Err(ApiError::forbidden()),
-            Err(_) => Err(ApiError::unauthorized()),
+    async fn from_request_parts(parts: &mut Parts, _: &ApiState) -> Result<Self, Self::Rejection> {
+        match parts.extensions.get::<Authenticated>() {
+            Some(Authenticated::Session(s)) if s.principal.can(Permission::View) => {
+                Ok(Self(s.clone()))
+            }
+            Some(Authenticated::Session(_)) => Err(ApiError::forbidden()),
+            Some(Authenticated::Token(_)) => Err(ApiError::forbidden_code(
+                "session_required",
+                "this endpoint identifies the signed-in account, so an API token cannot use it",
+            )),
+            None => Err(ApiError::unauthorized()),
         }
     }
 }
@@ -378,6 +488,35 @@ mod tests {
         req.into_parts().0
     }
 
+    /// Request parts as a guard actually sees them: with the bearer already resolved into the
+    /// extension, the way `resolve_auth_mw` does for every real request.
+    ///
+    /// The guards read that extension rather than the header, so parts carrying only an
+    /// `Authorization` header are — correctly — anonymous. Building them through the same resolution
+    /// the router uses keeps these tests testing the guard rather than the fixture.
+    async fn resolved(st: &ApiState, token: Option<&str>) -> Parts {
+        let mut parts = parts_with(token);
+        if let Some(auth) = resolve_auth(st, &parts.headers).await {
+            parts.extensions.insert(auth);
+        }
+        parts
+    }
+
+    /// A token-authenticated caller, without a database. `resolve_auth` needs `admin` for that, and
+    /// these tests run in skeleton mode — so the resolution is injected directly, which is also the
+    /// only way to exercise the token branch of the guards in a unit test at all.
+    fn token_parts(role: Role, name: &str) -> Parts {
+        let mut parts = parts_with(None);
+        parts
+            .extensions
+            .insert(Authenticated::Token(crate::apitokens::TokenAuth {
+                token_name: name.to_owned(),
+                owner_username: "svc-ci".to_owned(),
+                principal: Principal::new(role, Scope::All),
+            }));
+        parts
+    }
+
     #[tokio::test]
     async fn view_is_open_on_a_public_dashboard_but_gated_otherwise() {
         let public = public_state();
@@ -417,14 +556,15 @@ mod tests {
         // The viewer authenticates fine (View passes) but cannot administer accounts. The two
         // failures must stay distinguishable: 401 means "who are you", 403 means "not allowed".
         assert!(
-            RequireView::from_request_parts(&mut parts_with(Some(&token)), &st)
+            RequireView::from_request_parts(&mut resolved(&st, Some(&token)).await, &st)
                 .await
                 .is_ok()
         );
-        let err = RequireManageUsers::from_request_parts(&mut parts_with(Some(&token)), &st)
-            .await
-            .err()
-            .expect("a viewer must not pass ManageUsers");
+        let err =
+            RequireManageUsers::from_request_parts(&mut resolved(&st, Some(&token)).await, &st)
+                .await
+                .err()
+                .expect("a viewer must not pass ManageUsers");
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
     }
 
@@ -447,7 +587,7 @@ mod tests {
             Principal::new(Role::Viewer, Scope::All),
             "viewer1",
         );
-        let caller = Caller::from_request_parts(&mut parts_with(Some(&token)), &st)
+        let caller = Caller::from_request_parts(&mut resolved(&st, Some(&token)).await, &st)
             .await
             .expect("a valid token authorizes");
         assert_eq!(caller.0.username, "viewer1");
@@ -462,5 +602,80 @@ mod tests {
             .expect("skeleton mode has no write side");
         assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(err.code(), "admin_unavailable");
+    }
+
+    // An API token authenticates the REST surface like a session does — that is the point of the
+    // change. It reaches reads and ordinary writes on its (capped) role.
+    #[tokio::test]
+    async fn an_api_token_authorizes_reads_and_ordinary_writes() {
+        let st = private_state();
+        assert!(
+            RequireView::from_request_parts(&mut token_parts(Role::Viewer, "ro"), &st)
+                .await
+                .is_ok()
+        );
+        assert!(
+            RequireManageConfig::from_request_parts(&mut token_parts(Role::Admin, "ci"), &st)
+                .await
+                .is_ok(),
+            "an admin-role token may reconfigure monitoring — what REST automation is for"
+        );
+        // And the role still gates it: a viewer token is read-only, exactly like a viewer session.
+        let err =
+            RequireManageConfig::from_request_parts(&mut token_parts(Role::Viewer, "ro"), &st)
+                .await
+                .err()
+                .expect("a viewer token must not write");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    // The one power a token never gets, however privileged its owner: minting another. Without this
+    // an admin-role token could issue its own successor, and revoking the credential you know about
+    // would leave the one it made behind.
+    #[tokio::test]
+    async fn an_api_token_cannot_administer_users_even_as_admin() {
+        let st = private_state();
+        let err = RequireManageUsers::from_request_parts(&mut token_parts(Role::Admin, "ci"), &st)
+            .await
+            .err()
+            .expect("user administration is closed to tokens");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+        assert_eq!(err.code(), "token_not_permitted");
+    }
+
+    // Account-scoped endpoints have no meaning for an unattended credential. 403 rather than 401:
+    // the caller *is* authenticated, it is simply not a person.
+    #[tokio::test]
+    async fn caller_is_closed_to_an_api_token() {
+        let st = private_state();
+        let err = Caller::from_request_parts(&mut token_parts(Role::Admin, "ci"), &st)
+            .await
+            .err()
+            .expect("a token has no interactive identity");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+        assert_eq!(err.code(), "session_required");
+    }
+
+    // Audit attribution has to name both the account and the credential. The account alone cannot
+    // be told from an interactive login; the token alone loses who is answerable for it.
+    #[tokio::test]
+    async fn a_token_is_audited_by_its_owner_and_its_label() {
+        let parts = token_parts(Role::Operator, "grafana");
+        assert_eq!(
+            current_actor(&parts).as_deref(),
+            Some("svc-ci (token:grafana)")
+        );
+
+        let st = private_state();
+        let token = st.sessions.issue(
+            uuid::Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "alice",
+        );
+        let session_parts = resolved(&st, Some(&token)).await;
+        assert_eq!(current_actor(&session_parts).as_deref(), Some("alice"));
+
+        // No credential, no actor — `audit_mw` renders that as the anonymous marker.
+        assert_eq!(current_actor(&parts_with(None)), None);
     }
 }

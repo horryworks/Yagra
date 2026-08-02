@@ -53,7 +53,7 @@ pub use metric::{is_valid_metric_name, MetricKind, SeriesKey};
 pub use node::Node;
 pub use node_kind::{NodeKind, NodeRows};
 pub use profile::ProfileCategory;
-pub use rbac::{Permission, Principal, Role, Scope};
+pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};
 pub use severity::Severity;
 pub use state::NodeState;
 pub use thresholds::{

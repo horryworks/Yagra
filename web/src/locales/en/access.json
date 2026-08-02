@@ -137,7 +137,14 @@
     "field": {
       "username": "Username",
       "password": "Password (min {{min}} chars)",
-      "role": "Role"
+      "role": "Role",
+      "kind": "Account type",
+      "kindHint": "A service account has no password and cannot sign in. It exists to own API tokens, so an integration keeps working when the person who set it up moves on."
+    },
+    "kind": {
+      "local": "Local",
+      "oidc": "SSO",
+      "service": "Service account"
     },
     "changePw": {
       "title": "Change password — {{name}}",

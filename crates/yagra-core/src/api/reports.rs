@@ -19,14 +19,14 @@
 //! left the builder.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{current_username, Admin, RequireManageConfig, RequireView, Scoped};
+use super::extract::{Actor, Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::NodeScope;
 use super::util::{CreatedId, ListQuery, MAX_JSON_DOC_BYTES};
 use super::ApiState;
 use crate::reports::{self, ScheduleInput};
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -230,13 +230,13 @@ fn checked_definition(body: &ReportDefinitionBody) -> Result<&str, ApiError> {
 )]
 async fn create_report_definition(
     _guard: RequireManageConfig,
-    State(st): State<ApiState>,
+
     admin: Admin,
-    headers: HeaderMap,
+    actor: Actor,
     Json(body): Json<ReportDefinitionBody>,
 ) -> ApiResult<Json<reports::ReportDefinition>> {
     let name = checked_definition(&body)?;
-    let user = current_username(&st, &headers);
+    let user = actor.0;
     let def = admin
         .reports
         .repo()
@@ -273,14 +273,14 @@ async fn create_report_definition(
 )]
 async fn update_report_definition(
     _guard: RequireManageConfig,
-    State(st): State<ApiState>,
+
     admin: Admin,
-    headers: HeaderMap,
+    actor: Actor,
     Path(id): Path<Uuid>,
     Json(body): Json<ReportDefinitionBody>,
 ) -> ApiResult<Json<Ok_>> {
     let name = checked_definition(&body)?;
-    let user = current_username(&st, &headers);
+    let user = actor.0;
     let updated = admin
         .reports
         .repo()
@@ -358,12 +358,12 @@ async fn delete_report_definition(
 )]
 async fn run_report_definition(
     _guard: RequireManageConfig,
-    State(st): State<ApiState>,
+
     admin: Admin,
-    headers: HeaderMap,
+    actor: Actor,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<reports::ReportRun>> {
-    let user = current_username(&st, &headers);
+    let user = actor.0;
     admin
         .reports
         .run_now(id, reports::ReportRunTrigger::Manual, user)
@@ -738,13 +738,13 @@ fn parse_schedule_body(
 )]
 async fn create_report_schedule(
     _guard: RequireManageConfig,
-    State(st): State<ApiState>,
+
     admin: Admin,
-    headers: HeaderMap,
+    actor: Actor,
     Json(body): Json<ReportScheduleBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let (input, next) = parse_schedule_body(body)?;
-    let user = current_username(&st, &headers);
+    let user = actor.0;
     let id = admin
         .reports
         .repo()
@@ -777,14 +777,14 @@ async fn create_report_schedule(
 )]
 async fn update_report_schedule(
     _guard: RequireManageConfig,
-    State(st): State<ApiState>,
+
     admin: Admin,
-    headers: HeaderMap,
+    actor: Actor,
     Path(id): Path<Uuid>,
     Json(body): Json<ReportScheduleBody>,
 ) -> ApiResult<Json<Ok_>> {
     let (input, next) = parse_schedule_body(body)?;
-    let user = current_username(&st, &headers);
+    let user = actor.0;
     let updated = admin
         .reports
         .repo()

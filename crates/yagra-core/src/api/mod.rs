@@ -74,7 +74,7 @@ mod util;
 
 pub(crate) use error::error_response;
 pub use error::{ApiError, ApiResult};
-pub(crate) use extract::{bearer, current_username};
+pub(crate) use extract::bearer;
 // Pool names are validated in `nodes` — every writer of one, including the folder-group and Meraki
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 pub(crate) use util::{
@@ -343,6 +343,13 @@ pub fn router(state: ApiState) -> Router {
         // Audit middleware: records every mutating /api/v1 request (who + method/path +
         // status) so new write endpoints are covered automatically (security.md).
         .layer(middleware::from_fn_with_state(state.clone(), audit_mw))
+        // Bearer resolution, *outside* the audit layer so it runs first and both the audit record
+        // and every guard read the same answer. Layers added later wrap earlier ones, so this is
+        // the outermost of the two. It authenticates nothing by itself — see `extract::resolve_auth`.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            resolve_auth_mw,
+        ))
         .with_state(state)
 }
 
@@ -354,6 +361,18 @@ const AUDIT_ANONYMOUS: &str = "(unauthenticated)";
 /// Middleware: append an audit row for every mutating `/api/v1` request. Auth endpoints
 /// are excluded here — login is recorded by its handler (with the attempted username,
 /// never the credential). Reads are not audited.
+/// Resolve the request's bearer token once and stash the answer for the guards and the audit log.
+///
+/// A plain middleware rather than work inside each extractor because an API token costs a database
+/// round-trip: a handler taking two guards would otherwise verify the same credential twice, and
+/// `audit_mw` — which runs outside the extractors entirely — would have to verify it a third time.
+async fn resolve_auth_mw(State(st): State<ApiState>, mut req: Request, next: Next) -> Response {
+    if let Some(auth) = extract::resolve_auth(&st, req.headers()).await {
+        req.extensions_mut().insert(auth);
+    }
+    next.run(req).await
+}
+
 async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
@@ -364,11 +383,14 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
         && path.starts_with("/api/v1/")
         && !path.starts_with("/api/v1/auth/")
         && !path.starts_with("/api/v1/ingest/");
-    // Resolve the actor before the handler runs (the request is consumed by it).
+    // Resolve the actor before the handler runs (the request is consumed by it). Read from the
+    // extension `resolve_auth_mw` already filled rather than looking the bearer up again — that
+    // second lookup consulted the session store alone, so a mutating call authenticated by an API
+    // token was recorded as anonymous.
     let username = if audited {
-        bearer(req.headers())
-            .and_then(|t| st.sessions.lookup(t))
-            .map(|s| s.username)
+        req.extensions()
+            .get::<extract::Authenticated>()
+            .map(extract::Authenticated::audit_actor)
     } else {
         None
     };

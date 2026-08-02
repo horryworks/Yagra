@@ -34,7 +34,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{tool_handler, ServerHandler};
 use tokio_util::sync::CancellationToken;
-use yagra_common::{Permission, Principal, Scope};
+use yagra_common::{Permission, Principal, Scope, TokenSurface};
 
 use crate::api::ApiState;
 
@@ -63,12 +63,12 @@ pub struct YagraMcp {
 /// the HTTP request extensions after authentication; rmcp forwards the request `Parts` into each
 /// tool's `RequestContext`, so a write tool reads it back to enforce a [`Permission`] and to attribute
 /// its audit entry. `Clone` is required for storage in `http::Extensions`.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct McpIdentity {
     /// The resolved principal (role + scope) — write tools check `principal.can(perm)`.
     pub principal: Principal,
-    /// A human-facing actor label for audit attribution: a session username, `mcp-token` for a PAT,
-    /// or `mcp` as a fallback. Never a secret (not the raw token).
+    /// A human-facing actor label for audit attribution: a session's username, or an API token's
+    /// `owner (token:name)`. Never a secret (not the raw token).
     pub actor: String,
 }
 
@@ -137,10 +137,8 @@ fn mcp_allowed_hosts() -> Vec<String> {
 async fn mcp_auth_mw(State(st): State<ApiState>, mut req: Request, next: Next) -> Response {
     let token = crate::api::bearer(req.headers()).map(str::to_owned);
     match authenticate(&st, token.as_deref()).await {
-        Ok(principal) => {
-            let actor = actor_label(&st, token.as_deref());
-            req.extensions_mut()
-                .insert(McpIdentity { principal, actor });
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
             next.run(req).await
         }
         Err(resp) => {
@@ -150,41 +148,35 @@ async fn mcp_auth_mw(State(st): State<ApiState>, mut req: Request, next: Next) -
     }
 }
 
-/// A human-facing actor label for audit attribution, derived from the bearer token shape without
-/// exposing the token: a session's username, `mcp-token` for a PAT (the token's own `last_used_at`
-/// correlates the specific token), or `mcp` as a fallback.
-fn actor_label(st: &ApiState, token: Option<&str>) -> String {
-    match token {
-        Some(t) if crate::apitokens::is_api_token_shape(t) => "mcp-token".to_owned(),
-        Some(t) => st
-            .sessions
-            .lookup(t)
-            .map(|s| s.username)
-            .unwrap_or_else(|| "mcp".to_owned()),
-        None => "mcp".to_owned(),
-    }
-}
-
-/// Resolve a bearer token to a [`Principal`] permitted to use MCP, or an error `Response`. Routes by
-/// token shape: a `yat_` API token → [`crate::apitokens::ApiTokenStore::verify`]; otherwise a session
-/// token → [`crate::auth::SessionStore::authorize`]. Requires `View` and (Increment 1) global scope.
-async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<Principal, Response> {
+/// Resolve a bearer token to an [`McpIdentity`] permitted to use MCP, or an error `Response`. Routes
+/// by token shape: a `yat_` API token → [`crate::apitokens::ApiTokenStore::verify`]; otherwise a
+/// session token → [`crate::auth::SessionStore::authorize`]. Requires `View` and (Increment 1) global
+/// scope.
+async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity, Response> {
     let Some(token) = token else {
         return Err(unauthorized("a valid bearer token is required"));
     };
-    let principal = if crate::apitokens::is_api_token_shape(token) {
-        // API tokens are backed by PostgreSQL (live mode only).
+    // The actor label is derived from the same resolution that authenticates, not from a second
+    // lookup: a PAT used to be audited as the constant `mcp-token`, which named the surface rather
+    // than anyone answerable for the call.
+    let resolved = if crate::apitokens::is_api_token_shape(token) {
+        // API tokens are backed by PostgreSQL (live mode only). Naming the surface is what keeps a
+        // token minted for REST automation out of here, and vice versa.
         match st.admin.as_ref() {
-            Some(admin) => admin.api_tokens.verify(token).await,
+            Some(admin) => admin
+                .api_tokens
+                .verify(token, TokenSurface::Mcp)
+                .await
+                .map(|auth| (auth.principal.clone(), auth.audit_actor())),
             None => None,
         }
     } else {
         st.sessions
             .authorize(Some(token), Permission::View)
             .ok()
-            .map(|session| session.principal)
+            .map(|session| (session.principal, session.username))
     };
-    let Some(principal) = principal else {
+    let Some((principal, actor)) = resolved else {
         return Err(unauthorized("invalid or expired token"));
     };
     if !principal.can(Permission::View) {
@@ -197,7 +189,7 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<Principal, R
             "group-scoped tokens are not yet supported on /mcp — use a global-scope (All) token",
         ));
     }
-    Ok(principal)
+    Ok(McpIdentity { principal, actor })
 }
 
 fn unauthorized(message: &str) -> Response {
@@ -270,8 +262,12 @@ mod tests {
             "viewer1",
         );
         let st = state_with_sessions(sessions);
-        let principal = authenticate(&st, Some(&token)).await.expect("accepted");
-        assert_eq!(principal.role, Role::Viewer);
+        let identity = authenticate(&st, Some(&token)).await.expect("accepted");
+        assert_eq!(identity.principal.role, Role::Viewer);
+        assert_eq!(
+            identity.actor, "viewer1",
+            "a session is audited by its username"
+        );
     }
 
     #[test]

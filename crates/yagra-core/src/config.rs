@@ -33,6 +33,17 @@ pub const MERAKI_TARGET_RPS_MAX: f64 = 10.0;
 /// Default API bind address.
 const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
 
+/// Default idle window, in days, after which an API token owned by an **externally-authenticated**
+/// account stops working.
+///
+/// Yagra cannot see an IdP disable an account — the accounts table is only ever refreshed by a
+/// *successful* SSO login, so a disabled user's row freezes with `enabled = true`. Sessions ride out
+/// that blind spot because they expire within a day; a no-expiry API token would not. The one signal
+/// left is that the owner stops signing in, so an OIDC-owned token is treated as dead once its owner
+/// has been absent this long. Thirty days is long enough not to punish a holiday and short enough
+/// that an offboarded account's credentials do not outlive the quarter.
+const DEFAULT_PAT_OIDC_IDLE_DAYS: i64 = 30;
+
 /// Live-mode configuration. Absent ⇒ skeleton mode.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -50,6 +61,9 @@ pub struct Config {
     /// authentication — a public, read-only dashboard. Default `false`: viewing requires
     /// a valid session (Viewer role), matching the RBAC design.
     pub public_dashboard: bool,
+    /// Days an SSO-owned API token survives its owner's silence — see
+    /// [`DEFAULT_PAT_OIDC_IDLE_DAYS`] for why this is the only handle on IdP-side revocation.
+    pub pat_oidc_idle_days: i64,
     /// Redis connection URL for volatile poller liveness/assignment mirroring (ADR-004/009).
     /// Optional and **independent of the live/skeleton decision**: Redis is rebuildable, so its
     /// absence only downgrades that mirror to a no-op (ADR-017), it never forces skeleton mode.
@@ -133,6 +147,7 @@ impl Config {
             api_addr: std::env::var("YAGRA_API_ADDR")
                 .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
             public_dashboard: parse_bool(std::env::var("YAGRA_PUBLIC_DASHBOARD").ok()),
+            pat_oidc_idle_days: parse_idle_days(std::env::var("YAGRA_PAT_OIDC_IDLE_DAYS").ok()),
             // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
             // affecting the live/skeleton gating above.
             redis_url: parse_optional(std::env::var("YAGRA_REDIS_URL").ok()),
@@ -182,6 +197,17 @@ fn parse_retention_days(raw: Option<String>) -> u32 {
         .filter(|&n| n > 0)
         .map(|n| n.clamp(1, 3650))
         .unwrap_or(crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS)
+}
+
+/// Parse the SSO-owner idle window in days. Unset, unparseable, or zero ⇒ the default; clamped to
+/// a year so a typo cannot turn the window off in practice. There is deliberately **no way to
+/// disable it**: it is the only check standing between an offboarded SSO account and a token that
+/// never expires, and an operator who wants a longer leash can raise the number.
+fn parse_idle_days(raw: Option<String>) -> i64 {
+    raw.and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|&n| n > 0)
+        .map(|n| n.clamp(1, 365))
+        .unwrap_or(DEFAULT_PAT_OIDC_IDLE_DAYS)
 }
 
 /// Parse a boolean flag. Truthy: `1`/`true`/`yes`/`on` (case-insensitive); everything

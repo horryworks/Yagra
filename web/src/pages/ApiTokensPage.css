@@ -39,3 +39,63 @@
   user-select: all;
   font-size: var(--font-sm);
 }
+
+/* Surface checkboxes in the create dialog. Each row is name + one line of consequence, because
+   "MCP" and "REST API" do not tell an admin what they are handing out. */
+.tok-surfaces {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tok-surface {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.tok-surface input {
+  grid-row: 1 / span 2;
+  align-self: start;
+  margin-top: 3px;
+}
+
+.tok-surface-name {
+  color: var(--text-primary);
+}
+
+.tok-surface-hint {
+  grid-column: 2;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+/* Surface badges in the list. */
+.tok-surface-badges {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.tok-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Marks an owner that signs in through an IdP — the case where going quiet ends the token. Paired
+   with a tooltip rather than standing alone, so it is never colour-only (ui-conventions.md). */
+.tok-sso-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-warning);
+  flex: none;
+}
+
+/* A token close to its expiry reads as something to act on, not as a date to parse. */
+.tok-expiring {
+  color: var(--status-warning);
+}

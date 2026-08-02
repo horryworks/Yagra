@@ -11,6 +11,13 @@
 ## Unreleased
 
 ### Breaking changes
+- **An API token now acts as an account, and one whose owner cannot be resolved stops working.**
+  Tokens used to be free-standing identities: `api_tokens` carried its own role and had no link to
+  `users` at all, so deleting, disabling or demoting the account that issued a token changed nothing
+  about the token. Migration `0057` binds each token to an owner, matching on the `created_by`
+  username. **A token whose issuing account no longer exists cannot be matched, and no longer
+  authenticates** — it is listed as "No owner" so it can be revoked deliberately. Re-issue any such
+  token, preferably owned by a service account (below).
 - **The four Top-N endpoints now return an object, not a bare array.**
   `GET /api/v1/metrics/top`, `/metrics/interface-top`, `/metrics/interface-delta` and
   `/alerts/top-nodes` answer `{"entries": [...], "partial": false}`; what used to be the whole body
@@ -34,6 +41,32 @@
   can point at a private registry holding unreleased builds.
 
 ### New Features
+- **The REST API accepts an API token.** Until now a `yat_…` token authenticated `/mcp` alone and
+  the REST API answered `401`, so unattended automation had to store a password and log in on every
+  run. A token now names the **surfaces** it may be presented at, and one that includes `rest` works
+  on `/api/v1` exactly like a session token: `Authorization: Bearer yat_…`. Existing tokens carry
+  `mcp` alone, so upgrading cannot turn a credential minted for an AI client into one that can
+  reconfigure monitoring — reaching REST is an explicit choice made when the token is issued.
+  Two limits apply to a token wherever it is used: it **cannot administer users** (a credential that
+  could mint its own successor would outlive every revocation of the original), and endpoints that
+  identify the signed-in account — `GET /api/v1/auth/me`, the personal dashboard — answer `403`.
+- **API tokens have an owner and an optional expiry.** A token's effective role is
+  `min(token role, owner's current role)`, so demoting an account narrows its tokens at once, and
+  disabling or deleting an account revokes them. Expiry is optional: `POST /api/v1/api-tokens` takes
+  `expires_at`, and omitting it still means no expiry — appropriate for a service account driving an
+  integration. Settings ▸ API tokens shows the owner, the surfaces, the expiry and why a token is
+  refused when it is.
+- **Service accounts.** `POST /api/v1/users` takes `kind: "service"` — a machine account with no
+  password that cannot sign in through either the local form or SSO. It exists to own API tokens, so
+  an integration keeps working when the person who set it up changes teams, and so that disabling it
+  stops every credential it owns at once. `password` is now optional in that request body and is
+  **refused** for a service account rather than ignored. The lock-out guard that protects the last
+  admin now counts only accounts a human can sign in with, so a service account cannot become the
+  only administrator.
+- **`YAGRA_PAT_OIDC_IDLE_DAYS`** (default `30`) bounds how long an API token owned by an
+  SSO-provisioned account survives its owner's silence. Yagra is never told when an identity
+  provider disables an account — the accounts table is only refreshed by a *successful* SSO login —
+  so an absent owner is the only signal available. Local and service accounts are unaffected.
 - **URL monitors can present credentials.** A new `http_auth` credential kind covers Basic, Bearer
   and a custom header; bind one to a URL monitor and the poller presents it. The credential is
   envelope-encrypted at rest and inlined into the poll job at dispatch time, the same path SNMP
@@ -366,6 +399,19 @@ TypeScript and closed a class of contract drift for good.
   dialog also disable Cancel while a save is in flight.
 
 ### Security
+- **Disabling an SSO account did not stop that person signing back in.** The local-password login
+  path has always refused a disabled account, but the SSO callback went straight from "the identity
+  provider says who you are" to issuing a session without ever reading `users.enabled`. Disabling an
+  SSO-provisioned account therefore revoked its live sessions and then let the very next SSO login
+  mint a fresh one — the control was effectively a no-op for exactly the accounts an operator is
+  least able to switch off at the source. The SSO path now refuses a disabled account, answering the
+  same opaque `oidc_denied` as every other callback failure.
+- **A mutating request authenticated by an API token was audited as anonymous.** `audit_mw` resolved
+  the actor by looking the bearer up in the *session* store only, which no token is in. With tokens
+  confined to `/mcp` nothing reached that path; opening REST to them would have made it reachable.
+  The bearer is now resolved once per request and the audit row names both the account and the
+  credential (`svc-ci (token:grafana)`), so a token-driven change is attributable to something a
+  person is answerable for.
 - **A URL monitor accepted an IPv6 loopback or link-local target.** The edge validator blocked
   SSRF-prone destinations by parsing the URL's host as an IP address — but a URL parser returns an
   IPv6 literal *with* its brackets (`[::1]`), which the address parser rejects, so every IPv6 target

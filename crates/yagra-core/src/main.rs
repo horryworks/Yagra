@@ -628,7 +628,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         events: events_repo,
         coordinator: coordinator.clone(),
         pollers: poller_repo.clone(),
-        api_tokens: Arc::new(apitokens::ApiTokenStore::new(repo.pool().clone())),
+        api_tokens: Arc::new(apitokens::ApiTokenStore::new(
+            repo.pool().clone(),
+            cfg.pat_oidc_idle_days,
+        )),
         forward: forward_store,
         forward_handle,
         llm: llm_repo,

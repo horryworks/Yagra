@@ -10,7 +10,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import { ROLES, type Role, type UserSummary } from '../types/api';
+import { ROLES, type Role, type UserKind, type UserSummary } from '../types/api';
+
+/** The account kinds an admin can create here.
+ *
+ *  A deliberate subset of `USER_KINDS`, the way `monitorKinds.ts` is a subset of `NodeKind`: an
+ *  `oidc` account is provisioned by someone signing in through the identity provider, and the API
+ *  refuses to create one directly. Offering it would be a choice that always fails. */
+const CREATABLE_USER_KINDS = ['local', 'service'] as const satisfies readonly UserKind[];
+
+type CreatableUserKind = (typeof CREATABLE_USER_KINDS)[number];
 import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -169,6 +178,11 @@ export function UsersPage() {
                             SSO
                           </span>
                         )}
+                        {u.auth_source === 'service' && (
+                          <span className="you-pill" title={t('users.field.kindHint')}>
+                            {t('users.kind.service')}
+                          </span>
+                        )}
                         <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
                           <span className="yt-status-dot" />
                           {u.enabled ? t('users.status.active') : t('users.status.disabled')}
@@ -266,16 +280,28 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('viewer');
+  // `oidc` is excluded: those accounts appear by signing in through the IdP, and the API refuses to
+  // create one by hand. Offering it would be a choice that always fails.
+  const [kind, setKind] = useState<CreatableUserKind>('local');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const valid = username.trim().length > 0 && password.length >= MIN_PW;
+  // A service account has no password to validate — it cannot sign in at all.
+  const valid =
+    username.trim().length > 0 && (kind === 'service' || password.length >= MIN_PW);
 
   const submit = () => {
     if (!valid) return;
     setBusy(true);
     setError(null);
     api
-      .createUser({ username: username.trim(), password, role })
+      .createUser({
+        username: username.trim(),
+        role,
+        kind,
+        // Omitted for a service account: the API rejects a password there rather than discarding
+        // it, so that an admin cannot come away believing they set one.
+        password: kind === 'service' ? undefined : password,
+      })
       .then(onDone)
       .catch((e: unknown) => {
         setError(errMsg(e, t('users.err.create')));
@@ -310,16 +336,32 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
         />
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">
-          {t('users.field.password', { min: MIN_PW })} <RequiredMark />
-        </label>
-        <TextInput
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="new-password"
-        />
+        <label className="modal-field-label">{t('users.field.kind')}</label>
+        <Select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as CreatableUserKind)}
+        >
+          {CREATABLE_USER_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {t(`users.kind.${k}`)}
+            </option>
+          ))}
+        </Select>
+        <span className="modal-hint">{t('users.field.kindHint')}</span>
       </div>
+      {kind !== 'service' && (
+        <div className="modal-field">
+          <label className="modal-field-label">
+            {t('users.field.password', { min: MIN_PW })} <RequiredMark />
+          </label>
+          <TextInput
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+        </div>
+      )}
       <div className="modal-field">
         <label className="modal-field-label">{t('users.field.role')}</label>
         <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>

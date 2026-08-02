@@ -53,10 +53,14 @@ impl Modify for SecurityAddon {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "A session token from `POST /api/v1/auth/login`. Personal access tokens \
-                         (`yat_…`, Settings ▸ API tokens) authenticate the MCP surface at `/mcp` \
-                         only — this REST API rejects them (401), because its auth edge accepts \
-                         session tokens alone.",
+                        "Either a session token from `POST /api/v1/auth/login` (short-lived; what \
+                         the WebUI uses), or a personal access token (`yat_…`, Settings ▸ API \
+                         tokens) whose surfaces include `rest`. A token issued for `mcp` only is \
+                         refused here with 401. An API token acts as the account that owns it, so \
+                         its role is capped at that account's current role and it stops working \
+                         when the account is disabled or deleted; it cannot administer users, and \
+                         endpoints that identify the signed-in account (`/auth/me`, the personal \
+                         dashboard) answer 403 to it.",
                     ))
                     .build(),
             ),

@@ -695,7 +695,7 @@
           "api-tokens"
         ],
         "summary": "Every issued personal access token, as metadata.",
-        "description": "Neither the raw token nor its hash is returned — a token's value exists only in the response\nthat created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.",
+        "description": "Neither the raw token nor its hash is returned — a token's value exists only in the response\nthat created it. These credentials authenticate whichever surfaces each token names — `/mcp`,\nthis REST API, or both.",
         "operationId": "list_api_tokens",
         "responses": {
           "200": {
@@ -747,8 +747,8 @@
         "tags": [
           "api-tokens"
         ],
-        "summary": "Mint a personal access token for the MCP tool surface at `/mcp`.",
-        "description": "The raw token is in this response and nowhere else — only its hash is stored, so no later call\ncan produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with\n`401` and wants a session token from `POST /api/v1/auth/login`.",
+        "summary": "Mint a personal access token.",
+        "description": "The raw token is in this response and nowhere else — only its hash is stored, so no later call\ncan produce it again.\n\nThe token acts as an **account** (`owner_user_id`, defaulting to the caller): disabling or\ndeleting that account stops the token, and its role is capped at the owner's current role on\nevery use. For anything unattended, own it with a service account rather than a person — see\n`POST /api/v1/users` — so the credential does not depend on who happened to create it.",
         "operationId": "create_api_token",
         "requestBody": {
           "content": {
@@ -772,7 +772,7 @@
             }
           },
           "400": {
-            "description": "The token name is empty or over 128 characters, or the scope is not `All`",
+            "description": "Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account",
             "content": {
               "application/json": {
                 "schema": {
@@ -829,7 +829,7 @@
         "tags": [
           "api-tokens"
         ],
-        "summary": "Revoke a personal access token, so it stops authenticating `/mcp` immediately.",
+        "summary": "Revoke a personal access token, so it stops authenticating every surface immediately.",
         "description": "Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator\nreaches for when a token may be compromised, so \"it was already gone\" is success, not `404`.",
         "operationId": "revoke_api_token",
         "parameters": [
@@ -14272,7 +14272,8 @@
         "tags": [
           "users"
         ],
-        "summary": "`POST /api/v1/users` — create a local account.",
+        "summary": "`POST /api/v1/users` — create a local or service account.\nCreate an account.",
+        "description": "A **service account** (`kind: \"service\"`) is a machine identity: no password, and no way to sign\nin through either the local form or SSO. It exists to own API tokens, so an unattended\nintegration keeps working when the person who set it up changes teams — and so that disabling it\nstops every credential it owns at once.",
         "operationId": "create_user",
         "requestBody": {
           "content": {
@@ -14296,7 +14297,7 @@
             }
           },
           "400": {
-            "description": "Empty username, a password below the minimum length, or an unknown role",
+            "description": "Empty username, an unknown role, a password that is missing/too short for a local account or supplied for a service one, or `kind: oidc`",
             "content": {
               "application/json": {
                 "schema": {
@@ -14353,7 +14354,7 @@
         "tags": [
           "users"
         ],
-        "summary": "`DELETE /api/v1/users/:id` — remove an account and cut any sessions it still holds.",
+        "summary": "`DELETE /api/v1/users/:id` — remove an account and cut every credential it still holds.",
         "operationId": "delete_user",
         "parameters": [
           {
@@ -14369,7 +14370,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Account removed and its sessions revoked"
+            "description": "Account removed, its sessions revoked and its API tokens revoked"
           },
           "401": {
             "description": "No valid bearer token",
@@ -14455,7 +14456,7 @@
         },
         "responses": {
           "204": {
-            "description": "Status changed; disabling also revokes the account's sessions"
+            "description": "Status changed; disabling also revokes the account's sessions and API tokens"
           },
           "401": {
             "description": "No valid bearer token",
@@ -15315,6 +15316,8 @@
           "name",
           "role",
           "scope",
+          "surfaces",
+          "owner_active",
           "created_by",
           "created_at"
         ],
@@ -15325,6 +15328,14 @@
           },
           "created_by": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the token stops authenticating, or `None` for no expiry."
           },
           "id": {
             "type": "string",
@@ -15340,6 +15351,25 @@
           "name": {
             "type": "string"
           },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the token acts as. `None` means the owner was deleted before this column\nexisted, or could not be matched during the 0057 backfill — such a token no longer\nauthenticates and is shown so an admin can revoke it deliberately."
+          },
+          "owner_active": {
+            "type": "boolean",
+            "description": "Whether the owner account is currently able to authenticate (enabled). Surfaced so the\nlisting can explain a token that is live by its own dates yet refused."
+          },
+          "owner_last_login_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The owner's last interactive sign-in, when the owner authenticates through an external IdP.\nThis is the only signal Yagra has that an SSO account is still live (see [`ApiTokenStore`]),\nso the listing shows it; `None` for local and service accounts, where it means nothing."
+          },
           "revoked_at": {
             "type": [
               "string",
@@ -15352,6 +15382,13 @@
           },
           "scope": {
             "$ref": "#/components/schemas/Scope"
+          },
+          "surfaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenSurface"
+            },
+            "description": "Which auth surfaces this token may be presented at. Never empty in practice — a token that\nnamed no surface could authenticate nowhere — but stored as a list so it can grow."
           }
         }
       },
@@ -16025,13 +16062,29 @@
           "role"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the token stops working. Omit for no expiry — appropriate for a service account driving\nan integration, and deliberately still allowed."
+          },
           "name": {
             "type": "string",
             "description": "Human label (unique, ≤128 chars)."
           },
+          "owner_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The account the token acts as. Omit to own it yourself; name a service account for anything\nunattended, so the credential outlives whoever set it up."
+          },
           "role": {
             "$ref": "#/components/schemas/Role",
-            "description": "The role the token grants (`viewer` is the right default for a read-only MCP client)."
+            "description": "The role the token grants (`viewer` is the right default for a read-only client). Capped at\nthe owner's role on every use, so this is a ceiling rather than a promise."
           },
           "scope": {
             "oneOf": [
@@ -16040,9 +16093,19 @@
               },
               {
                 "$ref": "#/components/schemas/Scope",
-                "description": "Visibility scope; defaults to `All` when omitted. Only `\"All\"` is accepted today — a\ngroup scope is rejected with `400 unsupported_scope` rather than stored, because nothing\nenforces it yet."
+                "description": "Visibility scope; defaults to `All` when omitted. Only `\"All\"` is accepted today — a\ngroup scope is rejected with `400 unsupported_scope` rather than stored, because no account\ncan hold one yet."
               }
             ]
+          },
+          "surfaces": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TokenSurface"
+            },
+            "description": "Which surfaces the token may authenticate. Defaults to `[\"mcp\"]` when omitted, matching what\nevery token issued before this field existed can do."
           }
         }
       },
@@ -16468,12 +16531,26 @@
         "description": "Create-user request body. The password is hashed before storage and never logged.",
         "required": [
           "username",
-          "password",
           "role"
         ],
         "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserKind",
+                "description": "What kind of account this is. Defaults to `local`, so a client written before service\naccounts existed keeps creating exactly what it did before.\n\n`oidc` is not accepted: those accounts are provisioned by signing in through the IdP, never\nby hand — creating one here would produce an account whose subject matches nobody."
+              }
+            ]
+          },
           "password": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required for a `local` account, and rejected for a `service` one — a machine account has no\npassword by design, so accepting a discarded one would advertise a login that does not exist."
           },
           "role": {
             "type": "string"
@@ -16518,9 +16595,17 @@
           "id",
           "name",
           "role",
+          "surfaces",
           "token"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -16530,6 +16615,12 @@
           },
           "role": {
             "$ref": "#/components/schemas/Role"
+          },
+          "surfaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenSurface"
+            }
           },
           "token": {
             "type": "string",
@@ -22563,6 +22654,14 @@
           }
         }
       },
+      "TokenSurface": {
+        "type": "string",
+        "description": "Which authentication surface a credential may be presented at.\n\nA personal access token authenticated `/mcp` and nothing else, so there was never a choice to\nexpress. Now that the REST API accepts one too the two surfaces differ enough that \"may\nauthenticate here\" has to be recorded per token: `/mcp` is a curated, mostly-read tool surface,\nwhile REST is the entire configuration API. A token minted for an AI client must not become a\nconfiguration credential because the server learned a new trick — so the surfaces are named on\nthe token, and anything that does not name [`TokenSurface::Rest`] cannot reach `/api/v1`.",
+        "enum": [
+          "mcp",
+          "rest"
+        ]
+      },
       "TopEntry": {
         "type": "object",
         "description": "One ranked node in a Top-N result.",
@@ -22737,6 +22836,15 @@
           }
         }
       },
+      "UserKind": {
+        "type": "string",
+        "description": "How an account authenticates, which decides whether it can log in interactively at all.\n\n`Service` is the reason this enum exists. An API token needs an owner so that disabling or\ndeleting the owner takes the token with it — but binding an unattended integration to a *person*\nmeans it dies when they change teams. A service account is a machine identity: no password, no\nIdP subject, and therefore no way to sign in. It exists to own tokens.",
+        "enum": [
+          "local",
+          "oidc",
+          "service"
+        ]
+      },
       "UserSummary": {
         "type": "object",
         "description": "User-account metadata for the API — never includes the password hash.",
@@ -22807,7 +22915,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A session token from `POST /api/v1/auth/login`. Personal access tokens (`yat_…`, Settings ▸ API tokens) authenticate the MCP surface at `/mcp` only — this REST API rejects them (401), because its auth edge accepts session tokens alone."
+        "description": "Either a session token from `POST /api/v1/auth/login` (short-lived; what the WebUI uses), or a personal access token (`yat_…`, Settings ▸ API tokens) whose surfaces include `rest`. A token issued for `mcp` only is refused here with 401. An API token acts as the account that owns it, so its role is capped at that account's current role and it stops working when the account is disabled or deleted; it cannot administer users, and endpoints that identify the signed-in account (`/auth/me`, the personal dashboard) answer 403 to it."
       }
     }
   },

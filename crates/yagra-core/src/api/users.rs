@@ -26,7 +26,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{Permission, Role};
+use yagra_common::{Permission, Role, UserKind};
 
 /// Minimum password length accepted for a new account or a reset.
 const MIN_PASSWORD_LEN: usize = 8;
@@ -119,23 +119,39 @@ async fn list_users(_perm: RequireManageUsers, admin: Admin) -> ApiResult<Json<V
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateUser {
     username: String,
-    password: String,
+    /// Required for a `local` account, and rejected for a `service` one — a machine account has no
+    /// password by design, so accepting a discarded one would advertise a login that does not exist.
+    #[serde(default)]
+    password: Option<String>,
     role: String,
+    /// What kind of account this is. Defaults to `local`, so a client written before service
+    /// accounts existed keeps creating exactly what it did before.
+    ///
+    /// `oidc` is not accepted: those accounts are provisioned by signing in through the IdP, never
+    /// by hand — creating one here would produce an account whose subject matches nobody.
+    #[serde(default)]
+    kind: Option<UserKind>,
 }
 
-/// `POST /api/v1/users` — create a local account.
+/// `POST /api/v1/users` — create a local or service account.
 #[utoipa::path(
     post, path = "/api/v1/users", tag = "users",
     request_body = CreateUser,
     responses(
         (status = 201, description = "Account created", body = CreatedId),
-        (status = 400, description = "Empty username, a password below the minimum length, or an unknown role", body = super::error::ErrorBody),
+        (status = 400, description = "Empty username, an unknown role, a password that is missing/too short for a local account or supplied for a service one, or `kind: oidc`", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 409, description = "The username is already taken", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
+/// Create an account.
+///
+/// A **service account** (`kind: "service"`) is a machine identity: no password, and no way to sign
+/// in through either the local form or SSO. It exists to own API tokens, so an unattended
+/// integration keeps working when the person who set it up changes teams — and so that disabling it
+/// stops every credential it owns at once.
 async fn create_user(
     _perm: RequireManageUsers,
     admin: Admin,
@@ -148,9 +164,38 @@ async fn create_user(
             "username must not be empty",
         ));
     }
-    check_password(&body.password)?;
     let role = checked_role(&body.role)?;
-    match admin.users.create(username, &body.password, role).await {
+    let kind = body.kind.unwrap_or(UserKind::Local);
+    let created = match kind {
+        UserKind::Local => {
+            let Some(password) = body.password.as_deref() else {
+                return Err(ApiError::bad_request(
+                    "password_required",
+                    "a local account needs a password",
+                ));
+            };
+            check_password(password)?;
+            admin.users.create(username, password, role).await
+        }
+        UserKind::Service => {
+            // Refuse rather than ignore a supplied password. Silently dropping it would leave the
+            // admin believing they had set one, and later believing the account could sign in.
+            if body.password.is_some() {
+                return Err(ApiError::bad_request(
+                    "password_not_allowed",
+                    "a service account cannot sign in, so it takes no password",
+                ));
+            }
+            admin.users.create_service(username, role).await
+        }
+        UserKind::Oidc => {
+            return Err(ApiError::bad_request(
+                "kind_not_creatable",
+                "SSO accounts are provisioned by signing in through the identity provider",
+            ))
+        }
+    };
+    match created {
         Ok(UserCreateOutcome::Created(id)) => Ok((StatusCode::CREATED, Json(CreatedId { id }))),
         Ok(UserCreateOutcome::UsernameTaken) => Err(ApiError::conflict(
             "username_taken",
@@ -164,12 +209,12 @@ async fn create_user(
     }
 }
 
-/// `DELETE /api/v1/users/:id` — remove an account and cut any sessions it still holds.
+/// `DELETE /api/v1/users/:id` — remove an account and cut every credential it still holds.
 #[utoipa::path(
     delete, path = "/api/v1/users/{id}", tag = "users",
     params(("id" = Uuid, Path, description = "User account id")),
     responses(
-        (status = 204, description = "Account removed and its sessions revoked"),
+        (status = 204, description = "Account removed, its sessions revoked and its API tokens revoked"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 404, description = "No such account", body = super::error::ErrorBody),
@@ -183,6 +228,12 @@ async fn delete_user(
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // Revoke the account's API tokens *before* deleting it, while the owner column still points at
+    // it. The FK is `ON DELETE SET NULL` so the rows survive as an audit record, and verification
+    // refuses an owner-less token anyway — but leaving them un-revoked would show a departed
+    // account's credentials as "active" in the listing, which is the state this whole change exists
+    // to make impossible to overlook.
+    revoke_tokens_of(&admin, id).await;
     let outcome =
         admin.users.delete(id).await.map_err(|e| {
             ApiError::from_internal(e.as_ref(), "delete user", "failed to delete user")
@@ -191,6 +242,22 @@ async fn delete_user(
     // Drop any live sessions the deleted account still holds.
     st.sessions.revoke_user(id);
     Ok(status)
+}
+
+/// Revoke every API token owned by `id`, logging rather than failing on error.
+///
+/// Best-effort by design: this runs alongside the session revocation that is already best-effort,
+/// and the account change itself must not be rolled back because a credential cleanup failed. The
+/// token would still be refused at verification time — an owner that is disabled or gone does not
+/// authenticate — so a failure here costs visibility in the listing, not safety.
+async fn revoke_tokens_of(admin: &Admin, id: Uuid) {
+    match admin.api_tokens.revoke_owned_by(id).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(user_id = %id, revoked = n, "revoked API tokens owned by account"),
+        Err(e) => {
+            tracing::error!(error = %e, user_id = %id, "failed to revoke the account's API tokens");
+        }
+    }
 }
 
 /// Change-role request body.
@@ -244,7 +311,7 @@ pub(super) struct SetStatus {
     params(("id" = Uuid, Path, description = "User account id")),
     request_body = SetStatus,
     responses(
-        (status = 204, description = "Status changed; disabling also revokes the account's sessions"),
+        (status = 204, description = "Status changed; disabling also revokes the account's sessions and API tokens"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 404, description = "No such account", body = super::error::ErrorBody),
@@ -271,10 +338,13 @@ async fn set_user_status(
             )
         })?;
     let status = mutation_result(outcome, id)?;
-    // Disabling an account must also cut its live sessions (the whole point of disabling a
-    // compromised account); enabling has nothing to revoke.
+    // Disabling an account must cut every credential it holds — live sessions *and* API tokens.
+    // Verification already refuses a token whose owner is disabled, so this is belt-and-braces, but
+    // it is the visible half: re-enabling the account must not silently resurrect credentials that
+    // were taken away with it. Enabling has nothing to revoke.
     if !body.enabled {
         st.sessions.revoke_user(id);
+        revoke_tokens_of(&admin, id).await;
     }
     Ok(status)
 }

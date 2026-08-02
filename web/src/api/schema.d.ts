@@ -190,15 +190,20 @@ export interface paths {
         /**
          * Every issued personal access token, as metadata.
          * @description Neither the raw token nor its hash is returned — a token's value exists only in the response
-         *     that created it. These credentials authenticate the MCP surface at `/mcp`, not this REST API.
+         *     that created it. These credentials authenticate whichever surfaces each token names — `/mcp`,
+         *     this REST API, or both.
          */
         get: operations["list_api_tokens"];
         put?: never;
         /**
-         * Mint a personal access token for the MCP tool surface at `/mcp`.
+         * Mint a personal access token.
          * @description The raw token is in this response and nowhere else — only its hash is stored, so no later call
-         *     can produce it again. It authenticates `/mcp` only: this REST API rejects a `yat_…` bearer with
-         *     `401` and wants a session token from `POST /api/v1/auth/login`.
+         *     can produce it again.
+         *
+         *     The token acts as an **account** (`owner_user_id`, defaulting to the caller): disabling or
+         *     deleting that account stops the token, and its role is capped at the owner's current role on
+         *     every use. For anything unattended, own it with a service account rather than a person — see
+         *     `POST /api/v1/users` — so the credential does not depend on who happened to create it.
          */
         post: operations["create_api_token"];
         delete?: never;
@@ -218,7 +223,7 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Revoke a personal access token, so it stops authenticating `/mcp` immediately.
+         * Revoke a personal access token, so it stops authenticating every surface immediately.
          * @description Idempotent: a missing or already-revoked id answers `204` too. Revocation is what an operator
          *     reaches for when a token may be compromised, so "it was already gone" is success, not `404`.
          */
@@ -2758,7 +2763,14 @@ export interface paths {
         /** `GET /api/v1/users` — every local account (never a password hash). */
         get: operations["list_users"];
         put?: never;
-        /** `POST /api/v1/users` — create a local account. */
+        /**
+         * `POST /api/v1/users` — create a local or service account.
+         *     Create an account.
+         * @description A **service account** (`kind: "service"`) is a machine identity: no password, and no way to sign
+         *     in through either the local form or SSO. It exists to own API tokens, so an unattended
+         *     integration keeps working when the person who set it up changes teams — and so that disabling it
+         *     stops every credential it owns at once.
+         */
         post: operations["create_user"];
         delete?: never;
         options?: never;
@@ -2776,7 +2788,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** `DELETE /api/v1/users/:id` — remove an account and cut any sessions it still holds. */
+        /** `DELETE /api/v1/users/:id` — remove an account and cut every credential it still holds. */
         delete: operations["delete_user"];
         options?: never;
         head?: never;
@@ -3120,15 +3132,43 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             created_by: string;
+            /**
+             * Format: date-time
+             * @description When the token stops authenticating, or `None` for no expiry.
+             */
+            expires_at?: string | null;
             /** Format: uuid */
             id: string;
             /** Format: date-time */
             last_used_at?: string | null;
             name: string;
+            /**
+             * @description The account the token acts as. `None` means the owner was deleted before this column
+             *     existed, or could not be matched during the 0057 backfill — such a token no longer
+             *     authenticates and is shown so an admin can revoke it deliberately.
+             */
+            owner?: string | null;
+            /**
+             * @description Whether the owner account is currently able to authenticate (enabled). Surfaced so the
+             *     listing can explain a token that is live by its own dates yet refused.
+             */
+            owner_active: boolean;
+            /**
+             * Format: date-time
+             * @description The owner's last interactive sign-in, when the owner authenticates through an external IdP.
+             *     This is the only signal Yagra has that an SSO account is still live (see [`ApiTokenStore`]),
+             *     so the listing shows it; `None` for local and service accounts, where it means nothing.
+             */
+            owner_last_login_at?: string | null;
             /** Format: date-time */
             revoked_at?: string | null;
             role: components["schemas"]["Role"];
             scope: components["schemas"]["Scope"];
+            /**
+             * @description Which auth surfaces this token may be presented at. Never empty in practice — a token that
+             *     named no surface could authenticate nowhere — but stored as a list so it can grow.
+             */
+            surfaces: components["schemas"]["TokenSurface"][];
         };
         /** @description One audit row (API shape; `at` is RFC 3339 text at the edge). */
         AuditRow: {
@@ -3401,11 +3441,31 @@ export interface components {
         };
         /** @description Request body for `POST /api/v1/api-tokens`. */
         CreateApiTokenBody: {
+            /**
+             * Format: date-time
+             * @description When the token stops working. Omit for no expiry — appropriate for a service account driving
+             *     an integration, and deliberately still allowed.
+             */
+            expires_at?: string | null;
             /** @description Human label (unique, ≤128 chars). */
             name: string;
-            /** @description The role the token grants (`viewer` is the right default for a read-only MCP client). */
+            /**
+             * Format: uuid
+             * @description The account the token acts as. Omit to own it yourself; name a service account for anything
+             *     unattended, so the credential outlives whoever set it up.
+             */
+            owner_user_id?: string | null;
+            /**
+             * @description The role the token grants (`viewer` is the right default for a read-only client). Capped at
+             *     the owner's role on every use, so this is a ceiling rather than a promise.
+             */
             role: components["schemas"]["Role"];
             scope?: null | components["schemas"]["Scope"];
+            /**
+             * @description Which surfaces the token may authenticate. Defaults to `["mcp"]` when omitted, matching what
+             *     every token issued before this field existed can do.
+             */
+            surfaces?: components["schemas"]["TokenSurface"][] | null;
         };
         /** @description Create-channel body: a name plus the (secret-bearing) connection config, tagged by `kind`. */
         CreateChannel: {
@@ -3530,7 +3590,12 @@ export interface components {
         };
         /** @description Create-user request body. The password is hashed before storage and never logged. */
         CreateUser: {
-            password: string;
+            kind?: null | components["schemas"]["UserKind"];
+            /**
+             * @description Required for a `local` account, and rejected for a `service` one — a machine account has no
+             *     password by design, so accepting a discarded one would advertise a login that does not exist.
+             */
+            password?: string | null;
             role: string;
             username: string;
         };
@@ -3553,10 +3618,13 @@ export interface components {
          *     type makes that field visible in one place if this response ever grows a second consumer.
          */
         CreatedApiToken: {
+            /** Format: date-time */
+            expires_at?: string | null;
             /** Format: uuid */
             id: string;
             name: string;
             role: components["schemas"]["Role"];
+            surfaces: components["schemas"]["TokenSurface"][];
             /** @description The raw bearer token, returned **once**. Never stored, never logged. */
             token: string;
         };
@@ -6045,6 +6113,18 @@ export interface components {
             out_bps: (number | null)[];
             timestamps: number[];
         };
+        /**
+         * @description Which authentication surface a credential may be presented at.
+         *
+         *     A personal access token authenticated `/mcp` and nothing else, so there was never a choice to
+         *     express. Now that the REST API accepts one too the two surfaces differ enough that "may
+         *     authenticate here" has to be recorded per token: `/mcp` is a curated, mostly-read tool surface,
+         *     while REST is the entire configuration API. A token minted for an AI client must not become a
+         *     configuration credential because the server learned a new trick — so the surfaces are named on
+         *     the token, and anything that does not name [`TokenSurface::Rest`] cannot reach `/api/v1`.
+         * @enum {string}
+         */
+        TokenSurface: "mcp" | "rest";
         /** @description One ranked node in a Top-N result. */
         TopEntry: {
             /**
@@ -6118,6 +6198,16 @@ export interface components {
             /** @description Verify the TLS certificate chain (default `true`; never silently disabled — security.md). */
             verify_tls?: boolean;
         };
+        /**
+         * @description How an account authenticates, which decides whether it can log in interactively at all.
+         *
+         *     `Service` is the reason this enum exists. An API token needs an owner so that disabling or
+         *     deleting the owner takes the token with it — but binding an unattended integration to a *person*
+         *     means it dies when they change teams. A service account is a machine identity: no password, no
+         *     IdP subject, and therefore no way to sign in. It exists to own tokens.
+         * @enum {string}
+         */
+        UserKind: "local" | "oidc" | "service";
         /** @description User-account metadata for the API — never includes the password hash. */
         UserSummary: {
             /** @description How the account authenticates: `"local"` (password) or `"oidc"` (external IdP). */
@@ -6750,7 +6840,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedApiToken"];
                 };
             };
-            /** @description The token name is empty or over 128 characters, or the scope is not `All` */
+            /** @description Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17266,7 +17356,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Empty username, a password below the minimum length, or an unknown role */
+            /** @description Empty username, an unknown role, a password that is missing/too short for a local account or supplied for a service one, or `kind: oidc` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17325,7 +17415,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Account removed and its sessions revoked */
+            /** @description Account removed, its sessions revoked and its API tokens revoked */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -17395,7 +17485,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Status changed; disabling also revokes the account's sessions */
+            /** @description Status changed; disabling also revokes the account's sessions and API tokens */
             204: {
                 headers: {
                     [name: string]: unknown;

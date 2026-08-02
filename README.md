@@ -132,11 +132,18 @@ byte-identical to before. MCP always requires authentication, even if `YAGRA_PUB
 
 ### 2. Create an API token
 
-Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → choose **Viewer** for a
-read-only assistant (all the read/Troubleshoot tools work), or **Operator/Admin** if you want it to
-also acknowledge alerts, open maintenance windows, or poll on demand → copy the `yat_…` value shown
-once. This is the bearer token the AI client sends. (A regular login session token works too, but it
-expires; an API token is meant for an unattended client and is revocable from the same page.)
+Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → tick **MCP** under
+"Can be used for" → choose **Viewer** for a read-only assistant (all the read/Troubleshoot tools
+work), or **Operator/Admin** if you want it to also acknowledge alerts, open maintenance windows, or
+poll on demand → copy the `yat_…` value shown once. This is the bearer token the AI client sends.
+(A regular login session token works too, but it expires; an API token is meant for an unattended
+client and is revocable from the same page.)
+
+The same kind of token also authenticates the **REST API** — tick **REST API** as well, or issue a
+separate token for it. Leaving an assistant's token to MCP alone is the point of that field. For
+unattended use, set the token's owner to a **service account** (Settings ▸ Users & roles → account
+type *Service account*): it has no password and cannot sign in, so the credential outlives whoever
+created it, and disabling that one account stops every token it owns.
 
 > **Reachability:** the AI client makes the HTTP call from *your* machine, not from Anthropic's cloud —
 > so the client only needs network access to `<yagra-host>:8080` (same LAN, or over a VPN). No public

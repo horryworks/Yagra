@@ -18,11 +18,11 @@
 //! something an unauthenticated prober should be able to read off a 503-vs-403.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{current_username, Admin, RequireAckAlerts, RequireManageConfig, Scoped};
+use super::extract::{Actor, Admin, RequireAckAlerts, RequireManageConfig, Scoped};
 use super::ApiState;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
@@ -133,7 +133,7 @@ async fn create_rca(
     _guard: RequireAckAlerts,
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
-    headers: HeaderMap,
+    actor: Actor,
     Json(body): Json<RcaBody>,
 ) -> ApiResult<Json<crate::rca::store::RcaReport>> {
     // Checked before the provider lookup, so an out-of-scope node reads as "no such node" rather
@@ -146,7 +146,7 @@ async fn create_rca(
         window_secs: body.window_secs,
         language: crate::rca::prompt::Language::from_tag(body.language.as_deref().unwrap_or("en")),
         force: body.force,
-        username: current_username(&st, &headers).unwrap_or_else(|| "(unknown)".to_owned()),
+        username: actor.0.unwrap_or_else(|| "(unknown)".to_owned()),
     };
     let report = rca.explain(&req).await.map_err(|e| rca_error(&e))?;
     Ok(Json(report))
