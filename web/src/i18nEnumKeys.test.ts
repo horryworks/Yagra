@@ -296,4 +296,22 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // ones. A kind without strings shows an operator a raw key while they decide what an account is.
     expectKeys('user kind', { en: enAccess, ja: jaAccess }, 'users.kind.', USER_KINDS);
   });
+
+  it('every scope label state has strings (access:users.scope.* and settings-tokens:scope.*)', () => {
+    // `scopeLabelKey` picks one of three states at runtime, and both screens render it. The three
+    // must be told apart in every locale: "All groups" and "No groups" are opposites, and reading
+    // one as the other is the whole failure mode group scoping exists to prevent.
+    //
+    // `groups` is pluralized, so the stored keys carry i18next's suffixes — `_one`/`_other` in EN,
+    // `_other` alone in JA, which has one plural form. Listed explicitly rather than derived,
+    // because the suffix set is a property of the language, not of the union.
+    for (const locales of [
+      { prefix: 'users.scope.', en: enAccess, ja: jaAccess },
+      { prefix: 'scope.', en: enSettingsTokens, ja: jaSettingsTokens },
+    ]) {
+      const { prefix, en, ja } = locales;
+      expectKeys('scope label', { en, ja }, prefix, ['all', 'none', 'groups_other']);
+      expectKeys('scope label (en plural)', { en, ja: en }, prefix, ['groups_one']);
+    }
+  });
 });
