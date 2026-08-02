@@ -53,6 +53,14 @@
   matching thousands of nodes showed 100, with nothing indicating the list had been cut. The cap is
   now a single constant (500) used by both the edge and the query, and the tree shows a notice when
   a filter fills the page.
+- **The WebUI could keep serving a pre-upgrade page after an upgrade.** nginx sent no
+  `Cache-Control` for the SPA at all, so browsers fell back to heuristic freshness (RFC 9111
+  §4.2.2) and could reuse a cached `index.html` for hours. Because each image replaces the whole
+  document root, that stale page names hashed assets the new image no longer contains — and the
+  SPA fallback answered those requests with `index.html`, so the browser rejected a script served
+  as `text/html` and rendered nothing, with no indication why. `index.html` is now `no-cache`
+  (revalidated on every load, still a 304 when unchanged), hashed assets under `/assets/` are
+  `immutable` for a year, and a missing asset returns 404 instead of HTML.
 
 ## v0.1.19
 
