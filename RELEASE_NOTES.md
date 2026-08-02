@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+## v0.1.20 — Group-scoped visibility, end to end
+
+Group scoping went from a type nothing consulted to a working control: the read surface filters by
+it, an admin can hand one out, and both API tokens and `/mcp` honour it. Alongside that, the
+Troubleshoot tools gained a cross-run findings search and scheduled runs, and the Geo map became a
+real page.
+
 ### Breaking changes
 - **An API token now acts as an account, and one whose owner cannot be resolved stops working.**
   Tokens used to be free-standing identities: `api_tokens` carried its own role and had no link to
