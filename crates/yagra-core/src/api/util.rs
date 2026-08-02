@@ -9,6 +9,7 @@
 //! Keep this module for things with no better home. Anything that is really about errors belongs in
 //! [`super::error`], anything about request identity or guards in [`super::extract`].
 
+use super::ApiError;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -81,6 +82,56 @@ impl<T> Ranked<T> {
 #[into_params(parameter_in = Query)]
 pub(crate) struct ListQuery {
     pub limit: Option<i64>,
+}
+
+/// The cadence fields of any create/update body that schedules something.
+///
+/// Two domains post these — report schedules and analysis schedules — so the fields, their
+/// validation and their clamps are declared once. Flattened into each domain's own body rather than
+/// nested, so the wire shape is unchanged from when reports owned it alone.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(crate) struct CadenceBody {
+    /// `daily` | `weekly` | `monthly`.
+    pub frequency: String,
+    /// 0=Sun … 6=Sat. Read only for `weekly`.
+    pub day_of_week: Option<i16>,
+    /// 1 … 28. Read only for `monthly`.
+    pub day_of_month: Option<i16>,
+    /// Hour of day to fire, UTC.
+    pub at_hour: i16,
+    /// Minute of the hour to fire.
+    pub at_minute: i16,
+}
+
+/// Validate a cadence body into a [`crate::cadence::Schedule`].
+///
+/// The frequency is **rejected**, the day/hour/minute fields are **clamped**. That split is
+/// deliberate: a `day_of_month` of 31 is a reasonable thing for a form to send and there is a
+/// defensible answer (28, so it fires every month including February), whereas an unknown frequency
+/// has no defensible answer at all.
+///
+/// `Unknown` is a *storage* degradation — what a row written by a newer core reads back as — and
+/// never something an operator may pick. Accepting it here would let a client write a cadence the
+/// scheduler then silently treats as daily.
+pub(crate) fn parse_cadence(body: CadenceBody) -> Result<crate::cadence::Schedule, ApiError> {
+    let frequency = crate::cadence::Cadence::from_stored(&body.frequency);
+    if frequency == crate::cadence::Cadence::Unknown {
+        return Err(ApiError::bad_request(
+            "invalid_frequency",
+            "frequency must be daily|weekly|monthly",
+        ));
+    }
+    Ok(crate::cadence::Schedule {
+        frequency,
+        // Each day field is kept only for the cadence that reads it, so a weekly schedule cannot
+        // carry a stale day-of-month from an edit that changed the frequency.
+        day_of_week: (frequency == crate::cadence::Cadence::Weekly)
+            .then(|| body.day_of_week.unwrap_or(0).clamp(0, 6)),
+        day_of_month: (frequency == crate::cadence::Cadence::Monthly)
+            .then(|| body.day_of_month.unwrap_or(1).clamp(1, 28)),
+        at_hour: body.at_hour.clamp(0, 23),
+        at_minute: body.at_minute.clamp(0, 59),
+    })
 }
 
 /// Append one audit row, logging rather than failing if the write does not land.

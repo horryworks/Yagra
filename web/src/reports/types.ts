@@ -2,10 +2,7 @@
 // Frontend helpers for the report document (spec). The backend stores `spec` opaquely and the
 // WebUI owns the shape (same contract as the dashboard layout) — these helpers build/sanitize it.
 
-import type { TFunction } from 'i18next';
-import { CADENCE } from './runStatus';
 import type {
-  ReportFrequency,
   ReportSchedule,
   ReportSectionDef,
   ReportSectionInstance,
@@ -72,46 +69,6 @@ export function sanitizeSpec(spec: ReportSpec | undefined | null): ReportSpec {
 export function sectionTitle(defs: ReportSectionDef[], kind: string): string {
   return defs.find((d) => d.kind === kind)?.title ?? kind;
 }
-
-const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-
-/** Weekday name for 0=Sun..6=Sat (clamped). `t` is threaded in (non-component module) so the label
- *  re-resolves on language change. */
-export function weekdayName(t: TFunction, dow: number): string {
-  const key = WEEKDAY_KEYS[Math.max(0, Math.min(6, dow))] ?? 'sun';
-  return t(`reports:weekday.${key}`);
-}
-
-/** Human-readable cadence for a schedule (e.g. "Weekly · Monday 09:00 UTC"). Word order comes from
- *  the translation so a language like Japanese can reorder it. */
-export function cadenceLabel(
-  t: TFunction,
-  s: {
-    frequency: ReportFrequency;
-    day_of_week: number | null;
-    day_of_month: number | null;
-    at_hour: number;
-    at_minute: number;
-  },
-): string {
-  const time = `${String(s.at_hour).padStart(2, '0')}:${String(s.at_minute).padStart(2, '0')} UTC`;
-  // Registry-driven, not a switch: the `default:` this replaces rendered an unrecognised cadence as
-  // "Daily", which is a claim about when the report fires rather than an admission of ignorance.
-  const spec = CADENCE[s.frequency];
-  switch (spec.part) {
-    case 'day':
-      return t(spec.labelKey, { day: weekdayName(t, s.day_of_week ?? 0), time });
-    case 'dom':
-      return t(spec.labelKey, { day: s.day_of_month ?? 1, time });
-    case 'none':
-      return t(spec.labelKey, { time });
-  }
-}
-
-export const WEEKDAY_OPTIONS = WEEKDAY_KEYS.map((key, value) => ({
-  value,
-  labelKey: `reports:weekday.${key}`,
-}));
 
 /** Whether a schedule is the cheapest "next run is soon" — for sorting display (unused stub kept
  *  small; the list is server-ordered by next_run_at). */

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { REPORT_FREQUENCIES, REPORT_RUN_STATES } from '../types/api';
-import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES, isRunInFlight, isRunState } from './runStatus';
+import { REPORT_RUN_STATES } from '../types/api';
+import { RUN_STATUS, isRunInFlight, isRunState } from './runStatus';
 
 describe('report run status', () => {
-  it('covers every run state and every cadence', () => {
+  it('covers every run state', () => {
     // The Record types already force this at compile time; asserting it at runtime is what catches
     // the union and the generated schema drifting apart after a regeneration.
     expect(Object.keys(RUN_STATUS).sort()).toEqual([...REPORT_RUN_STATES].sort());
-    expect(Object.keys(CADENCE).sort()).toEqual([...REPORT_FREQUENCIES].sort());
   });
 
   it('never shows an unrecognised state as a failure', () => {
@@ -27,16 +26,6 @@ describe('report run status', () => {
     expect(isRunState('cancelled')).toBe(false);
     expect(isRunState(undefined)).toBe(false);
     expect(isRunState(3)).toBe(false);
-  });
-
-  it('offers every cadence except the storage-only one', () => {
-    // A deliberate subset: `unknown` means "written by a newer core", so an operator picking it
-    // would be asking for a cadence the scheduler silently treats as daily.
-    expect([...SELECTABLE_FREQUENCIES]).toEqual(['daily', 'weekly', 'monthly']);
-    expect(SELECTABLE_FREQUENCIES).not.toContain('unknown');
-    // Pin the subset relation, so a fourth cadence has to choose a side.
-    for (const f of SELECTABLE_FREQUENCIES) expect(REPORT_FREQUENCIES).toContain(f);
-    expect(SELECTABLE_FREQUENCIES.length).toBe(REPORT_FREQUENCIES.length - 1);
   });
 
   it('marks exactly the state whose label needs a percentage', () => {

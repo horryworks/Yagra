@@ -19,16 +19,18 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::alerts::AlertManager;
+use crate::cadence::Cadence;
 use crate::history::AlertHistoryStore;
 use crate::repo::NodeRepo;
 use crate::store::{MetricStore, TopAgg};
+use crate::stored_enum::token_enum;
 use yagra_common::NodeState;
 
 /// Broadcast buffer for the run-status SSE stream (matches the analysis runner's sizing).
@@ -89,18 +91,6 @@ pub enum ReportRunTrigger {
     Unknown,
 }
 
-/// How often a schedule fires.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReportFrequency {
-    Daily,
-    Weekly,
-    Monthly,
-    /// A cadence this build does not know — a newer core wrote it. Treated as daily when
-    /// computing the next run, which is what the old wildcard arm did.
-    Unknown,
-}
-
 /// Outcome of a schedule's most recent firing.
 //  kebab-case, not snake: `missing-definition` is the token already in the column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -116,43 +106,6 @@ pub enum ReportScheduleStatus {
     Unknown,
 }
 
-/// Give a fieldless enum its token list once: `ALL`, `as_str`, and a lenient `from_stored`.
-///
-/// The tokens listed here must match what `#[serde(rename_all = …)]` produces — the column and the
-/// JSON tag are the same string, written by two different mechanisms. `token_and_serde_agree`
-/// pins that.
-macro_rules! token_enum {
-    ($t:ty, $unknown:ident, $col:literal, [$($v:ident => $s:literal),+ $(,)?]) => {
-        impl $t {
-            /// Every variant, so anything that must present all of them reads one list.
-            pub const ALL: &'static [$t] = &[$(Self::$v),+];
-
-            /// Stable token — the DB column value and the JSON tag.
-            #[must_use]
-            pub const fn as_str(self) -> &'static str {
-                match self { $(Self::$v => $s),+ }
-            }
-
-            /// Parse a stored token, degrading to `Unknown` rather than failing the read: a value
-            /// this build does not recognise came from a newer core, and a report that cannot be
-            /// listed at all is a worse answer than one whose state reads "unknown".
-            #[must_use]
-            pub fn from_stored(s: &str) -> Self {
-                match Self::ALL.iter().copied().find(|v| v.as_str() == s) {
-                    Some(v) => v,
-                    None => {
-                        tracing::warn!(
-                            token = %s, column = $col,
-                            "unrecognised token; a newer core wrote this row"
-                        );
-                        Self::$unknown
-                    }
-                }
-            }
-        }
-    };
-}
-
 token_enum!(ReportRunState, Unknown, "report_runs.state", [
     Queued => "queued",
     Running => "running",
@@ -163,12 +116,6 @@ token_enum!(ReportRunState, Unknown, "report_runs.state", [
 token_enum!(ReportRunTrigger, Unknown, "report_runs.trigger", [
     Manual => "manual",
     Scheduled => "scheduled",
-    Unknown => "unknown",
-]);
-token_enum!(ReportFrequency, Unknown, "report_schedules.frequency", [
-    Daily => "daily",
-    Weekly => "weekly",
-    Monthly => "monthly",
     Unknown => "unknown",
 ]);
 token_enum!(ReportScheduleStatus, Unknown, "report_schedules.last_status", [
@@ -198,7 +145,7 @@ pub struct ReportSchedule {
     pub id: Uuid,
     pub definition_id: Uuid,
     pub definition_name: String,
-    pub frequency: ReportFrequency,
+    pub frequency: Cadence,
     pub day_of_week: Option<i16>,
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
@@ -848,7 +795,7 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
         id: row.try_get("id")?,
         definition_id: row.try_get("definition_id")?,
         definition_name: row.try_get("definition_name")?,
-        frequency: ReportFrequency::from_stored(row.try_get("frequency")?),
+        frequency: Cadence::from_stored(row.try_get("frequency")?),
         day_of_week: row.try_get("day_of_week")?,
         day_of_month: row.try_get("day_of_month")?,
         at_hour: row.try_get("at_hour")?,
@@ -867,7 +814,7 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
 #[derive(Debug, Clone)]
 pub struct ScheduleInput {
     pub definition_id: Uuid,
-    pub frequency: ReportFrequency,
+    pub frequency: Cadence,
     pub day_of_week: Option<i16>,
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
@@ -1218,74 +1165,6 @@ impl ReportsRepo {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
-    }
-}
-
-// ── Schedule maths (preset cadence → next firing) ────────────────────────────────────────
-
-/// Compute the next firing instant for a preset schedule, strictly after `now`. Unknown frequency
-/// falls back to daily. Pure (testable).
-#[must_use]
-pub fn compute_next_run(
-    frequency: ReportFrequency,
-    day_of_week: Option<i16>,
-    day_of_month: Option<i16>,
-    at_hour: i16,
-    at_minute: i16,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
-    let hour = at_hour.clamp(0, 23) as u32;
-    let minute = at_minute.clamp(0, 59) as u32;
-    let at_time = |date: NaiveDate| -> DateTime<Utc> {
-        let naive = date
-            .and_hms_opt(hour, minute, 0)
-            .unwrap_or_else(|| date.and_hms_opt(0, 0, 0).unwrap_or_else(|| now.naive_utc()));
-        Utc.from_utc_datetime(&naive)
-    };
-    match frequency {
-        ReportFrequency::Weekly => {
-            // 0=Sun..6=Sat; chrono's num_days_from_sunday matches.
-            let target = day_of_week.unwrap_or(0).clamp(0, 6) as i64;
-            let current = i64::from(now.weekday().num_days_from_sunday());
-            let mut days = (target - current).rem_euclid(7);
-            let mut candidate = at_time(now.date_naive() + ChronoDuration::days(days));
-            if candidate <= now {
-                days += 7;
-                candidate = at_time(now.date_naive() + ChronoDuration::days(days));
-            }
-            candidate
-        }
-        ReportFrequency::Monthly => {
-            // Clamp to 28 so every month has the day.
-            let dom = day_of_month.unwrap_or(1).clamp(1, 28) as u32;
-            let (mut y, mut m) = (now.year(), now.month());
-            if let Some(date) = NaiveDate::from_ymd_opt(y, m, dom) {
-                let candidate = at_time(date);
-                if candidate > now {
-                    return candidate;
-                }
-            }
-            // Advance to next month.
-            if m == 12 {
-                y += 1;
-                m = 1;
-            } else {
-                m += 1;
-            }
-            let date = NaiveDate::from_ymd_opt(y, m, dom)
-                .unwrap_or_else(|| now.date_naive() + ChronoDuration::days(28));
-            at_time(date)
-        }
-        // An Unknown cadence falls to daily, which is exactly what the old wildcard arm did —
-        // named now, so a fifth cadence has to choose rather than inherit this by accident.
-        ReportFrequency::Daily | ReportFrequency::Unknown => {
-            let candidate = at_time(now.date_naive());
-            if candidate > now {
-                candidate
-            } else {
-                at_time(now.date_naive() + ChronoDuration::days(1))
-            }
-        }
     }
 }
 
@@ -1774,8 +1653,9 @@ mod tests {
         }
         check!(ReportRunState);
         check!(ReportRunTrigger);
-        check!(ReportFrequency);
         check!(ReportScheduleStatus);
+        // `Cadence` is checked the same way in `cadence.rs` — it is shared with analysis schedules
+        // now, so its test belongs beside it rather than in whichever feature happens to store it.
 
         // The kebab-case outlier, spelled out so nobody "tidies" it to snake_case: this token is
         // already in the column.
@@ -1882,55 +1762,6 @@ mod tests {
         assert!(csv.contains("Node,CPU"));
         assert!(csv.contains("\"r\"\"2\",10")); // embedded quote doubled
         assert!(csv.contains("Peak,88%"));
-    }
-
-    #[test]
-    fn next_run_daily_rolls_to_tomorrow_when_past() {
-        // now = 2026-06-20 10:00 UTC; daily at 09:00 → next is 2026-06-21 09:00.
-        let now = Utc.with_ymd_and_hms(2026, 6, 20, 10, 0, 0).unwrap();
-        let next = compute_next_run(ReportFrequency::Daily, None, None, 9, 0, now);
-        assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 21, 9, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn next_run_daily_today_when_future() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 20, 6, 0, 0).unwrap();
-        let next = compute_next_run(ReportFrequency::Daily, None, None, 9, 30, now);
-        assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 20, 9, 30, 0).unwrap());
-    }
-
-    #[test]
-    fn next_run_weekly_finds_target_weekday() {
-        // 2026-06-20 is a Saturday (dow=6). Target Monday (dow=1) at 08:00 → 2026-06-22 08:00.
-        let now = Utc.with_ymd_and_hms(2026, 6, 20, 12, 0, 0).unwrap();
-        let next = compute_next_run(ReportFrequency::Weekly, Some(1), None, 8, 0, now);
-        assert_eq!(next, Utc.with_ymd_and_hms(2026, 6, 22, 8, 0, 0).unwrap());
-    }
-
-    #[test]
-    fn next_run_weekly_same_day_future_vs_past() {
-        // Saturday now 06:00; weekly Saturday(6) at 09:00 → today; at 03:00 → next week.
-        let now = Utc.with_ymd_and_hms(2026, 6, 20, 6, 0, 0).unwrap();
-        assert_eq!(
-            compute_next_run(ReportFrequency::Weekly, Some(6), None, 9, 0, now),
-            Utc.with_ymd_and_hms(2026, 6, 20, 9, 0, 0).unwrap()
-        );
-        assert_eq!(
-            compute_next_run(ReportFrequency::Weekly, Some(6), None, 3, 0, now),
-            Utc.with_ymd_and_hms(2026, 6, 27, 3, 0, 0).unwrap()
-        );
-    }
-
-    #[test]
-    fn next_run_monthly_rolls_to_next_month() {
-        // now 2026-06-20; monthly on the 1st → 2026-07-01.
-        let now = Utc.with_ymd_and_hms(2026, 6, 20, 12, 0, 0).unwrap();
-        let next = compute_next_run(ReportFrequency::Monthly, None, Some(1), 0, 0, now);
-        assert_eq!(next, Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap());
-        // Year rollover from December.
-        let dec = Utc.with_ymd_and_hms(2026, 12, 15, 12, 0, 0).unwrap();
-        let jan = compute_next_run(ReportFrequency::Monthly, None, Some(5), 6, 0, dec);
-        assert_eq!(jan, Utc.with_ymd_and_hms(2027, 1, 5, 6, 0, 0).unwrap());
     }
 
     #[test]

@@ -19,6 +19,7 @@ mod audit;
 mod auth;
 mod authcallout;
 mod bigquery;
+mod cadence;
 mod classification;
 mod collection;
 mod config;
@@ -57,6 +58,7 @@ mod scheduler;
 mod secrets;
 mod sink;
 mod store;
+mod stored_enum;
 mod thresholds;
 mod token;
 mod url_check;
@@ -579,6 +581,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classification: classification.clone(),
         notifications: notifications.clone(),
         analysis_repo: analysis_repo.clone(),
+        analysis: analysis.clone(),
         reports_repo: reports_repo.clone(),
         reports: reports.clone(),
         dns_checks: dns_checks.clone(),
@@ -815,6 +818,7 @@ struct LeaderTasks {
     classification: Arc<classification::ClassificationRepo>,
     notifications: Arc<NotificationRepo>,
     analysis_repo: Arc<analysis::AnalysisRepo>,
+    analysis: Arc<analysis::AnalysisRunner>,
     reports_repo: Arc<reports::ReportsRepo>,
     reports: Arc<reports::ReportRunner>,
     dns_checks: Arc<dns_check::DnsCheckRepo>,
@@ -1084,6 +1088,11 @@ impl LeaderTasks {
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
         spawn_cancellable(&self.shutdown, run_report_scheduler(self.reports.clone()));
+        // Analysis schedule-firing loop (60s tick) — same cadence maths, different admission rules.
+        spawn_cancellable(
+            &self.shutdown,
+            run_analysis_scheduler(self.analysis.clone()),
+        );
     }
 
     /// Fail analysis/report jobs a previous leader left `running`. Leader-only — a standby must
@@ -2527,12 +2536,14 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
         match repo.due_schedules().await {
             Ok(due) => {
                 for sched in due {
-                    let next = reports::compute_next_run(
-                        sched.frequency,
-                        sched.day_of_week,
-                        sched.day_of_month,
-                        sched.at_hour,
-                        sched.at_minute,
+                    let next = cadence::compute_next_run(
+                        cadence::Schedule {
+                            frequency: sched.frequency,
+                            day_of_week: sched.day_of_week,
+                            day_of_month: sched.day_of_month,
+                            at_hour: sched.at_hour,
+                            at_minute: sched.at_minute,
+                        },
                         Utc::now(),
                     );
                     let status = match reports
@@ -2562,6 +2573,91 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
                 tracing::warn!(error = %e, "prune report runs failed");
             }
         }
+    }
+}
+
+/// Fire due analysis schedules on a fixed tick.
+///
+/// The same shape as [`run_report_scheduler`] and the same cadence maths, with one difference that
+/// is the whole reason it is a separate loop: **the analysis runner has admission control.**
+/// `create` can refuse with `TooManyConcurrent` / `RateLimited`, which are transient. Treating a
+/// refusal like a fire — stamping a status and advancing `next_run_at` — would skip the whole
+/// period, so a daily 03:00 analysis that happened to collide with a busy minute would simply not
+/// run that day, with a `last_status` nobody reads and an empty runs list that looks normal.
+/// A refused schedule is therefore left due, and the next tick retries it a minute later.
+///
+/// Failures degrade to a warn so one bad schedule never stalls the others.
+async fn run_analysis_scheduler(analysis: Arc<analysis::AnalysisRunner>) {
+    const TICK_SECS: u64 = 60;
+    let repo = analysis.repo();
+    loop {
+        tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
+        let due = match repo.due_schedules().await {
+            Ok(due) => due,
+            Err(e) => {
+                tracing::warn!(error = %e, "analysis scheduler: due-query failed");
+                continue;
+            }
+        };
+        for sched in due {
+            // Re-validated at fire time rather than trusted as stored — the clamps are edge
+            // validation, and a schedule saved before a bound moved must not keep firing outside
+            // the new one.
+            let params = match api::analysis::scheduled_params(&sched) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        schedule = %sched.id, code = e.code(),
+                        "scheduled analysis has params this build will not accept; skipping"
+                    );
+                    // Advance anyway: retrying an unacceptable row every minute would be a busy
+                    // loop, and the status says why.
+                    advance(&repo, &sched, analysis::AnalysisScheduleStatus::Error).await;
+                    continue;
+                }
+            };
+            match analysis.create(params, Some("scheduler".to_owned())).await {
+                Ok(_) => advance(&repo, &sched, analysis::AnalysisScheduleStatus::Queued).await,
+                Err(
+                    analysis::CreateError::TooManyConcurrent(_)
+                    | analysis::CreateError::RateLimited(_),
+                ) => {
+                    tracing::info!(
+                        schedule = %sched.id,
+                        "scheduled analysis deferred — the runner is at its admission limit; \
+                         staying due for the next tick"
+                    );
+                    if let Err(e) = repo.mark_deferred(sched.id).await {
+                        tracing::warn!(error = %e, schedule = %sched.id, "failed to defer schedule");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, schedule = %sched.id, "scheduled analysis failed to start");
+                    advance(&repo, &sched, analysis::AnalysisScheduleStatus::Error).await;
+                }
+            }
+        }
+    }
+}
+
+/// Stamp the outcome and move a schedule on to its next firing instant.
+async fn advance(
+    repo: &analysis::AnalysisRepo,
+    sched: &analysis::AnalysisSchedule,
+    status: analysis::AnalysisScheduleStatus,
+) {
+    let next = cadence::compute_next_run(
+        cadence::Schedule {
+            frequency: sched.frequency,
+            day_of_week: sched.day_of_week,
+            day_of_month: sched.day_of_month,
+            at_hour: sched.at_hour,
+            at_minute: sched.at_minute,
+        },
+        chrono::Utc::now(),
+    );
+    if let Err(e) = repo.mark_fired(sched.id, status, next).await {
+        tracing::warn!(error = %e, schedule = %sched.id, "failed to advance analysis schedule");
     }
 }
 

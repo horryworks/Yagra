@@ -206,6 +206,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analysis/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every analysis schedule, soonest first. Empty in skeleton mode. */
+        get: operations["list_analysis_schedules"];
+        put?: never;
+        /** Create an analysis schedule (operator+). */
+        post: operations["create_analysis_schedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analysis/schedules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the
+         *     next matching instant rather than whenever the old one happened to be.
+         */
+        put: operations["update_analysis_schedule"];
+        post?: never;
+        /** Delete a schedule (operator+). */
+        delete: operations["delete_analysis_schedule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/api-tokens": {
         parameters: {
             query?: never;
@@ -3141,6 +3180,82 @@ export interface components {
             summary?: string | null;
             tool: string;
         };
+        /** @description A schedule row, as served to the API. */
+        AnalysisSchedule: {
+            /** Format: int32 */
+            at_hour: number;
+            /** Format: int32 */
+            at_minute: number;
+            /** Format: int32 */
+            day_of_month?: number | null;
+            /** Format: int32 */
+            day_of_week?: number | null;
+            enabled: boolean;
+            frequency: components["schemas"]["Cadence"];
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            last_run_ms?: number | null;
+            last_status?: null | components["schemas"]["AnalysisScheduleStatus"];
+            /** Format: int64 */
+            next_run_ms: number;
+            /** @description The launch knobs, the same shape as `AnalysisJob.params`. */
+            params: unknown;
+            /** Format: uuid */
+            scope_id?: string | null;
+            /** @description `all` | `group` | `node`. */
+            scope_kind: string;
+            scope_label: string;
+            /** @description Which diagnostic runs, as an `AnalysisTool` token. */
+            tool: string;
+        };
+        /** @description Create/update body for an analysis schedule: the launch spec plus the cadence. */
+        AnalysisScheduleBody: {
+            /** Format: int32 */
+            at_hour: number;
+            /** Format: int32 */
+            at_minute: number;
+            /** Format: int64 */
+            baseline_secs?: number | null;
+            /**
+             * Format: int32
+             * @description 1 … 28. Read only for `monthly`.
+             */
+            day_of_month?: number | null;
+            /**
+             * Format: int32
+             * @description 0=Sun … 6=Sat. Read only for `weekly`.
+             */
+            day_of_week?: number | null;
+            depth?: string | null;
+            /** @description Defaults to enabled. */
+            enabled?: boolean | null;
+            family?: string | null;
+            /** @description `daily` | `weekly` | `monthly`. */
+            frequency: string;
+            /**
+             * @description Whether a completed run may notify. Defaults to `false` — a schedule fires unattended, so
+             *     silence is the safer default; the manual launch path defaults it on because someone is
+             *     waiting for that run.
+             */
+            notify?: boolean | null;
+            /** Format: uuid */
+            scope_id?: string | null;
+            /** @description `all` | `group` | `node`. */
+            scope_kind: string;
+            scope_label: string;
+            /** Format: double */
+            sensitivity?: number | null;
+            /** @description Which diagnostic to run (an `AnalysisTool` token, e.g. `anomaly`). */
+            tool: string;
+            /** Format: int64 */
+            window_secs: number;
+        };
+        /**
+         * @description Outcome of a schedule's most recent firing attempt.
+         * @enum {string}
+         */
+        AnalysisScheduleStatus: "queued" | "busy" | "error" | "unknown";
         /**
          * @description The ADR-019 envelope every failure renders as. `pub(crate)` and schema-bearing so the OpenAPI
          *     document can name one error shape for every endpoint (ADR-035) instead of leaving 4xx/5xx bodies
@@ -3240,6 +3355,11 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /**
+         * @description How often a schedule fires.
+         * @enum {string}
+         */
+        Cadence: "daily" | "weekly" | "monthly" | "unknown";
         /** @description One weekday×hour heatmap cell. */
         CalendarBucket: {
             /** Format: int64 */
@@ -3398,6 +3518,11 @@ export interface components {
             auth_available: boolean;
             /** Format: int32 */
             default_poll_interval_secs: number;
+            /**
+             * @description Whether this deployment has a traffic-flow store configured (ADR-031). When `false`, the
+             *     flow analyses cannot be scheduled — `POST /api/v1/analysis/schedules` refuses them.
+             */
+            flow_enabled: boolean;
             /** @description Whether read endpoints are open to anonymous callers. */
             public_dashboard: boolean;
             /** @description Whether an LLM provider is configured *and* enabled. */
@@ -5690,11 +5815,6 @@ export interface components {
             name: string;
             spec: unknown;
         };
-        /**
-         * @description How often a schedule fires.
-         * @enum {string}
-         */
-        ReportFrequency: "daily" | "weekly" | "monthly" | "unknown";
         /** @description A run row for the saved-reports list (without the heavy `result_*` payloads). */
         ReportRun: {
             created_by?: string | null;
@@ -5750,7 +5870,7 @@ export interface components {
             definition_id: string;
             definition_name: string;
             enabled: boolean;
-            frequency: components["schemas"]["ReportFrequency"];
+            frequency: components["schemas"]["Cadence"];
             /** Format: uuid */
             id: string;
             /** Format: int64 */
@@ -6896,6 +7016,240 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_analysis_schedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every schedule the caller may see; empty when this deployment has no runner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisSchedule"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_analysis_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Schedule created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
+            };
+            /** @description Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Operator, or a fleet-wide schedule from a group-scoped account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The named node or group is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no runner */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_analysis_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Analysis schedule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Schedule updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Operator, or a fleet-wide schedule from a group-scoped account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such schedule, or it is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no runner */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_analysis_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Analysis schedule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Operator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such schedule, or it is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no runner */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

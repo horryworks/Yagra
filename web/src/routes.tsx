@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Route table. Mirrors the nav IA (nav.ts): the AppShell wraps every in-app screen; static
-// section/sub-feature paths map to their pages, and every not-yet-backed IA entry routes to
-// ComingSoon so the structure is complete and navigable. Unknown paths fall back to the
-// dashboard.
+// Route table. Mirrors the nav IA (nav.ts): the AppShell wraps every in-app screen and static
+// section/sub-feature paths map to their pages. Unknown paths fall back to the dashboard.
+//
+// Every IA entry now has a real screen, so nothing routes to `ComingSoon` at the moment. The
+// component and `nav.ts`'s `implemented` flag stay: they are the mechanism for slotting a screen
+// into the IA before it has a backend, and `nav.test.ts` still pins how a placeholder is grouped.
 
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './components/shell/AppShell';
-import { ComingSoon } from './components/ui/ComingSoon';
 import { LoginPage } from './pages/LoginPage';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
@@ -48,6 +49,7 @@ import { GeoMapPage } from './pages/GeoMapPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
 import { RunsPage } from './troubleshoot/RunsPage';
 import { SavedFindingsPage } from './troubleshoot/SavedFindingsPage';
+import { ScheduledPage } from './troubleshoot/ScheduledPage';
 import { ReportRoutePage } from './troubleshoot/report/ReportRoutePage';
 
 /** Redirect that keeps the query string — a bare `<Navigate to="/x"/>` drops it, which would strip
@@ -114,7 +116,7 @@ export function AppRoutes() {
         path="troubleshoot/anomaly"
         element={<RedirectPreservingQuery to="/troubleshoot/report/anomaly" />}
       />
-        <Route path="troubleshoot/scheduled" element={<ComingSoon />} />
+        <Route path="troubleshoot/scheduled" element={<ScheduledPage />} />
         <Route path="troubleshoot/findings" element={<SavedFindingsPage />} />
 
         {/* Settings — the tab lands on System health (the first sidebar item). */}

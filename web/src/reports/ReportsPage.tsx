@@ -5,7 +5,6 @@
 // non-admins; the server enforces it too).
 
 import { useEffect, useState } from 'react';
-import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -26,7 +25,7 @@ import type {
   ReportSpec,
 } from '../types/api';
 import { useReportRunsStore } from './store';
-import { cadenceLabel } from './types';
+import { cadenceLabel } from '../lib/cadence';
 import { RUN_STATUS } from './runStatus';
 import { ReportBuilder } from './ReportBuilder';
 import { ReportViewer } from './ReportViewer';
@@ -34,18 +33,6 @@ import { ScheduleModal } from './ScheduleModal';
 import './reports.css';
 
 type Tab = 'saved' | 'templates' | 'schedules';
-
-/** `cadenceLabel` reads both day fields; a stored schedule may omit the one its cadence doesn't
- *  use. The cadence itself is now typed, so there is nothing left to narrow. */
-function scheduleCadence(t: TFunction, s: ReportSchedule): string {
-  return cadenceLabel(t, {
-    frequency: s.frequency,
-    day_of_week: s.day_of_week ?? null,
-    day_of_month: s.day_of_month ?? null,
-    at_hour: s.at_hour,
-    at_minute: s.at_minute,
-  });
-}
 
 /** Status chip for a run (live progress while generating). Read from the registry rather than a
  *  switch, so a state added to the backend cannot fall through to "failed" — see `runStatus.ts`. */
@@ -240,7 +227,7 @@ export function ReportsPage() {
       key: 'cadence',
       header: t('scheds.cols.cadence'),
       width: '1.4fr',
-      render: (s) => scheduleCadence(t, s),
+      render: (s) => cadenceLabel(t, s),
     },
     {
       key: 'next',

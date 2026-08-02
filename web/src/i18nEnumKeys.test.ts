@@ -21,12 +21,13 @@ import {
   ROLES,
   SCOPE_LEVELS,
   SEVERITIES,
-  REPORT_FREQUENCIES,
+  CADENCES,
   REPORT_RUN_STATES,
   REPORT_TRIGGERS,
   EVENT_ACTIONS,
   EVENT_MATCH_KINDS,
   DNS_FAILURE_KINDS,
+  ANALYSIS_SCHEDULE_STATUSES,
   FINDING_SEVERITIES,
   RCA_CONFIDENCES,
   TOKEN_SURFACES,
@@ -37,7 +38,8 @@ import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
-import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES } from './reports/runStatus';
+import { RUN_STATUS } from './reports/runStatus';
+import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES } from './troubleshoot/data';
 import { FINDING_RANGES } from './troubleshoot/findingsQuery';
@@ -182,12 +184,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enReports, ja: jaReports };
     expectKeys('trigger', locales, 'trigger.', REPORT_TRIGGERS);
     // CADENCE keys are fully qualified (`reports:cadence.x`) — strip the namespace.
-    const cadenceKeys = REPORT_FREQUENCIES.map((f) =>
+    const cadenceKeys = CADENCES.map((f) =>
       CADENCE[f].labelKey.replace(/^reports:/, ''),
     );
     expectKeys('cadence', locales, '', cadenceKeys);
     // The schedule form's option labels, for the subset an operator may pick.
-    expectKeys('freq option', locales, 'schedule.freq.', SELECTABLE_FREQUENCIES);
+    expectKeys('freq option', locales, 'schedule.freq.', SELECTABLE_CADENCES);
   });
 
   it('every event action and match kind has a label', () => {
@@ -227,6 +229,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'runs.state.',
       TERMINAL_JOB_STATES,
+    );
+  });
+
+  it('every analysis-schedule status has a label (troubleshoot:schedule.status.*)', () => {
+    // The schedules table renders `schedule.status.${last_status}` from a Record; a status the
+    // backend gains without strings would put a raw key in the table's outcome column.
+    expectKeys(
+      'analysis schedule status',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'schedule.status.',
+      ANALYSIS_SCHEDULE_STATUSES,
     );
   });
 

@@ -28,6 +28,44 @@
       "requeueFailed": "分析を再実行できませんでした。"
     }
   },
+  "schedule": {
+    "pageNote": "設定した周期で自動的に実行される分析",
+    "signInPrompt": "スケジュール分析を管理するにはサインインしてください。",
+    "add": "分析をスケジュール",
+    "empty": "スケジュールされた分析はまだありません。",
+    "paused": "停止中",
+    "schedule_other": "件",
+    "newTitle": "分析をスケジュール",
+    "editTitle": "スケジュール分析を編集",
+    "analysis": "分析",
+    "frequency": "実行周期",
+    "notify": "実行完了時に通知する",
+    "flowHidden": "トラフィックフロー分析は表示していません。このデプロイにはフローストアが無く、実行のたびに空の結果になるためです。",
+    "save": "保存",
+    "saving": "保存中…",
+    "deleteTitle": "スケジュール分析を削除",
+    "deleteBody": "{{name}} の定期実行を停止します。すでに生成された実行結果は残ります。",
+    "cols": {
+      "analysis": "分析",
+      "scope": "対象",
+      "cadence": "実行周期",
+      "next": "次回実行",
+      "last": "前回の試行"
+    },
+    "status": {
+      "queued": "開始",
+      "busy": "延期",
+      "error": "失敗",
+      "unknown": "不明"
+    },
+    "err": {
+      "load": "スケジュール分析を読み込めませんでした。",
+      "saveFailed": "スケジュールを保存できませんでした。",
+      "deleteFailed": "スケジュールを削除できませんでした。",
+      "unknown_cadence": "実行周期を選択してください。",
+      "missing_scope": "分析の対象を選択してください。"
+    }
+  },
   "findings": {
     "pageNote": "全実行を横断した分析の検出結果（新しい順）",
     "signInPrompt": "保存された検出結果を検索するにはサインインしてください。",

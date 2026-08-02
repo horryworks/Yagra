@@ -64,6 +64,11 @@ pub(crate) struct ClientConfig {
     sso_enabled: bool,
     /// Whether an LLM provider is configured *and* enabled.
     rca_enabled: bool,
+    /// Whether this deployment has a traffic-flow store configured (ADR-031). When `false`, the
+    /// flow analyses cannot be scheduled — `POST /api/v1/analysis/schedules` refuses them.
+    //  A manual run of one is still allowed: it answers immediately with "flow tier not enabled",
+    //  which is a useful answer once and an empty run every day forever on a schedule.
+    flow_enabled: bool,
     default_poll_interval_secs: u32,
 }
 
@@ -100,6 +105,7 @@ async fn get_config(State(st): State<ApiState>) -> Json<ClientConfig> {
         auth_available: st.admin.is_some(),
         sso_enabled,
         rca_enabled,
+        flow_enabled: st.flows.is_some(),
         default_poll_interval_secs,
     })
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// How a report run's state and a schedule's cadence are presented — as maps keyed by the union, not
-// as switch statements.
+// How a report run's state is presented — as a map keyed by the union, not
+// as a switch. (The cadence half moved to `lib/cadence.ts` when analyses gained schedules too.)
 //
 // The switch this replaces ended in `default: <Badge tone="critical">Failed</Badge>`. Because the
 // backend typed `state` as a bare `String`, TypeScript could not object, so any state the UI had
@@ -13,12 +13,7 @@
 // `.tsx` is judgement no test can reach (see .claude/rules/testing.md).
 
 import type { Tone } from '../components/ui/Badge';
-import {
-  REPORT_FREQUENCIES,
-  REPORT_RUN_STATES,
-  type ReportFrequency,
-  type ReportRunState,
-} from '../types/api';
+import { REPORT_RUN_STATES, type ReportRunState } from '../types/api';
 
 export interface RunStatusSpec {
   tone: Tone;
@@ -51,19 +46,3 @@ export function isRunInFlight(state: ReportRunState): boolean {
 export function isRunState(v: unknown): v is ReportRunState {
   return typeof v === 'string' && (REPORT_RUN_STATES as readonly string[]).includes(v);
 }
-
-/** Cadence label key + which extra field it interpolates. Same shape, same reason: `cadenceLabel`
- *  had the identical `default:` bug and rendered an unknown cadence as "Daily". */
-export const CADENCE: Record<ReportFrequency, { labelKey: string; part: 'day' | 'dom' | 'none' }> = {
-  daily: { labelKey: 'reports:cadence.daily', part: 'none' },
-  weekly: { labelKey: 'reports:cadence.weekly', part: 'day' },
-  monthly: { labelKey: 'reports:cadence.monthly', part: 'dom' },
-  unknown: { labelKey: 'reports:cadence.unknown', part: 'none' },
-};
-
-/** The cadences an operator may actually choose — `unknown` is a storage degradation, never a
- *  selectable option. A deliberate subset of the union, pinned by a test (the `monitorKinds.ts`
- *  pattern) so a fourth cadence forces the question rather than being silently excluded. */
-export const SELECTABLE_FREQUENCIES = REPORT_FREQUENCIES.filter(
-  (f) => f !== 'unknown',
-) as readonly Exclude<ReportFrequency, 'unknown'>[];

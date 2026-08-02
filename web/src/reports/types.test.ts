@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import i18n from '../i18n';
 import type { ReportSectionDef, ReportSpec } from '../types/api';
 import {
-  cadenceLabel,
   defaultSettings,
   emptySpec,
   newSection,
   sanitizeSpec,
-  weekdayName,
 } from './types';
-
-// cadenceLabel/weekdayName resolve their display strings through i18next now; pass the real
-// (English-bundled) translator so the expected output stays the human-readable label.
-const t = i18n.t;
 
 const topCpu: ReportSectionDef = {
   kind: 'top-cpu',
@@ -69,43 +62,5 @@ describe('sanitizeSpec', () => {
     expect(clean.sections[0]).toEqual({ id: 's1', kind: 'top-cpu', settings: { limit: 5 } });
     expect(clean.sections[1].kind).toBe('top-rtt');
     expect(typeof clean.sections[1].id).toBe('string');
-  });
-});
-
-describe('cadenceLabel', () => {
-  it('formats daily/weekly/monthly with UTC time', () => {
-    expect(
-      cadenceLabel(t, {
-        frequency: 'daily',
-        day_of_week: null,
-        day_of_month: null,
-        at_hour: 9,
-        at_minute: 0,
-      }),
-    ).toBe('Daily · 09:00 UTC');
-    expect(
-      cadenceLabel(t, {
-        frequency: 'weekly',
-        day_of_week: 1,
-        day_of_month: null,
-        at_hour: 8,
-        at_minute: 30,
-      }),
-    ).toBe('Weekly · Monday 08:30 UTC');
-    expect(
-      cadenceLabel(t, {
-        frequency: 'monthly',
-        day_of_week: null,
-        day_of_month: 15,
-        at_hour: 6,
-        at_minute: 5,
-      }),
-    ).toBe('Monthly · day 15 06:05 UTC');
-  });
-
-  it('weekdayName clamps out-of-range indices', () => {
-    expect(weekdayName(t, 0)).toBe('Sunday');
-    expect(weekdayName(t, 6)).toBe('Saturday');
-    expect(weekdayName(t, 99)).toBe('Saturday');
   });
 });

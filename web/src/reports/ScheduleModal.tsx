@@ -8,9 +8,9 @@ import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { api, ApiError } from '../services/api';
-import type { ReportDefinition, ReportFrequency, ReportSchedule } from '../types/api';
-import { WEEKDAY_OPTIONS } from './types';
-import { SELECTABLE_FREQUENCIES } from './runStatus';
+import type { ReportDefinition, Cadence, ReportSchedule } from '../types/api';
+import { WEEKDAY_OPTIONS } from '../lib/cadence';
+import { SELECTABLE_CADENCES } from '../lib/cadence';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -32,7 +32,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
   // A stored `unknown` cadence (written by a newer core) is not offerable, so the form opens on
   // daily rather than preselecting an option the operator cannot have meant.
   const stored = schedule?.frequency;
-  const [frequency, setFrequency] = useState<ReportFrequency>(
+  const [frequency, setFrequency] = useState<Cadence>(
     stored && stored !== 'unknown' ? stored : 'daily',
   );
   const [dayOfWeek, setDayOfWeek] = useState<number>(schedule?.day_of_week ?? 1);
@@ -110,11 +110,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
           <span>{t('schedule.frequency')}</span>
           <Select
             value={frequency}
-            onChange={(e) => setFrequency(e.target.value as ReportFrequency)}
+            onChange={(e) => setFrequency(e.target.value as Cadence)}
           >
             {/* Iterated from the deliberate subset, so a cadence added to the backend either
                 appears here or is consciously excluded — never silently missing. */}
-            {SELECTABLE_FREQUENCIES.map((f) => (
+            {SELECTABLE_CADENCES.map((f) => (
               <option key={f} value={f}>
                 {t(`schedule.freq.${f}`)}
               </option>

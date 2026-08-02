@@ -686,42 +686,23 @@ fn parse_schedule_body(
 ) -> Result<(ScheduleInput, chrono::DateTime<chrono::Utc>), ApiError> {
     // `Unknown` is a *storage* degradation, never something an operator may pick — accepting it
     // here would let a client write a cadence the scheduler then silently treats as daily.
-    let frequency = match reports::ReportFrequency::from_stored(&body.frequency) {
-        f if f != reports::ReportFrequency::Unknown => f,
-        _ => {
-            return Err(ApiError::bad_request(
-                "invalid_frequency",
-                "frequency must be daily|weekly|monthly",
-            ))
-        }
-    };
-    let day_of_week = if frequency == reports::ReportFrequency::Weekly {
-        Some(body.day_of_week.unwrap_or(0).clamp(0, 6))
-    } else {
-        None
-    };
-    let day_of_month = if frequency == reports::ReportFrequency::Monthly {
-        Some(body.day_of_month.unwrap_or(1).clamp(1, 28))
-    } else {
-        None
-    };
+    let cadence = super::util::parse_cadence(super::util::CadenceBody {
+        frequency: body.frequency,
+        day_of_week: body.day_of_week,
+        day_of_month: body.day_of_month,
+        at_hour: body.at_hour,
+        at_minute: body.at_minute,
+    })?;
     let input = ScheduleInput {
         definition_id: body.definition_id,
-        frequency,
-        day_of_week,
-        day_of_month,
-        at_hour: body.at_hour.clamp(0, 23),
-        at_minute: body.at_minute.clamp(0, 59),
+        frequency: cadence.frequency,
+        day_of_week: cadence.day_of_week,
+        day_of_month: cadence.day_of_month,
+        at_hour: cadence.at_hour,
+        at_minute: cadence.at_minute,
         enabled: body.enabled.unwrap_or(true),
     };
-    let next = reports::compute_next_run(
-        input.frequency,
-        input.day_of_week,
-        input.day_of_month,
-        input.at_hour,
-        input.at_minute,
-        chrono::Utc::now(),
-    );
+    let next = crate::cadence::compute_next_run(cadence, chrono::Utc::now());
     Ok((input, next))
 }
 

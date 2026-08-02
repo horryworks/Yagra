@@ -41,6 +41,16 @@
   can point at a private registry holding unreleased builds.
 
 ### New Features
+- **Scheduled analyses.** Troubleshoot ▸ Scheduled runs an analysis on a preset cadence — daily,
+  weekly or monthly at a time of day (UTC), over the whole fleet, a site or one node. Until now
+  every analysis had to be launched by hand, so a nightly anomaly sweep meant someone remembering.
+  `GET/POST /api/v1/analysis/schedules` and `PUT/DELETE /api/v1/analysis/schedules/{id}`, all
+  Operator-and-up like launching a run.
+  Two behaviours worth knowing: a fire the runner's admission control refuses is **deferred, not
+  skipped** — the schedule stays due and the next minute's tick retries, rather than losing a whole
+  period to a busy moment — and the traffic-flow analyses **cannot be scheduled on a deployment
+  with no flow store**, because each fire would write an empty run forever. A schedule defaults to
+  not notifying, unlike a run you launch and wait for.
 - **Saved findings — search what the analyses found, across every run.** Troubleshoot ▸ Saved
   findings (`GET /api/v1/analysis/findings`) lists findings from every analysis, newest first,
   filterable by node or site, by analysis, by severity and by time window. Until now a finding was

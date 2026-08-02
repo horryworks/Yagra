@@ -29,6 +29,45 @@
       "requeueFailed": "Could not re-queue the analysis."
     }
   },
+  "schedule": {
+    "pageNote": "Analyses that run on their own, on a preset cadence",
+    "signInPrompt": "Sign in to manage scheduled analyses.",
+    "add": "Schedule analysis",
+    "empty": "No scheduled analyses yet.",
+    "paused": "Paused",
+    "schedule_one": "schedule",
+    "schedule_other": "schedules",
+    "newTitle": "Schedule an analysis",
+    "editTitle": "Edit scheduled analysis",
+    "analysis": "Analysis",
+    "frequency": "Runs",
+    "notify": "Notify me when a run finishes",
+    "flowHidden": "Traffic-flow analyses are hidden — this deployment has no flow store, so they would produce an empty run on every fire.",
+    "save": "Save",
+    "saving": "Saving…",
+    "deleteTitle": "Delete scheduled analysis",
+    "deleteBody": "This stops {{name}} from running on its schedule. Runs it already produced are kept.",
+    "cols": {
+      "analysis": "Analysis",
+      "scope": "Scope",
+      "cadence": "Runs",
+      "next": "Next run",
+      "last": "Last attempt"
+    },
+    "status": {
+      "queued": "Started",
+      "busy": "Deferred",
+      "error": "Failed",
+      "unknown": "Unknown"
+    },
+    "err": {
+      "load": "Could not load scheduled analyses.",
+      "saveFailed": "Could not save the schedule.",
+      "deleteFailed": "Could not delete the schedule.",
+      "unknown_cadence": "Choose how often this should run.",
+      "missing_scope": "Choose what this analysis should run over."
+    }
+  },
   "findings": {
     "pageNote": "Everything the analyses have found, newest first — across every run",
     "signInPrompt": "Sign in to search saved findings.",

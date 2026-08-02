@@ -16,6 +16,8 @@ import type {
   AnalysisFinding,
   AnalysisJob,
   AnalysisJobInput,
+  AnalysisSchedule,
+  AnalysisScheduleInput,
   ApiErrorBody,
   CalendarBucket,
   AuditRow,
@@ -352,6 +354,10 @@ export interface ClientConfig {
    *  incident" affordance so it is never offered on an installation that would 503. Optional so an
    *  older core (which omits the field) reads as off rather than as `undefined`. */
   rca_enabled?: boolean;
+  /** Whether this deployment has a traffic-flow store (ADR-031) — decides which analyses may be
+   *  *scheduled*, since the backend refuses a scheduled flow analysis with the tier off. Optional
+   *  for the same reason as `rca_enabled`: an older core omits it and that must read as off. */
+  flow_enabled?: boolean;
 }
 
 export const api = {
@@ -742,6 +748,21 @@ export const api = {
   /** Cancel a running analysis job. */
   cancelAnalysisJob: (id: string): Promise<{ cancelled: boolean }> =>
     apiPost('/api/v1/analysis/jobs/{id}/cancel', { path: { id } }),
+
+  /** Recurring analyses, soonest first. */
+  listAnalysisSchedules: (): Promise<AnalysisSchedule[]> => apiGet('/api/v1/analysis/schedules'),
+
+  /** Create a recurring analysis. */
+  createAnalysisSchedule: (body: AnalysisScheduleInput): Promise<{ id: string }> =>
+    apiPost('/api/v1/analysis/schedules', { body }),
+
+  /** Replace a recurring analysis; `next_run_at` is recomputed from the new cadence. */
+  updateAnalysisSchedule: (id: string, body: AnalysisScheduleInput): Promise<void> =>
+    apiPut('/api/v1/analysis/schedules/{id}', { path: { id }, body }),
+
+  /** Delete a recurring analysis. */
+  deleteAnalysisSchedule: (id: string): Promise<void> =>
+    apiDelete('/api/v1/analysis/schedules/{id}', { path: { id } }),
 
   // ── Reports (Dashboard → Reports) ──
   /** The report-section catalog (drives the builder). */

@@ -82,6 +82,7 @@
     "topologyDependency": "Manage parent → child dependency links",
     "troubleshootRuns": "Background analysis jobs and their reports",
     "troubleshootFindings": "What the analyses have found, across every run",
+    "troubleshootScheduled": "Analyses that run on their own, on a preset cadence",
     "settingsCredentials": "SNMP and API credentials, encrypted at rest",
     "settingsPollers": "Distributed poller fleet status",
     "settingsForwarding": "Relay received syslog and traps to external collectors",

@@ -203,8 +203,9 @@ export const NAV: NavSection[] = [
           },
           {
             labelKey: 'troubleshoot.scheduled',
+            descKey: 'descriptions.troubleshootScheduled',
             path: '/troubleshoot/scheduled',
-            implemented: false,
+            implemented: true,
             mono: 'Sc',
           },
           {

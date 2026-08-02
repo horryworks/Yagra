@@ -832,6 +832,279 @@
         }
       }
     },
+    "/api/v1/analysis/schedules": {
+      "get": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "Every analysis schedule, soonest first. Empty in skeleton mode.",
+        "operationId": "list_analysis_schedules",
+        "responses": {
+          "200": {
+            "description": "Every schedule the caller may see; empty when this deployment has no runner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AnalysisSchedule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "Create an analysis schedule (operator+).",
+        "operationId": "create_analysis_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisScheduleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Schedule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Operator, or a fleet-wide schedule from a group-scoped account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The named node or group is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no runner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analysis/schedules/{id}": {
+      "put": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the\nnext matching instant rather than whenever the old one happened to be.",
+        "operationId": "update_analysis_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Analysis schedule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisScheduleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Schedule updated"
+          },
+          "400": {
+            "description": "Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Operator, or a fleet-wide schedule from a group-scoped account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such schedule, or it is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no runner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "Delete a schedule (operator+).",
+        "operationId": "delete_analysis_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Analysis schedule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Schedule deleted"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such schedule, or it is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no runner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/api-tokens": {
       "get": {
         "tags": [
@@ -15439,6 +15712,213 @@
           }
         }
       },
+      "AnalysisSchedule": {
+        "type": "object",
+        "description": "A schedule row, as served to the API.",
+        "required": [
+          "id",
+          "tool",
+          "scope_kind",
+          "scope_label",
+          "params",
+          "frequency",
+          "at_hour",
+          "at_minute",
+          "enabled",
+          "next_run_ms"
+        ],
+        "properties": {
+          "at_hour": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "at_minute": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "day_of_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "day_of_week": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_run_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisScheduleStatus"
+              }
+            ]
+          },
+          "next_run_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "params": {
+            "description": "The launch knobs, the same shape as `AnalysisJob.params`."
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "scope_kind": {
+            "type": "string",
+            "description": "`all` | `group` | `node`."
+          },
+          "scope_label": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string",
+            "description": "Which diagnostic runs, as an `AnalysisTool` token."
+          }
+        }
+      },
+      "AnalysisScheduleBody": {
+        "type": "object",
+        "description": "Create/update body for an analysis schedule: the launch spec plus the cadence.",
+        "required": [
+          "tool",
+          "scope_kind",
+          "scope_label",
+          "window_secs",
+          "frequency",
+          "at_hour",
+          "at_minute"
+        ],
+        "properties": {
+          "at_hour": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "at_minute": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "baseline_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "day_of_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 … 28. Read only for `monthly`."
+          },
+          "day_of_week": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0=Sun … 6=Sat. Read only for `weekly`."
+          },
+          "depth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Defaults to enabled."
+          },
+          "family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frequency": {
+            "type": "string",
+            "description": "`daily` | `weekly` | `monthly`."
+          },
+          "notify": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether a completed run may notify. Defaults to `false` — a schedule fires unattended, so\nsilence is the safer default; the manual launch path defaults it on because someone is\nwaiting for that run."
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "scope_kind": {
+            "type": "string",
+            "description": "`all` | `group` | `node`."
+          },
+          "scope_label": {
+            "type": "string"
+          },
+          "sensitivity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "tool": {
+            "type": "string",
+            "description": "Which diagnostic to run (an `AnalysisTool` token, e.g. `anomaly`)."
+          },
+          "window_secs": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AnalysisScheduleStatus": {
+        "type": "string",
+        "description": "Outcome of a schedule's most recent firing attempt.",
+        "enum": [
+          "queued",
+          "busy",
+          "error",
+          "unknown"
+        ]
+      },
       "ApiErrorBody": {
         "type": "object",
         "description": "The ADR-019 envelope every failure renders as. `pub(crate)` and schema-bearing so the OpenAPI\ndocument can name one error shape for every endpoint (ADR-035) instead of leaving 4xx/5xx bodies\nundescribed — a client that has to guess the failure shape ends up parsing the success shape and\nreading `undefined`.",
@@ -15642,6 +16122,16 @@
             "format": "double"
           }
         }
+      },
+      "Cadence": {
+        "type": "string",
+        "description": "How often a schedule fires.",
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly",
+          "unknown"
+        ]
       },
       "CalendarBucket": {
         "type": "object",
@@ -16037,6 +16527,7 @@
           "auth_available",
           "sso_enabled",
           "rca_enabled",
+          "flow_enabled",
           "default_poll_interval_secs"
         ],
         "properties": {
@@ -16048,6 +16539,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "flow_enabled": {
+            "type": "boolean",
+            "description": "Whether this deployment has a traffic-flow store configured (ADR-031). When `false`, the\nflow analyses cannot be scheduled — `POST /api/v1/analysis/schedules` refuses them."
           },
           "public_dashboard": {
             "type": "boolean",
@@ -21574,16 +22069,6 @@
           "spec": {}
         }
       },
-      "ReportFrequency": {
-        "type": "string",
-        "description": "How often a schedule fires.",
-        "enum": [
-          "daily",
-          "weekly",
-          "monthly",
-          "unknown"
-        ]
-      },
       "ReportRun": {
         "type": "object",
         "description": "A run row for the saved-reports list (without the heavy `result_*` payloads).",
@@ -21758,7 +22243,7 @@
             "type": "boolean"
           },
           "frequency": {
-            "$ref": "#/components/schemas/ReportFrequency"
+            "$ref": "#/components/schemas/Cadence"
           },
           "id": {
             "type": "string",

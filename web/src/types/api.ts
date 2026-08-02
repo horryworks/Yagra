@@ -56,7 +56,8 @@ const schemaEnumPins: {
   NodeKind: AssertEqual<NodeKind, components['schemas']['NodeKind']>;
   ReportRunState: AssertEqual<ReportRunState, components['schemas']['ReportRunState']>;
   ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
-  ReportFrequency: AssertEqual<ReportFrequency, components['schemas']['ReportFrequency']>;
+  Cadence: AssertEqual<Cadence, components['schemas']['Cadence']>;
+  AnalysisScheduleStatus: AssertEqual<AnalysisScheduleStatus, components['schemas']['AnalysisScheduleStatus']>;
   EventKind: AssertEqual<EventKind, components['schemas']['EventKind']>;
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
@@ -72,7 +73,8 @@ const schemaEnumPins: {
   NodeKind: true,
   ReportRunState: true,
   ReportTrigger: true,
-  ReportFrequency: true,
+  Cadence: true,
+  AnalysisScheduleStatus: true,
   EventKind: true,
   EventAction: true,
   EventMatchKind: true,
@@ -681,6 +683,18 @@ export type SavedFindingsQuery = NonNullable<
   paths['/api/v1/analysis/findings']['get']['parameters']['query']
 >;
 
+/** A recurring analysis (`GET /api/v1/analysis/schedules`). Timestamps are epoch-millis. */
+export type AnalysisSchedule = components['schemas']['AnalysisSchedule'];
+
+/** Create/update body for a recurring analysis — the launch spec plus the cadence. */
+export type AnalysisScheduleInput = components['schemas']['AnalysisScheduleBody'];
+
+/** Outcome of a schedule's last firing attempt. `busy` is the one with no report-schedule
+ *  equivalent: the analysis runner has admission control, so a fire can be refused, and a refused
+ *  schedule stays due rather than skipping its period. */
+export const ANALYSIS_SCHEDULE_STATUSES = ['queued', 'busy', 'error', 'unknown'] as const;
+export type AnalysisScheduleStatus = (typeof ANALYSIS_SCHEDULE_STATUSES)[number];
+
 // ── Reports (Dashboard → Reports) ──
 // Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
 // preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
@@ -891,8 +905,8 @@ export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
 /** Schedule cadence presets. `unknown` is a *storage* degradation the backend emits when a row was
  *  written by a newer core — never something an operator may pick, which is why the schedule form
  *  offers a deliberate subset (see `reports/runStatus.ts`). */
-export const REPORT_FREQUENCIES = ['daily', 'weekly', 'monthly', 'unknown'] as const;
-export type ReportFrequency = (typeof REPORT_FREQUENCIES)[number];
+export const CADENCES = ['daily', 'weekly', 'monthly', 'unknown'] as const;
+export type Cadence = (typeof CADENCES)[number];
 
 /** Lifecycle of a generated report run. */
 export const REPORT_RUN_STATES = [

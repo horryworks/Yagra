@@ -50,6 +50,10 @@ use uuid::Uuid;
     get_analysis_job,
     analysis_findings,
     saved_findings,
+    list_analysis_schedules,
+    create_analysis_schedule,
+    update_analysis_schedule,
+    delete_analysis_schedule,
     cancel_analysis_job,
     stream_analysis
 ))]
@@ -59,6 +63,14 @@ pub(super) struct Doc;
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/analysis/findings", get(saved_findings))
+        .route(
+            "/api/v1/analysis/schedules",
+            get(list_analysis_schedules).post(create_analysis_schedule),
+        )
+        .route(
+            "/api/v1/analysis/schedules/:id",
+            axum::routing::put(update_analysis_schedule).delete(delete_analysis_schedule),
+        )
         .route(
             "/api/v1/analysis/jobs",
             get(list_analysis_jobs).post(create_analysis_job),
@@ -589,33 +601,7 @@ async fn create_analysis_job(
     actor: super::extract::Actor,
     Json(body): Json<CreateAnalysisJob>,
 ) -> ApiResult<Json<AnalysisJob>> {
-    // A run's scope is resolved server-side and its findings are read back later, so an
-    // over-broad launch would hand a scoped operator fleet-wide data through the results. A
-    // scoped caller must therefore name a target inside their scope, and cannot ask for `all`.
-    if !scope.is_all() {
-        match body.scope_kind.as_str() {
-            "node" => {
-                let node = body.scope_id.ok_or_else(|| {
-                    ApiError::bad_request("missing_scope_id", "scope_id is required for node scope")
-                })?;
-                super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(node))?;
-            }
-            "group" => {
-                let gid = body.scope_id.ok_or_else(|| {
-                    ApiError::bad_request(
-                        "missing_scope_id",
-                        "scope_id is required for group scope",
-                    )
-                })?;
-                super::scope::require_visible_group(&scope, gid)?;
-            }
-            _ => return Err(ApiError::forbidden_code(
-                "scope_unsupported",
-                "a group-scoped account must run an analysis against a node or a folder group, \
-                     not the whole fleet",
-            )),
-        }
-    }
+    require_launchable_scope(&st, &scope, &body.scope_kind, body.scope_id)?;
     let user = actor.0;
     let req = AnalysisRequest {
         tool: body.tool,
@@ -632,6 +618,376 @@ async fn create_analysis_job(
         notify: body.notify.unwrap_or(true),
     };
     Ok(Json(launch(&admin, req, user).await?))
+}
+
+// ── Schedules ────────────────────────────────────────────────────────────────
+
+/// Create/update body for an analysis schedule: the launch spec plus the cadence.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct AnalysisScheduleBody {
+    /// Which diagnostic to run (an `AnalysisTool` token, e.g. `anomaly`).
+    tool: String,
+    /// `all` | `group` | `node`.
+    scope_kind: String,
+    scope_id: Option<Uuid>,
+    scope_label: String,
+    window_secs: i64,
+    baseline_secs: Option<i64>,
+    sensitivity: Option<f64>,
+    depth: Option<String>,
+    family: Option<String>,
+    /// Whether a completed run may notify. Defaults to `false` — a schedule fires unattended, so
+    /// silence is the safer default; the manual launch path defaults it on because someone is
+    /// waiting for that run.
+    notify: Option<bool>,
+    /// `daily` | `weekly` | `monthly`.
+    frequency: String,
+    /// 0=Sun … 6=Sat. Read only for `weekly`.
+    day_of_week: Option<i16>,
+    /// 1 … 28. Read only for `monthly`.
+    day_of_month: Option<i16>,
+    at_hour: i16,
+    at_minute: i16,
+    /// Defaults to enabled.
+    enabled: Option<bool>,
+}
+
+/// Validate a schedule body into a [`crate::analysis::ScheduleInput`] and its first `next_run_at`.
+///
+/// The launch half goes through the same [`job_params`] the immediate launch uses, so a schedule
+/// cannot be saved with a window a direct run would refuse — and so the clamps are applied on the
+/// way in *and* re-applied at fire time (see [`scheduled_params`]).
+fn parse_schedule_body(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+    body: AnalysisScheduleBody,
+) -> Result<
+    (
+        crate::analysis::ScheduleInput,
+        chrono::DateTime<chrono::Utc>,
+    ),
+    ApiError,
+> {
+    require_launchable_scope(st, scope, &body.scope_kind, body.scope_id)?;
+    let cadence = super::util::parse_cadence(super::util::CadenceBody {
+        frequency: body.frequency,
+        day_of_week: body.day_of_week,
+        day_of_month: body.day_of_month,
+        at_hour: body.at_hour,
+        at_minute: body.at_minute,
+    })?;
+    let params = job_params(AnalysisRequest {
+        tool: body.tool,
+        scope_kind: body.scope_kind,
+        scope_id: body.scope_id,
+        scope_label: body.scope_label,
+        window_secs: body.window_secs,
+        baseline_secs: body.baseline_secs,
+        sensitivity: body.sensitivity,
+        depth: body.depth,
+        family: body.family,
+        notify: body.notify.unwrap_or(false),
+    })?;
+    // Refused rather than accepted-and-useless: a flow analysis with no flow store short-circuits
+    // to a single "flow tier not enabled" info finding. Once a day, forever, that is an unbroken
+    // column of successful empty runs — a schedule that looks like it is working.
+    if params.tool.needs_flow_tier() && !admin.analysis.flow_enabled() {
+        return Err(ApiError::bad_request(
+            "flow_tier_off",
+            "this analysis reads the traffic-flow store, which this deployment does not have \
+             configured — scheduling it would produce an empty run on every fire",
+        ));
+    }
+    let next = crate::cadence::compute_next_run(cadence, chrono::Utc::now());
+    Ok((
+        crate::analysis::ScheduleInput {
+            params,
+            cadence,
+            enabled: body.enabled.unwrap_or(true),
+        },
+        next,
+    ))
+}
+
+/// Rebuild a launch request from a stored schedule and re-validate it through [`job_params`].
+///
+/// Re-validated, not trusted: the clamps are *edge* validation, so a schedule saved before a bound
+/// moved must not keep firing outside the new one. It also means a row hand-edited in the database
+/// cannot drive the runner past its limits.
+pub(crate) fn scheduled_params(
+    s: &crate::analysis::AnalysisSchedule,
+) -> Result<crate::analysis::JobParams, ApiError> {
+    let p = &s.params;
+    let num = |k: &str| p.get(k).and_then(serde_json::Value::as_i64);
+    let text = |k: &str| {
+        p.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    job_params(AnalysisRequest {
+        tool: s.tool.clone(),
+        scope_kind: s.scope_kind.clone(),
+        scope_id: s.scope_id,
+        scope_label: s.scope_label.clone(),
+        // A stored row with no window is a row this build cannot honour as written; the default is
+        // the same one the launch drawer offers, not a silently unbounded scan.
+        window_secs: num("window_secs").unwrap_or(7 * 86_400),
+        baseline_secs: num("baseline_secs"),
+        sensitivity: p.get("sensitivity").and_then(serde_json::Value::as_f64),
+        depth: text("depth"),
+        family: text("family"),
+        notify: p
+            .get("notify")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// The schedule's own target, as a [`ScopeTarget`] — exhaustive over [`ScopeKind`], and the same
+/// reading `job_target` gives a run row.
+fn schedule_target(s: &crate::analysis::AnalysisSchedule) -> ScopeTarget {
+    job_target(ScopeKind::from_str(&s.scope_kind), s.scope_id)
+}
+
+/// Every analysis schedule, soonest first. Empty in skeleton mode.
+#[utoipa::path(
+    get, path = "/api/v1/analysis/schedules", tag = "analysis",
+    responses(
+        (status = 200, description = "Every schedule the caller may see; empty when this deployment has no runner", body = Vec<crate::analysis::AnalysisSchedule>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_analysis_schedules(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+) -> ApiResult<Json<Vec<crate::analysis::AnalysisSchedule>>> {
+    let Some(admin) = st.admin.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    let list = admin.analysis.repo().list_schedules().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list analysis schedules",
+            "failed to list analysis schedules",
+        )
+    })?;
+    // Post-filtered on each schedule's own target, exactly as the runs list is: a schedule names a
+    // node or a folder group, and a fleet-wide one is unbounded.
+    Ok(Json(
+        list.into_iter()
+            .filter(|s| scope.allows_target(&st, schedule_target(s)))
+            .collect(),
+    ))
+}
+
+/// Create an analysis schedule (operator+).
+#[utoipa::path(
+    post, path = "/api/v1/analysis/schedules", tag = "analysis",
+    request_body = AnalysisScheduleBody,
+    responses(
+        (status = 201, description = "Schedule created", body = super::util::CreatedId),
+        (status = 400, description = "Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator, or a fleet-wide schedule from a group-scoped account", body = super::error::ErrorBody),
+        (status = 404, description = "The named node or group is outside the caller's scope", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
+async fn create_analysis_schedule(
+    _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    State(st): State<ApiState>,
+    actor: super::extract::Actor,
+    Json(body): Json<AnalysisScheduleBody>,
+) -> ApiResult<(axum::http::StatusCode, Json<super::util::CreatedId>)> {
+    let (input, next) = parse_schedule_body(&st, &scope, &admin, body)?;
+    let id = admin
+        .analysis
+        .repo()
+        .create_schedule(&input, next, actor.0.as_deref())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "create analysis schedule",
+                "failed to create analysis schedule",
+            )
+        })?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(super::util::CreatedId { id }),
+    ))
+}
+
+/// Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the
+/// next matching instant rather than whenever the old one happened to be.
+#[utoipa::path(
+    put, path = "/api/v1/analysis/schedules/{id}", tag = "analysis",
+    params(("id" = Uuid, Path, description = "Analysis schedule id")),
+    request_body = AnalysisScheduleBody,
+    responses(
+        (status = 204, description = "Schedule updated"),
+        (status = 400, description = "Unknown tool or cadence, a group/node scope with no `scope_id`, or a flow analysis on a deployment with no flow store", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator, or a fleet-wide schedule from a group-scoped account", body = super::error::ErrorBody),
+        (status = 404, description = "No such schedule, or it is outside the caller's scope", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
+async fn update_analysis_schedule(
+    _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    State(st): State<ApiState>,
+    Path(id): Path<Uuid>,
+    actor: super::extract::Actor,
+    Json(body): Json<AnalysisScheduleBody>,
+) -> ApiResult<axum::http::StatusCode> {
+    // Both ends are checked: the schedule as it stands must be visible, and so must the target the
+    // edit moves it to. Checking only the new one would let a scoped caller retarget somebody
+    // else's schedule onto their own group and thereby take it over.
+    require_visible_schedule(&st, &scope, &admin, id).await?;
+    let (input, next) = parse_schedule_body(&st, &scope, &admin, body)?;
+    let found = admin
+        .analysis
+        .repo()
+        .update_schedule(id, &input, next, actor.0.as_deref())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "update analysis schedule",
+                "failed to update analysis schedule",
+            )
+        })?;
+    if found {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "schedule_not_found",
+            format!("no analysis schedule {id}"),
+        ))
+    }
+}
+
+/// Delete a schedule (operator+).
+#[utoipa::path(
+    delete, path = "/api/v1/analysis/schedules/{id}", tag = "analysis",
+    params(("id" = Uuid, Path, description = "Analysis schedule id")),
+    responses(
+        (status = 204, description = "Schedule deleted"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Operator", body = super::error::ErrorBody),
+        (status = 404, description = "No such schedule, or it is outside the caller's scope", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
+    ),
+)]
+async fn delete_analysis_schedule(
+    _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    State(st): State<ApiState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<axum::http::StatusCode> {
+    require_visible_schedule(&st, &scope, &admin, id).await?;
+    let found = admin
+        .analysis
+        .repo()
+        .delete_schedule(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "delete analysis schedule",
+                "failed to delete analysis schedule",
+            )
+        })?;
+    if found {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "schedule_not_found",
+            format!("no analysis schedule {id}"),
+        ))
+    }
+}
+
+/// Refuse a schedule the caller cannot see — with the same 404 an unknown id gets, so the id space
+/// is not an enumeration oracle. Unrestricted callers skip the lookup entirely.
+async fn require_visible_schedule(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    let existing = admin
+        .analysis
+        .repo()
+        .get_schedule(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "get analysis schedule",
+                "failed to load analysis schedule",
+            )
+        })?
+        .ok_or_else(|| {
+            ApiError::not_found("schedule_not_found", format!("no analysis schedule {id}"))
+        })?;
+    if scope.allows_target(st, schedule_target(&existing)) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(
+            "schedule_not_found",
+            format!("no analysis schedule {id}"),
+        ))
+    }
+}
+
+/// Refuse a launch target the caller may not run an analysis over.
+///
+/// A run's scope is resolved server-side and its findings are read back later, so an over-broad
+/// launch would hand a scoped operator fleet-wide data through the results. A scoped caller must
+/// name a target inside their scope and cannot ask for `all`.
+///
+/// Shared by the immediate launch and the schedule writers, because a schedule is a launch with a
+/// delay — checking one and not the other would make the schedule the way around the check.
+fn require_launchable_scope(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    scope_kind: &str,
+    scope_id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    match scope_kind {
+        "node" => {
+            let node = scope_id.ok_or_else(|| {
+                ApiError::bad_request("missing_scope_id", "scope_id is required for node scope")
+            })?;
+            super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(node))
+        }
+        "group" => {
+            let gid = scope_id.ok_or_else(|| {
+                ApiError::bad_request("missing_scope_id", "scope_id is required for group scope")
+            })?;
+            super::scope::require_visible_group(scope, gid)
+        }
+        _ => Err(ApiError::forbidden_code(
+            "scope_unsupported",
+            "a group-scoped account must run an analysis against a node or a folder group, \
+             not the whole fleet",
+        )),
+    }
 }
 
 /// What cancelling a run reports.
@@ -1041,6 +1397,145 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{q}");
         }
+    }
+
+    // ── Scheduled analyses ───────────────────────────────────────────────────
+
+    fn schedule_row(params: serde_json::Value) -> crate::analysis::AnalysisSchedule {
+        crate::analysis::AnalysisSchedule {
+            id: Uuid::new_v4(),
+            tool: "anomaly".to_owned(),
+            scope_kind: "all".to_owned(),
+            scope_id: None,
+            scope_label: "All nodes".to_owned(),
+            params,
+            frequency: crate::cadence::Cadence::Daily,
+            day_of_week: None,
+            day_of_month: None,
+            at_hour: 3,
+            at_minute: 0,
+            enabled: true,
+            next_run_ms: 0,
+            last_run_ms: None,
+            last_status: None,
+        }
+    }
+
+    #[test]
+    fn a_stored_schedule_is_re_clamped_at_fire_time_not_trusted() {
+        // The reason the fire path re-runs `job_params` instead of reading the blob straight: the
+        // clamps are edge validation. A row saved before a bound moved — or edited in the database
+        // — must not drive the runner past today's limits.
+        let p = scheduled_params(&schedule_row(serde_json::json!({
+            "window_secs": i64::MAX,
+            "baseline_secs": -1,
+            "sensitivity": 1e9,
+            "depth": "exhaustive",
+            "family": "all",
+            "notify": true,
+        })))
+        .expect("a stored schedule with absurd knobs still fires, bounded");
+        assert_eq!(p.window_secs, WINDOW_BOUNDS.1);
+        assert_eq!(p.baseline_secs, BASELINE_BOUNDS.0);
+        assert!((p.sensitivity - SENSITIVITY_BOUNDS.1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_schedule_with_no_stored_window_gets_a_default_rather_than_an_unbounded_scan() {
+        let p = scheduled_params(&schedule_row(serde_json::json!({}))).expect("defaults apply");
+        assert_eq!(p.window_secs, 7 * 86_400);
+        assert_eq!(p.baseline_secs, DEFAULT_BASELINE_SECS);
+        // Notify defaults **off** for an unattended fire, unlike the manual launch path.
+        assert!(!p.notify);
+    }
+
+    #[test]
+    fn a_schedule_naming_a_tool_this_build_lacks_is_reported_not_run() {
+        let mut row = schedule_row(serde_json::json!({}));
+        row.tool = "teleport".to_owned();
+        assert_eq!(
+            scheduled_params(&row)
+                .expect_err("unknown tool must reject")
+                .code(),
+            "invalid_tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduling_is_gated_before_the_runner_is_consulted() {
+        // A schedule is a write: an anonymous caller learns only that it is unauthenticated, never
+        // whether this deployment has a runner.
+        let resp = router(public_state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/analysis/schedules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"tool":"anomaly","scope_kind":"all","scope_label":"All nodes","window_secs":3600,"frequency":"daily","at_hour":3,"at_minute":0}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_viewer_may_read_schedules_but_not_write_one() {
+        let st = private_state();
+        let token = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer2",
+        );
+        let app = router(st);
+        let list = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/analysis/schedules")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.status(), StatusCode::OK);
+
+        let create = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/analysis/schedules")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"tool":"anomaly","scope_kind":"all","scope_label":"All nodes","window_secs":3600,"frequency":"daily","at_hour":3,"at_minute":0}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn the_schedules_list_is_empty_not_broken_without_a_runner() {
+        let resp = router(public_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/analysis/schedules")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"[]");
     }
 
     #[tokio::test]

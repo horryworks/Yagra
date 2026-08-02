@@ -177,6 +177,36 @@ impl AnalysisTool {
     pub fn from_str(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.as_str() == s)
     }
+
+    /// Whether this analysis reads the flow store (ClickHouse, ADR-031).
+    ///
+    /// Exhaustive rather than a `matches!` over the flow group, because a wildcard is what lets a
+    /// new tool ship on the wrong side of this question (`extensibility.md` §1). The answer must
+    /// agree with which `run_*` short-circuits to `flow_tier_off()` — a test pins that by reading
+    /// this file.
+    #[must_use]
+    pub const fn needs_flow_tier(self) -> bool {
+        match self {
+            AnalysisTool::TrafficAnomaly
+            | AnalysisTool::TalkerShift
+            | AnalysisTool::NewDestination
+            | AnalysisTool::FlowScan
+            | AnalysisTool::Saturation => true,
+            AnalysisTool::Anomaly
+            | AnalysisTool::Correlation
+            | AnalysisTool::Capacity
+            | AnalysisTool::Flap
+            | AnalysisTool::EventStorm
+            | AnalysisTool::EventFlap
+            | AnalysisTool::SeverityShift
+            | AnalysisTool::RuleGap
+            | AnalysisTool::AuthProbe
+            // Cross-store: reads flow when it is there and simply omits that signal when it is
+            // not, so it stays useful with the tier off — unlike the five above, which have
+            // nothing left to say.
+            | AnalysisTool::IncidentCorrelate => false,
+        }
+    }
 }
 
 // Lifecycle states are stored as text in `analysis_jobs.state`:
@@ -342,6 +372,68 @@ pub struct SavedFinding {
     pub at: String,
 }
 
+// ⚠️ `ToSchema` — every `///` below is published verbatim to API clients (ADR-035). Rationale goes
+// in `//` comments like this one.
+//
+// `Busy` is the variant `ReportScheduleStatus` has no equivalent for, and it is the whole reason
+// this is its own enum rather than a reuse of that one. The analysis runner has admission control
+// (`YAGRA_ANALYSIS_MAX_CONCURRENT`, `YAGRA_ANALYSIS_RATE_PER_MIN`), so a fire can be *refused*
+// rather than failing — and a refusal that advanced `next_run_at` would silently skip a whole
+// period, leaving a schedule that looks healthy and simply produced no run that day.
+/// Outcome of a schedule's most recent firing attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisScheduleStatus {
+    /// A run was launched.
+    Queued,
+    /// Admission control was full; the schedule stays due and the next tick retries.
+    Busy,
+    /// Launching failed for a reason retrying will not fix.
+    Error,
+    /// A status this build does not know — a newer core wrote it.
+    Unknown,
+}
+
+crate::stored_enum::token_enum!(AnalysisScheduleStatus, Unknown, "analysis_schedules.last_status", [
+    Queued => "queued",
+    Busy => "busy",
+    Error => "error",
+    Unknown => "unknown",
+]);
+
+/// A schedule row, as served to the API.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct AnalysisSchedule {
+    pub id: Uuid,
+    /// Which diagnostic runs, as an `AnalysisTool` token.
+    pub tool: String,
+    /// `all` | `group` | `node`.
+    pub scope_kind: String,
+    pub scope_id: Option<Uuid>,
+    pub scope_label: String,
+    /// The launch knobs, the same shape as `AnalysisJob.params`.
+    pub params: serde_json::Value,
+    pub frequency: crate::cadence::Cadence,
+    pub day_of_week: Option<i16>,
+    pub day_of_month: Option<i16>,
+    pub at_hour: i16,
+    pub at_minute: i16,
+    pub enabled: bool,
+    pub next_run_ms: i64,
+    pub last_run_ms: Option<i64>,
+    pub last_status: Option<AnalysisScheduleStatus>,
+}
+
+/// Validated fields for creating/updating an analysis schedule (parsed at the API edge).
+#[derive(Debug, Clone)]
+pub struct ScheduleInput {
+    /// The launch spec, already validated and clamped by the same `job_params` the manual launch
+    /// path uses — so a schedule cannot be saved with a window a direct launch would refuse.
+    pub params: JobParams,
+    pub cadence: crate::cadence::Schedule,
+    pub enabled: bool,
+}
+
 /// One page of the cross-run findings search.
 ///
 /// The cursor is `(before, before_id)` and not `before` alone. A run writes its findings in a tight
@@ -466,6 +558,35 @@ fn finding_search_sql() -> String {
          WHERE {FINDING_SEARCH_WHERE} \
          ORDER BY f.created_at DESC, f.id DESC LIMIT $9"
     )
+}
+
+/// Columns selected for a schedule row (timestamps projected to epoch-millis, as the job rows are).
+const SCHED_COLS: &str = "id, tool, scope_kind, scope_id, scope_label, params, frequency, \
+     day_of_week, day_of_month, at_hour, at_minute, enabled, last_status, \
+     (EXTRACT(EPOCH FROM next_run_at) * 1000)::bigint AS next_run_ms, \
+     (EXTRACT(EPOCH FROM last_run_at) * 1000)::bigint AS last_run_ms";
+
+fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisSchedule> {
+    Ok(AnalysisSchedule {
+        id: row.try_get("id")?,
+        tool: row.try_get("tool")?,
+        scope_kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+        scope_label: row.try_get("scope_label")?,
+        params: row.try_get("params")?,
+        frequency: crate::cadence::Cadence::from_stored(row.try_get("frequency")?),
+        day_of_week: row.try_get("day_of_week")?,
+        day_of_month: row.try_get("day_of_month")?,
+        at_hour: row.try_get("at_hour")?,
+        at_minute: row.try_get("at_minute")?,
+        enabled: row.try_get("enabled")?,
+        next_run_ms: row.try_get("next_run_ms")?,
+        last_run_ms: row.try_get("last_run_ms")?,
+        last_status: row
+            .try_get::<Option<String>, _>("last_status")?
+            .as_deref()
+            .map(AnalysisScheduleStatus::from_stored),
+    })
 }
 
 fn job_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisJob> {
@@ -693,6 +814,146 @@ impl AnalysisRepo {
             .collect()
     }
 
+    // — Schedules —
+
+    /// Every schedule, soonest first.
+    pub async fn list_schedules(&self) -> anyhow::Result<Vec<AnalysisSchedule>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules ORDER BY next_run_at"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(sched_from_row).collect()
+    }
+
+    pub async fn create_schedule(
+        &self,
+        input: &ScheduleInput,
+        next_run_at: DateTime<Utc>,
+        updated_by: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO analysis_schedules \
+             (id, tool, scope_kind, scope_id, scope_label, params, frequency, day_of_week, \
+              day_of_month, at_hour, at_minute, enabled, next_run_at, updated_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        )
+        .bind(id)
+        .bind(input.params.tool.as_str())
+        .bind(input.params.scope_kind.as_str())
+        .bind(input.params.scope_id)
+        .bind(&input.params.scope_label)
+        .bind(input.params.to_json())
+        .bind(input.cadence.frequency.as_str())
+        .bind(input.cadence.day_of_week)
+        .bind(input.cadence.day_of_month)
+        .bind(input.cadence.at_hour)
+        .bind(input.cadence.at_minute)
+        .bind(input.enabled)
+        .bind(next_run_at)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn update_schedule(
+        &self,
+        id: Uuid,
+        input: &ScheduleInput,
+        next_run_at: DateTime<Utc>,
+        updated_by: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE analysis_schedules SET tool = $2, scope_kind = $3, scope_id = $4, \
+             scope_label = $5, params = $6, frequency = $7, day_of_week = $8, day_of_month = $9, \
+             at_hour = $10, at_minute = $11, enabled = $12, next_run_at = $13, updated_by = $14, \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(input.params.tool.as_str())
+        .bind(input.params.scope_kind.as_str())
+        .bind(input.params.scope_id)
+        .bind(&input.params.scope_label)
+        .bind(input.params.to_json())
+        .bind(input.cadence.frequency.as_str())
+        .bind(input.cadence.day_of_week)
+        .bind(input.cadence.day_of_month)
+        .bind(input.cadence.at_hour)
+        .bind(input.cadence.at_minute)
+        .bind(input.enabled)
+        .bind(next_run_at)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// One schedule by id — the read the API edge does before letting a scoped caller edit it.
+    pub async fn get_schedule(&self, id: Uuid) -> anyhow::Result<Option<AnalysisSchedule>> {
+        let row = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(sched_from_row).transpose()
+    }
+
+    pub async fn delete_schedule(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query("DELETE FROM analysis_schedules WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Enabled schedules whose `next_run_at` has passed (the scheduler's due-query).
+    pub async fn due_schedules(&self) -> anyhow::Result<Vec<AnalysisSchedule>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules \
+             WHERE enabled = true AND next_run_at <= now() ORDER BY next_run_at"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(sched_from_row).collect()
+    }
+
+    /// Record a fire that produced a run: stamp `last_run_at`/`last_status` and advance to `next`.
+    pub async fn mark_fired(
+        &self,
+        id: Uuid,
+        status: AnalysisScheduleStatus,
+        next: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE analysis_schedules SET last_run_at = now(), last_status = $2, next_run_at = $3 \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(status.as_str())
+        .bind(next)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record an attempt admission control refused: **leave `next_run_at` where it is** so the
+    /// schedule stays due and the next tick retries.
+    ///
+    /// `last_run_at` is deliberately not stamped either — nothing ran, and a schedule reporting a
+    /// last run that produced no row is the confusing half of this failure mode. The status alone
+    /// says what happened.
+    pub async fn mark_deferred(&self, id: Uuid) -> anyhow::Result<()> {
+        sqlx::query("UPDATE analysis_schedules SET last_status = $2 WHERE id = $1")
+            .bind(id)
+            .bind(AnalysisScheduleStatus::Busy.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// On startup, fail any job left `running` by a previous core process (it can't resume).
     pub async fn fail_orphans(&self) -> anyhow::Result<u64> {
         let res = sqlx::query(
@@ -815,6 +1076,23 @@ impl AnalysisRunner {
         q: &FindingSearch<'_>,
     ) -> anyhow::Result<Vec<SavedFinding>> {
         self.repo.search_findings(q).await
+    }
+
+    /// The job/finding/schedule store, for the API's schedule CRUD and the leader's scheduler loop.
+    #[must_use]
+    pub fn repo(&self) -> Arc<AnalysisRepo> {
+        self.repo.clone()
+    }
+
+    /// Whether this deployment has a flow store (ClickHouse, ADR-031).
+    ///
+    /// The API edge asks before accepting a *scheduled* flow analysis. A manual run of one with the
+    /// tier off short-circuits to a single "flow tier not enabled" info finding, which is the right
+    /// answer to a one-off question; scheduled daily it would stack up an empty successful run
+    /// every day forever, which reads as a working schedule producing nothing.
+    #[must_use]
+    pub fn flow_enabled(&self) -> bool {
+        self.flows.is_some()
     }
 
     /// Request cancellation of a running job; the task observes the flag between phases.
@@ -3005,6 +3283,66 @@ mod tests {
                 "severity_for({score}) = {written:?}, which is not in FINDING_SEVERITIES"
             );
         }
+    }
+
+    #[test]
+    fn needs_flow_tier_matches_which_analyses_actually_short_circuit() {
+        // The two must agree or a scheduled analysis is refused for a tier it does not need, or —
+        // worse — accepted and left to stack up an empty successful run every day. Read from the
+        // source rather than restated, so adding a `flow_tier_off()` arm without updating
+        // `needs_flow_tier` fails here.
+        //
+        // The needle is built at runtime: a literal `flow_tier_off()` written in this test would
+        // match itself in the file and pass forever.
+        let src = include_str!("analysis.rs");
+        let needle = format!("{}{}", "flow_tier", "_off()");
+        let mut short_circuits = std::collections::BTreeSet::new();
+        let mut current_fn: Option<String> = None;
+        for line in src.lines() {
+            if let Some(rest) = line.trim().strip_prefix("async fn run_") {
+                current_fn = rest.split('(').next().map(str::to_owned);
+            }
+            if line.contains(&needle) && line.contains("return") {
+                if let Some(f) = &current_fn {
+                    short_circuits.insert(f.clone());
+                }
+            }
+        }
+        assert!(
+            short_circuits.len() >= 5,
+            "the source scan stopped matching: {short_circuits:?}"
+        );
+        for tool in AnalysisTool::ALL.iter().copied() {
+            // `run_<token>` is the naming convention every analysis follows.
+            let name = tool.as_str().to_owned();
+            let short_circuits_here = short_circuits.contains(&name);
+            assert_eq!(
+                tool.needs_flow_tier(),
+                short_circuits_here,
+                "{name}: needs_flow_tier() = {} but the runner {} short-circuit on the flow tier",
+                tool.needs_flow_tier(),
+                if short_circuits_here {
+                    "does"
+                } else {
+                    "does not"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn token_and_serde_agree_for_every_schedule_status() {
+        // The column value and the JSON tag come from two mechanisms — `as_str` and
+        // `#[serde(rename_all)]` — and nothing else makes them agree.
+        for s in AnalysisScheduleStatus::ALL.iter().copied() {
+            let json = serde_json::to_string(&s).expect("status serializes");
+            assert_eq!(json, format!("\"{}\"", s.as_str()));
+            assert_eq!(AnalysisScheduleStatus::from_stored(s.as_str()), s);
+        }
+        assert_eq!(
+            AnalysisScheduleStatus::from_stored("throttled"),
+            AnalysisScheduleStatus::Unknown
+        );
     }
 
     #[test]

@@ -120,18 +120,18 @@ describe('sidebarGroups', () => {
     }
   });
 
-  it('collects the known placeholders (Scheduled)', () => {
+  it('has no placeholders left, and none of the lifted ones came back', () => {
+    // Every IA entry now has a real screen. The grouping mechanism above is still tested — this
+    // asserts the *current* state, so re-adding a placeholder is a deliberate act that shows up
+    // here rather than a quiet regression.
+    //
+    // Lifting one has two halves — `implemented: true` in `nav.ts` and the real element in
+    // `routes.tsx` — and they have to happen together: doing only the second leaves a working page
+    // rendered inside a greyed-out "Coming soon" group, with nothing failing.
     const soonPaths = NAV.flatMap((s) => sidebarGroups(s))
       .filter((g) => g.comingSoon)
       .flatMap((g) => g.items.map((i) => i.path));
-    for (const p of ['/troubleshoot/scheduled']) {
-      expect(soonPaths).toContain(p);
-    }
-    // Lifted placeholders. Both halves of lifting one — `implemented: true` in `nav.ts` and the
-    // real element in `routes.tsx` — have to happen together: doing only the second leaves a
-    // working page rendered inside a greyed-out "Coming soon" group, and no test fails.
-    expect(soonPaths).not.toContain('/settings/auth');
-    expect(soonPaths).not.toContain('/topology/geo');
-    expect(soonPaths).not.toContain('/troubleshoot/findings');
+    expect(soonPaths).toEqual([]);
+    expect(NAV.flatMap(sectionItems).filter((i) => !i.implemented)).toEqual([]);
   });
 });
