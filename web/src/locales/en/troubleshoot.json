@@ -77,7 +77,8 @@
     },
     "notify": {
       "notify": "Notify me",
-      "silent": "Run silently"
+      "silent": "Run silently",
+      "hint": "A notice appears when the run finishes, while Yagra is open in this browser."
     },
     "sens": {
       "veryLoose": "very loose",
@@ -91,7 +92,9 @@
     }
   },
   "toast": {
-    "startFailed": "Could not start the analysis."
+    "startFailed": "Could not start the analysis.",
+    "finished": "Analysis finished.",
+    "failed": "Analysis did not finish."
   },
   "report": {
     "common": {

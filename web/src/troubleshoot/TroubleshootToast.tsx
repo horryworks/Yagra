@@ -25,7 +25,8 @@ export function TroubleshootToast() {
     <div className={toast ? 'ts-toast show' : 'ts-toast'} role="status" aria-live="polite">
       {toast && (
         <>
-          <span>{toast.msg}</span>
+          {/* `msgKey` is set when the message originates in the store, which has no `t`. */}
+          <span>{toast.msgKey ? t(toast.msgKey) : toast.msg}</span>
           {toast.linkTo && (
             <button
               className="ts-linkbtn ts-toast-link"

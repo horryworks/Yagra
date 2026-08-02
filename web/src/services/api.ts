@@ -834,6 +834,13 @@ export const api = {
     body: { parent_id: string | null; before?: string; after?: string },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/placement', { path: { id }, body }),
 
+  /** Set or clear a folder's map pin — the coordinates the dashboard's Geo map widget places.
+   *  Both fields or neither; `null`/`null` clears it. Validated server-side as well. */
+  setNodeGroupGeo: (
+    id: string,
+    body: { latitude: number | null; longitude: number | null },
+  ): Promise<void> => apiPut('/api/v1/node-groups/{id}/geo', { path: { id }, body }),
+
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>
     apiDelete('/api/v1/node-groups/{id}', { path: { id } }),

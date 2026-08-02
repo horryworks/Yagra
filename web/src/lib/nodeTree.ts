@@ -365,3 +365,17 @@ export function isSelfOrDescendant(
   }
   return true;
 }
+
+/** Whether a filter-mode result set hit the server's cap, so matches are missing from the list.
+ *
+ *  Filter mode asks the server for one page of matches. A fleet with more matches than the cap
+ *  gets a silently short list: the group-truncation notice does not cover this path, because that
+ *  one reports per-group member caps while filtering bypasses groups entirely. Without this the
+ *  operator reads "these are the switches" when it is "these are the first N switches". */
+export function filterResultsTruncated(
+  filtering: boolean,
+  resultCount: number,
+  cap: number,
+): boolean {
+  return filtering && resultCount >= cap;
+}

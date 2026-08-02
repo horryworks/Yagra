@@ -255,6 +255,26 @@ impl GroupRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with a `None` pair) this folder's map pin. Returns whether the group exists.
+    ///
+    /// The caller is responsible for the both-or-neither and range rules — half a coordinate pair
+    /// is not a location. Written by `PUT /api/v1/node-groups/{id}/geo`, read back by
+    /// [`Self::list`] and rendered by the dashboard's Geo map widget.
+    pub async fn set_geo(
+        &self,
+        id: Uuid,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET latitude = $2, longitude = $3 WHERE id = $1")
+            .bind(id)
+            .bind(latitude)
+            .bind(longitude)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// The distinct non-empty pools folders assign. Feeds the pool picker together with
     /// [`crate::repo::NodeRepo::distinct_pools`].
     pub async fn distinct_pools(&self) -> anyhow::Result<Vec<String>> {

@@ -1,0 +1,100 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Top-bar global search popover. The input itself keeps `.topbar-search` from TopBar.css so the
+   field stays visually identical to the control that used to sit here disabled. */
+
+.gsearch {
+  position: relative;
+}
+
+.gsearch-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 340px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px var(--overlay);
+  overflow: hidden;
+}
+
+.gsearch-section {
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.gsearch-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.gsearch-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gsearch-option.active {
+  background: var(--bg-tertiary);
+}
+
+.gsearch-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gsearch-opt-addr {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.gsearch-empty,
+.gsearch-foot {
+  padding: 8px 10px;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.gsearch-foot {
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+/* Mobile: the field is opened from the top bar and spans the sheet, so the popover follows the
+   full width rather than hanging off the right edge. Touch targets get the 44px floor. */
+html[data-viewport='mobile'] .gsearch.mobile {
+  flex: 1;
+}
+
+html[data-viewport='mobile'] .gsearch.mobile .topbar-search {
+  width: 100%;
+  height: var(--touch-target);
+  font-size: var(--font-touch-input);
+}
+
+html[data-viewport='mobile'] .gsearch.mobile .gsearch-pop {
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: none;
+}
+
+html[data-viewport='mobile'] .gsearch.mobile .gsearch-option {
+  min-height: var(--touch-target);
+}

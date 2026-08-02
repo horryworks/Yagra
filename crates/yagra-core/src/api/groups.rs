@@ -35,7 +35,8 @@ use uuid::Uuid;
     update_node_group,
     delete_node_group,
     place_group,
-    set_node_group_pool
+    set_node_group_pool,
+    set_node_group_geo
 ))]
 pub(super) struct Doc;
 
@@ -52,6 +53,7 @@ pub(super) fn routes() -> Router<ApiState> {
         )
         .route("/api/v1/node-groups/:id/placement", put(place_group))
         .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
+        .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
 }
 
 #[utoipa::path(
@@ -306,6 +308,72 @@ async fn set_node_group_pool(
     }
 }
 
+/// A folder's map pin. Both fields or neither — see [`set_node_group_geo`].
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupGeo {
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/geo", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = GroupGeo,
+    responses(
+        (status = 204, description = "Map pin set or cleared"),
+        (status = 400, description = "Only one of latitude/longitude given, or a coordinate out of range", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_group_geo(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupGeo>,
+) -> ApiResult<StatusCode> {
+    // Both or neither, and in range. Half a coordinate pair is not a location, and an out-of-range
+    // one puts the pin somewhere the map cannot show.
+    match (body.latitude, body.longitude) {
+        (Some(lat), Some(lon)) => {
+            if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+                return Err(ApiError::bad_request(
+                    "invalid_coordinates",
+                    "latitude must be -90..90 and longitude -180..180",
+                ));
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_coordinates",
+                "provide both latitude and longitude, or neither (to clear)",
+            ))
+        }
+    }
+    let updated = admin
+        .groups
+        .set_geo(id, body.latitude, body.longitude)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set group geo",
+                "failed to set group coordinates",
+            )
+        })?;
+    if updated {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "group_not_found",
+            format!("no group {id}"),
+        ))
+    }
+}
+
 #[utoipa::path(
     delete, path = "/api/v1/node-groups/{id}", tag = "groups",
     params(("id" = Uuid, Path, description = "Group id")),
@@ -355,6 +423,7 @@ mod tests {
             ("DELETE", format!("/api/v1/node-groups/{ID}")),
             ("PUT", format!("/api/v1/node-groups/{ID}/placement")),
             ("PUT", format!("/api/v1/node-groups/{ID}/pool")),
+            ("PUT", format!("/api/v1/node-groups/{ID}/geo")),
         ]
     }
 

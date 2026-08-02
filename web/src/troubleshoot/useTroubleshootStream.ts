@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Seeds the analysis-runs list once, then keeps it live over SSE (ADR-022) — the analysis analog
-// of useAlertStream. Mounted by the catalog and runs pages; the sidebar badge reads the store.
+// of useAlertStream. Mounted once by AppShell — not per page — so a run launched with "notify me"
+// still reports its completion after the operator navigates away. The sidebar badge reads the store.
 
 import { useEffect } from 'react';
 import { api } from '../services/api';

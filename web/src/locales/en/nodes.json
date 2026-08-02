@@ -44,7 +44,7 @@
   "inventory": {
     "groupCount": "{{count}} groups",
     "needAttention": "{{count}} need attention",
-    "truncated": "Showing the first {{count}} nodes. Use search/filter for larger inventories (virtualized tree loading is planned).",
+    "filterTruncated": "Showing the first {{count}} matches — narrow the search to see the rest.",
     "groupTruncated": "Some large groups are showing a partial member list. Use search to find a specific node.",
     "searchPlaceholder": "Search…",
     "loadingInventory": "Loading inventory…",
@@ -88,7 +88,10 @@
     "parentGroup": "Parent group",
     "topLevelOption": "— top level —",
     "pool": "Poller pool (optional)",
-    "poolHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit."
+    "poolHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit.",
+    "latitude": "Latitude (optional)",
+    "longitude": "Longitude (optional)",
+    "geoHint": "Where this group sits on the dashboard Geo map widget. Set both or leave both blank to remove the pin."
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",
@@ -107,6 +110,9 @@
     "reorderGroup": "failed to reorder group",
     "deleteGroup": "failed to delete group",
     "saveGroup": "failed to save group",
+    "geoPair": "enter both latitude and longitude, or leave both blank",
+    "geoNumber": "latitude and longitude must be numbers",
+    "geoRange": "latitude must be between -90 and 90, longitude between -180 and 180",
     "loadInterfaces": "failed to load interfaces",
     "requestPoll": "failed to request poll",
     "deleteNode": "failed to delete node",

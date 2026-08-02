@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Troubleshoot landing — the tool catalog (handoff §1). PageHeader + an intro stat strip (now
 // computed from the real job history) + the Analysis runs panel + the diagnostic-tool grid. Owns
-// the launch drawer and the toast; live job updates arrive via useTroubleshootStream.
+// the launch drawer; live job updates and the completion toast come from AppShell.
 
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -10,17 +10,14 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TOOLS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
-import { useTroubleshootStream } from './useTroubleshootStream';
 import { AnalysisRuns } from './AnalysisRuns';
 import { ToolCard } from './ToolCard';
 import { LaunchDrawer } from './LaunchDrawer';
-import { TroubleshootToast } from './TroubleshootToast';
 import { avgRuntime, runsToday } from './catalogStats';
 import './troubleshoot.css';
 
 export function TroubleshootCatalogPage() {
   const { t } = useTranslation('troubleshoot');
-  useTroubleshootStream();
   const navigate = useNavigate();
   const jobs = useTroubleshootStore((s) => s.jobs);
   const running = runningCount(jobs);
@@ -77,7 +74,6 @@ export function TroubleshootCatalogPage() {
       </div>
 
       <LaunchDrawer />
-      <TroubleshootToast />
     </div>
   );
 }

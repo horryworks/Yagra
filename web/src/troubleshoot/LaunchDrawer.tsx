@@ -26,6 +26,7 @@ export function LaunchDrawer() {
   const closeDrawer = useTroubleshootStore((s) => s.closeDrawer);
   const createJob = useTroubleshootStore((s) => s.createJob);
   const showToast = useTroubleshootStore((s) => s.showToast);
+  const watchJob = useTroubleshootStore((s) => s.watchJob);
 
   const WINDOWS = useMemo(
     () => [
@@ -118,6 +119,8 @@ export function LaunchDrawer() {
     setSubmitting(true);
     try {
       const job = await createJob(input);
+      // Notify me: watch this job so its completion raises an in-app notice from any page.
+      if (notify === 'notify') watchJob(job.id);
       closeDrawer();
       showToast(
         t('launch.toast.started', { name: t(tool.name) }),
@@ -212,6 +215,7 @@ export function LaunchDrawer() {
                   onChange={setNotify}
                   ariaLabel={t('fields.whenDone')}
                 />
+                <span className="ts-fhint">{t('launch.notify.hint')}</span>
               </div>
             </div>
 

@@ -17,11 +17,9 @@ import { Select } from '../../components/ui/Field';
 import { api } from '../../services/api';
 import { ScopePicker } from '../ScopePicker';
 import { allScope, type ScopeValue } from '../scope';
-import { TroubleshootToast } from '../TroubleshootToast';
 import { relTime } from '../format';
 import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
-import { useTroubleshootStream } from '../useTroubleshootStream';
 import { NoticeRow } from './kit';
 import { sigmaFor, splitNotices, toCsv } from './format';
 import { buildJobInput } from './jobInput';
@@ -72,7 +70,6 @@ function Processing({
 
 export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   const { t } = useTranslation('troubleshoot');
-  useTroubleshootStream();
   const [params, setParams] = useSearchParams();
   const jobId = params.get('job');
   const jobs = useTroubleshootStore((s) => s.jobs);
@@ -331,8 +328,6 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
           <descriptor.Body job={job} findings={findings} />
         </>
       )}
-
-      <TroubleshootToast />
     </div>
   );
 }

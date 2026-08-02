@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Mobile top bar (ADR-027 §2.3): hamburger → home (logo + wordmark) → spacer → notification bell →
 // the shared UserMenu. Only mounts in mobile mode (AppShell branch), so it carries no desktop CSS.
-// Global search is omitted (it is disabled everywhere today); it returns with the search backend.
+// Global search opens as a full-width row under the bar rather than living in it: at 44px targets
+// the bar has no room for a field, and a tap-to-open row keeps the burger/home/bell reachable.
 
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAlertStore } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
+import { GlobalSearch } from './GlobalSearch';
 import './MobileTopBar.css';
 
 interface Props {
@@ -19,6 +22,7 @@ export function MobileTopBar({ onOpenMenu }: Props) {
   const { t } = useTranslation('nav');
   const navigate = useNavigate();
   const alertCount = useAlertStore((s) => Object.keys(s.alerts).length);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   return (
     <header className="mtopbar">
@@ -45,6 +49,16 @@ export function MobileTopBar({ onOpenMenu }: Props) {
       <div className="mtopbar-right">
         <button
           className="mtopbar-bell"
+          onClick={() => setSearchOpen((v) => !v)}
+          aria-label={t('shell.globalSearch')}
+          aria-expanded={searchOpen}
+        >
+          <span className="mtopbar-bell-glyph" aria-hidden>
+            ⌕
+          </span>
+        </button>
+        <button
+          className="mtopbar-bell"
           onClick={() => navigate('/alerts')}
           title={t('shell.activeAlerts', { count: alertCount })}
           aria-label={t('shell.alerts')}
@@ -56,6 +70,12 @@ export function MobileTopBar({ onOpenMenu }: Props) {
         </button>
         <UserMenu />
       </div>
+
+      {searchOpen && (
+        <div className="mtopbar-search">
+          <GlobalSearch mobile />
+        </div>
+      )}
     </header>
   );
 }

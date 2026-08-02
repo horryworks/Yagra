@@ -11,6 +11,7 @@ import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
 import { asGroupType, groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
+import { geoBodyFrom, geoChanged, geoDraftFrom } from './geoFields';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select, RequiredMark } from '../ui/Field';
@@ -44,6 +45,8 @@ export function GroupModal({
   );
   /** The folder's own pool ('' ⇒ inherit from an ancestor, else the default pool). */
   const [pool, setPool] = useState(state.group?.pool ?? '');
+  /** The folder's map pin. Saved by its own endpoint after the group body — see `save`. */
+  const [geo, setGeo] = useState(() => geoDraftFrom(state.group));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const poolInvalid = !isValidPoolName(pool);
@@ -57,6 +60,13 @@ export function GroupModal({
   );
 
   const save = () => {
+    // Validate the pin before issuing anything, so a bad coordinate costs no round trip and cannot
+    // leave the group saved with the pin rejected.
+    const pin = geoBodyFrom(geo);
+    if ('error' in pin) {
+      setError(t(`err.${pin.error}`));
+      return;
+    }
     setBusy(true);
     setError(null);
     // `pool` is always sent: '' clears it back to inherited (a JSON-absent field would mean
@@ -67,10 +77,14 @@ export function GroupModal({
       parent_id: parent || null,
       pool: pool.trim(),
     };
-    const call = editing
-      ? api.updateNodeGroup(state.group!.id, body)
-      : api.createNodeGroup(body).then(() => undefined);
-    call
+    const saved: Promise<string> = editing
+      ? api.updateNodeGroup(state.group!.id, body).then(() => state.group!.id)
+      : api.createNodeGroup(body).then((r) => r.id);
+    saved
+      // The pin is a sub-resource with its own endpoint (like placement and pool), so saving one
+      // is a second request. Skip it when the pin is untouched — on a create with no coordinates
+      // entered that is the common case.
+      .then((id) => (geoChanged(geo, state.group) ? api.setNodeGroupGeo(id, pin.body) : undefined))
       .then(onSaved)
       .catch((e: unknown) => {
         setError(errMsg(e, t('err.saveGroup')));
@@ -133,6 +147,29 @@ export function GroupModal({
             {poolInvalid ? t('field.poolInvalid') : t('group.poolHint')}
           </span>
         </label>
+        <div className="form-row">
+          <label className="form-label">
+            {t('group.latitude')}
+            <TextInput
+              className="mono"
+              inputMode="decimal"
+              value={geo.latitude}
+              onChange={(e) => setGeo({ ...geo, latitude: e.target.value })}
+              placeholder="35.681"
+            />
+          </label>
+          <label className="form-label">
+            {t('group.longitude')}
+            <TextInput
+              className="mono"
+              inputMode="decimal"
+              value={geo.longitude}
+              onChange={(e) => setGeo({ ...geo, longitude: e.target.value })}
+              placeholder="139.767"
+            />
+          </label>
+        </div>
+        <span className="form-hint">{t('group.geoHint')}</span>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

@@ -272,7 +272,10 @@ async fn list_nodes(
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodePageQuery>,
 ) -> ApiResult<Json<NodePage>> {
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let limit = q
+        .limit
+        .unwrap_or(100)
+        .clamp(1, crate::repo::NODE_SEARCH_MAX);
     // Search mode: a non-empty `search` filters by name/address server-side and returns a single
     // capped page (no keyset cursor) — the tree's filter searches the fleet without loading it.
     if let Some(term) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {

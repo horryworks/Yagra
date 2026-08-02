@@ -132,6 +132,7 @@ pub(crate) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/node-groups"),
     ("DELETE", "/api/v1/node-groups/:id"),
     ("PUT", "/api/v1/node-groups/:id"),
+    ("PUT", "/api/v1/node-groups/:id/geo"),
     ("PUT", "/api/v1/node-groups/:id/placement"),
     ("PUT", "/api/v1/node-groups/:id/pool"),
     ("POST", "/api/v1/node-names"),

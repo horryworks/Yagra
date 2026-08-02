@@ -6,9 +6,14 @@
 import { create } from 'zustand';
 import { api } from '../services/api';
 import type { AnalysisJob, AnalysisJobInput } from '../types/api';
+import { shouldNotify } from './notifyWatch';
 
 export interface Toast {
+  /** Already-translated text. Empty when [`msgKey`] carries the message instead. */
   msg: string;
+  /** An i18next key under `troubleshoot:`, translated by the toast component. Used when the
+   *  message originates in the store, which has no `t`. */
+  msgKey?: string;
   /** Optional in-app route the "View →" action navigates to. */
   linkTo?: string;
   /** Bumps on every showToast so the auto-dismiss timer restarts for a repeat message. */
@@ -23,6 +28,12 @@ interface TroubleshootStore {
   setJobs: (jobs: AnalysisJob[]) => void;
   /** Upsert one job by id (SSE tick or create response), keeping newest-first order. */
   upsertJob: (job: AnalysisJob) => void;
+
+  /** Jobs the operator asked to be notified about (launch drawer, Notify me). Session-scoped:
+   *  the notice is an in-app toast, so it has no meaning once this tab is gone. */
+  watched: Set<string>;
+  /** Start watching a job for completion. */
+  watchJob: (id: string) => void;
   /** Launch a job; returns the created row (already upserted). */
   createJob: (input: AnalysisJobInput) => Promise<AnalysisJob>;
   /** Cancel a running job (optimistically marks it cancelled; SSE confirms). */
@@ -48,10 +59,23 @@ export const useTroubleshootStore = create<TroubleshootStore>((set, get) => ({
 
   setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewest), loaded: true }),
 
+  watched: new Set<string>(),
+  watchJob: (id) => set((s) => ({ watched: new Set(s.watched).add(id) })),
+
   upsertJob: (job) =>
     set((s) => {
+      const prev = s.jobs.find((j) => j.id === job.id);
       const rest = s.jobs.filter((j) => j.id !== job.id);
-      return { jobs: [job, ...rest].sort(byNewest) };
+      const next: Partial<TroubleshootStore> = { jobs: [job, ...rest].sort(byNewest) };
+      // Completion notice for a watched job. Computed here rather than in the stream hook so it
+      // fires for every route into the store (SSE tick, cancel, create) and exactly once — the
+      // previous row is only available at this point.
+      const plan = shouldNotify(prev, job, s.watched);
+      if (plan) {
+        next.toast = { msg: '', msgKey: plan.msgKey, linkTo: plan.linkTo, key: (s.toast?.key ?? 0) + 1 };
+        next.watched = new Set([...s.watched].filter((id) => id !== job.id));
+      }
+      return next;
     }),
 
   createJob: async (input) => {

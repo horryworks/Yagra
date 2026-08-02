@@ -10,6 +10,29 @@
 
 ## Unreleased
 
+### New Features
+- **The global search box in the top bar works.** It has been present but permanently disabled
+  since the shell was built, with a code comment saying no search endpoint existed —
+  `GET /api/v1/nodes/search` has existed since the node picker was added. It searches nodes,
+  debounced, with arrow-key navigation, `Ctrl`/`Cmd`+K and `/` to focus, and Enter to open the
+  node. The popover states that only nodes are searched: alerts, events and groups have no
+  server-side search, and a nodes-only result set that looks fleet-wide is worse than none.
+  Mobile gets it as a tap-to-open row under the top bar.
+- **Group coordinates can be set again.** `PUT /api/v1/node-groups/{id}/geo` was removed in
+  v0.1.19 as an uncalled endpoint, but the dashboard's Geo map widget still read those
+  coordinates — leaving a widget with no way to be populated. The endpoint is restored and the
+  group dialog now has latitude/longitude fields.
+- **"Notify me" on a Troubleshoot run now notifies.** The choice was offered and stored, and
+  consumed by nothing. A completion notice now appears from any page, with a link to the report.
+  It fires only while Yagra is open in this browser, which the control now says.
+
+### Bug Fixes
+- **Filtering the node inventory returned at most 100 matches, silently.** The API clamped the
+  limit to 500 and documented that as the maximum, while the query re-clamped to 100 — so a filter
+  matching thousands of nodes showed 100, with nothing indicating the list had been cut. The cap is
+  now a single constant (500) used by both the edge and the query, and the tree shows a notice when
+  a filter fills the page.
+
 ## v0.1.19
 
 **Ask why, and see who polls what.** Two additions lead this release. **AI-assisted root-cause

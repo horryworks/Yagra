@@ -4,6 +4,7 @@ import {
   asGroupType,
   buildNodeTree,
   descendantNodes,
+  filterResultsTruncated,
   flattenTree,
   flatRowKey,
   groupOptions,
@@ -357,5 +358,22 @@ describe('subtreeGroupIds', () => {
     // the server let through would otherwise spin here and hang the page rather than fail loudly.
     const cyclic = [group('a', 'A', 'b'), group('b', 'B', 'a')];
     expect(subtreeGroupIds(cyclic, 'a').sort()).toEqual(['a', 'b'].sort());
+  });
+});
+
+describe('filterResultsTruncated', () => {
+  it('is false while browsing, whatever the count', () => {
+    // Browsing pages through groups; the cap belongs to filter mode only.
+    expect(filterResultsTruncated(false, 500, 500)).toBe(false);
+  });
+
+  it('is true only when a filter came back with a full page', () => {
+    expect(filterResultsTruncated(true, 499, 500)).toBe(false);
+    expect(filterResultsTruncated(true, 500, 500)).toBe(true);
+  });
+
+  it('reports truncation when the server returns more than the cap', () => {
+    // Defensive: the client cap and the server cap are two numbers and could drift.
+    expect(filterResultsTruncated(true, 501, 500)).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 /* Mobile top bar (ADR-027). Height = --topbar-h plus the top safe-area inset (notch); a flat row of
    44px touch targets. Only mounts in mobile mode, so no data-viewport scoping is needed. */
 .mtopbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -91,4 +92,18 @@
   color: var(--on-status);
   background: var(--status-critical);
   border-radius: 8px;
+}
+
+/* The search row. It hangs below the bar rather than sitting inside it: at 44px touch targets the
+   bar has no width left for a field, and pushing layout down would shift the page on every open. */
+.mtopbar-search {
+  position: absolute;
+  top: calc(var(--topbar-h) + var(--safe-top));
+  left: 0;
+  right: 0;
+  display: flex;
+  padding: 8px max(10px, var(--safe-right)) 8px max(10px, var(--safe-left));
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
+  z-index: 30;
 }

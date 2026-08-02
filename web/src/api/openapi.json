@@ -7567,6 +7567,91 @@
         }
       }
     },
+    "/api/v1/node-groups/{id}/geo": {
+      "put": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "set_node_group_geo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupGeo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Map pin set or cleared"
+          },
+          "400": {
+            "description": "Only one of latitude/longitude given, or a coordinate out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-groups/{id}/placement": {
       "put": {
         "tags": [
@@ -18296,6 +18381,26 @@
               "null"
             ],
             "description": "Poll-pool this folder assigns to its nodes (ADR-009/020). Same three-state contract as a\nnode's: **absent** leaves it unchanged, `\"\"` clears it (inherit from the nearest ancestor,\nelse the default pool), otherwise it moves the folder's nodes to that pool."
+          }
+        }
+      },
+      "GroupGeo": {
+        "type": "object",
+        "description": "A folder's map pin. Both fields or neither — see [`set_node_group_geo`].",
+        "properties": {
+          "latitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "longitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },

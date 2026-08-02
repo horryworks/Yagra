@@ -9,6 +9,7 @@ import { NAV, sectionForPath } from '../../nav';
 import { useAlertStore } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
+import { GlobalSearch } from './GlobalSearch';
 import './TopBar.css';
 
 export function TopBar() {
@@ -42,19 +43,11 @@ export function TopBar() {
       </nav>
 
       <div className="topbar-right">
-        {/* Global search is a permanent affordance (decision 3). A search endpoint does not
-            exist yet, so it is present but disabled for now. */}
-        <input
-          className="topbar-search"
-          type="search"
-          placeholder={t('shell.search')}
-          disabled
-          title={t('shell.searchUnavailable')}
-          aria-label={t('shell.globalSearch')}
-        />
+        {/* Global search is a permanent affordance (decision 3). Nodes only for now — the popover
+            says so, because a nodes-only result set that looks fleet-wide is worse than none. */}
+        <GlobalSearch />
         {/* The bell is a shortcut to Active alerts, not a popover: the count it carries is the
-            same set that page lists, so a menu would be a second rendering of one list. Unlike
-            search above it is wired, so it must not look disabled. */}
+            same set that page lists, so a menu would be a second rendering of one list. */}
         <button
           className="topbar-bell"
           onClick={() => navigate('/alerts')}

@@ -1497,6 +1497,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-groups/{id}/geo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_node_group_geo"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-groups/{id}/placement": {
         parameters: {
             query?: never;
@@ -4348,6 +4364,13 @@ export interface components {
              *     else the default pool), otherwise it moves the folder's nodes to that pool.
              */
             pool?: string | null;
+        };
+        /** @description A folder's map pin. Both fields or neither — see [`set_node_group_geo`]. */
+        GroupGeo: {
+            /** Format: double */
+            latitude?: number | null;
+            /** Format: double */
+            longitude?: number | null;
         };
         /**
          * @description One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
@@ -11909,6 +11932,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such group */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_group_geo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Group id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupGeo"];
+            };
+        };
+        responses: {
+            /** @description Map pin set or cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Only one of latitude/longitude given, or a coordinate out of range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
             };
             /** @description No valid bearer token */
             401: {

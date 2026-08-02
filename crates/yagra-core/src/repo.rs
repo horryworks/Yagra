@@ -99,6 +99,15 @@ pub struct TopologyRow {
 /// Fixed id for the seeded demo node the walking-skeleton WebUI queries.
 const DEMO_NODE_ID: Uuid = Uuid::nil();
 
+/// Ceiling on one server-side node search page.
+///
+/// One number, deliberately: the API edge and both [`NodeListing`] implementations clamp against
+/// it. It used to be written twice — the edge clamped to 500 and documented that as the maximum,
+/// while the SQL re-clamped to 100 — so filtering a fleet with thousands of matches silently
+/// returned 100 rows with nothing saying the list had been cut (extensibility.md §3: the same
+/// fact in two places drifts, and the copy that is wrong is the one nobody reads).
+pub const NODE_SEARCH_MAX: i64 = 500;
+
 /// A read-only source of the node inventory for the API. Implemented by [`NodeRepo`]
 /// (live, PostgreSQL) and [`StaticNodeList`] (skeleton mode), so the router doesn't care
 /// which is behind it.
@@ -144,7 +153,7 @@ impl NodeListing for NodeRepo {
             .collect()
     }
     async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>> {
-        let limit = limit.clamp(1, 100);
+        let limit = limit.clamp(1, NODE_SEARCH_MAX);
         // Parameterized ILIKE (security.md — never string-format user input into SQL); the `%`
         // wildcards are concatenated in SQL so the term itself is a bound value. `host(address)`
         // strips the netmask so an IP-substring search matches the displayed address.
@@ -226,7 +235,7 @@ impl NodeListing for StaticNodeList {
                 .cmp(&b.name)
                 .then(a.id.as_uuid().cmp(&b.id.as_uuid()))
         });
-        nodes.truncate(limit.clamp(1, 100) as usize);
+        nodes.truncate(limit.clamp(1, NODE_SEARCH_MAX) as usize);
         Ok(nodes)
     }
 }
@@ -1384,5 +1393,38 @@ mod tests {
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
         assert_eq!(capped[1].name, "osaka-core");
+    }
+
+    /// The search cap is one number, and no implementation may re-clamp to its own.
+    ///
+    /// A source-reading test rather than a behavioural one because the PostgreSQL path needs a
+    /// live database — and that is exactly where the regression lived: the API edge clamped to
+    /// 500 and documented that as the maximum, while `NodeRepo::search` re-clamped to 100, so
+    /// filtering a large fleet silently returned 100 rows. The needle is built at runtime; a
+    /// literal written out in this file would match itself and fail forever (testing.md).
+    #[test]
+    fn the_search_cap_is_declared_once() {
+        let src = include_str!("repo.rs");
+        // Both needles are assembled at runtime. A literal spelled out here would appear in this
+        // file and match itself — the stale one would fail forever, the good one would over-count.
+        let stale = format!("clamp(1, {})", 100);
+        assert!(
+            !src.contains(&stale),
+            "a search path re-clamps to its own literal instead of the shared constant"
+        );
+        let shared = format!("clamp(1, {})", "NODE_SEARCH_MAX");
+        // Both implementations clamp, and both clamp against the constant.
+        assert_eq!(src.matches(&shared).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_is_capped_by_the_shared_constant_not_a_local_literal() {
+        let nodes: Vec<Node> = (0..600u32)
+            .map(|i| node(u128::from(i) + 1, &format!("sw-{i:04}"), "10.0.0.1", None))
+            .collect();
+        let list = StaticNodeList(nodes);
+        // Asking for more than the cap yields exactly the cap, not some smaller inner limit.
+        let hits = list.search("sw-", NODE_SEARCH_MAX * 2).await.unwrap();
+        assert_eq!(hits.len() as i64, NODE_SEARCH_MAX);
     }
 }

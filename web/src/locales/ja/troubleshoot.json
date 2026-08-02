@@ -76,7 +76,8 @@
     },
     "notify": {
       "notify": "通知する",
-      "silent": "通知なしで実行"
+      "silent": "通知なしで実行",
+      "hint": "実行が終わると通知します（このブラウザで Yagra を開いている間）。"
     },
     "sens": {
       "veryLoose": "非常に緩い",
@@ -90,7 +91,9 @@
     }
   },
   "toast": {
-    "startFailed": "分析を開始できませんでした。"
+    "startFailed": "分析を開始できませんでした。",
+    "finished": "分析が完了しました。",
+    "failed": "分析は完了しませんでした。"
   },
   "report": {
     "common": {

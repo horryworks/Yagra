@@ -32,7 +32,7 @@ import type {
   NodeSummary,
   PoolOption,
 } from '../types/api';
-import { countsTotal, type StateCounts } from '../lib/nodeTree';
+import { countsTotal, filterResultsTruncated, type StateCounts } from '../lib/nodeTree';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
@@ -376,6 +376,9 @@ export function NodesPage() {
     ? fleetSummary.states.warning + fleetSummary.states.critical + fleetSummary.states.unreachable
     : 0;
   const anyGroupTruncated = members.anyTruncated;
+  // Filter mode bypasses groups, so the group-truncation notice above never fires for it —
+  // a fleet with more matches than the cap would otherwise show a silently short list.
+  const filterTruncated = filterResultsTruncated(filtering, treeNodes.length, FILTER_SEARCH_LIMIT);
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
   const selectedNode =
@@ -421,6 +424,11 @@ export function NodesPage() {
       {error && <p className="form-error">{error}</p>}
       {anyGroupTruncated && (
         <p className="muted nodes-truncated">{t('inventory.groupTruncated')}</p>
+      )}
+      {filterTruncated && (
+        <p className="muted nodes-truncated">
+          {t('inventory.filterTruncated', { count: FILTER_SEARCH_LIMIT })}
+        </p>
       )}
 
       <div
