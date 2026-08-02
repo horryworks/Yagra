@@ -18,7 +18,7 @@
 //! something an unauthenticated prober should be able to read off a 503-vs-403.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{current_username, Admin, RequireAckAlerts, RequireManageConfig};
+use super::extract::{current_username, Admin, RequireAckAlerts, RequireManageConfig, Scoped};
 use super::ApiState;
 use axum::{
     extract::State,
@@ -131,10 +131,14 @@ fn rca_error(e: &crate::rca::orchestrator::RcaError) -> ApiError {
 )]
 async fn create_rca(
     _guard: RequireAckAlerts,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     headers: HeaderMap,
     Json(body): Json<RcaBody>,
 ) -> ApiResult<Json<crate::rca::store::RcaReport>> {
+    // Checked before the provider lookup, so an out-of-scope node reads as "no such node" rather
+    // than leaking whether this deployment has an LLM configured.
+    super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.node))?;
     let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
     let req = crate::rca::orchestrator::RcaRequest {
         node: yagra_common::NodeId::from(body.node),

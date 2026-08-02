@@ -62,6 +62,7 @@ mod rca;
 mod reports;
 #[cfg(test)]
 mod route_table;
+pub(crate) mod scope;
 mod session;
 mod system;
 #[cfg(test)]

@@ -67,7 +67,9 @@ impl YagraMcp {
         // inserted only the states it had observed, so an AI client reading `states["warning"]`
         // got a missing key where the WebUI got a zero — the kind of difference that only shows up
         // as a model confidently reporting there is no warning data.
-        let summary = crate::api::fleet::state_tally(&self.state).await;
+        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
+        let summary =
+            crate::api::fleet::state_tally(&self.state, &crate::api::scope::NodeScope::All).await;
         let dto = FleetSummaryDto {
             total_nodes: summary.total,
             states: summary
@@ -95,9 +97,13 @@ impl YagraMcp {
         Parameters(p): Parameters<ListNodesParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(50).clamp(1, 100);
+        // Unrestricted, and safe only because `/mcp` is fail-closed on scope: `mcp/mod.rs` refuses
+        // a connection whose principal is not `Scope::All`, so nothing scoped ever reaches here.
+        // ⚠️ That refusal and this `None` are one decision in two files — lifting the refusal
+        // (ADR-028 WS-F) means threading the principal's scope through here in the same change.
         let nodes = match &p.search {
-            Some(term) => self.state.nodes.search(term, limit).await,
-            None => self.state.nodes.list_page(None, limit).await,
+            Some(term) => self.state.nodes.search(None, term, limit).await,
+            None => self.state.nodes.list_page(None, None, limit).await,
         };
         let nodes = match nodes {
             Ok(n) => n,
@@ -290,7 +296,16 @@ impl YagraMcp {
         // Same assembly as `GET /api/v1/topology`; only the page bound differs, because an AI
         // client wants a handful of edges where the graph view wants the fleet.
         let limit = p.limit.unwrap_or(200).clamp(1, 1000);
-        match crate::api::topology::topology_page(&self.state, admin, p.after, limit).await {
+        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
+        match crate::api::topology::topology_page(
+            &self.state,
+            admin,
+            &crate::api::scope::NodeScope::All,
+            p.after,
+            limit,
+        )
+        .await
+        {
             Ok(page) => ok_json("get_topology", &page),
             Err(e) => tool_api_error("get_topology", &e),
         }
@@ -544,7 +559,16 @@ impl YagraMcp {
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
         // Same store routing too, including resolving a node-name term to ids so the name never
         // enters the log store (ADR-011).
-        let rows = match crate::api::eventlog::search(&self.state, admin, &filter, limit).await {
+        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
+        let rows = match crate::api::eventlog::search(
+            &self.state,
+            admin,
+            &crate::api::scope::NodeScope::All,
+            &filter,
+            limit,
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => return tool_api_error("search_events", &e),
         };
@@ -823,8 +847,9 @@ impl YagraMcp {
         if ids.is_empty() {
             return HashMap::new();
         }
+        // Unrestricted — see `list_nodes` above: `/mcp` admits only `Scope::All` principals today.
         match self.state.admin.as_ref() {
-            Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+            Some(admin) => admin.repo.node_names(None, &ids).await.unwrap_or_default(),
             None => HashMap::new(),
         }
     }

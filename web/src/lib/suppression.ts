@@ -4,13 +4,40 @@
 // (which nodes/groups are currently under maintenance or muted, propagated down a targeted folder
 // group). Kept free of React so the index logic is unit-tested directly.
 
-import type { MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
+import type { Alert, MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
 
 /** A right-click target in the All Nodes tree: a single node or a folder group. */
 export interface SuppressionTarget {
   kind: 'node' | 'group';
   id: string;
   name: string;
+}
+
+/** The mute an active alert maps onto: always its node, pre-filled with the metric it fired on. */
+export interface AlertMuteSeed {
+  target: SuppressionTarget;
+  /** Metric to pre-fill, or `undefined` for a whole-node mute. */
+  metric?: string;
+}
+
+/**
+ * Which mute silences *this* alert — the seed for the per-alert Mute action on the triage screen.
+ *
+ * The metric is carried through **verbatim, including the `__liveness__` sentinel**, and that is
+ * the whole point: a mute is stored by check *name*, and the backend re-derives its identity as
+ * `check_id(node, name)` — the same v5 hash the alert's `check` already is (`alerts.rs::check_id`).
+ * Passing the alert's metric therefore produces a mute matching exactly the check the operator
+ * clicked. Substituting the display text ("Reachability") or dropping the sentinel would silently
+ * widen or miss the mute; rendering it readably is the *form's* job, not this function's.
+ *
+ * An alert with no captured metric (raised before migration 0036) has no check name to name, so it
+ * seeds a whole-node mute — broader than the one alert, but the only thing that can be expressed.
+ */
+export function muteTargetFromAlert(alert: Alert, nodeName: string): AlertMuteSeed {
+  return {
+    target: { kind: 'node', id: alert.node, name: nodeName },
+    metric: alert.metric ? alert.metric : undefined,
+  };
 }
 
 /** Metric-name presets offered as a `<datalist>` wherever the operator types a metric by hand

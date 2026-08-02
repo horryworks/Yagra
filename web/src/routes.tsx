@@ -44,6 +44,7 @@ import { ApiTokensPage } from './pages/ApiTokensPage';
 import { ForwardingPage } from './pages/ForwardingPage';
 import { TopologyMapPage } from './pages/TopologyMapPage';
 import { DependencyPage } from './pages/DependencyPage';
+import { GeoMapPage } from './pages/GeoMapPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
 import { RunsPage } from './troubleshoot/RunsPage';
 import { ReportRoutePage } from './troubleshoot/report/ReportRoutePage';
@@ -83,11 +84,12 @@ export function AppRoutes() {
         <Route path="nodes/mib" element={<MibRepositoryPage />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
-        {/* Topology — the network map visualizes the dependency graph (GET /api/v1/topology) and
-            the dependency view manages its edges; geo map is still backend-pending. */}
+        {/* Topology — the network map visualizes the dependency graph (GET /api/v1/topology), the
+            dependency view manages its edges, and the geo map places groups by the coordinates
+            `PUT /api/v1/node-groups/{id}/geo` stores. */}
         <Route path="topology/map" element={<TopologyMapPage />} />
         <Route path="topology/dependency" element={<DependencyPage />} />
-        <Route path="topology/geo" element={<ComingSoon />} />
+        <Route path="topology/geo" element={<GeoMapPage />} />
 
         {/* Alerts */}
         <Route path="alerts" element={<ActiveAlertsPage />} />

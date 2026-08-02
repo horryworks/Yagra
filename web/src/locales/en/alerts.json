@@ -4,9 +4,7 @@
     "note": "{{count}} active · triage view (ack & escalation are handled in your external tool)",
     "empty": "No active alerts.",
     "mute": "Mute",
-    "muteHint": "Per-alert quick-mute is coming soon — use Alerts ▸ Mutes for now",
-    "openExternal": "Open external",
-    "openExternalHint": "No external routing integration is configured yet (PagerDuty / JSM)"
+    "muteHint": "Silence notifications for this check on this node until a time you choose"
   },
   "row": {
     "flapping": "flapping",

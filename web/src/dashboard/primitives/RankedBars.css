@@ -56,3 +56,11 @@
   color: var(--text-primary);
   text-align: right;
 }
+
+/* The "this ranking may be short" caveat (ADR-014). Lives here rather than in each widget's CSS
+   because DeltaBars and the heatmap widget render the same element — one class, one look. */
+.rankedbars-partial {
+  margin: 0 0 8px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}

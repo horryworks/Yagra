@@ -20,7 +20,7 @@
 //! should display. DNS additionally has a read surface with no URL counterpart — the recorded
 //! resolution chain and its append-on-change history.
 
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
 use super::nodes::validate_pool_create;
 use super::util::CreatedId;
 use super::{AdminState, ApiError, ApiResult, ApiState};
@@ -453,6 +453,7 @@ async fn create_monitor<K: CheckKind>(
 )]
 async fn get_url_check(
     perm: RequireView,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<UrlCheckConfig>> {
@@ -514,6 +515,7 @@ async fn delete_url_check(
 )]
 async fn get_dns_check(
     perm: RequireView,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<DnsCheckConfig>> {
@@ -800,6 +802,7 @@ pub(crate) struct DnsChainCurrent {
 )]
 async fn get_dns_chain(
     _perm: RequireView,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<DnsChainCurrent>> {
@@ -898,6 +901,7 @@ impl DnsHistoryQuery {
 )]
 async fn list_dns_chain_history(
     _perm: RequireView,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Query(q): Query<DnsHistoryQuery>,

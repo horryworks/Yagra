@@ -15,7 +15,7 @@
 //! follow: handlers take their auth guard as an extractor ([`RequireView`]) and return
 //! [`ApiResult`], and the module owns its own [`Router`], merged by [`super::router`].
 
-use super::extract::RequireView;
+use super::extract::{RequireView, Scoped, VisibleNode};
 use super::{ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS};
 use crate::flowstore::{
     FlowAsAgg, FlowConversation, FlowPoint, FlowPortAgg, FlowProtoAgg, FlowTalker,
@@ -107,6 +107,33 @@ fn flow_unavailable() -> ApiError {
         "flow_unavailable",
         "flow monitoring is not enabled (no ClickHouse flow store configured)",
     )
+}
+
+/// Refuse a group-scoped caller the **fleet-wide** aggregations (ADR-014).
+///
+/// ⚠️ The plan for this pass assumed these could be over-fetched and post-filtered like the TSDB
+/// rankings. They cannot, and the reason is worth recording so nobody re-derives it: every fleet
+/// aggregation here is a `GROUP BY` on something that is *not* the exporter — `GROUP BY dst_port`,
+/// `GROUP BY addr`, `GROUP BY src, dst` — so ClickHouse collapses across exporters and **no
+/// `node_id` survives into the row**. There is nothing left to filter on. (`FlowTalker`,
+/// `FlowPortAgg`, `FlowProtoAgg`, `FlowAsAgg`, `FlowConversation` and `FlowPoint` all carry no node
+/// field; that is the check.)
+///
+/// Pushing the restriction *down* instead — `node_id IN (…)` — would mean resolving the caller's
+/// scope to a node-id list whose size is unbounded by anything, which is the full-fleet enumeration
+/// `api/scope.rs` exists to avoid.
+///
+/// So a scoped caller is refused the roll-up and keeps `/nodes/{node_id}/flow/*`, which is
+/// `NodeScoped` and is where flow analysis is actually done — you look at one exporter.
+fn fleet_flow_is_unattributed(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    Err(ApiError::forbidden_code(
+        "scope_unsupported",
+        "fleet-wide flow aggregates are grouped by address, port, protocol or AS, so no exporter \
+         attribution survives to filter on; query a specific node's flow instead",
+    ))
 }
 
 /// Map a flow-store error to a `500` without leaking the internal error to the client
@@ -298,8 +325,11 @@ macro_rules! flow_endpoints {
                 (status = 503, description = "Flow monitoring is not enabled (no flow store configured)", body = super::error::ErrorBody),
             ),
         )]
+        // One guard here covers all six per-node flow routes — the macro is why the pair was
+        // deduplicated in the first place, and it pays off again: there is no sixth copy to forget.
         async fn $node_fn(
             _view: RequireView,
+            _visible: VisibleNode,
             State(st): State<ApiState>,
             Path(node_id): Path<Uuid>,
             Query(q): Query<FlowRangeQuery>,
@@ -320,9 +350,11 @@ macro_rules! flow_endpoints {
         )]
         async fn $fleet_fn(
             _view: RequireView,
+            Scoped(scope): Scoped,
             State(st): State<ApiState>,
             Query(q): Query<FlowRangeQuery>,
         ) -> ApiResult<Response> {
+            fleet_flow_is_unattributed(&scope)?;
             run_flow_agg(&st, None, &q, $agg).await
         }
     };

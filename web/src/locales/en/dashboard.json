@@ -451,7 +451,8 @@
       "aria": "distribution"
     },
     "rankedBars": {
-      "empty": "No data yet…"
+      "empty": "No data yet…",
+      "partial": "This ranking covers only the groups your account can see, and may be missing entries."
     },
     "deltaBars": {
       "empty": "No change yet…"

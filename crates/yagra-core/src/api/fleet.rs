@@ -12,7 +12,8 @@
 //! REST pre-seeded all six states, MCP returned only the observed ones. [`state_tally`] is now the
 //! single answer, and it is keyed off [`NodeState::ALL`] rather than a hand-written list.
 
-use super::extract::{Admin, RequireView};
+use super::extract::{Admin, RequireView, Scoped};
+use super::scope::NodeScope;
 use super::{ApiError, ApiResult, ApiState};
 use axum::{
     extract::{Query, State},
@@ -61,18 +62,37 @@ pub(crate) struct FleetSummary {
 /// Nodes the alert engine has never observed — brand new, or in a pool with no live poller — are
 /// counted as `unknown`. That matches the per-node list's fallback, and it is what makes the tally
 /// reconcile with the inventory `total` instead of quietly summing to less.
-pub(crate) async fn state_tally(st: &ApiState) -> FleetSummary {
-    let total = st.nodes.count().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "fleet summary node count failed");
-        0
-    });
+/// Scoping costs the unrestricted caller nothing: `NodeScope::All` keeps the precomputed
+/// `node_state_counts()` fast path exactly as it was. A scoped caller instead walks `node_states()`
+/// once, intersecting with the visible set — O(fleet) over an in-memory map, not a database scan,
+/// and only on a dashboard poll. That asymmetry is deliberate; do not "unify" the two branches by
+/// making everyone take the walk.
+pub(crate) async fn state_tally(st: &ApiState, scope: &NodeScope) -> FleetSummary {
+    let total = st
+        .nodes
+        .count(scope.group_filter())
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "fleet summary node count failed");
+            0
+        });
     let mut states: BTreeMap<&'static str, i64> =
         NodeState::ALL.iter().map(|s| (s.as_str(), 0)).collect();
     let mut observed_total: i64 = 0;
-    for (state, n) in st.alerts.node_state_counts() {
-        let n = n as i64;
-        *states.entry(state.as_str()).or_insert(0) += n;
-        observed_total += n;
+    if scope.is_all() {
+        for (state, n) in st.alerts.node_state_counts() {
+            let n = n as i64;
+            *states.entry(state.as_str()).or_insert(0) += n;
+            observed_total += n;
+        }
+    } else {
+        for (node, state) in st.alerts.node_states() {
+            if !scope.allows_node(st, node) {
+                continue;
+            }
+            *states.entry(state.as_str()).or_insert(0) += 1;
+            observed_total += 1;
+        }
     }
     let unobserved = (total - observed_total).max(0);
     *states.entry(NodeState::Unknown.as_str()).or_insert(0) += unobserved;
@@ -91,8 +111,12 @@ pub(crate) async fn state_tally(st: &ApiState) -> FleetSummary {
         (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
     ),
 )]
-async fn fleet_summary(_perm: RequireView, State(st): State<ApiState>) -> Json<FleetSummary> {
-    Json(state_tally(&st).await)
+async fn fleet_summary(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+) -> Json<FleetSummary> {
+    Json(state_tally(&st, &scope).await)
 }
 
 // ── Per-group rollup ─────────────────────────────────────────────────────────
@@ -159,15 +183,23 @@ pub(crate) fn aggregate_group_counts(
 )]
 async fn fleet_group_summary(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<FleetGroupSummary>> {
-    let node_groups = st.nodes.node_group_map().await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "fleet group summary node map",
-            "failed to load group summary",
-        )
-    })?;
+    // Filtering the node→group map is enough: the rollup is keyed by group, so a group with no
+    // visible members simply never appears rather than appearing with a zeroed tally. Note this
+    // scans only the rows the caller may see — it does not add a second pass.
+    let node_groups = st
+        .nodes
+        .node_group_map(scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "fleet group summary node map",
+                "failed to load group summary",
+            )
+        })?;
     let states = st.alerts.node_states();
     Ok(Json(FleetGroupSummary {
         groups: aggregate_group_counts(&node_groups, &states),
@@ -247,16 +279,27 @@ fn coverage_of(nodes: Vec<yagra_common::Node>, fresh_ids: &HashSet<Uuid>) -> Fle
 )]
 async fn fleet_coverage(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<FleetCoverage>> {
-    let nodes = admin.repo.list_nodes().await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "fleet coverage list nodes",
-            "failed to load fleet coverage",
-        )
-    })?;
+    // `list_nodes` is the unscoped internal scan, so the filter is applied to its result here
+    // rather than in SQL. Coverage is an admin's periodic blind-spot check over a response that is
+    // bounded either way (the watchlist caps at 50), so the extra pass is not on a hot path.
+    let nodes: Vec<_> = admin
+        .repo
+        .list_nodes()
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "fleet coverage list nodes",
+                "failed to load fleet coverage",
+            )
+        })?
+        .into_iter()
+        .filter(|n| scope.allows_group(n.group.map(|g| g.as_uuid())))
+        .collect();
     let fresh_ids: HashSet<Uuid> = st
         .store
         .fresh_node_ids("icmp_rtt_ms", COVERAGE_FRESH_SECS)
@@ -329,9 +372,23 @@ fn pivot_state_history(rows: Vec<(i64, String, i64)>) -> FleetStateHistory {
 )]
 async fn fleet_state_history(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
     Query(q): Query<StateHistoryQuery>,
 ) -> ApiResult<Json<FleetStateHistory>> {
+    // `node_state_snapshots` stores `(ts, state, count)` — the tally was already computed when the
+    // snapshot was written, and no node id survives into the row. So there is nothing to filter and
+    // nothing to join: a scoped caller cannot be served a narrower timeline from this table at all.
+    // Serving them the fleet's numbers would be a leak, and serving zeroes would be a lie, so it
+    // refuses. Making this scopable means snapshotting per group — a schema and writer change, i.e.
+    // a feature rather than a filter.
+    if !scope.is_all() {
+        return Err(ApiError::forbidden_code(
+            "scope_unsupported",
+            "the fleet state timeline is stored pre-aggregated with no per-node attribution, so it \
+             cannot be narrowed to a group-scoped account",
+        ));
+    }
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 24 * 3600);
     if to < from || to - from > MAX_HISTORY_SECS {

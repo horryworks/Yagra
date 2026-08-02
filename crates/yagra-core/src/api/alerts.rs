@@ -16,7 +16,8 @@
 //! success, and every open dashboard keeps showing an unacknowledged alert until someone reloads.
 //! Making them one call means you cannot do one without the other.
 
-use super::extract::{RequireAckAlerts, RequireView};
+use super::extract::{RequireAckAlerts, RequireView, Scoped};
+use super::util::Ranked;
 use super::{ApiError, ApiResult, ApiState};
 use crate::ack::{AckKey, AckView};
 use crate::history::AlertHistoryRow;
@@ -186,9 +187,21 @@ pub(crate) async fn apply_ack(
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
 )]
-async fn list_alerts(_perm: RequireView, State(st): State<ApiState>) -> Json<Vec<ActiveAlertView>> {
+async fn list_alerts(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+) -> Json<Vec<ActiveAlertView>> {
     let acks = ack_map(&st).await;
-    Json(decorate_alerts(st.alerts.active_alerts(), &acks))
+    // Filter before decorating: an out-of-scope alert must not reach the ack join either, or the
+    // response would be shorter but the work — and the ack lookups — would still name those nodes.
+    let alerts = st
+        .alerts
+        .active_alerts()
+        .into_iter()
+        .filter(|a| scope.allows_node(&st, a.node))
+        .collect();
+    Json(decorate_alerts(alerts, &acks))
 }
 
 /// Recent alert-history rows: `?limit=` (default 100) + an optional `before` keyset cursor (an
@@ -212,6 +225,7 @@ pub(crate) struct HistoryQuery {
 )]
 async fn list_alert_history(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<AlertHistoryView>>> {
@@ -239,6 +253,14 @@ async fn list_alert_history(
                 "failed to list alert history",
             )
         })?;
+    // Post-filtered rather than pushed into the query: history rows are keyed by node id, not by
+    // group, and a scoped caller pages by timestamp — so a page may come back short. That is
+    // correct (the cursor is the timestamp, so paging still terminates) and is the same trade the
+    // TSDB rankings make. A group predicate here would mean joining `nodes` on every history read.
+    let rows = rows
+        .into_iter()
+        .filter(|r| scope.allows_node(&st, yagra_common::NodeId::from(r.node)))
+        .collect();
     let acks = ack_map(&st).await;
     Ok(Json(decorate_history(rows, &acks)))
 }
@@ -295,9 +317,11 @@ pub(super) struct AckResult {
 )]
 async fn ack_alert(
     _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Json(body): Json<AckRequest>,
 ) -> ApiResult<Json<AckResult>> {
+    super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.node))?;
     let view = body.acked.then(|| AckView {
         // The external tool's own timestamp wins when it sends one — its clock is the record of
         // when the human actually acknowledged, which may be well before this request arrives.
@@ -338,24 +362,32 @@ pub(crate) struct AlertNodeCount {
     get, path = "/api/v1/alerts/top-nodes", tag = "alerts",
     params(AlertTopQuery),
     responses(
-        (status = 200, description = "Nodes ranked by alert fires; empty when this deployment keeps no history", body = Vec<AlertNodeCount>),
+        (status = 200, description = "Nodes ranked by alert fires; empty when this deployment keeps no history, and `partial` says the scope filter may have shortened the list", body = super::util::Ranked<AlertNodeCount>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
 )]
 async fn alert_top_nodes(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<AlertTopQuery>,
-) -> ApiResult<Json<Vec<AlertNodeCount>>> {
+) -> ApiResult<Json<Ranked<AlertNodeCount>>> {
     let Some(history) = st.history.as_ref() else {
-        return Ok(Json(Vec::new()));
+        // No history store is "there is nothing to rank", not "the ranking was cut short".
+        return Ok(Json(Ranked {
+            entries: Vec::new(),
+            partial: false,
+        }));
     };
     let window = q.window.unwrap_or(86_400).clamp(60, 30 * 86_400);
     let since_ms = (super::now_unix_s() - window) * 1000;
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
+    let limit = q.limit.unwrap_or(6).clamp(1, 50) as usize;
+    // Ranked by fire count in SQL, filtered by scope afterwards — same shape and same trade-off as
+    // the TSDB rankings in `api/metrics.rs`. Over-fetch so a scoped list is usually still full.
+    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
     let counts = history
-        .top_nodes_by_fires(since_ms, limit)
+        .top_nodes_by_fires(since_ms, fetched as i64)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -364,9 +396,16 @@ async fn alert_top_nodes(
                 "failed to aggregate alerting nodes",
             )
         })?;
-    let names = super::nodes::resolve_node_names(&st, counts.iter().map(|(n, _)| *n)).await;
-    Ok(Json(
-        counts
+    let counts: Vec<_> = counts
+        .into_iter()
+        .filter(|(id, _)| scope.allows_node(&st, yagra_common::NodeId::from(*id)))
+        .collect();
+    let counts = Ranked::new(counts, limit, fetched);
+    let names =
+        super::nodes::resolve_node_names(&st, &scope, counts.entries.iter().map(|(n, _)| *n)).await;
+    Ok(Json(Ranked {
+        entries: counts
+            .entries
             .into_iter()
             .map(|(node_id, count)| AlertNodeCount {
                 node_id,
@@ -377,7 +416,8 @@ async fn alert_top_nodes(
                 count,
             })
             .collect(),
-    ))
+        partial: counts.partial,
+    }))
 }
 
 /// Query for the alert calendar heatmap: `?days=<n>` (default 7) of history.
@@ -409,6 +449,7 @@ pub(crate) struct CalendarBucket {
 )]
 async fn alert_calendar(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<AlertCalendarQuery>,
 ) -> ApiResult<Json<Vec<CalendarBucket>>> {
@@ -417,13 +458,19 @@ async fn alert_calendar(
     };
     let days = q.days.unwrap_or(7).clamp(1, 90);
     let since_ms = (super::now_unix_s() - days * 86_400) * 1000;
-    let buckets = history.fires_by_weekday_hour(since_ms).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "alert calendar",
-            "failed to build the alert calendar",
-        )
-    })?;
+    // The counts come out of a `GROUP BY`, so there are no per-node rows left to drop afterwards —
+    // the scope has to go into the query. This is the one of the four aggregate endpoints whose
+    // source table still carries a node id, which is why it can be filtered at all.
+    let buckets = history
+        .fires_by_weekday_hour(since_ms, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "alert calendar",
+                "failed to build the alert calendar",
+            )
+        })?;
     Ok(Json(
         buckets
             .into_iter()
@@ -459,6 +506,7 @@ pub(crate) struct AlertTransition {
 )]
 async fn alert_transitions(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<AlertTransition>>> {
@@ -475,7 +523,11 @@ async fn alert_transitions(
                 "failed to list alert transitions",
             )
         })?;
-    let names = super::nodes::resolve_node_names(&st, rows.iter().map(|r| r.node)).await;
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|r| scope.allows_node(&st, yagra_common::NodeId::from(r.node)))
+        .collect();
+    let names = super::nodes::resolve_node_names(&st, &scope, rows.iter().map(|r| r.node)).await;
     Ok(Json(
         rows.into_iter()
             .map(|r| AlertTransition {
@@ -495,25 +547,54 @@ async fn alert_transitions(
 
 // ── Live streams ─────────────────────────────────────────────────────────────
 
-/// Turn a broadcast receiver into an SSE stream, emitting a named `resync` event when a subscriber
-/// falls behind.
+/// Turn a broadcast receiver into an SSE stream for one subscriber: drop the frames their scope
+/// does not cover, and emit a named `resync` event when they fall behind.
 ///
-/// The resync hint is the whole point: a slow client that silently missed `n` events would show a
-/// stale alert list forever. Browsers ignore named events they do not listen for, so a client that
-/// only reads the default message stream is unaffected.
+/// The resync hint is the whole point of the second half: a slow client that silently missed `n`
+/// events would show a stale alert list forever. Browsers ignore named events they do not listen
+/// for, so a client that only reads the default message stream is unaffected.
+///
+/// **The scope filter is per subscriber, and it must be**, which is why it lives here rather than at
+/// the sender. One broadcast fans out to every open dashboard, and those callers do not share a
+/// scope — the sender has no single right answer. Filtering here costs a set membership per frame
+/// per subscriber and leaves the unrestricted case (`NodeScope::All`) taking the `is_all` short
+/// circuit, so the common deployment pays nothing.
+///
+/// A dropped frame is **not** a lag: `resync` means "you missed something, re-fetch", and firing it
+/// for an out-of-scope alert would send a scoped client back to REST — which correctly returns a
+/// list without that alert — on every event in the rest of the fleet.
+///
+/// ⚠️ **The captured handle is `Weak` on purpose.** Deciding whether a node is in scope needs the
+/// alert engine's fleet-wide node metadata — but the alert engine is also what owns the broadcast
+/// sender feeding this stream. A strong `Arc` here would keep that sender alive for as long as the
+/// stream lives and the stream alive for as long as the sender lives, so the body would never end.
+/// If the upgrade ever fails the whole state is gone, and the frame is dropped: fail-closed.
 fn sse_with_resync(
-    rx: tokio::sync::broadcast::Receiver<String>,
+    rx: tokio::sync::broadcast::Receiver<crate::alerts::StreamFrame>,
+    alerts: std::sync::Weak<crate::alerts::AlertManager>,
+    scope: super::scope::NodeScope,
     what: &'static str,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
-    tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(move |r| async move {
-        match r {
-            Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::warn!(
-                    missed = n,
-                    "SSE {what} subscriber lagged; emitting resync hint"
-                );
-                Some(Ok(Event::default().event("resync").data(n.to_string())))
+    tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(move |r| {
+        // Cloned per frame so the closure stays `FnMut` rather than consuming its captures; both
+        // are cheap (a `Weak` bump and an `Arc<ScopeSet>` clone).
+        let (alerts, scope) = (alerts.clone(), scope.clone());
+        async move {
+            match r {
+                Ok((node, json)) => {
+                    let visible = scope.is_all()
+                        || alerts
+                            .upgrade()
+                            .is_some_and(|a| scope.allows_node_in(&a, node));
+                    visible.then(|| Ok::<_, Infallible>(Event::default().data(&*json)))
+                }
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        missed = n,
+                        "SSE {what} subscriber lagged; emitting resync hint"
+                    );
+                    Some(Ok(Event::default().event("resync").data(n.to_string())))
+                }
             }
         }
     })
@@ -529,8 +610,14 @@ fn sse_with_resync(
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
 )]
-async fn stream_alerts(_perm: RequireView, State(st): State<ApiState>) -> Response {
-    Sse::new(sse_with_resync(st.alerts.subscribe(), "alert"))
+async fn stream_alerts(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+) -> Response {
+    let rx = st.alerts.subscribe();
+    let alerts = std::sync::Arc::downgrade(&st.alerts);
+    Sse::new(sse_with_resync(rx, alerts, scope, "alert"))
         .keep_alive(KeepAlive::default())
         .into_response()
 }
@@ -547,13 +634,16 @@ async fn stream_alerts(_perm: RequireView, State(st): State<ApiState>) -> Respon
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
 )]
-async fn stream_node_states(_perm: RequireView, State(st): State<ApiState>) -> Response {
-    Sse::new(sse_with_resync(
-        st.alerts.subscribe_node_states(),
-        "node-state",
-    ))
-    .keep_alive(KeepAlive::default())
-    .into_response()
+async fn stream_node_states(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+) -> Response {
+    let rx = st.alerts.subscribe_node_states();
+    let alerts = std::sync::Arc::downgrade(&st.alerts);
+    Sse::new(sse_with_resync(rx, alerts, scope, "node-state"))
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 #[cfg(test)]
@@ -706,11 +796,17 @@ mod tests {
 
     #[tokio::test]
     async fn history_and_its_aggregations_are_empty_not_broken_without_a_store() {
-        for path in [
-            "/api/v1/alerts/history",
-            "/api/v1/alerts/top-nodes",
-            "/api/v1/alerts/calendar",
-            "/api/v1/alerts/transitions",
+        // `top-nodes` answers the `Ranked` envelope rather than a bare array; the others are still
+        // plain lists. Both must be *empty*, not an error — an alerts page whose history panel 500s
+        // is worse than one with an empty panel.
+        for (path, want) in [
+            ("/api/v1/alerts/history", "[]"),
+            (
+                "/api/v1/alerts/top-nodes",
+                r#"{"entries":[],"partial":false}"#,
+            ),
+            ("/api/v1/alerts/calendar", "[]"),
+            ("/api/v1/alerts/transitions", "[]"),
         ] {
             let resp = router(public_state())
                 .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
@@ -718,7 +814,11 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK, "{path}");
             let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-            assert_eq!(&bytes[..], b"[]", "{path}");
+            assert_eq!(
+                String::from_utf8_lossy(&bytes),
+                want,
+                "{path}: an unrestricted caller must never be told the ranking was cut short"
+            );
         }
     }
 
@@ -739,6 +839,126 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["error"]["code"], "invalid_cursor");
+    }
+
+    // ── Live streams ────────────────────────────────────────────────────────
+
+    /// State whose alert engine knows one node in `group` and one node in no group at all.
+    fn state_with_one_grouped_node(node: NodeId, group: Uuid) -> ApiState {
+        use crate::alerts::{AlertConfig, NodeMeta};
+        let st = public_state();
+        let mut meta = std::collections::HashMap::new();
+        meta.insert(
+            node,
+            NodeMeta {
+                folder_group: Some(group),
+                ..NodeMeta::default()
+            },
+        );
+        st.alerts.set_config(AlertConfig::new(Vec::new(), meta));
+        st
+    }
+
+    /// Everything the stream puts on the wire, as the browser would receive it.
+    ///
+    /// `Event` has no public accessor, so the assertion is made against the rendered SSE text —
+    /// which is the better thing to assert on anyway. `take_until` bounds it: the broadcast channel
+    /// never closes, and `Sse` without a keep-alive ends its body exactly when the inner stream does.
+    async fn wire(
+        stream: impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static,
+    ) -> String {
+        use axum::response::IntoResponse as _;
+        use futures::StreamExt as _;
+        let bounded = stream.take_until(tokio::time::sleep(std::time::Duration::from_millis(100)));
+        let body = Sse::new(bounded).into_response().into_body();
+        let bytes = axum::body::to_bytes(body, 1 << 20).await.expect("sse body");
+        String::from_utf8(bytes.to_vec()).expect("sse text")
+    }
+
+    #[tokio::test]
+    async fn the_alert_stream_drops_out_of_scope_frames_without_calling_them_a_lag() {
+        // A scoped subscriber must not see another group's alert — and must not be told to resync
+        // either. `resync` means "you missed something, re-fetch"; firing it for a frame the caller
+        // was never entitled to would send them back to REST on every event in the rest of the
+        // fleet, and REST correctly answers without that alert, so the round trip is pure noise.
+        let mine = NodeId::new();
+        let group = Uuid::from_u128(7);
+        let st = state_with_one_grouped_node(mine, group);
+        let scope = crate::api::scope::NodeScope::Groups(std::sync::Arc::new(
+            crate::api::scope::ScopeSet {
+                visible: vec![group],
+                breadcrumb: Vec::new(),
+            },
+        ));
+
+        let rx = st.alerts.subscribe();
+        let stream = sse_with_resync(rx, std::sync::Arc::downgrade(&st.alerts), scope, "alert");
+
+        // One frame for the visible node, one for a node the engine has never heard of.
+        st.alerts.broadcast_test_frame(mine, "{\"node\":\"mine\"}");
+        st.alerts
+            .broadcast_test_frame(NodeId::new(), "{\"node\":\"theirs\"}");
+
+        let text = wire(stream).await;
+        assert!(
+            text.contains("mine"),
+            "the in-scope frame is served: {text}"
+        );
+        assert!(
+            !text.contains("theirs"),
+            "another group's alert must not reach a scoped subscriber: {text}"
+        );
+        assert!(
+            !text.contains("resync"),
+            "a filtered frame is not a lag: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unrestricted_subscriber_still_sees_every_frame() {
+        // The overwhelmingly common case — every admin, and every deployment with no scopes
+        // assigned. It must be unchanged by the filter, including for nodes the alert engine's
+        // metadata snapshot has never seen (which a *scoped* caller is denied, fail-closed).
+        let st = public_state();
+        let rx = st.alerts.subscribe();
+        let stream = sse_with_resync(
+            rx,
+            std::sync::Arc::downgrade(&st.alerts),
+            crate::api::scope::NodeScope::All,
+            "alert",
+        );
+        st.alerts.broadcast_test_frame(NodeId::new(), "{\"a\":1}");
+        st.alerts.broadcast_test_frame(NodeId::new(), "{\"b\":2}");
+        let text = wire(stream).await;
+        assert!(
+            text.contains("\"a\":1") && text.contains("\"b\":2"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stream_does_not_keep_the_engine_that_feeds_it_alive() {
+        // ⚠️ Regression guard. The filter needs the alert engine's node→group map to decide
+        // visibility — and the alert engine is also what owns this stream's broadcast sender. Hold
+        // it strongly and the two pin each other alive: the sender is never dropped, so the body
+        // never ends, so `route_table::every_listed_route_is_served` (which reads every route's
+        // body to completion) hangs forever rather than failing. It did.
+        use futures::StreamExt as _;
+        let st = public_state();
+        let rx = st.alerts.subscribe();
+        let stream = sse_with_resync(
+            rx,
+            std::sync::Arc::downgrade(&st.alerts),
+            crate::api::scope::NodeScope::All,
+            "alert",
+        );
+        drop(st);
+        // No `take_until` here — that is the whole point. If the stream held the engine strongly,
+        // this would never return.
+        assert!(
+            std::pin::pin!(stream).collect::<Vec<_>>().await.is_empty(),
+            "the stream must end once its sender is gone"
+        );
     }
 
     #[tokio::test]

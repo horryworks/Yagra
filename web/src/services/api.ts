@@ -11,7 +11,7 @@
 import type {
   Alert,
   AlertHistoryRow,
-  AlertNodeCount,
+  RankedAlertNodes,
   AlertTransition,
   AnalysisFinding,
   AnalysisJob,
@@ -51,7 +51,7 @@ import type {
   GroupType,
   InterfaceHeatmap,
   InterfaceRow,
-  InterfaceTopEntry,
+  RankedInterfaces,
   InterfaceTopMetric,
   InterfaceSeries,
   MaintenanceScopeLevel,
@@ -103,7 +103,7 @@ import type {
   ThroughputRange,
   StoredCollectionItem,
   ThresholdPage,
-  TopEntry,
+  RankedNodes,
   TopologyNode,
   UrlCheckConfig,
   DnsCheckConfig,
@@ -386,7 +386,7 @@ export const api = {
   getTopMetrics: (
     metric: string,
     opts?: { agg?: MetricTopAgg; limit?: number },
-  ): Promise<TopEntry[]> =>
+  ): Promise<RankedNodes> =>
     apiGet('/api/v1/metrics/top', {
       query: { metric, agg: opts?.agg, limit: opts?.limit },
     }),
@@ -395,7 +395,7 @@ export const api = {
   getInterfaceTop: (
     metric: InterfaceTopMetric,
     opts?: { agg?: MetricTopAgg; limit?: number },
-  ): Promise<InterfaceTopEntry[]> =>
+  ): Promise<RankedInterfaces> =>
     apiGet('/api/v1/metrics/interface-top', {
       query: { metric, agg: opts?.agg, limit: opts?.limit },
     }),
@@ -405,7 +405,7 @@ export const api = {
   getInterfaceDelta: (
     direction: 'up' | 'down',
     opts?: { window?: number; limit?: number },
-  ): Promise<InterfaceTopEntry[]> =>
+  ): Promise<RankedInterfaces> =>
     apiGet('/api/v1/metrics/interface-delta', {
       query: { direction, window: opts?.window, limit: opts?.limit },
     }),
@@ -1072,7 +1072,7 @@ export const api = {
     }),
 
   /** Nodes generating the most alert fires over a trailing window (chronic offenders). */
-  getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<AlertNodeCount[]> =>
+  getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<RankedAlertNodes> =>
     apiGet('/api/v1/alerts/top-nodes', { query: { window: opts?.window, limit: opts?.limit } }),
 
   /** Alert fires bucketed weekday×hour over the last `days` (heatmap). */

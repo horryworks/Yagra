@@ -3,8 +3,8 @@
 // alerts triage screen. Each row: severity dot + node name + what fired + root-cause + flapping
 // flag + acked pill + age. Triage-only per §3.2 — NO Ack *control* here (Yagra holds no ack
 // action; that's external PagerDuty/JSM). The `acked` pill is a READ-ONLY indicator mirrored
-// inbound from the external tool (ADR-015). The optional actions slot is for Mute / "open in
-// external tool" only.
+// inbound from the external tool (ADR-015) — its tooltip names the tool and the person. The
+// optional actions slot is for suppression (Mute) and diagnosis (Explain), never acknowledgement.
 //
 // Two things the row deliberately does NOT show as raw ids. The node and its root cause resolve to
 // names via the shared `useEntityNames` (ui-conventions: the visible primary is always the name,
@@ -30,11 +30,15 @@ import './AlertRows.css';
 
 type SortedAlert = ReturnType<typeof sortedAlerts>[number];
 
+/** Per-row actions. Triage-only — never an Ack. Receives the *resolved* node name alongside the
+ *  alert: an action that opens a dialog naming the node (Mute) would otherwise need a second
+ *  `useEntityNames()` resolver in the page, duplicating the batch this list already runs. */
+type RowActions = (alert: SortedAlert, nodeName: string) => ReactNode;
+
 interface Props {
   /** Cap the number of rows (e.g. dashboard widget). */
   limit?: number;
-  /** Per-row actions (Mute / open external). Triage-only — never an Ack. */
-  actions?: (alert: SortedAlert) => ReactNode;
+  actions?: RowActions;
   empty?: ReactNode;
 }
 
@@ -64,7 +68,7 @@ function AlertRow({
   v,
 }: {
   a: SortedAlert;
-  actions?: (alert: SortedAlert) => ReactNode;
+  actions?: RowActions;
   nodeName: NameOf;
   v?: VProps;
 }) {
@@ -104,7 +108,7 @@ function AlertRow({
         </span>
       )}
       <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
-      {actions && <span className="alertrow-actions">{actions(a)}</span>}
+      {actions && <span className="alertrow-actions">{actions(a, nodeName(a.node))}</span>}
     </div>
   );
 }
@@ -119,7 +123,7 @@ function VirtualAlertRows({
   nodeName,
 }: {
   alerts: SortedAlert[];
-  actions?: (alert: SortedAlert) => ReactNode;
+  actions?: RowActions;
   nodeName: NameOf;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);

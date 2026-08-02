@@ -251,6 +251,29 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
             clauses.push(format!("({})", ors.join(" OR ")));
         }
     }
+    // The RBAC group scope (ADR-014), already resolved to node ids by the API.
+    //
+    // ⚠️ Pushed **after** the free-text clause and as its own space-separated (i.e. ANDed) term, not
+    // into the `ors` above. `name_node_ids` a few lines up is the *opposite* operation — it widens
+    // the search to nodes whose name matches — and putting the two in the same list would turn a
+    // restriction into a widening, which is precisely the failure mode the field's doc warns about.
+    // The mirror of this clause is `events::EVENT_FILTER_WHERE`'s `$9`, and
+    // `both_backends_restrict_to_the_same_visible_node_set` pins the two together.
+    if let Some(visible) = &filter.visible_node_ids {
+        // An empty visible set matches nothing. `node_id:in()` is not a query VictoriaLogs accepts,
+        // so it is spelled as an explicitly unsatisfiable filter rather than omitted — omitting it
+        // would return the whole firehose, which is the fail-open inversion.
+        if visible.is_empty() {
+            clauses.push("node_id:in(\"\")".to_owned());
+        } else {
+            let ids = visible
+                .iter()
+                .map(|i| logsql_quote(&i.to_string()))
+                .collect::<Vec<_>>()
+                .join(",");
+            clauses.push(format!("node_id:in({ids})"));
+        }
+    }
     if clauses.is_empty() {
         "*".to_owned()
     } else {
@@ -626,6 +649,15 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) ->
             }
         }
     }
+    // The RBAC restriction, applied last and independently of the search — the third
+    // implementation of the same rule (SQL `$9`, LogsQL `node_id:in(…)`, and this fake), which is
+    // why `both_backends_restrict_to_the_same_visible_node_set` compares them rather than each on
+    // its own. An event with no node id never satisfies a restriction.
+    if let Some(visible) = &f.visible_node_ids {
+        if !r.node_id.is_some_and(|n| visible.contains(&n)) {
+            return false;
+        }
+    }
     true
 }
 
@@ -812,6 +844,7 @@ mod tests {
             matched: Some(true),
             search: Some("link down".into()),
             regex: false,
+            visible_node_ids: None,
         };
         let name_ids = [Uuid::from_u128(9)];
         let q = build_search_logsql(&filter, &name_ids, 100);
@@ -903,6 +936,7 @@ mod tests {
             matched: Some(false),
             search: Some("x".into()),
             regex: false,
+            visible_node_ids: None,
         };
         let logsql = build_filter_part(&full, &[]);
         for clause in [
@@ -916,9 +950,96 @@ mod tests {
         ] {
             assert!(logsql.contains(clause), "LogsQL missing {clause}: {logsql}");
         }
-        for bind in ["$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8"] {
+        for bind in ["$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9"] {
             assert!(EVENT_FILTER_WHERE.contains(bind), "SQL missing {bind}");
         }
+    }
+
+    #[test]
+    fn both_backends_restrict_to_the_same_visible_node_set() {
+        // The RBAC group scope (ADR-014) is the newest dimension of `EventFilter`, and the one with
+        // the worst failure direction: it is a *restriction*, and every way of getting it wrong
+        // makes it wider. So all three implementations are checked against each other here — the
+        // SQL predicate, the LogsQL clause, and the in-memory fake `record_matches`.
+        use crate::events::EVENT_FILTER_WHERE;
+        let mine = Uuid::from_u128(11);
+        let theirs = Uuid::from_u128(22);
+
+        // 1. The SQL side restricts on the array, and does it at the top level — not folded into
+        //    the `$7` search alternation, where an `OR` would let non-matching rows back in.
+        assert!(EVENT_FILTER_WHERE.contains("($9::uuid[] IS NULL OR e.node_id = ANY($9))"));
+        assert!(
+            EVENT_FILTER_WHERE.trim_end().ends_with("= ANY($9))"),
+            "the restriction must be the last top-level AND: {EVENT_FILTER_WHERE}"
+        );
+
+        // 2. The LogsQL side emits an ANDed `in(…)` term, separate from the free-text `OR` group.
+        let scoped = EventFilter {
+            visible_node_ids: Some(vec![mine]),
+            ..EventFilter::default()
+        };
+        let q = build_filter_part(&scoped, &[]);
+        assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}");
+
+        // ⚠️ The inversion that matters. `name_node_ids` is the *additive* term — it widens a text
+        // search to nodes whose name matched — and it must never be able to satisfy a restriction.
+        // Search for a term that matches `theirs` by name while scoped to `mine`: both clauses must
+        // be present and ANDed, so the restriction still applies.
+        let both = EventFilter {
+            search: Some("router".into()),
+            visible_node_ids: Some(vec![mine]),
+            ..EventFilter::default()
+        };
+        let q = build_filter_part(&both, &[theirs]);
+        assert!(q.contains(&format!("node_id:in(\"{theirs}\")")), "{q}"); // widening, inside the OR
+        assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}"); // restriction, ANDed
+        let or_group = q.split(" OR ").count();
+        assert!(or_group > 1, "the search term still ORs its alternatives");
+        assert!(
+            q.trim_end().ends_with(&format!("node_id:in(\"{mine}\")")),
+            "the restriction must sit outside the search's OR group: {q}"
+        );
+
+        // 3. An empty visible set matches nothing — the fail-open inversion, on all three sides.
+        let none_visible = EventFilter {
+            visible_node_ids: Some(Vec::new()),
+            ..EventFilter::default()
+        };
+        let q = build_filter_part(&none_visible, &[]);
+        assert!(
+            q.contains("node_id:in(\"\")"),
+            "an empty scope must emit an unsatisfiable filter, never no filter: {q}"
+        );
+        assert!(!q.contains('*'), "and must not fall back to match-all: {q}");
+    }
+
+    #[test]
+    fn the_in_memory_fake_restricts_by_the_same_rule_as_the_two_query_builders() {
+        // `record_matches` is what every store test asserts against, so if it disagreed with the
+        // real builders the tests would pass while the deployment leaked.
+        let mine = Uuid::from_u128(11);
+        let theirs = Uuid::from_u128(22);
+        let rec = |node: Option<Uuid>| PersistRecord {
+            node_id: node,
+            ..record(Uuid::new_v4(), "link down", 1_000, EventAction::None)
+        };
+        let scoped = EventFilter {
+            visible_node_ids: Some(vec![mine]),
+            ..EventFilter::default()
+        };
+        assert!(record_matches(&rec(Some(mine)), &scoped, &[]));
+        assert!(!record_matches(&rec(Some(theirs)), &scoped, &[]));
+        // An unattributed event is hidden from a scoped caller — the same rule an ungrouped node
+        // gets, and it matters most here because syslog bodies routinely carry credentials.
+        assert!(!record_matches(&rec(None), &scoped, &[]));
+        // …but is still visible when unrestricted, which is the behaviour that must not regress.
+        assert!(record_matches(&rec(None), &EventFilter::default(), &[]));
+        // An empty scope sees nothing at all.
+        let empty = EventFilter {
+            visible_node_ids: Some(Vec::new()),
+            ..EventFilter::default()
+        };
+        assert!(!record_matches(&rec(Some(mine)), &empty, &[]));
     }
 
     #[test]

@@ -1,0 +1,135 @@
+/* Topology ▸ Geo map. The map fills the pane; the outline and ocean are drawn in surface tokens so
+   the whole thing themes with the rest of the product rather than looking like an embedded image. */
+
+.geopage {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.geopage-empty {
+  margin: 0 0 8px;
+}
+
+/* Scroll discipline (ui-conventions.md): the parent hides overflow, this pane owns the space. */
+.geopage-map {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.geopage-svg {
+  display: block;
+  touch-action: none; /* pointer events drive pan/pinch; the browser must not also scroll */
+  cursor: grab;
+}
+
+.geopage-svg:active {
+  cursor: grabbing;
+}
+
+.geopage-ocean {
+  fill: var(--bg-tertiary);
+}
+
+.geopage-land {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke; /* the coastline stays hairline at every zoom */
+}
+
+.geopage-pin {
+  cursor: pointer;
+}
+
+.geopage-pin-halo {
+  fill: var(--bg-primary);
+  opacity: 0.65;
+}
+
+.geopage-pin-dot {
+  stroke: var(--bg-primary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.geopage-pin:hover .geopage-pin-halo,
+.geopage-pin:focus-visible .geopage-pin-halo {
+  opacity: 1;
+}
+
+.geopage-pin:focus-visible {
+  outline: none;
+}
+
+.geopage-pin:focus-visible .geopage-pin-dot {
+  stroke: var(--accent-color);
+  stroke-width: 2;
+}
+
+/* Zoom controls, same placement and affordance as the topology map's. */
+.geopage-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+
+.geopage-ctl {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.geopage-ctl:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.geopage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 8px 0 0;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  list-style: none;
+}
+
+.geopage-legend li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.geopage-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+/* Touch targets: the zoom controls must stay operable by finger (ui-conventions.md). */
+@media (hover: none) {
+  .geopage-ctl {
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+  }
+}

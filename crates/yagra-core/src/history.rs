@@ -120,6 +120,18 @@ impl AlertHistoryStore {
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
 
+    /// The RBAC group-visibility predicate over `alert_history` (ADR-014), bound as `$2`.
+    ///
+    /// History rows are keyed by node id, not by group, so unlike `NodeRepo`'s version this one goes
+    /// through a subquery on `nodes`. The subquery is what makes it correct across a node that has
+    /// since moved groups: it resolves membership *now*, which is the same answer every other read
+    /// path gives, rather than freezing whatever was true when the alert fired.
+    ///
+    /// ⚠️ Same parenthesisation trap as `NodeRepo::SCOPE_PREDICATE` — `WHERE {SCOPE} AND a OR b`
+    /// parses as `({SCOPE} AND a) OR b` and lets every `b` row escape the scope.
+    const SCOPE_PREDICATE: &'static str =
+        "($2::uuid[] IS NULL OR node IN (SELECT id FROM nodes WHERE group_id = ANY($2)))";
+
     /// Nodes with the most alert **fires** (resolved=false) at or after `since_ms` (Unix ms),
     /// highest first. Powers the "Top alerting nodes" widget (chronic offenders).
     pub async fn top_nodes_by_fires(
@@ -144,19 +156,28 @@ impl AlertHistoryStore {
     /// Alert-fire counts bucketed by weekday (0=Sun … 6=Sat, UTC) × hour (0–23) at or after
     /// `since_ms`. Powers the "Alert calendar" heatmap. UTC so buckets are stable regardless of
     /// the DB session timezone.
+    /// `groups` restricts the count to nodes in those folder groups (ADR-014); `None` counts the
+    /// whole fleet. Unlike the rankings, this cannot be filtered after the fact — the counts are
+    /// produced by the `GROUP BY` and there are no per-node rows left to drop — so the restriction
+    /// has to be part of the query. It is written as [`Self::SCOPE_PREDICATE`]: always present,
+    /// bound rather than interpolated, `NULL` meaning unrestricted. A conditionally-appended clause
+    /// would have a branch that can be forgotten, and forgetting it fails **open**.
     pub async fn fires_by_weekday_hour(
         &self,
         since_ms: i64,
+        groups: crate::repo::GroupFilter<'_>,
     ) -> anyhow::Result<Vec<(i32, i32, i64)>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "SELECT \
                 extract(dow from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS dow, \
                 extract(hour from to_timestamp(at_unix_ms / 1000.0) at time zone 'UTC')::int AS hour, \
                 count(*) AS n \
-             FROM alert_history WHERE resolved = false AND at_unix_ms >= $1 \
+             FROM alert_history WHERE resolved = false AND at_unix_ms >= $1 AND {} \
              GROUP BY dow, hour",
-        )
+            Self::SCOPE_PREDICATE
+        ))
         .bind(since_ms)
+        .bind(groups.map(<[Uuid]>::to_vec))
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()

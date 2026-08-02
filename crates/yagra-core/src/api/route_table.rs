@@ -20,224 +20,369 @@
 //!
 //! **This list is not a wish list — it is a ledger.** Adding an endpoint means adding its line
 //! here in the same commit; deleting one means deleting its line, deliberately.
+//!
+//! ## The third column: what each route does about RBAC group scope (ADR-014)
+//!
+//! Scope filtering is the kind of thing that is applied to the twenty endpoints someone thought of
+//! and silently missing from the twenty-first — and a miss fails **open**, returning the whole
+//! fleet with no error anywhere. So it is not left to memory: every route carries a [`Scoping`]
+//! rule, and the tests below check the handler's signature actually matches what its line claims.
+//!
+//! Adding the column was itself the mechanism. Widening the tuple made all 209 lines fail to
+//! compile at once, which forced one deliberate pass over the whole surface with a human deciding
+//! each entry, rather than a sweep that stops when the obvious ones are done. From here on a new
+//! endpoint cannot be added without answering the question, because its ledger line does not
+//! compile without a rule.
 
-/// Every `(method, path)` the router serves, sorted by path. Axum path params keep their `:name`
-/// form; the test substitutes a value that parses for every extractor in use.
-pub(crate) const ROUTES: &[(&str, &str)] = &[
-    ("GET", "/api/v1/alerts"),
-    ("POST", "/api/v1/alerts/ack"),
-    ("GET", "/api/v1/alerts/calendar"),
-    ("GET", "/api/v1/alerts/history"),
-    ("GET", "/api/v1/alerts/top-nodes"),
-    ("GET", "/api/v1/alerts/transitions"),
-    ("GET", "/api/v1/analysis/jobs"),
-    ("POST", "/api/v1/analysis/jobs"),
-    ("GET", "/api/v1/analysis/jobs/:id"),
-    ("POST", "/api/v1/analysis/jobs/:id/cancel"),
-    ("GET", "/api/v1/analysis/jobs/:id/findings"),
-    ("GET", "/api/v1/api-tokens"),
-    ("POST", "/api/v1/api-tokens"),
-    ("DELETE", "/api/v1/api-tokens/:id"),
-    ("GET", "/api/v1/audit"),
-    ("POST", "/api/v1/auth/login"),
-    ("POST", "/api/v1/auth/logout"),
-    ("GET", "/api/v1/auth/me"),
-    ("GET", "/api/v1/auth/oidc/authorize"),
-    ("POST", "/api/v1/auth/oidc/callback"),
-    ("GET", "/api/v1/classification-rules"),
-    ("POST", "/api/v1/classification-rules"),
-    ("DELETE", "/api/v1/classification-rules/:id"),
-    ("PUT", "/api/v1/classification-rules/:id"),
-    ("GET", "/api/v1/collection-templates"),
-    ("POST", "/api/v1/collection-templates"),
-    ("DELETE", "/api/v1/collection-templates/:id"),
-    ("GET", "/api/v1/collection-templates/:id/items"),
-    ("POST", "/api/v1/collection-templates/:id/items"),
-    ("DELETE", "/api/v1/collection-templates/:id/items/:item_id"),
-    ("DELETE", "/api/v1/collection/:item_id"),
-    ("GET", "/api/v1/config"),
-    ("PUT", "/api/v1/config"),
-    ("GET", "/api/v1/credentials"),
-    ("POST", "/api/v1/credentials"),
-    ("DELETE", "/api/v1/credentials/:id"),
-    ("PUT", "/api/v1/credentials/:id"),
-    ("GET", "/api/v1/dashboard"),
-    ("PUT", "/api/v1/dashboard"),
-    ("GET", "/api/v1/discovery/candidates"),
-    ("POST", "/api/v1/discovery/import"),
-    ("POST", "/api/v1/discovery/scan"),
-    ("GET", "/api/v1/discovery/scan/:id"),
-    ("POST", "/api/v1/dns-monitors"),
-    ("GET", "/api/v1/event-rules"),
-    ("POST", "/api/v1/event-rules"),
-    ("DELETE", "/api/v1/event-rules/:id"),
-    ("PUT", "/api/v1/event-rules/:id"),
-    ("POST", "/api/v1/event-rules/test"),
-    ("GET", "/api/v1/event-sources"),
-    ("POST", "/api/v1/event-sources"),
-    ("DELETE", "/api/v1/event-sources/:id"),
-    ("PUT", "/api/v1/event-sources/:id"),
-    ("POST", "/api/v1/event-sources/:id/rotate-token"),
-    ("GET", "/api/v1/events"),
-    ("GET", "/api/v1/events/stats"),
-    ("GET", "/api/v1/fleet/coverage"),
-    ("GET", "/api/v1/fleet/group-summary"),
-    ("GET", "/api/v1/fleet/state-history"),
-    ("GET", "/api/v1/fleet/summary"),
-    ("GET", "/api/v1/flow/conversations"),
-    ("GET", "/api/v1/flow/protocols"),
-    ("GET", "/api/v1/flow/series"),
-    ("GET", "/api/v1/flow/top-as"),
-    ("GET", "/api/v1/flow/top-ports"),
-    ("GET", "/api/v1/flow/top-talkers"),
-    ("GET", "/api/v1/forwarding/destinations"),
-    ("POST", "/api/v1/forwarding/destinations"),
-    ("DELETE", "/api/v1/forwarding/destinations/:id"),
-    ("PUT", "/api/v1/forwarding/destinations/:id"),
-    ("POST", "/api/v1/forwarding/destinations/:id/test"),
-    ("GET", "/api/v1/forwarding/status"),
-    ("POST", "/api/v1/ingest/webhook/:source_id"),
-    ("GET", "/api/v1/llm/config"),
-    ("PUT", "/api/v1/llm/config"),
-    ("POST", "/api/v1/llm/test"),
-    ("GET", "/api/v1/maintenance-windows"),
-    ("POST", "/api/v1/maintenance-windows"),
-    ("DELETE", "/api/v1/maintenance-windows/:id"),
-    ("PUT", "/api/v1/maintenance-windows/:id"),
-    ("POST", "/api/v1/meraki/import"),
-    ("GET", "/api/v1/meraki/orgs"),
-    ("POST", "/api/v1/meraki/orgs"),
-    ("DELETE", "/api/v1/meraki/orgs/:id"),
-    ("PUT", "/api/v1/meraki/orgs/:id/cadence"),
-    ("PUT", "/api/v1/meraki/orgs/:id/enabled"),
-    ("POST", "/api/v1/meraki/orgs/:id/enumerate"),
-    ("GET", "/api/v1/meraki/orgs/:id/networks"),
-    ("PUT", "/api/v1/meraki/orgs/:id/networks"),
-    ("POST", "/api/v1/meraki/orgs/discover"),
-    ("GET", "/api/v1/meraki/polling"),
-    ("PUT", "/api/v1/meraki/polling"),
-    ("GET", "/api/v1/metrics/interface-delta"),
-    ("GET", "/api/v1/metrics/interface-heatmap"),
-    ("GET", "/api/v1/metrics/interface-top"),
-    ("GET", "/api/v1/metrics/throughput-range"),
-    ("GET", "/api/v1/metrics/top"),
-    ("GET", "/api/v1/mib-catalog"),
-    ("POST", "/api/v1/mib-catalog"),
-    ("DELETE", "/api/v1/mib-catalog/:id"),
-    ("GET", "/api/v1/monitoring-gaps"),
-    ("GET", "/api/v1/mutes"),
-    ("POST", "/api/v1/mutes"),
-    ("DELETE", "/api/v1/mutes/:id"),
-    ("GET", "/api/v1/node-groups"),
-    ("POST", "/api/v1/node-groups"),
-    ("DELETE", "/api/v1/node-groups/:id"),
-    ("PUT", "/api/v1/node-groups/:id"),
-    ("PUT", "/api/v1/node-groups/:id/geo"),
-    ("PUT", "/api/v1/node-groups/:id/placement"),
-    ("PUT", "/api/v1/node-groups/:id/pool"),
-    ("POST", "/api/v1/node-names"),
-    ("GET", "/api/v1/nodes"),
-    ("POST", "/api/v1/nodes"),
-    ("DELETE", "/api/v1/nodes/:node_id"),
-    ("GET", "/api/v1/nodes/:node_id"),
-    ("GET", "/api/v1/nodes/:node_id/assignment"),
-    ("PUT", "/api/v1/nodes/:node_id/bindings"),
-    ("GET", "/api/v1/nodes/:node_id/collection"),
-    ("POST", "/api/v1/nodes/:node_id/collection"),
-    ("GET", "/api/v1/nodes/:node_id/dns-chain"),
-    ("GET", "/api/v1/nodes/:node_id/dns-chain/history"),
-    ("DELETE", "/api/v1/nodes/:node_id/dns-check"),
-    ("GET", "/api/v1/nodes/:node_id/dns-check"),
-    ("PUT", "/api/v1/nodes/:node_id/dns-check"),
-    ("GET", "/api/v1/nodes/:node_id/flow/conversations"),
-    ("GET", "/api/v1/nodes/:node_id/flow/protocols"),
-    ("GET", "/api/v1/nodes/:node_id/flow/series"),
-    ("GET", "/api/v1/nodes/:node_id/flow/top-as"),
-    ("GET", "/api/v1/nodes/:node_id/flow/top-ports"),
-    ("GET", "/api/v1/nodes/:node_id/flow/top-talkers"),
-    ("PUT", "/api/v1/nodes/:node_id/group"),
-    ("GET", "/api/v1/nodes/:node_id/interfaces"),
-    ("GET", "/api/v1/nodes/:node_id/interfaces/:ifindex/series"),
-    ("GET", "/api/v1/nodes/:node_id/metrics/:metric"),
-    ("GET", "/api/v1/nodes/:node_id/metrics/:metric/range"),
-    ("PUT", "/api/v1/nodes/:node_id/parent"),
-    ("PUT", "/api/v1/nodes/:node_id/placement"),
-    ("POST", "/api/v1/nodes/:node_id/poll"),
-    ("PUT", "/api/v1/nodes/:node_id/pool"),
-    ("GET", "/api/v1/nodes/:node_id/status"),
-    ("DELETE", "/api/v1/nodes/:node_id/url-check"),
-    ("GET", "/api/v1/nodes/:node_id/url-check"),
-    ("PUT", "/api/v1/nodes/:node_id/url-check"),
-    ("GET", "/api/v1/nodes/by-group"),
-    ("GET", "/api/v1/nodes/search"),
-    ("GET", "/api/v1/notification-channels"),
-    ("POST", "/api/v1/notification-channels"),
-    ("DELETE", "/api/v1/notification-channels/:id"),
-    ("PUT", "/api/v1/notification-channels/:id"),
-    ("GET", "/api/v1/openapi.json"),
-    ("GET", "/api/v1/poller-health"),
-    ("GET", "/api/v1/pollers"),
-    ("DELETE", "/api/v1/pollers/:id"),
-    ("GET", "/api/v1/pollers/:id/nodes"),
-    ("GET", "/api/v1/pools"),
-    ("GET", "/api/v1/profiles"),
-    ("POST", "/api/v1/profiles"),
-    ("DELETE", "/api/v1/profiles/:id"),
-    ("PUT", "/api/v1/profiles/:id"),
-    ("GET", "/api/v1/profiles/:id/templates"),
-    ("PUT", "/api/v1/profiles/:id/templates"),
-    ("POST", "/api/v1/rca"),
-    ("GET", "/api/v1/reports/definitions"),
-    ("POST", "/api/v1/reports/definitions"),
-    ("DELETE", "/api/v1/reports/definitions/:id"),
-    ("PUT", "/api/v1/reports/definitions/:id"),
-    ("POST", "/api/v1/reports/definitions/:id/run"),
-    ("GET", "/api/v1/reports/runs"),
-    ("DELETE", "/api/v1/reports/runs/:id"),
-    ("GET", "/api/v1/reports/runs/:id"),
-    ("GET", "/api/v1/reports/runs/:id/export"),
-    ("GET", "/api/v1/reports/schedules"),
-    ("POST", "/api/v1/reports/schedules"),
-    ("DELETE", "/api/v1/reports/schedules/:id"),
-    ("PUT", "/api/v1/reports/schedules/:id"),
-    ("GET", "/api/v1/reports/sections"),
-    ("GET", "/api/v1/roles"),
-    ("GET", "/api/v1/routing-rules"),
-    ("POST", "/api/v1/routing-rules"),
-    ("DELETE", "/api/v1/routing-rules/:id"),
-    ("PUT", "/api/v1/routing-rules/:id"),
-    ("GET", "/api/v1/settings/oidc"),
-    ("POST", "/api/v1/settings/oidc"),
-    ("DELETE", "/api/v1/settings/oidc/:id"),
-    ("PUT", "/api/v1/settings/oidc/:id"),
-    ("GET", "/api/v1/shared-dashboard"),
-    ("PUT", "/api/v1/shared-dashboard"),
-    ("GET", "/api/v1/stream/alerts"),
-    ("GET", "/api/v1/stream/analysis"),
-    ("GET", "/api/v1/stream/node-states"),
-    ("GET", "/api/v1/stream/report-runs"),
-    ("GET", "/api/v1/system-health"),
-    ("GET", "/api/v1/system/hosts"),
-    ("GET", "/api/v1/system/hosts/:instance/metrics/range"),
-    ("GET", "/api/v1/thresholds"),
-    ("POST", "/api/v1/thresholds"),
-    ("DELETE", "/api/v1/thresholds/:id"),
-    ("GET", "/api/v1/topology"),
-    ("POST", "/api/v1/url-monitors"),
-    ("GET", "/api/v1/users"),
-    ("POST", "/api/v1/users"),
-    ("DELETE", "/api/v1/users/:id"),
-    ("PUT", "/api/v1/users/:id/enabled"),
-    ("PUT", "/api/v1/users/:id/password"),
-    ("PUT", "/api/v1/users/:id/role"),
-    ("GET", "/api/v1/version"),
-    ("GET", "/healthz"),
-    ("GET", "/readyz"),
+/// What a route does about the caller's group scope.
+///
+/// [`Self::Global`] and [`Self::Pending`] both carry a **reason string**, and it is required to be
+/// non-empty. That is the whole defence against the lazy path: without it, `Global` would be the
+/// variant that always compiles, and an unscoped node-returning endpoint would sail through review
+/// looking considered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scoping {
+    /// Addresses one node — or one stored row that names a node or a folder group as its target
+    /// (a mute, a maintenance window). Takes `VisibleNode` (a `:node_id` path param) or checks the
+    /// id it was handed against the caller's scope.
+    ///
+    /// Out of scope answers `404`, never `403` — see `extract::VisibleNode`.
+    NodeScoped,
+    /// The scope becomes a **predicate in the store query**, so the answer is already narrow when it
+    /// arrives: `group_id = ANY(…)` against `nodes` for the SQL lists, or the caller's resolved
+    /// node-id set for a store that has never heard of groups (`/events/stats`, both backends).
+    GroupFiltered,
+    /// Ranked, aggregated or streamed by something that does not know about groups (the alert
+    /// engine, VictoriaMetrics, ClickHouse, VictoriaLogs), so the filter runs after the answer.
+    PostFiltered,
+    /// Refuses a group-scoped caller outright, because it cannot yet honour one. The same
+    /// fail-closed shape `POST /api/v1/api-tokens` and `/mcp` already use, and for the same reason:
+    /// a number that quietly covers the whole fleet is worse than a refusal.
+    Refused(&'static str),
+    /// ⚠️ **Not scoped yet** — the reason names what is missing. This exists so the gap lives in the
+    /// ledger, where a reviewer sees it, instead of in a plan file nobody reads. The count is
+    /// ratcheted by a test: it may go down, never up.
+    ///
+    /// **Currently unconstructed, and that is the goal state, not dead code.** Every route now has a
+    /// real rule; this variant is the declared landing place for the next one that does not, so that
+    /// adding an unscoped endpoint is a visible ledger entry with a written reason rather than a
+    /// silently missing filter. Deleting it would remove the only honest way to record a gap and
+    /// leave `Global` — which means "deliberately unscoped" — as the path of least resistance.
+    #[allow(dead_code)]
+    Pending(&'static str),
+    /// Deliberately unscoped, with the reason recorded. Infrastructure, deployment-wide config,
+    /// admin-only administration, or a resource with no node attribution at all.
+    Global(&'static str),
+}
+
+// `Pending` is deliberately absent from this list while no route needs it — see its doc comment.
+use Scoping::{Global, GroupFiltered, NodeScoped, PostFiltered, Refused};
+
+/// Reasons reused across many admin-only configuration routes, so the ledger stays readable and the
+/// same justification is not re-worded twenty times.
+const ADMIN_CFG: Scoping = Global("admin-only configuration; an Admin is unscoped by construction");
+const INFRA: Scoping = Global("infrastructure, not monitored-node data");
+const DEPLOY_WIDE: Scoping = Global("deployment-wide, identical for every caller");
+const ACCOUNT: Scoping = Global("account/session identity, not node data");
+/// A **report** artefact. Refused to a group-scoped caller rather than filtered, because a saved run
+/// is rendered output over fleet-wide sections and retains no node attribution to filter by — see
+/// `api/reports.rs::reports_are_fleet_wide`.
+const REPORT: Scoping = Refused(
+    "a rendered report has no per-node attribution left to filter, so a scoped caller is refused \
+     rather than shown the fleet or told there are no reports",
+);
+/// A number that was **already summed** before this endpoint saw it — the fleet state timeline
+/// (snapshotted as `(ts, state, count)`) and fleet throughput (`sum()` inside VictoriaMetrics).
+/// Neither retains a node id, so there is nothing to filter and nothing to join; narrowing them
+/// means changing how they are *recorded*, which is a feature rather than a filter.
+const PRE_AGGREGATED: Scoping = Refused(
+    "the value arrives already summed with no per-node attribution, so it can be served whole or \
+     not at all; a group-scoped caller gets the refusal rather than the fleet's numbers",
+);
+
+/// Every `(method, path, scoping)` the router serves, sorted by path. Axum path params keep their
+/// `:name` form; the test substitutes a value that parses for every extractor in use.
+pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
+    ("GET", "/api/v1/alerts", PostFiltered),
+    ("POST", "/api/v1/alerts/ack", NodeScoped),
+    ("GET", "/api/v1/alerts/calendar", GroupFiltered),
+    ("GET", "/api/v1/alerts/history", PostFiltered),
+    ("GET", "/api/v1/alerts/top-nodes", PostFiltered),
+    ("GET", "/api/v1/alerts/transitions", PostFiltered),
+    ("GET", "/api/v1/analysis/jobs", PostFiltered),
+    ("POST", "/api/v1/analysis/jobs", NodeScoped),
+    ("GET", "/api/v1/analysis/jobs/:id", NodeScoped),
+    ("POST", "/api/v1/analysis/jobs/:id/cancel", NodeScoped),
+    ("GET", "/api/v1/analysis/jobs/:id/findings", PostFiltered),
+    ("GET", "/api/v1/api-tokens", ADMIN_CFG),
+    ("POST", "/api/v1/api-tokens", ADMIN_CFG),
+    ("DELETE", "/api/v1/api-tokens/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/audit",
+        Global(
+            "admin-only, and audit rows carry no node attribution to filter on (ADR-014 non-goal)",
+        ),
+    ),
+    ("POST", "/api/v1/auth/login", ACCOUNT),
+    ("POST", "/api/v1/auth/logout", ACCOUNT),
+    ("GET", "/api/v1/auth/me", ACCOUNT),
+    ("GET", "/api/v1/auth/oidc/authorize", ACCOUNT),
+    ("POST", "/api/v1/auth/oidc/callback", ACCOUNT),
+    ("GET", "/api/v1/classification-rules", ADMIN_CFG),
+    ("POST", "/api/v1/classification-rules", ADMIN_CFG),
+    ("DELETE", "/api/v1/classification-rules/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/classification-rules/:id", ADMIN_CFG),
+    ("GET", "/api/v1/collection-templates", ADMIN_CFG),
+    ("POST", "/api/v1/collection-templates", ADMIN_CFG),
+    ("DELETE", "/api/v1/collection-templates/:id", ADMIN_CFG),
+    ("GET", "/api/v1/collection-templates/:id/items", ADMIN_CFG),
+    ("POST", "/api/v1/collection-templates/:id/items", ADMIN_CFG),
+    (
+        "DELETE",
+        "/api/v1/collection-templates/:id/items/:item_id",
+        ADMIN_CFG,
+    ),
+    ("DELETE", "/api/v1/collection/:item_id", ADMIN_CFG),
+    ("GET", "/api/v1/config", DEPLOY_WIDE),
+    ("PUT", "/api/v1/config", ADMIN_CFG),
+    ("GET", "/api/v1/credentials", ADMIN_CFG),
+    ("POST", "/api/v1/credentials", ADMIN_CFG),
+    ("DELETE", "/api/v1/credentials/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/credentials/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/dashboard",
+        Global("the caller's own widget layout; the widgets' queries are scoped individually"),
+    ),
+    (
+        "PUT",
+        "/api/v1/dashboard",
+        Global("the caller's own widget layout"),
+    ),
+    ("GET", "/api/v1/discovery/candidates", ADMIN_CFG),
+    ("POST", "/api/v1/discovery/import", ADMIN_CFG),
+    ("POST", "/api/v1/discovery/scan", ADMIN_CFG),
+    ("GET", "/api/v1/discovery/scan/:id", ADMIN_CFG),
+    ("POST", "/api/v1/dns-monitors", ADMIN_CFG),
+    ("GET", "/api/v1/event-rules", ADMIN_CFG),
+    ("POST", "/api/v1/event-rules", ADMIN_CFG),
+    ("DELETE", "/api/v1/event-rules/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/event-rules/:id", ADMIN_CFG),
+    ("POST", "/api/v1/event-rules/test", ADMIN_CFG),
+    ("GET", "/api/v1/event-sources", ADMIN_CFG),
+    ("POST", "/api/v1/event-sources", ADMIN_CFG),
+    ("DELETE", "/api/v1/event-sources/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/event-sources/:id", ADMIN_CFG),
+    ("POST", "/api/v1/event-sources/:id/rotate-token", ADMIN_CFG),
+    ("GET", "/api/v1/events", PostFiltered),
+    ("GET", "/api/v1/events/stats", GroupFiltered),
+    ("GET", "/api/v1/fleet/coverage", GroupFiltered),
+    ("GET", "/api/v1/fleet/group-summary", PostFiltered),
+    ("GET", "/api/v1/fleet/state-history", PRE_AGGREGATED),
+    ("GET", "/api/v1/fleet/summary", PostFiltered),
+    ("GET", "/api/v1/flow/conversations", PRE_AGGREGATED),
+    ("GET", "/api/v1/flow/protocols", PRE_AGGREGATED),
+    ("GET", "/api/v1/flow/series", PRE_AGGREGATED),
+    ("GET", "/api/v1/flow/top-as", PRE_AGGREGATED),
+    ("GET", "/api/v1/flow/top-ports", PRE_AGGREGATED),
+    ("GET", "/api/v1/flow/top-talkers", PRE_AGGREGATED),
+    ("GET", "/api/v1/forwarding/destinations", ADMIN_CFG),
+    ("POST", "/api/v1/forwarding/destinations", ADMIN_CFG),
+    ("DELETE", "/api/v1/forwarding/destinations/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/forwarding/destinations/:id", ADMIN_CFG),
+    (
+        "POST",
+        "/api/v1/forwarding/destinations/:id/test",
+        ADMIN_CFG,
+    ),
+    ("GET", "/api/v1/forwarding/status", ADMIN_CFG),
+    (
+        "POST",
+        "/api/v1/ingest/webhook/:source_id",
+        Global("token-authenticated ingest from a device, not a user-facing read"),
+    ),
+    ("GET", "/api/v1/llm/config", ADMIN_CFG),
+    ("PUT", "/api/v1/llm/config", ADMIN_CFG),
+    ("POST", "/api/v1/llm/test", ADMIN_CFG),
+    ("GET", "/api/v1/maintenance-windows", PostFiltered),
+    ("POST", "/api/v1/maintenance-windows", NodeScoped),
+    ("DELETE", "/api/v1/maintenance-windows/:id", NodeScoped),
+    ("PUT", "/api/v1/maintenance-windows/:id", NodeScoped),
+    ("POST", "/api/v1/meraki/import", ADMIN_CFG),
+    ("GET", "/api/v1/meraki/orgs", ADMIN_CFG),
+    ("POST", "/api/v1/meraki/orgs", ADMIN_CFG),
+    ("DELETE", "/api/v1/meraki/orgs/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/meraki/orgs/:id/cadence", ADMIN_CFG),
+    ("PUT", "/api/v1/meraki/orgs/:id/enabled", ADMIN_CFG),
+    ("POST", "/api/v1/meraki/orgs/:id/enumerate", ADMIN_CFG),
+    ("GET", "/api/v1/meraki/orgs/:id/networks", ADMIN_CFG),
+    ("PUT", "/api/v1/meraki/orgs/:id/networks", ADMIN_CFG),
+    ("POST", "/api/v1/meraki/orgs/discover", ADMIN_CFG),
+    ("GET", "/api/v1/meraki/polling", ADMIN_CFG),
+    ("PUT", "/api/v1/meraki/polling", ADMIN_CFG),
+    ("GET", "/api/v1/metrics/interface-delta", PostFiltered),
+    ("GET", "/api/v1/metrics/interface-heatmap", PostFiltered),
+    ("GET", "/api/v1/metrics/interface-top", PostFiltered),
+    ("GET", "/api/v1/metrics/throughput-range", PRE_AGGREGATED),
+    ("GET", "/api/v1/metrics/top", PostFiltered),
+    ("GET", "/api/v1/mib-catalog", ADMIN_CFG),
+    ("POST", "/api/v1/mib-catalog", ADMIN_CFG),
+    ("DELETE", "/api/v1/mib-catalog/:id", ADMIN_CFG),
+    ("GET", "/api/v1/monitoring-gaps", INFRA),
+    ("GET", "/api/v1/mutes", PostFiltered),
+    ("POST", "/api/v1/mutes", NodeScoped),
+    ("DELETE", "/api/v1/mutes/:id", NodeScoped),
+    ("GET", "/api/v1/node-groups", GroupFiltered),
+    ("POST", "/api/v1/node-groups", ADMIN_CFG),
+    ("DELETE", "/api/v1/node-groups/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/node-groups/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/node-groups/:id/geo", ADMIN_CFG),
+    ("PUT", "/api/v1/node-groups/:id/placement", ADMIN_CFG),
+    ("PUT", "/api/v1/node-groups/:id/pool", ADMIN_CFG),
+    ("POST", "/api/v1/node-names", GroupFiltered),
+    ("GET", "/api/v1/nodes", GroupFiltered),
+    ("POST", "/api/v1/nodes", ADMIN_CFG),
+    ("DELETE", "/api/v1/nodes/:node_id", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id", NodeScoped),
+    ("GET", "/api/v1/nodes/:node_id/assignment", NodeScoped),
+    ("PUT", "/api/v1/nodes/:node_id/bindings", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/collection", NodeScoped),
+    ("POST", "/api/v1/nodes/:node_id/collection", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/dns-chain", NodeScoped),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/dns-chain/history",
+        NodeScoped,
+    ),
+    ("DELETE", "/api/v1/nodes/:node_id/dns-check", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/dns-check", NodeScoped),
+    ("PUT", "/api/v1/nodes/:node_id/dns-check", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/flow/conversations",
+        NodeScoped,
+    ),
+    ("GET", "/api/v1/nodes/:node_id/flow/protocols", NodeScoped),
+    ("GET", "/api/v1/nodes/:node_id/flow/series", NodeScoped),
+    ("GET", "/api/v1/nodes/:node_id/flow/top-as", NodeScoped),
+    ("GET", "/api/v1/nodes/:node_id/flow/top-ports", NodeScoped),
+    ("GET", "/api/v1/nodes/:node_id/flow/top-talkers", NodeScoped),
+    ("PUT", "/api/v1/nodes/:node_id/group", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/interfaces", NodeScoped),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
+        NodeScoped,
+    ),
+    ("GET", "/api/v1/nodes/:node_id/metrics/:metric", NodeScoped),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/metrics/:metric/range",
+        NodeScoped,
+    ),
+    ("PUT", "/api/v1/nodes/:node_id/parent", ADMIN_CFG),
+    ("PUT", "/api/v1/nodes/:node_id/placement", ADMIN_CFG),
+    ("POST", "/api/v1/nodes/:node_id/poll", NodeScoped),
+    ("PUT", "/api/v1/nodes/:node_id/pool", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/status", NodeScoped),
+    ("DELETE", "/api/v1/nodes/:node_id/url-check", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/:node_id/url-check", NodeScoped),
+    ("PUT", "/api/v1/nodes/:node_id/url-check", ADMIN_CFG),
+    ("GET", "/api/v1/nodes/by-group", GroupFiltered),
+    ("GET", "/api/v1/nodes/search", GroupFiltered),
+    ("GET", "/api/v1/notification-channels", ADMIN_CFG),
+    ("POST", "/api/v1/notification-channels", ADMIN_CFG),
+    ("DELETE", "/api/v1/notification-channels/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/notification-channels/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/openapi.json",
+        Global("the API contract document itself"),
+    ),
+    ("GET", "/api/v1/poller-health", INFRA),
+    ("GET", "/api/v1/pollers", INFRA),
+    ("DELETE", "/api/v1/pollers/:id", INFRA),
+    ("GET", "/api/v1/pollers/:id/nodes", PostFiltered),
+    ("GET", "/api/v1/pools", INFRA),
+    ("GET", "/api/v1/profiles", ADMIN_CFG),
+    ("POST", "/api/v1/profiles", ADMIN_CFG),
+    ("DELETE", "/api/v1/profiles/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/profiles/:id", ADMIN_CFG),
+    ("GET", "/api/v1/profiles/:id/templates", ADMIN_CFG),
+    ("PUT", "/api/v1/profiles/:id/templates", ADMIN_CFG),
+    ("POST", "/api/v1/rca", NodeScoped),
+    ("GET", "/api/v1/reports/definitions", ADMIN_CFG),
+    ("POST", "/api/v1/reports/definitions", ADMIN_CFG),
+    ("DELETE", "/api/v1/reports/definitions/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/reports/definitions/:id", ADMIN_CFG),
+    ("POST", "/api/v1/reports/definitions/:id/run", ADMIN_CFG),
+    ("GET", "/api/v1/reports/runs", REPORT),
+    ("DELETE", "/api/v1/reports/runs/:id", ADMIN_CFG),
+    ("GET", "/api/v1/reports/runs/:id", REPORT),
+    ("GET", "/api/v1/reports/runs/:id/export", REPORT),
+    ("GET", "/api/v1/reports/schedules", ADMIN_CFG),
+    ("POST", "/api/v1/reports/schedules", ADMIN_CFG),
+    ("DELETE", "/api/v1/reports/schedules/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/reports/schedules/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/reports/sections",
+        Global("a static catalog of report building blocks"),
+    ),
+    ("GET", "/api/v1/roles", DEPLOY_WIDE),
+    ("GET", "/api/v1/routing-rules", ADMIN_CFG),
+    ("POST", "/api/v1/routing-rules", ADMIN_CFG),
+    ("DELETE", "/api/v1/routing-rules/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/routing-rules/:id", ADMIN_CFG),
+    ("GET", "/api/v1/settings/oidc", ADMIN_CFG),
+    ("POST", "/api/v1/settings/oidc", ADMIN_CFG),
+    ("DELETE", "/api/v1/settings/oidc/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/settings/oidc/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/shared-dashboard",
+        Global("one admin-edited layout shown to everyone; its widgets' queries are scoped"),
+    ),
+    ("PUT", "/api/v1/shared-dashboard", ADMIN_CFG),
+    ("GET", "/api/v1/stream/alerts", PostFiltered),
+    ("GET", "/api/v1/stream/analysis", PostFiltered),
+    ("GET", "/api/v1/stream/node-states", PostFiltered),
+    ("GET", "/api/v1/stream/report-runs", REPORT),
+    (
+        "GET",
+        "/api/v1/system-health",
+        Global("core's own health, not monitored-node data"),
+    ),
+    (
+        "GET",
+        "/api/v1/system/hosts",
+        Global("core and poller host metrics, not monitored nodes"),
+    ),
+    (
+        "GET",
+        "/api/v1/system/hosts/:instance/metrics/range",
+        Global("core and poller host metrics, not monitored nodes"),
+    ),
+    ("GET", "/api/v1/thresholds", ADMIN_CFG),
+    ("POST", "/api/v1/thresholds", ADMIN_CFG),
+    ("DELETE", "/api/v1/thresholds/:id", ADMIN_CFG),
+    ("GET", "/api/v1/topology", GroupFiltered),
+    ("POST", "/api/v1/url-monitors", ADMIN_CFG),
+    ("GET", "/api/v1/users", ADMIN_CFG),
+    ("POST", "/api/v1/users", ADMIN_CFG),
+    ("DELETE", "/api/v1/users/:id", ADMIN_CFG),
+    ("PUT", "/api/v1/users/:id/enabled", ADMIN_CFG),
+    ("PUT", "/api/v1/users/:id/password", ADMIN_CFG),
+    ("PUT", "/api/v1/users/:id/role", ADMIN_CFG),
+    ("GET", "/api/v1/version", DEPLOY_WIDE),
+    ("GET", "/healthz", Global("unauthenticated liveness probe")),
+    ("GET", "/readyz", Global("unauthenticated readiness probe")),
 ];
 
 #[cfg(test)]
 mod tests {
-    use super::ROUTES;
+    use super::{Scoping, ROUTES};
     use crate::api::{router, tests_support::public_state};
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
@@ -266,7 +411,7 @@ mod tests {
         // EMPTY body, and a wrong method answers 405. That is the discriminator: a 404 with no
         // body means the route is genuinely missing, not that the resource wasn't found.
         let mut missing = Vec::new();
-        for (method, path) in ROUTES {
+        for (method, path, _) in ROUTES {
             let app = router(public_state());
             let req = Request::builder()
                 .method(*method)
@@ -328,7 +473,8 @@ mod tests {
         let documented = documented();
         let missing: Vec<_> = ROUTES
             .iter()
-            .filter(|(m, p)| !documented.contains(&((*m).to_owned(), (*p).to_owned())))
+            .filter(|(m, p, _)| !documented.contains(&((*m).to_owned(), (*p).to_owned())))
+            .map(|(m, p, _)| (m, p))
             .collect();
         assert!(
             missing.is_empty(),
@@ -345,7 +491,7 @@ mod tests {
         // which is exactly the failure mode this whole mechanism exists to remove.
         let served: std::collections::BTreeSet<_> = ROUTES
             .iter()
-            .map(|(m, p)| ((*m).to_owned(), (*p).to_owned()))
+            .map(|(m, p, _)| ((*m).to_owned(), (*p).to_owned()))
             .collect();
         let extra: Vec<_> = documented()
             .into_iter()
@@ -356,8 +502,206 @@ mod tests {
 
     #[test]
     fn the_ledger_has_no_duplicates() {
+        // Keyed on (method, path) only: two lines for the same endpoint are a duplicate however
+        // they classify it — and if they classified it *differently*, that is worse, not exempt.
         let mut seen = std::collections::BTreeSet::new();
-        let dupes: Vec<_> = ROUTES.iter().filter(|r| !seen.insert(**r)).collect();
+        let dupes: Vec<_> = ROUTES
+            .iter()
+            .filter(|(m, p, _)| !seen.insert((*m, *p)))
+            .collect();
         assert!(dupes.is_empty(), "duplicate route entries: {dupes:?}");
+    }
+
+    // ── The scoping column, checked against the handlers ──────────────────────
+
+    /// `(method, path) → (module, handler fn name)`, parsed out of every `routes()` in `api/`.
+    ///
+    /// Source-text, like `openapi.rs`'s body guard, and partial in the same deliberate way: a
+    /// registration shape this cannot parse is skipped rather than failed, and the callers assert a
+    /// floor on how many they compared so "the parser stopped matching" cannot pass for "all clear".
+    fn registered_handlers() -> std::collections::BTreeMap<(String, String), (String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
+        let mut out = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(&dir).expect("read src/api") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let file = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("?")
+                .to_owned();
+            let src = std::fs::read_to_string(&path).expect("read module");
+            for chunk in src.split(".route(").skip(1) {
+                // The route path is the first string literal after `.route(`.
+                let Some(rest) = chunk.split_once('"').map(|(_, r)| r) else {
+                    continue;
+                };
+                let Some((route_path, after)) = rest.split_once('"') else {
+                    continue;
+                };
+                if !route_path.starts_with('/') {
+                    continue;
+                }
+                // Then the `method(handler)` pairs, up to the end of this registration. Bounded by
+                // the next `.route(` (already handled by the split) and by the `routes()` fn end.
+                let reg = after.split("\n}").next().unwrap_or(after);
+                for (verb, method) in [
+                    ("get(", "GET"),
+                    ("post(", "POST"),
+                    ("put(", "PUT"),
+                    ("delete(", "DELETE"),
+                    ("patch(", "PATCH"),
+                ] {
+                    let mut cursor = reg;
+                    while let Some((_, tail)) = cursor.split_once(verb) {
+                        let name: String = tail
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if !name.is_empty() {
+                            out.insert(
+                                (method.to_owned(), route_path.to_owned()),
+                                (file.clone(), name),
+                            );
+                        }
+                        cursor = tail;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The parameter list of `async fn <name>` in `api/<file>`, or `None` if it cannot be found.
+    ///
+    /// Handlers generated by a macro (the twelve flow endpoints) are declared as `async fn $node_fn`
+    /// and cannot be located by name — those are skipped, which is why the floor assertions matter.
+    fn handler_signature(file: &str, name: &str) -> Option<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/api")
+            .join(file);
+        let src = std::fs::read_to_string(path).ok()?;
+        let needle = format!("async fn {name}(");
+        let (_, after) = src.split_once(&needle)?;
+        Some(after.split_once(')')?.0.to_owned())
+    }
+
+    /// A route that says it is node-scoped must actually take the guard that enforces it.
+    ///
+    /// This is the half of the mechanism the ledger alone cannot provide: a line can *claim*
+    /// `NodeScoped` while the handler quietly returns the node to anyone. Path-param routes take
+    /// `VisibleNode`; the operator writes that name their target in the body take `Scoped` and check
+    /// it themselves (`scope::require_visible_node`), which is what the second arm allows.
+    #[test]
+    fn every_node_scoped_route_takes_a_scope_guard() {
+        let handlers = registered_handlers();
+        let mut checked = 0usize;
+        let mut wrong = Vec::new();
+        for (method, path, scoping) in ROUTES {
+            if *scoping != Scoping::NodeScoped {
+                continue;
+            }
+            let Some((file, name)) = handlers.get(&((*method).to_owned(), (*path).to_owned()))
+            else {
+                continue; // macro-generated or an unparsed registration shape
+            };
+            let Some(sig) = handler_signature(file, name) else {
+                continue;
+            };
+            checked += 1;
+            let guarded = sig.contains("VisibleNode") || sig.contains("Scoped");
+            if !guarded {
+                wrong.push(format!("{method} {path} → {file}::{name}"));
+            }
+        }
+        assert!(
+            checked >= 15,
+            "only checked {checked} node-scoped handlers — the parser stopped matching"
+        );
+        assert!(
+            wrong.is_empty(),
+            "ledger says NodeScoped but the handler takes no scope guard:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
+
+    /// Same, for the list/aggregate rules: the handler must take `Scoped`.
+    #[test]
+    fn every_filtered_route_takes_the_scope_extractor() {
+        let handlers = registered_handlers();
+        let mut checked = 0usize;
+        let mut wrong = Vec::new();
+        for (method, path, scoping) in ROUTES {
+            if !matches!(
+                scoping,
+                Scoping::GroupFiltered | Scoping::PostFiltered | Scoping::Refused(_)
+            ) {
+                continue;
+            }
+            let Some((file, name)) = handlers.get(&((*method).to_owned(), (*path).to_owned()))
+            else {
+                continue;
+            };
+            let Some(sig) = handler_signature(file, name) else {
+                continue;
+            };
+            checked += 1;
+            if !sig.contains("Scoped") {
+                wrong.push(format!("{method} {path} → {file}::{name}"));
+            }
+        }
+        assert!(
+            checked >= 10,
+            "only checked {checked} filtered handlers — the parser stopped matching"
+        );
+        assert!(
+            wrong.is_empty(),
+            "ledger says the route is scope-filtered but the handler never asks for the scope:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
+
+    /// Every deliberate exemption states why, in the ledger, where a reviewer sees it.
+    ///
+    /// Cheap, and the point is not the assertion — it is that `Global` cannot be the variant that
+    /// always compiles. Without a required reason it would be, and an unscoped node-returning
+    /// endpoint would look reviewed.
+    #[test]
+    fn every_unscoped_route_states_why() {
+        let mut silent = Vec::new();
+        for (method, path, scoping) in ROUTES {
+            let reason = match scoping {
+                Scoping::Global(r) | Scoping::Pending(r) | Scoping::Refused(r) => *r,
+                _ => continue,
+            };
+            if reason.trim().len() < 20 {
+                silent.push(format!("{method} {path}"));
+            }
+        }
+        assert!(
+            silent.is_empty(),
+            "these routes opt out of scoping without saying why: {silent:#?}"
+        );
+    }
+
+    /// **A ratchet.** The `Pending` entries are the scoping work that is designed but not built;
+    /// this pins how many there are, so finishing one means lowering the number and adding a new
+    /// unscoped endpoint fails until someone either scopes it or argues it down in review.
+    ///
+    /// Deliberately an equality, not a `<=`: an upper bound lets the count drift down silently and
+    /// then quietly absorb a new gap under the old ceiling.
+    #[test]
+    fn the_unscoped_route_count_only_moves_deliberately() {
+        let pending = ROUTES
+            .iter()
+            .filter(|(_, _, s)| matches!(s, Scoping::Pending(_)))
+            .count();
+        assert_eq!(
+            pending, 0,
+            "the number of not-yet-scoped routes changed — if you scoped one, lower this; \
+             if you added one, scope it instead"
+        );
     }
 }

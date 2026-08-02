@@ -23,7 +23,8 @@
 //! *validation* rule is the worst kind to keep, because when they drift the looser one is the
 //! security boundary.
 
-use super::extract::{Admin, RequireAckAlerts, RequireView};
+use super::extract::{Admin, RequireAckAlerts, RequireView, Scoped};
+use super::scope::ScopeTarget;
 use super::util::ListQuery;
 use super::{ApiError, ApiResult, ApiState};
 use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
@@ -227,6 +228,33 @@ pub(crate) async fn report(
     Ok(AnalysisReport { job, findings })
 }
 
+// ── Group scope over run rows (ADR-014) ──────────────────────────────────────
+
+/// A run's target, as [`ScopeTarget`] — exhaustive over [`ScopeKind`].
+///
+/// A run is an artefact that *names its own scope*, exactly like a mute or a maintenance window, so
+/// the visibility decision is the shared one in `api/scope.rs`. Only this reading is local, because
+/// only this module knows what its own columns mean (see the warning on [`ScopeTarget`]).
+///
+/// A fleet-wide (`all`) run is [`ScopeTarget::Unbounded`]: its findings span the whole inventory, so
+/// there is no group scope that honestly contains it. `create_analysis_job` already refuses to let a
+/// scoped caller launch one; this is the read side of the same rule.
+fn job_target(kind: Option<ScopeKind>, id: Option<Uuid>) -> ScopeTarget {
+    match kind {
+        Some(ScopeKind::Node) => id.map_or(ScopeTarget::Unbounded, |n| {
+            ScopeTarget::Node(yagra_common::NodeId::from(n))
+        }),
+        Some(ScopeKind::Group) => id.map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
+        // `all`, or a persisted kind this build does not recognise — neither is bounded.
+        Some(ScopeKind::All) | None => ScopeTarget::Unbounded,
+    }
+}
+
+/// [`job_target`] for a stored row, whose `scope_kind` is still in its persisted text form.
+fn row_target(job: &AnalysisJob) -> ScopeTarget {
+    job_target(ScopeKind::from_str(&job.scope_kind), job.scope_id)
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// Recent analysis jobs (the runs list). `?limit=` (default 50).
@@ -244,6 +272,7 @@ pub(crate) async fn report(
 )]
 async fn list_analysis_jobs(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<AnalysisJob>>> {
@@ -258,7 +287,15 @@ async fn list_analysis_jobs(
             "failed to list analysis jobs",
         )
     })?;
-    Ok(Json(jobs))
+    // Post-filtered on the run's own scope. A short page is correct here rather than merely
+    // tolerable: the runs list is "recent activity", not a cursor-paged collection, so there is no
+    // paging invariant to preserve — and over-fetching would only widen how much of somebody else's
+    // activity this handler touches.
+    Ok(Json(
+        jobs.into_iter()
+            .filter(|j| scope.allows_target(&st, row_target(j)))
+            .collect(),
+    ))
 }
 
 /// One analysis job by id.
@@ -274,6 +311,7 @@ async fn list_analysis_jobs(
 )]
 async fn get_analysis_job(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<AnalysisJob>> {
@@ -295,6 +333,15 @@ async fn get_analysis_job(
             )
         })?
         .ok_or_else(|| ApiError::not_found("job_not_found", format!("no analysis job {id}")))?;
+    // Out of scope reads as absent — the same 404 as an unknown id, so the job-id space is not an
+    // enumeration oracle. The row carries the run's `scope_label`, which is a node or group *name*,
+    // so leaking the row leaks inventory even before anyone reads its findings.
+    if !scope.allows_target(&st, row_target(&job)) {
+        return Err(ApiError::not_found(
+            "job_not_found",
+            format!("no analysis job {id}"),
+        ));
+    }
     Ok(Json(job))
 }
 
@@ -310,12 +357,36 @@ async fn get_analysis_job(
 )]
 async fn analysis_findings(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<crate::analysis::AnalysisFinding>>> {
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
+    // The run row is the unit of visibility, so gate on it first — otherwise this endpoint answers
+    // `200 []` where `GET /analysis/jobs/{id}` answers 404 for the same id, and the pair of them is
+    // an existence oracle. Unrestricted callers skip the lookup entirely.
+    if !scope.is_all() {
+        let job = admin
+            .analysis
+            .get(id)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "get analysis job",
+                    "failed to load analysis job",
+                )
+            })?
+            .ok_or_else(|| ApiError::not_found("job_not_found", format!("no analysis job {id}")))?;
+        if !scope.allows_target(&st, row_target(&job)) {
+            return Err(ApiError::not_found(
+                "job_not_found",
+                format!("no analysis job {id}"),
+            ));
+        }
+    }
     let findings = admin.analysis.findings(id).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -323,6 +394,19 @@ async fn analysis_findings(
             "failed to load findings",
         )
     })?;
+    // Then filter per finding as well. Not redundant with the gate above: a run's scope is resolved
+    // to a node set when it *starts*, and a node can be moved to another group before anyone opens
+    // the results — so the group the run named is not proof about every node its findings name.
+    let findings = findings
+        .into_iter()
+        .filter(|f| match f.node_id {
+            Some(n) => scope.allows_node(&st, yagra_common::NodeId::from(n)),
+            // A finding attributed to no node — the flow-tier-off notice, a fleet-level summary
+            // row. Always shown to an unrestricted caller; hidden from a scoped one for the same
+            // reason an ungrouped node is, since nothing places it inside their scope.
+            None => scope.is_all(),
+        })
+        .collect();
     Ok(Json(findings))
 }
 
@@ -356,11 +440,39 @@ pub(super) struct CreateAnalysisJob {
 )]
 async fn create_analysis_job(
     _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
     admin: Admin,
     State(st): State<ApiState>,
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateAnalysisJob>,
 ) -> ApiResult<Json<AnalysisJob>> {
+    // A run's scope is resolved server-side and its findings are read back later, so an
+    // over-broad launch would hand a scoped operator fleet-wide data through the results. A
+    // scoped caller must therefore name a target inside their scope, and cannot ask for `all`.
+    if !scope.is_all() {
+        match body.scope_kind.as_str() {
+            "node" => {
+                let node = body.scope_id.ok_or_else(|| {
+                    ApiError::bad_request("missing_scope_id", "scope_id is required for node scope")
+                })?;
+                super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(node))?;
+            }
+            "group" => {
+                let gid = body.scope_id.ok_or_else(|| {
+                    ApiError::bad_request(
+                        "missing_scope_id",
+                        "scope_id is required for group scope",
+                    )
+                })?;
+                super::scope::require_visible_group(&scope, gid)?;
+            }
+            _ => return Err(ApiError::forbidden_code(
+                "scope_unsupported",
+                "a group-scoped account must run an analysis against a node or a folder group, \
+                     not the whole fleet",
+            )),
+        }
+    }
     let user = super::current_username(&st, &headers);
     let req = AnalysisRequest {
         tool: body.tool,
@@ -399,9 +511,33 @@ pub(super) struct Cancelled {
 )]
 async fn cancel_analysis_job(
     _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Cancelled>> {
+    // Killing someone else's run is a write, and the 200/404 split also answers "is this job
+    // running right now" — a read oracle wearing a POST. Same 404 as a job that is not running.
+    if !scope.is_all() {
+        let visible = admin
+            .analysis
+            .get(id)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "get analysis job",
+                    "failed to load analysis job",
+                )
+            })?
+            .is_some_and(|job| scope.allows_target(&st, row_target(&job)));
+        if !visible {
+            return Err(ApiError::not_found(
+                "job_not_running",
+                format!("no running analysis job {id}"),
+            ));
+        }
+    }
     if admin.analysis.cancel(id) {
         Ok(Json(Cancelled { cancelled: true }))
     } else {
@@ -426,13 +562,34 @@ async fn cancel_analysis_job(
         (status = 503, description = "This deployment has no runner", body = super::error::ErrorBody),
     ),
 )]
-async fn stream_analysis(_perm: RequireView, admin: Admin) -> Response {
+async fn stream_analysis(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    admin: Admin,
+) -> Response {
+    // ⚠️ `Weak`, for the reason spelled out on `scope::NodeScope::allows_node_in`: the runner owns
+    // this stream's broadcast sender, so a strong handle here would keep the sender alive as long
+    // as the stream and the stream alive as long as the sender — a body that never ends.
+    let alerts = std::sync::Arc::downgrade(&st.alerts);
     let stream = tokio_stream::wrappers::BroadcastStream::new(admin.analysis.subscribe())
-        .filter_map(|r| async move {
-            match r {
-                Ok(json) => Some(Ok::<_, Infallible>(Event::default().data(json))),
-                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                    Some(Ok(Event::default().event("resync").data(n.to_string())))
+        .filter_map(move |r| {
+            let (alerts, scope) = (alerts.clone(), scope.clone());
+            async move {
+                match r {
+                    Ok((kind, id, json)) => {
+                        let target = job_target(kind, id);
+                        let visible = scope.is_all()
+                            || alerts
+                                .upgrade()
+                                .is_some_and(|a| scope.allows_target_in(&a, target));
+                        // Another caller's run progressing is dropped, not resynced — see the note
+                        // on `api/alerts.rs::sse_with_resync`.
+                        visible.then(|| Ok::<_, Infallible>(Event::default().data(&*json)))
+                    }
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                        Some(Ok(Event::default().event("resync").data(n.to_string())))
+                    }
                 }
             }
         });

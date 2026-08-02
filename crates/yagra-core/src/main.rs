@@ -2650,7 +2650,10 @@ async fn load_alert_config_base(repo: &NodeRepo, thresholds: &ThresholdStore) ->
             node.id,
             NodeMeta {
                 profile: node.profile.as_ref().map(ToString::to_string),
-                groups: node.tags.values().cloned().collect(),
+                // Tag values (threshold scope) and the folder group (RBAC visibility) are two
+                // different things — see the `NodeMeta` docs before touching either.
+                tag_groups: node.tags.values().cloned().collect(),
+                folder_group: node.group.map(|g| g.as_uuid()),
             },
         );
     }

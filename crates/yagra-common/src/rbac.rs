@@ -200,6 +200,29 @@ impl Scope {
             Scope::Groups(allowed) => node_groups.iter().any(|g| allowed.contains(g)),
         }
     }
+
+    /// The folder-group ids this scope names, or `None` when it is unrestricted.
+    ///
+    /// **A `Groups` entry is a `node_groups.id` UUID**, canonically lowercase-hyphenated — not a
+    /// group *name*. Names are editable and not unique, so a rename would silently widen or void a
+    /// scope; the id is the thing the inventory actually keys on. This is the single place that
+    /// rule is written down: parsing it in two modules is how the two come to disagree.
+    ///
+    /// An entry that does not parse is **dropped**, and dropping every entry yields an empty
+    /// `Some(vec![])` — a scope naming only deleted or malformed groups therefore sees **nothing**.
+    /// Returning `None` (i.e. unrestricted) there would turn a corrupt scope into a privilege
+    /// escalation, so the empty and the unrestricted cases must never collapse into one another.
+    #[must_use]
+    pub fn group_uuids(&self) -> Option<Vec<uuid::Uuid>> {
+        match self {
+            Scope::All => None,
+            Scope::Groups(raw) => Some(
+                raw.iter()
+                    .filter_map(|g| uuid::Uuid::parse_str(g).ok())
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// An authenticated principal: a role plus a visibility scope.
@@ -307,5 +330,40 @@ mod tests {
         let p = Principal::new(Role::Operator, Scope::groups(["tokyo"]));
         assert!(p.can(Permission::AckAlerts));
         assert!(!p.can(Permission::ManageConfig));
+    }
+
+    #[test]
+    fn all_scope_names_no_groups_at_all() {
+        assert_eq!(Scope::All.group_uuids(), None);
+    }
+
+    #[test]
+    fn group_uuids_parses_the_ids_it_holds() {
+        let a = uuid::Uuid::from_u128(1);
+        let b = uuid::Uuid::from_u128(2);
+        let ids = Scope::groups([a.to_string(), b.to_string()])
+            .group_uuids()
+            .expect("a group scope names groups");
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&a) && ids.contains(&b));
+    }
+
+    // The inversion that matters: a scope whose entries are all unusable must see NOTHING, not
+    // everything. `None` means unrestricted, so an empty parse result has to stay `Some(vec![])` —
+    // if the two ever collapse, a corrupt scope becomes a privilege escalation.
+    #[test]
+    fn a_scope_whose_entries_all_fail_to_parse_sees_nothing_not_everything() {
+        let s = Scope::groups(["tokyo", "not-a-uuid"]);
+        assert_eq!(s.group_uuids(), Some(Vec::new()));
+        assert_ne!(s.group_uuids(), None);
+    }
+
+    #[test]
+    fn an_unparseable_entry_does_not_discard_its_valid_siblings() {
+        let a = uuid::Uuid::from_u128(7);
+        let ids = Scope::groups([a.to_string(), "tokyo".to_owned()])
+            .group_uuids()
+            .expect("a group scope names groups");
+        assert_eq!(ids, vec![a]);
     }
 }

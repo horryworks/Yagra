@@ -153,6 +153,32 @@ pub fn group_subtree(edges: &[(Uuid, Option<Uuid>)], root: Uuid) -> Vec<Uuid> {
     out
 }
 
+/// The chain of groups **above** `start`, nearest parent first, over the same `(id, parent_id)`
+/// edges [`group_subtree`] walks. Excludes `start` itself. A visited set bounds the walk so cyclic
+/// or malformed data can't loop forever.
+///
+/// This is what keeps a group-scoped inventory tree from rendering as orphans: the WebUI builds the
+/// forest from `parent_id`, so handing it a scoped subtree without the ancestors leaves every
+/// visible root pointing at a parent that is not in the response. The ancestors are breadcrumb
+/// only — they carry no membership, and being able to *name* the group above yours is not the same
+/// as being able to see what is in it.
+#[must_use]
+pub fn group_ancestors(edges: &[(Uuid, Option<Uuid>)], start: Uuid) -> Vec<Uuid> {
+    let parent_of = |id: Uuid| edges.iter().find(|(e, _)| *e == id).and_then(|(_, p)| *p);
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(start);
+    let mut cur = parent_of(start);
+    while let Some(p) = cur {
+        if !seen.insert(p) {
+            break;
+        }
+        out.push(p);
+        cur = parent_of(p);
+    }
+    out
+}
+
 /// PostgreSQL-backed group store.
 pub struct GroupRepo {
     pool: PgPool,
@@ -485,5 +511,46 @@ mod tests {
         let mut sub = group_subtree(&edges, a);
         sub.sort();
         assert_eq!(sub, vec![a, b]);
+    }
+
+    #[test]
+    fn group_ancestors_walks_up_nearest_first_and_excludes_the_start() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let d = Uuid::from_u128(4);
+        // a → b → d.
+        let edges = vec![(a, None), (b, Some(a)), (d, Some(b))];
+        assert_eq!(group_ancestors(&edges, d), vec![b, a]);
+        assert_eq!(group_ancestors(&edges, b), vec![a]);
+        assert_eq!(group_ancestors(&edges, a), Vec::<Uuid>::new()); // a root has none
+    }
+
+    #[test]
+    fn group_ancestors_of_an_unknown_group_is_empty() {
+        assert_eq!(group_ancestors(&[], Uuid::from_u128(9)), Vec::<Uuid>::new());
+    }
+
+    #[test]
+    fn group_ancestors_terminates_on_a_cycle() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let edges = vec![(a, Some(b)), (b, Some(a))];
+        // Walking up from `a` reaches `b`, then `a` again — which is the start, already seen.
+        assert_eq!(group_ancestors(&edges, a), vec![b]);
+    }
+
+    // The two walks must agree about direction: nothing above a group may also be below it, or a
+    // scoped caller's breadcrumb would quietly hand them a sibling subtree's membership.
+    #[test]
+    fn a_groups_ancestors_and_its_subtree_never_overlap() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let d = Uuid::from_u128(4);
+        let edges = vec![(a, None), (b, Some(a)), (c, Some(a)), (d, Some(b))];
+        let sub = group_subtree(&edges, b);
+        for up in group_ancestors(&edges, b) {
+            assert!(!sub.contains(&up), "{up} is both above and below b");
+        }
     }
 }

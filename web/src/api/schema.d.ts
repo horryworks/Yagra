@@ -4598,6 +4598,11 @@ export interface components {
          */
         InterfaceHeatmap: {
             links: string[];
+            /**
+             * @description `true` when the link set covers only the groups the calling account may see and links it is
+             *     entitled to may be missing. Always `false` for an account with unrestricted visibility.
+             */
+            partial: boolean;
             timestamps: number[];
             values: number[][];
         };
@@ -5423,6 +5428,70 @@ export interface components {
             needs_project: boolean;
             suggested_location?: string | null;
             suggested_model: string;
+        };
+        /** @description A ranked Top-N result. */
+        Ranked_AlertNodeCount: {
+            /** @description The ranked rows, highest first, at most the requested `limit`. */
+            entries: {
+                /** Format: int64 */
+                count: number;
+                name: string;
+                /** Format: uuid */
+                node_id: string;
+            }[];
+            /**
+             * @description `true` when this ranking covers only the groups the calling account may see and entries it
+             *     is entitled to may be missing. Always `false` for an account with unrestricted visibility.
+             */
+            partial: boolean;
+        };
+        /** @description A ranked Top-N result. */
+        Ranked_InterfaceTopEntry: {
+            /** @description The ranked rows, highest first, at most the requested `limit`. */
+            entries: {
+                if_alias?: string | null;
+                if_name?: string | null;
+                /**
+                 * Format: int64
+                 * @description Configured speed (bits/sec) for util%; `null` if unknown.
+                 */
+                if_speed_bps?: number | null;
+                /** Format: int32 */
+                ifindex: number;
+                /** Format: uuid */
+                node_id: string;
+                node_name: string;
+                /**
+                 * Format: double
+                 * @description bits/sec for throughput metrics, errors|discards per second otherwise.
+                 */
+                value: number;
+            }[];
+            /**
+             * @description `true` when this ranking covers only the groups the calling account may see and entries it
+             *     is entitled to may be missing. Always `false` for an account with unrestricted visibility.
+             */
+            partial: boolean;
+        };
+        /** @description A ranked Top-N result. */
+        Ranked_TopEntry: {
+            /** @description The ranked rows, highest first, at most the requested `limit`. */
+            entries: {
+                /**
+                 * @description Display name, joined from PostgreSQL (ADR-011); falls back to the id string if the node has
+                 *     since been deleted.
+                 */
+                name: string;
+                /** Format: uuid */
+                node_id: string;
+                /** Format: double */
+                value: number;
+            }[];
+            /**
+             * @description `true` when this ranking covers only the groups the calling account may see and entries it
+             *     is entitled to may be missing. Always `false` for an account with unrestricted visibility.
+             */
+            partial: boolean;
         };
         /**
          * @description The parsed explanation. **Every field is plain text and must be rendered as text, never as HTML
@@ -6283,13 +6352,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Nodes ranked by alert fires; empty when this deployment keeps no history */
+            /** @description Nodes ranked by alert fires; empty when this deployment keeps no history, and `partial` says the scope filter may have shortened the list */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlertNodeCount"][];
+                    "application/json": components["schemas"]["Ranked_AlertNodeCount"];
                 };
             };
             /** @description No valid bearer token */
@@ -11122,13 +11191,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Interfaces ranked by signed throughput delta (bits/sec) */
+            /** @description Interfaces ranked by signed throughput delta (bits/sec); `partial` says the scope filter may have shortened the list */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InterfaceTopEntry"][];
+                    "application/json": components["schemas"]["Ranked_InterfaceTopEntry"];
                 };
             };
             /** @description `direction` is not 'up' or 'down' */
@@ -11217,13 +11286,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The busiest or most-erroring interfaces, ranked */
+            /** @description The busiest or most-erroring interfaces, ranked; `partial` says the scope filter may have shortened the list */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InterfaceTopEntry"][];
+                    "application/json": components["schemas"]["Ranked_InterfaceTopEntry"];
                 };
             };
             /** @description `metric` is not one of throughput|in_bps|out_bps|errors|discards, or `agg` is unsupported */
@@ -11313,13 +11382,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The highest-value nodes, ranked; empty when the store cannot rank */
+            /** @description The highest-value nodes, ranked; `partial` says the scope filter may have shortened the list */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TopEntry"][];
+                    "application/json": components["schemas"]["Ranked_TopEntry"];
                 };
             };
             /** @description `metric` is neither a logical alias nor an identifier, or `agg` is unsupported */

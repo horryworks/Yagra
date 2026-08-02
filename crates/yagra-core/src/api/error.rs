@@ -133,6 +133,13 @@ impl ApiError {
         )
     }
 
+    /// `403` with a specific code — for a refusal the client should be able to tell apart from a
+    /// plain role failure (e.g. an endpoint that cannot yet honour a group scope, which is a
+    /// property of the endpoint rather than of the caller's role).
+    pub fn forbidden_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, code, message)
+    }
+
     /// `503` — the write side is absent (skeleton mode has no admin state).
     pub fn admin_unavailable() -> Self {
         Self::new(

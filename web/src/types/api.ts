@@ -104,6 +104,17 @@ export type MetricRange = components['schemas']['MetricRange'];
  *  PostgreSQL (TSDB carries only the id); it falls back to the id for a since-deleted node. */
 export type TopEntry = components['schemas']['TopEntry'];
 
+/** A Top-N result: the rows, plus whether the list may be **short for this caller**.
+ *
+ *  Rankings are produced by stores that know nothing about folder groups, so a group-scoped
+ *  account's list is over-fetched and then filtered (ADR-014). When the filter eats the over-fetch
+ *  the list comes back short — and a short list is indistinguishable from "that is all there is"
+ *  unless the response says so. `partial: true` is what widgets render the "may be incomplete"
+ *  note from. Always `false` for an unrestricted account. */
+export type RankedNodes = components['schemas']['Ranked_TopEntry'];
+export type RankedInterfaces = components['schemas']['Ranked_InterfaceTopEntry'];
+export type RankedAlertNodes = components['schemas']['Ranked_AlertNodeCount'];
+
 // ── Flow analysis (ADR-031) ─────────────────────────────────────────────────────────────────────
 
 /** A top-talker: one host address with summed traffic (`/nodes/:id/flow/top-talkers`). */

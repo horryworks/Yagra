@@ -56,12 +56,12 @@ function NodeTopN({
   );
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  const rows: RankedRow[] = (data ?? []).map((e) => ({
+  const rows: RankedRow[] = (data?.entries ?? []).map((e) => ({
     label: e.name,
     value: e.value,
     valueText: format(e.value),
   }));
-  return <RankedBars rows={rows} max={max} empty={empty} />;
+  return <RankedBars rows={rows} max={max} empty={empty} partial={data?.partial} />;
 }
 
 export function TopRttWidget({ instance }: WidgetProps) {
@@ -131,12 +131,12 @@ function InterfaceTopN({
   );
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  const rows: RankedRow[] = (data ?? []).map((e) => ({
+  const rows: RankedRow[] = (data?.entries ?? []).map((e) => ({
     label: ifaceLabel(e),
     value: e.value,
     valueText: format(e.value),
   }));
-  return <RankedBars rows={rows} empty={empty} />;
+  return <RankedBars rows={rows} empty={empty} partial={data?.partial} />;
 }
 
 export function TopTalkersWidget({ instance }: WidgetProps) {
@@ -174,7 +174,7 @@ export function BusiestInterfacesWidget({ instance }: WidgetProps) {
   );
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  const withUtil = (data ?? [])
+  const withUtil = (data?.entries ?? [])
     .map((e) => {
       // Only compute utilization for a known positive link speed and a non-negative reading;
       // a negative value (corrupt counter math) would yield a nonsensical negative %.
@@ -205,6 +205,7 @@ export function BusiestInterfacesWidget({ instance }: WidgetProps) {
       rows={rows}
       max={anyUtil ? 100 : undefined}
       empty={t('widgets.interfaceTraffic.empty')}
+      partial={data?.partial}
     />
   );
 }

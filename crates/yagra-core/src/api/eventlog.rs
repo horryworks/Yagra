@@ -25,7 +25,7 @@
 //! general shape of the risk with duplicated validation: when two copies drift, the looser one is
 //! the boundary.
 
-use super::extract::{Admin, RequireView};
+use super::extract::{Admin, RequireView, Scoped};
 use super::{ApiError, ApiResult, ApiState};
 use crate::events::{EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket};
 use axum::{
@@ -134,19 +134,70 @@ pub(crate) fn parse_event_filter(input: EventFilterInput<'_>) -> Result<EventFil
         matched: input.matched,
         search,
         regex: input.regex,
+        // Not part of the *request*: the group scope comes from the caller's session, never from a
+        // query parameter, so a client cannot widen it by asking. Handlers that push it into the
+        // store set it after this returns (`events_stats`); the ones that post-filter leave it None.
+        visible_node_ids: None,
     })
+}
+
+/// How many nodes a group scope may resolve to before `/events/stats` refuses.
+///
+/// The aggregate endpoints cannot post-filter — the counts are produced by the store — so honouring
+/// a scope means sending the visible node ids *into* the query, and both stores need them as a
+/// literal list (VictoriaLogs has never heard of groups, and the two backends must be handed the
+/// same restriction or they stop being a mirror). This bounds that list: at the cap the LogsQL
+/// `in(…)` term is roughly 185 KB, which is fine in a POST body, and beyond it the honest answer is
+/// a refusal rather than an unbounded query built from a scope somebody typed.
+const STATS_SCOPE_NODE_LIMIT: usize = 5_000;
+
+/// Resolve the caller's group scope into the restricting node-id set the two aggregate builders
+/// take, or `None` when unrestricted.
+///
+/// ⚠️ This enumerates nodes, which every other scoped path deliberately avoids (`api/scope.rs`
+/// explains why: at 50k nodes a per-request full-fleet scan is what S2/S6/S7 removed). It is
+/// justified *here* and only here because the query is already restricted by the indexed
+/// `group_id = ANY(…)` predicate, so it returns the caller's own nodes rather than the fleet — and
+/// because the alternative for the log store is no filtering at all.
+async fn stats_scope_node_ids(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+) -> Result<Option<Vec<Uuid>>, ApiError> {
+    let Some(groups) = scope.group_filter() else {
+        return Ok(None);
+    };
+    let ids = admin.repo.nodes_in_groups(groups).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "resolve event scope",
+            "failed to resolve the visible node set",
+        )
+    })?;
+    if ids.len() > STATS_SCOPE_NODE_LIMIT {
+        return Err(ApiError::forbidden_code(
+            "scope_too_large",
+            format!(
+                "this account's scope covers more than {STATS_SCOPE_NODE_LIMIT} nodes, which is \
+                 more than event statistics can restrict to; narrow the query with node_id"
+            ),
+        ));
+    }
+    // `Some(vec![])` survives on purpose: a scope naming only groups with no nodes must match
+    // nothing. Collapsing it to `None` here would hand the caller the whole fleet's counts.
+    Ok(Some(ids))
 }
 
 /// Resolve a free-text (non-regex) term to matching node ids, for the log-store path's node-name
 /// search. Empty for a regex search, which is message-only.
 pub(crate) async fn search_name_node_ids(
     admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
     filter: &EventFilter,
 ) -> Vec<Uuid> {
     match (filter.regex, filter.search.as_deref()) {
         (false, Some(term)) => admin
             .repo
-            .node_ids_by_name_like(term, NAME_SEARCH_NODE_LIMIT)
+            .node_ids_by_name_like(scope.group_filter(), term, NAME_SEARCH_NODE_LIMIT)
             .await
             .unwrap_or_default(),
         _ => Vec::new(),
@@ -154,20 +205,44 @@ pub(crate) async fn search_name_node_ids(
 }
 
 /// Search the event log, routing to whichever store is the source of record.
+///
+/// Scope is applied **here**, after the store answers, rather than as a `node_id` set pushed into
+/// each backend. There are two backends with two query languages (PostgreSQL and LogsQL) and
+/// `extensibility.md` §2 already lists them as a mirror that has drifted before; one filter that
+/// both paths flow through cannot drift at all. The cost is that a page may come back shorter than
+/// `limit` for a scoped caller — acceptable, because the cursor is the event time, so paging still
+/// terminates and no row is skipped.
+///
+/// **An event with no `node_id` is hidden from a scoped caller.** That is the same rule
+/// `Scope::allows` applies to an ungrouped node, and it matters more here: an unattributed syslog
+/// message is exactly the case where the body may name a device the caller cannot otherwise see,
+/// and syslog bodies routinely carry credentials (ADR-024).
 pub(crate) async fn search(
     st: &ApiState,
     admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
     filter: &EventFilter,
     limit: i64,
 ) -> Result<Vec<EventRow>, ApiError> {
     let rows = match st.logs.as_ref() {
         Some(logs) => {
-            let name_node_ids = search_name_node_ids(admin, filter).await;
+            let name_node_ids = search_name_node_ids(admin, scope, filter).await;
             logs.search(filter, &name_node_ids, limit).await
         }
         None => admin.events.list_events(filter, limit).await,
     };
-    rows.map_err(|e| ApiError::from_internal(e.as_ref(), "list events", "failed to list events"))
+    let rows = rows
+        .map_err(|e| ApiError::from_internal(e.as_ref(), "list events", "failed to list events"))?;
+    if scope.is_all() {
+        return Ok(rows);
+    }
+    Ok(rows
+        .into_iter()
+        .filter(|r| {
+            r.node_id
+                .is_some_and(|n| scope.allows_node(st, yagra_common::NodeId::from(n)))
+        })
+        .collect())
 }
 
 /// Query params for the event log (keyset paging on event time, like alert history).
@@ -203,6 +278,7 @@ pub(super) struct EventsQuery {
 )]
 async fn list_events(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
     State(st): State<ApiState>,
     Query(q): Query<EventsQuery>,
@@ -218,7 +294,7 @@ async fn list_events(
         regex: q.regex.unwrap_or(false),
     })?;
     Ok(Json(
-        search(&st, &admin, &filter, q.limit.unwrap_or(100)).await?,
+        search(&st, &admin, &scope, &filter, q.limit.unwrap_or(100)).await?,
     ))
 }
 
@@ -273,12 +349,13 @@ pub(super) enum EventStats {
 )]
 async fn events_stats(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
     State(st): State<ApiState>,
     Query(q): Query<EventStatsQuery>,
 ) -> ApiResult<Json<EventStats>> {
     let group_by = q.group_by.as_deref().unwrap_or("kind").to_owned();
-    let filter = parse_event_filter(EventFilterInput {
+    let mut filter = parse_event_filter(EventFilterInput {
         before: None,
         start: q.start.as_deref(),
         end: q.end.as_deref(),
@@ -288,13 +365,18 @@ async fn events_stats(
         q: q.q.as_deref(),
         regex: q.regex.unwrap_or(false),
     })?;
+    // Unlike `/events`, the counts here are produced by the store, so there is no row set left to
+    // post-filter — the scope has to go *into* both queries as a restricting node-id set. It rides
+    // on the filter itself, so every store call below carries it whether or not its author
+    // remembered; the same reasoning as `EVENT_FILTER_WHERE` being always-present.
+    filter.visible_node_ids = stats_scope_node_ids(&admin, &scope).await?;
 
     if group_by == "time" {
         let bucket = q.bucket_secs.unwrap_or(3600);
         let split_kind = q.split.as_deref() == Some("kind");
         let buckets = match st.logs.as_ref() {
             Some(logs) => {
-                let ids = search_name_node_ids(&admin, &filter).await;
+                let ids = search_name_node_ids(&admin, &scope, &filter).await;
                 logs.stats_series(&filter, &ids, bucket, split_kind).await
             }
             None => admin.events.stats_series(&filter, bucket, split_kind).await,
@@ -318,7 +400,7 @@ async fn events_stats(
     let limit = q.limit.unwrap_or(12);
     let buckets = match st.logs.as_ref() {
         Some(logs) => {
-            let ids = search_name_node_ids(&admin, &filter).await;
+            let ids = search_name_node_ids(&admin, &scope, &filter).await;
             logs.stats_grouped(&filter, &ids, group, limit).await
         }
         None => admin.events.stats_grouped(&filter, group, limit).await,

@@ -13,7 +13,7 @@
 //! graph is assembled once in the codebase. The two surfaces keep their own limits — the UI wants
 //! large pages, an AI client wants small ones — because a clamp is surface policy, not assembly.
 
-use super::extract::RequireView;
+use super::extract::{RequireView, Scoped};
 use super::nodes::{fresh_fallback_ids, NodePageQuery};
 use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
@@ -59,15 +59,21 @@ pub(crate) struct TopologyPage {
 /// `limit` is the page size the caller has already clamped — this fetches `limit + 1` rows to
 /// detect a further page and truncates before returning, so `next_cursor` is `Some` if and only if
 /// there really is more.
+///
+/// Scoped at the row source, so an out-of-scope node never enters the page — including as somebody
+/// else's `parent_id`. A visible node whose parent is not visible therefore arrives with a
+/// `parent_id` pointing at a node absent from the response, and the graph draws it as a root. That
+/// is the honest rendering: the caller is not shown the parent, so they are not told about it.
 pub(crate) async fn topology_page(
     st: &ApiState,
     admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
     cursor: Option<Uuid>,
     limit: i64,
 ) -> Result<TopologyPage, ApiError> {
     let mut rows = admin
         .repo
-        .list_topology_page(cursor, limit + 1)
+        .list_topology_page(scope.group_filter(), cursor, limit + 1)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "topology list nodes", "failed to load topology")
@@ -138,12 +144,15 @@ pub(crate) async fn topology_page(
 )]
 async fn get_topology(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodePageQuery>,
 ) -> ApiResult<Json<TopologyPage>> {
     let limit = q.limit.unwrap_or(2000).clamp(1, 5000);
-    Ok(Json(topology_page(&st, &admin, q.cursor, limit).await?))
+    Ok(Json(
+        topology_page(&st, &admin, &scope, q.cursor, limit).await?,
+    ))
 }
 
 #[cfg(test)]

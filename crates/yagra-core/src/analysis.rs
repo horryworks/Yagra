@@ -183,7 +183,7 @@ impl AnalysisTool {
 // running | done | failed | cancelled (set via the repo's UPDATE statements).
 
 /// Which nodes an analysis runs over.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
     /// Every node in the inventory.
     All,
@@ -281,6 +281,14 @@ pub struct AnalysisJob {
     pub started_ms: Option<i64>,
     pub finished_ms: Option<i64>,
 }
+
+/// One analysis-stream frame: the run's own scope beside its already-serialized JSON.
+///
+/// Mirrors [`crate::alerts::StreamFrame`] and exists for the same reason — a group-scoped SSE
+/// subscriber has to be filtered per frame, and re-parsing the body to recover a field the sender
+/// already held would be waste. `scope_kind` is `None` for a persisted value this build does not
+/// recognise, which the API edge reads as unbounded (fail-closed).
+pub type JobFrame = (Option<ScopeKind>, Option<Uuid>, std::sync::Arc<str>);
 
 /// One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -559,7 +567,7 @@ pub struct AnalysisRunner {
     flows: Option<Arc<dyn FlowStore>>,
     /// IP→ASN table handle for resolving AS names in flow findings (`new_destination`).
     ipasn: IpAsnHandle,
-    tx: broadcast::Sender<String>,
+    tx: broadcast::Sender<JobFrame>,
     cancels: Mutex<std::collections::HashMap<Uuid, Arc<AtomicBool>>>,
     /// Concurrency cap (ADR-028 Increment 2 WS-A): a permit is held for each running job's lifetime.
     slots: Arc<Semaphore>,
@@ -618,13 +626,16 @@ impl AnalysisRunner {
 
     /// Subscribe to the live job-status stream (SSE).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+    pub fn subscribe(&self) -> broadcast::Receiver<JobFrame> {
         self.tx.subscribe()
     }
 
     fn broadcast_job(&self, job: &AnalysisJob) {
         if let Ok(json) = serde_json::to_string(job) {
-            let _ = self.tx.send(json);
+            let kind = ScopeKind::from_str(&job.scope_kind);
+            let _ = self
+                .tx
+                .send((kind, job.scope_id, std::sync::Arc::from(json)));
         }
     }
 
@@ -740,7 +751,14 @@ impl AnalysisRunner {
         if node_ids.is_empty() {
             return Ok(Some((Vec::new(), "no nodes in scope".to_owned())));
         }
-        let names = self.nodes.node_names(&node_ids).await.unwrap_or_default();
+        // Unrestricted deliberately: `node_ids` is the job's own resolved scope, which was checked
+        // against the launching principal at create time (`api/analysis.rs`). Re-filtering here
+        // would scope a background run to whoever happens to be reading the results.
+        let names = self
+            .nodes
+            .node_names(None, &node_ids)
+            .await
+            .unwrap_or_default();
 
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);

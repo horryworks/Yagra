@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { MetricChart, SERIES_IN, SERIES_OUT } from '../../components/MetricChart/MetricChart';
 import { formatBps, formatSi } from '../../lib/format';
 import { api } from '../../services/api';
-import type { InterfaceTopEntry } from '../../types/api';
+import type { InterfaceTopEntry, RankedInterfaces } from '../../types/api';
 import { DeltaBars, type DeltaRow } from '../primitives/DeltaBars';
 import { Heatmap } from '../primitives/Heatmap';
 import { usePolled } from '../usePolled';
@@ -27,8 +27,8 @@ function ifaceLabel(e: InterfaceTopEntry): string {
   return `${e.node_name} · ${iface}`;
 }
 
-function toRows(data: InterfaceTopEntry[] | null): DeltaRow[] {
-  return (data ?? []).map((e) => ({
+function toRows(data: RankedInterfaces | null): DeltaRow[] {
+  return (data?.entries ?? []).map((e) => ({
     label: ifaceLabel(e),
     value: e.value,
     valueText: `${e.value >= 0 ? '+' : '−'}${formatBps(Math.abs(e.value))}`,
@@ -40,7 +40,14 @@ export function TrafficSpikesWidget() {
   const { data, loading, error } = usePolled(() => api.getInterfaceDelta('up', { limit: 6 }), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  return <DeltaBars rows={toRows(data)} color="var(--series-4)" empty={t('widgets.trafficSpikes.empty')} />;
+  return (
+    <DeltaBars
+      rows={toRows(data)}
+      color="var(--series-4)"
+      empty={t('widgets.trafficSpikes.empty')}
+      partial={data?.partial}
+    />
+  );
 }
 
 export function TrafficDropsWidget() {
@@ -48,7 +55,14 @@ export function TrafficDropsWidget() {
   const { data, loading, error } = usePolled(() => api.getInterfaceDelta('down', { limit: 6 }), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  return <DeltaBars rows={toRows(data)} color="var(--series-5)" empty={t('widgets.trafficDrops.empty')} />;
+  return (
+    <DeltaBars
+      rows={toRows(data)}
+      color="var(--series-5)"
+      empty={t('widgets.trafficDrops.empty')}
+      partial={data?.partial}
+    />
+  );
 }
 
 // In / Out series colors come from the shared MetricChart palette (single source of truth;
@@ -88,12 +102,17 @@ export function InterfaceHeatmapWidget() {
   if (links.length === 0 || ts.length === 0)
     return <p className="muted">{t('widgets.interfaceTraffic.empty')}</p>;
   return (
-    <Heatmap
-      rowLabels={links}
-      colLabels={timeColLabels(ts)}
-      values={data?.values ?? []}
-      colorBase="var(--series-3)"
-      title={(row, col, v) => `${row} ${col || ''} — ${formatBps(v)}`}
-    />
+    <>
+      {data?.partial && (
+        <p className="rankedbars-partial">{t('primitives.rankedBars.partial')}</p>
+      )}
+      <Heatmap
+        rowLabels={links}
+        colLabels={timeColLabels(ts)}
+        values={data?.values ?? []}
+        colorBase="var(--series-3)"
+        title={(row, col, v) => `${row} ${col || ''} — ${formatBps(v)}`}
+      />
+    </>
   );
 }

@@ -377,8 +377,10 @@ async fn names_of(src: &Sources<'_>, active: &[Alert]) -> BTreeMap<Uuid, String>
     let mut ids: Vec<Uuid> = active.iter().map(|a| uuid_of(a.node)).collect();
     ids.sort_unstable();
     ids.dedup();
+    // Unrestricted: `active` is the alert set this RCA was already authorized to explain, so the
+    // names are for nodes the caller has been shown. Filtering again would blank them mid-report.
     src.nodes
-        .node_names(&ids)
+        .node_names(None, &ids)
         .await
         .unwrap_or_default()
         .into_iter()

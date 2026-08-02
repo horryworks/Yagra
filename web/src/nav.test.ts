@@ -120,14 +120,17 @@ describe('sidebarGroups', () => {
     }
   });
 
-  it('collects the known placeholders (Geo map, Scheduled, Saved findings)', () => {
+  it('collects the known placeholders (Scheduled, Saved findings)', () => {
     const soonPaths = NAV.flatMap((s) => sidebarGroups(s))
       .filter((g) => g.comingSoon)
       .flatMap((g) => g.items.map((i) => i.path));
-    for (const p of ['/topology/geo', '/troubleshoot/scheduled', '/troubleshoot/findings']) {
+    for (const p of ['/troubleshoot/scheduled', '/troubleshoot/findings']) {
       expect(soonPaths).toContain(p);
     }
-    // Authentication (/settings/auth) is now implemented — no longer a placeholder.
+    // Lifted placeholders. Both halves of lifting one — `implemented: true` in `nav.ts` and the
+    // real element in `routes.tsx` — have to happen together: doing only the second leaves a
+    // working page rendered inside a greyed-out "Coming soon" group, and no test fails.
     expect(soonPaths).not.toContain('/settings/auth');
+    expect(soonPaths).not.toContain('/topology/geo');
   });
 });

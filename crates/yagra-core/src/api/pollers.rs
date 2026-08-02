@@ -16,7 +16,7 @@
 //! node detail's "Polled by" read the same data and cannot disagree.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::pool_resolver;
 use super::ApiState;
 use crate::coordinator::PollerView;
@@ -367,6 +367,7 @@ fn resolve_polled_by(
 )]
 async fn node_assignment(
     _guard: RequireView,
+    _visible: VisibleNode,
     State(st): State<ApiState>,
     admin: Admin,
     Path(node_id): Path<Uuid>,
@@ -457,6 +458,7 @@ pub(super) struct PollerNodesResponse {
 )]
 async fn poller_nodes(
     _guard: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<String>,
@@ -485,6 +487,13 @@ async fn poller_nodes(
         .limit
         .unwrap_or(POLLER_NODES_MAX)
         .clamp(1, POLLER_NODES_MAX);
+    // Filter before counting, not after: `total` and `truncated` are part of the answer, so
+    // deriving them from the poller's full working set would tell a scoped caller how many nodes it
+    // holds outside their scope — the count is as much of a leak as the ids would be.
+    let owned: Vec<NodeId> = owned
+        .into_iter()
+        .filter(|n| scope.allows_node(&st, *n))
+        .collect();
     let total = owned.len();
     let truncated = total > limit;
     if truncated {
@@ -497,11 +506,16 @@ async fn poller_nodes(
     }
     let page: Vec<Uuid> = owned.iter().take(limit).map(NodeId::as_uuid).collect();
     // Names are context, not the answer — an id with no name still tells the operator which node
-    // moved, so a lookup failure degrades to bare ids rather than failing the drill-down.
-    let names = admin.repo.node_names(&page).await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "poller node drill-down: name lookup failed");
-        std::collections::HashMap::new()
-    });
+    // moved, so a lookup failure degrades to bare ids rather than failing the drill-down. The ids
+    // are already scope-filtered above, so the name lookup adds nothing to filter.
+    let names = admin
+        .repo
+        .node_names(scope.group_filter(), &page)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "poller node drill-down: name lookup failed");
+            std::collections::HashMap::new()
+        });
     let mut nodes: Vec<PollerNodeRef> = page
         .into_iter()
         .map(|id| PollerNodeRef {

@@ -26,16 +26,27 @@ interface Props {
   empty?: string;
   /** When set, rows become clickable drill-downs (keyboard-operable); receives the row's index. */
   onRowClick?: (index: number) => void;
+  /**
+   * The backend's `partial` flag: this ranking was cut short by the caller's group scope.
+   *
+   * Rendered here rather than per widget because every Top-N widget already draws through this
+   * component, so there is one place the caveat can be forgotten instead of six. Without it a
+   * short list reads as "these are all the nodes there are", which is exactly wrong for the
+   * account most likely to see it.
+   */
+  partial?: boolean;
 }
 
-export function RankedBars({ rows, max, empty, onRowClick }: Props) {
+export function RankedBars({ rows, max, empty, onRowClick, partial }: Props) {
   const { t } = useTranslation('dashboard');
   if (rows.length === 0) return <p className="muted">{empty ?? t('primitives.rankedBars.empty')}</p>;
   const peak = max ?? Math.max(...rows.map((r) => r.value), 0);
   const clickable = Boolean(onRowClick);
   return (
-    <ul className="rankedbars">
-      {rows.map((r, i) => {
+    <>
+      {partial && <p className="rankedbars-partial">{t('primitives.rankedBars.partial')}</p>}
+      <ul className="rankedbars">
+        {rows.map((r, i) => {
         const pct = peak > 0 ? Math.max(0, Math.min(100, (r.value / peak) * 100)) : 0;
         return (
           <li
@@ -64,10 +75,11 @@ export function RankedBars({ rows, max, empty, onRowClick }: Props) {
                 style={{ width: `${pct}%`, background: r.color ?? 'var(--series-1)' }}
               />
             </span>
-            <span className="rankedbar-value">{r.valueText ?? String(r.value)}</span>
-          </li>
-        );
-      })}
-    </ul>
+              <span className="rankedbar-value">{r.valueText ?? String(r.value)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

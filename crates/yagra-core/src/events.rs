@@ -460,6 +460,23 @@ pub struct EventFilter {
     pub search: Option<String>,
     /// Interpret `search` as a regular expression (message-only) rather than a substring.
     pub regex: bool,
+    /// RBAC group scope, already resolved to node ids (ADR-014): the result is **restricted** to
+    /// events from these nodes. `None` = unrestricted.
+    ///
+    /// ⚠️ **Do not confuse this with `name_node_ids`**, which the two search builders also take.
+    /// They are opposites. `name_node_ids` is *additive* — it ORs "…or the event came from a node
+    /// whose name matches your search term" into the free-text clause, widening the result. This is
+    /// *subtractive* and ANDs over everything. Reusing one as the other is the "same fact, two
+    /// meanings" bug this codebase has paid for before, and here the failure direction is that a
+    /// restriction quietly becomes a widening.
+    ///
+    /// `Some(vec![])` means "no visible nodes" and must match nothing — never everything.
+    ///
+    /// An event with **no** `node_id` is excluded whenever this is `Some`, in both backends
+    /// (SQL: `NULL = ANY(…)` is NULL; LogsQL: a missing field does not match `in(…)`). That is
+    /// deliberate and matches the row-level rule in `api/eventlog.rs::search`: an unattributed
+    /// syslog message is exactly where the body may name a device the caller cannot otherwise see.
+    pub visible_node_ids: Option<Vec<Uuid>>,
 }
 
 fn generate_token() -> String {
@@ -488,15 +505,20 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// The shared `WHERE` predicate for the event log + summary-stats queries. Binds $1..=$8:
+/// The shared `WHERE` predicate for the event log + summary-stats queries. Binds $1..=$9:
 /// $1 before (paging cursor), $2 since, $3 until, $4 kind, $5 node_id, $6 matched, $7 search,
-/// $8 regex. Kept in one place so `list_events` and `/events/stats` filter identically (the
-/// dashboard summaries must line up with the log). Uses the `e` (events) / `n` (nodes) aliases —
-/// every consumer joins `nodes n` (the name search needs it).
+/// $8 regex, $9 the RBAC visible-node restriction. Kept in one place so `list_events` and
+/// `/events/stats` filter identically (the dashboard summaries must line up with the log). Uses the
+/// `e` (events) / `n` (nodes) aliases — every consumer joins `nodes n` (the name search needs it).
 ///
 /// The three time bounds are **event time** in epoch milliseconds, matching what the VictoriaLogs
 /// builder filters on (`logstore::build_filter_part`) — see [`EventFilter`] for why. Callers bind
 /// them with [`ms_bound`]. `events_at_idx` (migration 0055) serves the ordering and the range.
+///
+/// `$9` is the group-scope restriction, written as an always-present clause for the same reason as
+/// `NodeRepo::SCOPE_PREDICATE`: a conditionally-appended one has a branch that can be forgotten, and
+/// forgetting it fails **open**. Note it is ANDed at the top level, *after* the `$7` search
+/// alternation — the search's `OR`s are already parenthesised, so it cannot be swallowed by them.
 pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms < $1) \
      AND ($2::bigint IS NULL OR e.at_unix_ms >= $2) \
      AND ($3::bigint IS NULL OR e.at_unix_ms <= $3) \
@@ -507,7 +529,8 @@ pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms
           OR ($8::boolean = FALSE AND (e.message ILIKE '%' || $7 || '%' \
                                        OR host(e.source_ip) ILIKE '%' || $7 || '%' \
                                        OR n.name ILIKE '%' || $7 || '%')) \
-          OR ($8::boolean = TRUE AND e.message ~* $7))";
+          OR ($8::boolean = TRUE AND e.message ~* $7)) \
+     AND ($9::uuid[] IS NULL OR e.node_id = ANY($9))";
 
 /// A time bound as the epoch milliseconds [`EVENT_FILTER_WHERE`] compares against. One helper so
 /// the three bounds can never be bound in different units.
@@ -515,7 +538,7 @@ fn ms_bound(at: Option<DateTime<Utc>>) -> Option<i64> {
     at.map(|t| t.timestamp_millis())
 }
 
-/// Build the keyset-paged event-list SQL. Binds are $1..=$8 (filter) + $9 (page size).
+/// Build the keyset-paged event-list SQL. Binds are $1..=$9 (filter) + $10 (page size).
 ///
 /// Extracted like the two stats builders so the **ordering column** is assertable: it has to be the
 /// one `EVENT_FILTER_WHERE`'s cursor compares against, and the same one VictoriaLogs sorts by, or
@@ -527,12 +550,12 @@ fn list_events_sql() -> String {
                 e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} \
-         ORDER BY e.at_unix_ms DESC LIMIT $9"
+         ORDER BY e.at_unix_ms DESC LIMIT $10"
     )
 }
 
 /// Build the categorical `/events/stats` SQL for a group dimension. All identifiers are fixed
-/// (chosen by the enum, never from the request); binds are $1..=$8 (filter) + $9 (row cap).
+/// (chosen by the enum, never from the request); binds are $1..=$9 (filter) + $10 (row cap).
 fn stats_grouped_sql(group: EventStatGroup) -> String {
     let (select, group_by, extra) = match group {
         EventStatGroup::Kind => ("e.kind AS key", "e.kind", ""),
@@ -552,12 +575,12 @@ fn stats_grouped_sql(group: EventStatGroup) -> String {
         "SELECT {select}, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE}{extra} \
-         GROUP BY {group_by} ORDER BY n DESC LIMIT $9"
+         GROUP BY {group_by} ORDER BY n DESC LIMIT $10"
     )
 }
 
-/// Build the time-series `/events/stats` SQL. Buckets on event time (`at_unix_ms`) into $9-wide
-/// windows; binds are $1..=$8 (filter) + $9 (bucket seconds).
+/// Build the time-series `/events/stats` SQL. Buckets on event time (`at_unix_ms`) into $10-wide
+/// windows; binds are $1..=$9 (filter) + $10 (bucket seconds).
 fn stats_series_sql(split_kind: bool) -> String {
     let (select_kind, group_kind) = if split_kind {
         (", e.kind AS kind", ", e.kind")
@@ -565,7 +588,7 @@ fn stats_series_sql(split_kind: bool) -> String {
         ("", "")
     };
     format!(
-        "SELECT (e.at_unix_ms / 1000 / $9) * $9 AS bucket{select_kind}, count(*) AS n \
+        "SELECT (e.at_unix_ms / 1000 / $10) * $10 AS bucket{select_kind}, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} \
          GROUP BY bucket{group_kind} ORDER BY bucket ASC"
@@ -845,6 +868,7 @@ impl EventRepo {
             .bind(filter.matched)
             .bind(filter.search.as_deref())
             .bind(filter.regex)
+            .bind(filter.visible_node_ids.as_deref())
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
             .await?;
@@ -1073,6 +1097,7 @@ impl EventRepo {
             .bind(filter.matched)
             .bind(filter.search.as_deref())
             .bind(filter.regex)
+            .bind(filter.visible_node_ids.as_deref())
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
             .await?;
@@ -1137,6 +1162,7 @@ impl EventRepo {
             .bind(filter.matched)
             .bind(filter.search.as_deref())
             .bind(filter.regex)
+            .bind(filter.visible_node_ids.as_deref())
             .bind(b)
             .fetch_all(&self.pool)
             .await?;
@@ -1998,10 +2024,13 @@ mod tests {
         // ORDER BY, and (in `stats_series_sql`) the bucketing. They were not — the predicate and
         // ordering used `recorded_at` while the bucketing used `at_unix_ms`.
         let sql = list_events_sql();
-        assert!(sql.contains("ORDER BY e.at_unix_ms DESC LIMIT $9"), "{sql}");
+        assert!(
+            sql.contains("ORDER BY e.at_unix_ms DESC LIMIT $10"),
+            "{sql}"
+        );
         assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
         assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms < $1"));
-        assert!(stats_series_sql(false).contains("(e.at_unix_ms / 1000 / $9)"));
+        assert!(stats_series_sql(false).contains("(e.at_unix_ms / 1000 / $10)"));
         // `recorded_at` is still selected and returned (it is real information), just never
         // filtered or ordered on.
         assert!(sql.contains("e.recorded_at,"), "{sql}");
@@ -2028,7 +2057,7 @@ mod tests {
             let sql = stats_grouped_sql(g);
             assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
             assert!(sql.contains("count(*) AS n"), "{sql}");
-            assert!(sql.contains("ORDER BY n DESC LIMIT $9"), "{sql}");
+            assert!(sql.contains("ORDER BY n DESC LIMIT $10"), "{sql}");
         }
         // Trap grouping drops NULL OIDs; source grouping carries node_id + source_ip for the UI.
         assert!(stats_grouped_sql(EventStatGroup::Trap).contains("e.trap_oid IS NOT NULL"));
@@ -2042,7 +2071,7 @@ mod tests {
     fn stats_series_sql_buckets_and_optionally_splits_by_kind() {
         let plain = stats_series_sql(false);
         assert!(
-            plain.contains("(e.at_unix_ms / 1000 / $9) * $9 AS bucket"),
+            plain.contains("(e.at_unix_ms / 1000 / $10) * $10 AS bucket"),
             "{plain}"
         );
         assert!(plain.contains(EVENT_FILTER_WHERE), "{plain}");

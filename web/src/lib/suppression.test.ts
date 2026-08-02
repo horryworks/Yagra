@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
-import { buildSuppressionIndex, groupSubtree } from './suppression';
+import type { Alert, MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
+import { buildSuppressionIndex, groupSubtree, muteTargetFromAlert } from './suppression';
+import { LIVENESS_METRIC } from './format';
 
 // Tree: tokyo ⊃ edge ⊃ (n2); tokyo also holds n1. osaka is a separate top-level group with n3.
 const groups: NodeGroup[] = [
@@ -44,6 +45,44 @@ const mute = (over: Partial<Mute>): Mute => ({
   until_at: '2026-01-02T00:00:00Z',
   reason: null,
   ...over,
+});
+
+const alert = (over: Partial<Alert>): Alert => ({
+  node: 'n1',
+  check: 'c1',
+  metric: 'icmp_rtt_ms',
+  severity: 'critical',
+  state: 'critical',
+  flapping: false,
+  at_unix_ms: 0,
+  ...over,
+});
+
+describe('muteTargetFromAlert', () => {
+  it('always targets the alert’s node, named for display', () => {
+    const seed = muteTargetFromAlert(alert({ node: 'n2' }), 'core-sw-01');
+    expect(seed.target).toEqual({ kind: 'node', id: 'n2', name: 'core-sw-01' });
+  });
+
+  it('pre-fills the metric so the mute matches exactly the check that fired', () => {
+    expect(muteTargetFromAlert(alert({ metric: 'huawei_cpu_usage' }), 'n').metric).toBe(
+      'huawei_cpu_usage',
+    );
+  });
+
+  // Load-bearing: the backend re-derives a mute's identity as check_id(node, name), the same v5
+  // hash the alert's `check` is. Substituting the display text ("Reachability") — or dropping the
+  // sentinel and falling back to a whole-node mute — would silence something other than what the
+  // operator clicked. The form renders it readably; the seed must stay verbatim.
+  it('carries the liveness sentinel through verbatim, not its display text', () => {
+    expect(muteTargetFromAlert(alert({ metric: LIVENESS_METRIC }), 'n').metric).toBe(
+      LIVENESS_METRIC,
+    );
+  });
+
+  it('seeds a whole-node mute when the alert captured no metric (pre-migration-0036 row)', () => {
+    expect(muteTargetFromAlert(alert({ metric: '' }), 'n').metric).toBeUndefined();
+  });
 });
 
 describe('groupSubtree', () => {

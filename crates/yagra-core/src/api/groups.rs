@@ -13,7 +13,7 @@
 //! [`validate_pool_update`]/[`validate_pool_create`] rather than being re-derived here.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
 use super::util::CreatedId;
 use super::ApiState;
@@ -67,11 +67,21 @@ pub(super) fn routes() -> Router<ApiState> {
 )]
 async fn list_node_groups(
     _guard: RequireView,
+    Scoped(scope): Scoped,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::groups::GroupSummary>>> {
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
+    // Keeps the caller's subtree **and the ancestors above it**. Dropping the ancestors would be
+    // the tempting simplification and it breaks the UI: the inventory tree is built from
+    // `parent_id`, so every visible root would point at a parent that is not in the response and
+    // render as an orphan. The ancestors are names only — `allows_group_row` admits them, while
+    // membership questions go through `allows_group`, which does not.
+    let list = list
+        .into_iter()
+        .filter(|g| scope.allows_group_row(g.id))
+        .collect();
     Ok(Json(list))
 }
 

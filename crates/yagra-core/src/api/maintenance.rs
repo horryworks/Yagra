@@ -13,11 +13,12 @@
 //! that ends before it starts, or a mute already in the past, silences nothing while looking to the
 //! operator like it worked. That is a worse failure than a rejection.
 
-use super::extract::{Admin, RequireAckAlerts, RequireManageMaintenance, RequireView};
+use super::extract::{Admin, RequireAckAlerts, RequireManageMaintenance, RequireView, Scoped};
+use super::scope::ScopeTarget;
 use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, put},
     Json, Router,
@@ -92,6 +93,107 @@ pub(crate) fn check_order(starts: DateTime<Utc>, ends: DateTime<Utc>) -> Result<
     Ok(())
 }
 
+// ── Group scope over stored suppression rows (ADR-014) ───────────────────────
+
+/// A window's target, as [`ScopeTarget`].
+///
+/// ⚠️ **Exhaustive over [`WindowScope`], and deliberately not shared with [`mute_target`].** A
+/// window's `Group` scope is a *tag value* and its folder group is `FolderGroup`; a mute's `Group`
+/// **is** the folder group. Both serialize as `"group"`. A converter keyed on that string would read
+/// a window's tag as a folder id — an operator may perfectly well tag nodes with a UUID — and hand a
+/// scoped caller somebody else's window. Only the decision is shared; the reading is per row type.
+fn window_target(w: &crate::maintenance::StoredWindow) -> ScopeTarget {
+    use crate::maintenance::WindowScope;
+    match w.level {
+        WindowScope::Node => w
+            .scope_id
+            .parse::<Uuid>()
+            .map_or(ScopeTarget::Unbounded, |n| {
+                ScopeTarget::Node(yagra_common::NodeId::from(n))
+            }),
+        WindowScope::FolderGroup => w
+            .scope_id
+            .parse::<Uuid>()
+            .map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
+        // A device class, and a free-form tag value, respectively — each an open-ended node set.
+        WindowScope::Profile | WindowScope::Group => ScopeTarget::Unbounded,
+    }
+}
+
+/// A mute's target. `StoredMute` keeps the id in a column per kind, so there is nothing to parse.
+fn mute_target(m: &crate::maintenance::StoredMute) -> ScopeTarget {
+    use crate::maintenance::MuteScope;
+    match m.scope_kind {
+        MuteScope::Node => m.node_id.map_or(ScopeTarget::Unbounded, |n| {
+            ScopeTarget::Node(yagra_common::NodeId::from(n))
+        }),
+        MuteScope::Group => m
+            .group_id
+            .map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
+    }
+}
+
+/// For a scoped caller, confirm `id` names a window they can see; otherwise `404` — the same answer
+/// they get for a window that does not exist, so the endpoint is not an id-enumeration oracle.
+///
+/// Reads the list rather than one row because [`crate::maintenance::MaintenanceRepo`] has no by-id
+/// read, and windows are a table an operator populates by hand (tens of rows). An unrestricted
+/// caller returns before the query, so the common path is unchanged.
+async fn require_visible_window(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    let windows = admin.maintenance.list_windows().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "resolve maintenance window scope",
+            "failed to load maintenance windows",
+        )
+    })?;
+    let visible = windows
+        .iter()
+        .any(|w| w.id == id && scope.allows_target(st, window_target(w)));
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(
+            "window_not_found",
+            format!("no maintenance window {id}"),
+        ))
+    }
+}
+
+/// The mute counterpart of [`require_visible_window`].
+async fn require_visible_mute(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    let mutes = admin.maintenance.list_mutes().await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "resolve mute scope", "failed to load mutes")
+    })?;
+    let visible = mutes
+        .iter()
+        .any(|m| m.id == id && scope.allows_target(st, mute_target(m)));
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(
+            "mute_not_found",
+            format!("no mute {id}"),
+        ))
+    }
+}
+
 /// Confirm `scope_id` names an existing folder group.
 ///
 /// A window or mute pointing at a group that does not exist silences nothing — same failure mode as
@@ -133,20 +235,26 @@ async fn validate_group_scope(admin: &super::AdminState, scope_id: &str) -> Resu
 )]
 async fn list_maintenance_windows(
     _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::maintenance::StoredWindow>>> {
-    admin
-        .maintenance
-        .list_windows()
-        .await
-        .map(Json)
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "list maintenance windows",
-                "failed to list maintenance windows",
-            )
-        })
+    let windows = admin.maintenance.list_windows().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list maintenance windows",
+            "failed to list maintenance windows",
+        )
+    })?;
+    // A window names its own target, so this filters on the row rather than on a query predicate —
+    // and a profile/tag-scoped window is hidden from a scoped caller entirely, matching the rule
+    // `create_maintenance_window` enforces on the way in.
+    Ok(Json(
+        windows
+            .into_iter()
+            .filter(|w| scope.allows_target(&st, window_target(w)))
+            .collect(),
+    ))
 }
 
 /// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
@@ -174,6 +282,8 @@ pub(super) struct CreateWindow {
 )]
 async fn create_maintenance_window(
     _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Json(body): Json<CreateWindow>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
@@ -191,6 +301,33 @@ async fn create_maintenance_window(
     }
     if body.scope_level == "group_id" {
         validate_group_scope(&admin, &body.scope_id).await?;
+    }
+    // Same reasoning as `create_mute`: `ManageMaintenance` is an operator permission, so a scoped
+    // caller must not open a window over something outside their scope. The `profile`/`group` (tag)
+    // levels name a *class* of node rather than one — they are refused outright for a scoped
+    // caller, because there is no way to open one that is honestly bounded by their scope.
+    if !scope.is_all() {
+        match body.scope_level.as_str() {
+            "node" => {
+                let node = body.scope_id.parse::<Uuid>().map_err(|_| {
+                    ApiError::bad_request("invalid_window", "scope_id must be a node uuid")
+                })?;
+                super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(node))?;
+            }
+            "group_id" => {
+                let gid = body.scope_id.parse::<Uuid>().map_err(|_| {
+                    ApiError::bad_request("invalid_window", "scope_id must be a group uuid")
+                })?;
+                super::scope::require_visible_group(&scope, gid)?;
+            }
+            _ => {
+                return Err(ApiError::forbidden_code(
+                    "scope_unsupported",
+                    "a group-scoped account can open a maintenance window over a node or a folder \
+                     group, not over a profile or a tag",
+                ))
+            }
+        }
     }
     let (starts, ends) = window_bounds(&body.starts_at, &body.ends_at)?;
     let id = admin
@@ -227,10 +364,15 @@ async fn create_maintenance_window(
 )]
 async fn set_maintenance_window_enabled(
     _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<super::util::EnabledBody>,
 ) -> ApiResult<StatusCode> {
+    // Disabling someone else's window is not a small thing: it un-suppresses their change and pages
+    // them. Same 404 as an absent window, so the id space stays opaque.
+    require_visible_window(&st, &scope, &admin, id).await?;
     let found = admin
         .maintenance
         .set_window_enabled(id, body.enabled)
@@ -265,9 +407,12 @@ async fn set_maintenance_window_enabled(
 )]
 async fn delete_maintenance_window(
     _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    require_visible_window(&st, &scope, &admin, id).await?;
     let found = admin.maintenance.delete_window(id).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -298,14 +443,20 @@ async fn delete_maintenance_window(
 )]
 async fn list_mutes(
     _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::maintenance::StoredMute>>> {
-    admin
-        .maintenance
-        .list_mutes()
-        .await
-        .map(Json)
-        .map_err(|e| ApiError::from_internal(e.as_ref(), "list mutes", "failed to list mutes"))
+    let mutes =
+        admin.maintenance.list_mutes().await.map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list mutes", "failed to list mutes")
+        })?;
+    Ok(Json(
+        mutes
+            .into_iter()
+            .filter(|m| scope.allows_target(&st, mute_target(m)))
+            .collect(),
+    ))
 }
 
 /// Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or
@@ -334,6 +485,8 @@ pub(super) struct CreateMute {
 )]
 async fn create_mute(
     _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Json(body): Json<CreateMute>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
@@ -344,6 +497,14 @@ async fn create_mute(
         ));
     }
     let group = body.scope_kind == "group";
+    // A mute names its target in the body, and `AckAlerts` is a permission a *scoped* operator
+    // holds — so the target has to be checked here or a scoped operator could silence the fleet.
+    // A group mute reaches every node beneath the group, hence the stricter group check.
+    if group {
+        super::scope::require_visible_group(&scope, body.scope_id)?;
+    } else {
+        super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.scope_id))?;
+    }
     // A group mute silences the whole node-set, so a per-metric mute only applies to a node scope.
     let check = if group {
         None
@@ -407,9 +568,14 @@ async fn create_mute(
 )]
 async fn delete_mute(
     _perm: RequireAckAlerts,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // Lifting a mute makes the fleet page again — the inverse of creating one, and checked the same
+    // way. `create_mute` already validates its target; this closes the other half.
+    require_visible_mute(&st, &scope, &admin, id).await?;
     let found =
         admin.maintenance.delete_mute(id).await.map_err(|e| {
             ApiError::from_internal(e.as_ref(), "delete mute", "failed to delete mute")
@@ -429,6 +595,7 @@ mod tests {
     use super::*;
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};
+    use crate::maintenance::{StoredMute, StoredWindow};
     use axum::body::Body;
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt;
@@ -470,6 +637,111 @@ mod tests {
                 "invalid_window"
             );
         }
+    }
+
+    // ── Group scope over stored rows ────────────────────────────────────────
+
+    fn window(level: crate::maintenance::WindowScope, scope_id: &str) -> StoredWindow {
+        StoredWindow {
+            id: Uuid::new_v4(),
+            name: "w".to_owned(),
+            level,
+            scope_id: scope_id.to_owned(),
+            starts_at: "2026-08-01T00:00:00Z".to_owned(),
+            ends_at: "2026-08-02T00:00:00Z".to_owned(),
+            enabled: true,
+            active: true,
+        }
+    }
+
+    fn mute(
+        kind: crate::maintenance::MuteScope,
+        node: Option<Uuid>,
+        group: Option<Uuid>,
+    ) -> StoredMute {
+        StoredMute {
+            id: Uuid::new_v4(),
+            scope_kind: kind,
+            node_id: node,
+            group_id: group,
+            check_name: None,
+            until_at: "2026-08-02T00:00:00Z".to_owned(),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn a_windows_tag_group_is_never_read_as_a_folder_group() {
+        // ⚠️ The trap this whole `Target` type exists for. A window's `group` scope holds a *tag
+        // value*, a mute's `group` holds a folder-group id, and both serialize as "group". An
+        // operator is perfectly entitled to tag nodes with a UUID-shaped string, so a helper keyed
+        // on the scope text would parse a window's tag as a folder id, compare it against the
+        // caller's visible set, and hand them a window belonging to a group they cannot see.
+        use crate::maintenance::{MuteScope, WindowScope};
+        let g = Uuid::from_u128(42);
+
+        // Same text, same shape, two different meanings — and they must not resolve alike.
+        assert_eq!(
+            window_target(&window(WindowScope::Group, &g.to_string())),
+            ScopeTarget::Unbounded,
+            "a window's `group` is a tag value, not a folder group"
+        );
+        assert_eq!(
+            mute_target(&mute(MuteScope::Group, None, Some(g))),
+            ScopeTarget::Group(g),
+            "a mute's `group` IS the folder group"
+        );
+
+        // And the folder-group case a window does have is spelled differently.
+        assert_eq!(
+            window_target(&window(WindowScope::FolderGroup, &g.to_string())),
+            ScopeTarget::Group(g)
+        );
+        assert_eq!(
+            window_target(&window(WindowScope::Profile, &g.to_string())),
+            ScopeTarget::Unbounded
+        );
+    }
+
+    #[test]
+    fn an_unparseable_or_missing_target_is_a_class_not_a_node() {
+        // Fail-closed: a row whose target cannot be read is treated as unbounded, so only an
+        // unrestricted caller sees it. The inversion — defaulting to some node id — would expose
+        // the row to whoever happened to hold that node.
+        use crate::maintenance::{MuteScope, WindowScope};
+        assert_eq!(
+            window_target(&window(WindowScope::Node, "not-a-uuid")),
+            ScopeTarget::Unbounded
+        );
+        assert_eq!(
+            mute_target(&mute(MuteScope::Node, None, None)),
+            ScopeTarget::Unbounded
+        );
+        assert_eq!(
+            mute_target(&mute(MuteScope::Group, Some(Uuid::new_v4()), None)),
+            ScopeTarget::Unbounded,
+            "a group mute reads group_id; a stray node_id must not stand in for it"
+        );
+    }
+
+    #[test]
+    fn a_class_scoped_row_is_visible_only_to_an_unrestricted_caller() {
+        use crate::api::scope::{NodeScope, ScopeSet};
+        use std::sync::Arc;
+        let st = public_state();
+        let g = Uuid::from_u128(7);
+        let scoped = NodeScope::Groups(Arc::new(ScopeSet {
+            visible: vec![g],
+            breadcrumb: Vec::new(),
+        }));
+
+        assert!(NodeScope::All.allows_target(&st, ScopeTarget::Unbounded));
+        assert!(
+            !scoped.allows_target(&st, ScopeTarget::Unbounded),
+            "a profile/tag-scoped row covers an open-ended node set; no group scope contains it"
+        );
+        assert!(scoped.allows_target(&st, ScopeTarget::Group(g)));
+        assert!(!scoped.allows_target(&st, ScopeTarget::Group(Uuid::from_u128(8))));
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {

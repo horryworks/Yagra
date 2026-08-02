@@ -15,7 +15,7 @@
 //! join the stored metadata with those query-time values.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
 use super::util::{now_unix_s, CreatedId, DEFAULT_RATE_LOOKBACK_SECS};
 use super::{is_valid_metric_name, is_valid_oid, ApiState};
 use crate::collection::CreateTemplateOutcome;
@@ -164,6 +164,7 @@ pub(super) enum NodeCollection {
 )]
 async fn list_node_collection(
     _guard: RequireManageConfig,
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
     Query(q): Query<CollectionQuery>,
@@ -582,6 +583,7 @@ pub(crate) struct InterfaceRow {
 )]
 async fn list_node_interfaces(
     _guard: RequireView,
+    _visible: VisibleNode,
     State(st): State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<InterfaceRow>>> {

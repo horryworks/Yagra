@@ -17,7 +17,8 @@
 //! (ADR-012), which is why the interface endpoints rank by a query-time rate rather than by a
 //! stored gauge.
 
-use super::extract::RequireView;
+use super::extract::{RequireView, Scoped, VisibleNode};
+use super::util::Ranked;
 use super::{
     clamp_range_step, is_valid_metric_name, ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS,
     DEFAULT_RATE_LOOKBACK_SECS, DEFAULT_STEP_SECS,
@@ -131,6 +132,7 @@ fn check_metric_name(metric: &str) -> Result<(), ApiError> {
 )]
 async fn get_node_metric(
     _perm: RequireView,
+    _visible: VisibleNode,
     State(st): State<ApiState>,
     Path((node_id, metric)): Path<(Uuid, String)>,
     Query(q): Query<MetricQuery>,
@@ -185,6 +187,7 @@ pub(super) struct RangeQuery {
 )]
 async fn get_node_metric_range(
     _perm: RequireView,
+    _visible: VisibleNode,
     State(st): State<ApiState>,
     Path((node_id, metric)): Path<(Uuid, String)>,
     Query(q): Query<RangeQuery>,
@@ -243,6 +246,7 @@ pub(crate) struct InterfaceSeries {
 )]
 async fn get_interface_series(
     _perm: RequireView,
+    _visible: VisibleNode,
     State(st): State<ApiState>,
     Path((node_id, ifindex)): Path<(Uuid, u32)>,
     Query(q): Query<RangeQuery>,
@@ -388,7 +392,7 @@ fn top_selector(metric: &str) -> Result<String, ApiError> {
     get, path = "/api/v1/metrics/top", tag = "metrics",
     params(TopQuery),
     responses(
-        (status = 200, description = "The highest-value nodes, ranked; empty when the store cannot rank", body = Vec<TopEntry>),
+        (status = 200, description = "The highest-value nodes, ranked; `partial` says the scope filter may have shortened the list", body = super::util::Ranked<TopEntry>),
         (status = 400, description = "`metric` is neither a logical alias nor an identifier, or `agg` is unsupported", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
@@ -396,16 +400,28 @@ fn top_selector(metric: &str) -> Result<String, ApiError> {
 )]
 async fn top_metrics(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<TopQuery>,
-) -> ApiResult<Json<Vec<TopEntry>>> {
+) -> ApiResult<Json<Ranked<TopEntry>>> {
     let selector = top_selector(&q.metric)?;
     let agg = parse_top_agg(q.agg.as_deref())?;
     let limit = q.limit.unwrap_or(5).clamp(1, 50);
-    let ranked = st.store.top_nodes(&selector, agg, limit).await;
-    let names = super::nodes::resolve_node_names(&st, ranked.iter().map(|(id, _)| *id)).await;
-    Ok(Json(
-        ranked
+    // The TSDB ranks by value and knows nothing about groups, so scoping happens after the ranking
+    // — over-fetch first so a scoped caller usually still gets a full list. See RANKING_OVERFETCH.
+    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
+    let ranked = st.store.top_nodes(&selector, agg, fetched).await;
+    let ranked: Vec<_> = ranked
+        .into_iter()
+        .filter(|(id, _)| scope.allows_node(&st, yagra_common::NodeId::from(*id)))
+        .collect();
+    let ranked = Ranked::new(ranked, limit, fetched);
+    let names =
+        super::nodes::resolve_node_names(&st, &scope, ranked.entries.iter().map(|(id, _)| *id))
+            .await;
+    Ok(Json(Ranked {
+        entries: ranked
+            .entries
             .into_iter()
             .map(|(id, value)| TopEntry {
                 node_id: id,
@@ -413,7 +429,8 @@ async fn top_metrics(
                 value,
             })
             .collect(),
-    ))
+        partial: ranked.partial,
+    }))
 }
 
 // ── Interface rankings ───────────────────────────────────────────────────────
@@ -465,7 +482,7 @@ fn parse_interface_metric(metric: &str) -> Result<InterfaceTopMetric, ApiError> 
     get, path = "/api/v1/metrics/interface-top", tag = "metrics",
     params(InterfaceTopQuery),
     responses(
-        (status = 200, description = "The busiest or most-erroring interfaces, ranked", body = Vec<InterfaceTopEntry>),
+        (status = 200, description = "The busiest or most-erroring interfaces, ranked; `partial` says the scope filter may have shortened the list", body = super::util::Ranked<InterfaceTopEntry>),
         (status = 400, description = "`metric` is not one of throughput|in_bps|out_bps|errors|discards, or `agg` is unsupported", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
@@ -473,30 +490,41 @@ fn parse_interface_metric(metric: &str) -> Result<InterfaceTopMetric, ApiError> 
 )]
 async fn interface_top(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<InterfaceTopQuery>,
-) -> ApiResult<Json<Vec<InterfaceTopEntry>>> {
+) -> ApiResult<Json<Ranked<InterfaceTopEntry>>> {
     let metric = parse_interface_metric(&q.metric)?;
     let agg = parse_top_agg(q.agg.as_deref())?;
     let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let ranked = st.store.top_interfaces(metric, agg, limit).await;
-    Ok(Json(build_interface_entries(&st, ranked).await))
+    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
+    let ranked = st.store.top_interfaces(metric, agg, fetched).await;
+    let entries = build_interface_entries(&st, &scope, ranked).await;
+    Ok(Json(Ranked::new(entries, limit, fetched)))
 }
 
 /// Join a fleet interface ranking `(node, ifindex, value)` to node + interface names (and speed)
 /// from PostgreSQL — one repo query over the distinct nodes in the result. Shared by the interface
 /// Top-N and interface-delta endpoints.
+///
+/// **Scope-filters the ranking**, so every caller of this shared join gets it — an interface
+/// ranking is node data, and there are three call sites that would each otherwise have to remember.
 pub(crate) async fn build_interface_entries(
     st: &ApiState,
+    scope: &super::scope::NodeScope,
     ranked: Vec<(Uuid, i32, f64)>,
 ) -> Vec<InterfaceTopEntry> {
+    let ranked: Vec<(Uuid, i32, f64)> = ranked
+        .into_iter()
+        .filter(|(n, _, _)| scope.allows_node(st, yagra_common::NodeId::from(*n)))
+        .collect();
     let node_ids: Vec<Uuid> = {
         let mut ids: Vec<Uuid> = ranked.iter().map(|(n, _, _)| *n).collect();
         ids.sort_unstable();
         ids.dedup();
         ids
     };
-    let names = super::nodes::resolve_node_names(st, node_ids.iter().copied()).await;
+    let names = super::nodes::resolve_node_names(st, scope, node_ids.iter().copied()).await;
     let idents = match st.admin.as_ref() {
         Some(admin) => admin
             .repo
@@ -542,7 +570,7 @@ pub(super) struct InterfaceDeltaQuery {
     get, path = "/api/v1/metrics/interface-delta", tag = "metrics",
     params(InterfaceDeltaQuery),
     responses(
-        (status = 200, description = "Interfaces ranked by signed throughput delta (bits/sec)", body = Vec<InterfaceTopEntry>),
+        (status = 200, description = "Interfaces ranked by signed throughput delta (bits/sec); `partial` says the scope filter may have shortened the list", body = super::util::Ranked<InterfaceTopEntry>),
         (status = 400, description = "`direction` is not 'up' or 'down'", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
@@ -550,9 +578,10 @@ pub(super) struct InterfaceDeltaQuery {
 )]
 async fn interface_delta(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<InterfaceDeltaQuery>,
-) -> ApiResult<Json<Vec<InterfaceTopEntry>>> {
+) -> ApiResult<Json<Ranked<InterfaceTopEntry>>> {
     let direction = match q.direction.as_str() {
         "up" => DeltaDirection::Up,
         "down" => DeltaDirection::Down,
@@ -565,8 +594,10 @@ async fn interface_delta(
     };
     let window = q.window.unwrap_or(300).clamp(60, 3600);
     let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let ranked = st.store.interface_delta(direction, window, limit).await;
-    Ok(Json(build_interface_entries(&st, ranked).await))
+    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
+    let ranked = st.store.interface_delta(direction, window, fetched).await;
+    let entries = build_interface_entries(&st, &scope, ranked).await;
+    Ok(Json(Ranked::new(entries, limit, fetched)))
 }
 
 // ── Busiest-links heatmap ────────────────────────────────────────────────────
@@ -588,13 +619,22 @@ pub(crate) struct InterfaceHeatmap {
     pub links: Vec<String>,
     pub timestamps: Vec<i64>,
     pub values: Vec<Vec<f64>>,
+    // Same flag as `util::Ranked::partial`, an added field rather than an envelope only because
+    // this response was already an object. Doc comment kept outward-facing — it is published.
+    /// `true` when the link set covers only the groups the calling account may see and links it is
+    /// entitled to may be missing. Always `false` for an account with unrestricted visibility.
+    pub partial: bool,
 }
 
 /// Build the grid from each link's independently-sampled series.
 ///
 /// A gap becomes `0.0` rather than a hole: this is a *heatmap*, so every cell must have a value to
 /// shade, and "no traffic recorded" is the honest reading of a missing throughput sample.
-fn build_heatmap(entries: &[InterfaceTopEntry], ranges: Vec<Vec<MetricPoint>>) -> InterfaceHeatmap {
+fn build_heatmap(
+    entries: &[InterfaceTopEntry],
+    ranges: Vec<Vec<MetricPoint>>,
+    partial: bool,
+) -> InterfaceHeatmap {
     let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     let mut per_link: Vec<(String, std::collections::HashMap<i64, f64>)> = Vec::new();
     for (e, pts) in entries.iter().zip(ranges) {
@@ -625,6 +665,7 @@ fn build_heatmap(entries: &[InterfaceTopEntry], ranges: Vec<Vec<MetricPoint>>) -
             })
             .collect(),
         timestamps,
+        partial,
     }
 }
 
@@ -641,6 +682,7 @@ fn build_heatmap(entries: &[InterfaceTopEntry], ranges: Vec<Vec<MetricPoint>>) -
 )]
 async fn interface_heatmap(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<HeatmapQuery>,
 ) -> Json<InterfaceHeatmap> {
@@ -648,11 +690,13 @@ async fn interface_heatmap(
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 6 * 3600);
     let step = clamp_range_step(from, to, q.step.unwrap_or(600), 60);
+    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
     let top = st
         .store
-        .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, limit)
+        .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, fetched)
         .await;
-    let entries = build_interface_entries(&st, top).await;
+    let entries = build_interface_entries(&st, &scope, top).await;
+    let Ranked { entries, partial } = Ranked::new(entries, limit, fetched);
     // The per-link throughput queries are independent (bounded ≤ 20), so fan them out concurrently
     // rather than awaiting one link at a time — one round-trip of latency instead of N.
     let ranges = futures::future::join_all(entries.iter().map(|e| {
@@ -660,7 +704,7 @@ async fn interface_heatmap(
             .interface_throughput_range(e.node_id, e.ifindex, from, to, step)
     }))
     .await;
-    Json(build_heatmap(&entries, ranges))
+    Json(build_heatmap(&entries, ranges, partial))
 }
 
 // ── Aggregate throughput ─────────────────────────────────────────────────────
@@ -716,14 +760,26 @@ fn align_throughput(in_pts: Vec<MetricPoint>, out_pts: Vec<MetricPoint>) -> Thro
 )]
 async fn throughput_range(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<ThroughputRangeQuery>,
-) -> Json<ThroughputRange> {
+) -> ApiResult<Json<ThroughputRange>> {
+    // One summed series, aggregated inside VictoriaMetrics. Unlike the Top-N endpoints there is no
+    // per-node breakdown to over-fetch and filter — the sum arrives already collapsed. Asking for
+    // `sum by (node)` instead would return one series per node, which at the 50k-node target is the
+    // cardinality blow-up CLAUDE.md names as the single biggest design risk. So it refuses.
+    if !scope.is_all() {
+        return Err(ApiError::forbidden_code(
+            "scope_unsupported",
+            "fleet throughput is summed inside the TSDB with no per-node breakdown to filter, so it \
+             cannot be narrowed to a group-scoped account",
+        ));
+    }
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 24 * 3600);
     let step = clamp_range_step(from, to, q.step.unwrap_or(300), 60);
     let (in_pts, out_pts) = st.store.throughput_range(from, to, step).await;
-    Json(align_throughput(in_pts, out_pts))
+    Ok(Json(align_throughput(in_pts, out_pts)))
 }
 
 #[cfg(test)]
@@ -882,7 +938,14 @@ mod tests {
         ] {
             let (status, body) = get_json(path).await;
             assert_eq!(status, StatusCode::OK, "{path}");
-            assert_eq!(body, serde_json::json!([]), "{path}");
+            // The `Ranked` envelope, and `partial:false`: nothing was filtered away, the store just
+            // had nothing to rank. Reporting `true` here would put a "may be incomplete" warning on
+            // every widget of a deployment that simply has no data yet.
+            assert_eq!(
+                body,
+                serde_json::json!({ "entries": [], "partial": false }),
+                "{path}"
+            );
         }
     }
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Create a mute — shared by the Mutes page ("+ Add mute") and the All Nodes right-click "Custom…"
-// path. A node mute can target one metric; a folder-group mute silences every node under the group
-// (recursive incl. subgroups, ADR-022) and has no metric. When `initialScope` is set the scope is
-// fixed to that node/group; otherwise it's chosen here.
+// Create a mute — shared by the Mutes page ("+ Add mute"), the All Nodes right-click "Custom…"
+// path, and the per-alert Mute action on Active alerts. A node mute can target one metric; a
+// folder-group mute silences every node under the group (recursive incl. subgroups, ADR-022) and
+// has no metric. When `initialScope` is set the scope is fixed to that node/group; otherwise it's
+// chosen here.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,21 +14,30 @@ import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
-import { localTimeZone } from '../../lib/format';
+import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
 import { METRIC_PRESETS, type SuppressionTarget } from '../../lib/suppression';
 
 const TZ = localTimeZone();
 const toRfc3339 = (local: string) => new Date(local).toISOString();
 
 interface Props {
-  groups: NodeGroup[];
+  /** Only consulted when the scope is chosen here — a locked scope names its own entity. */
+  groups?: NodeGroup[];
   /** When set, the scope is fixed to this node/group (the All Nodes right-click "Custom…" path). */
   initialScope?: SuppressionTarget;
+  /** Metric to pre-fill for a node scope (the per-alert Mute action seeds the metric that fired). */
+  initialMetric?: string;
   onClose: () => void;
   onSaved: () => void;
 }
 
-export function AddMuteModal({ groups, initialScope, onClose, onSaved }: Props) {
+export function AddMuteModal({
+  groups = [],
+  initialScope,
+  initialMetric,
+  onClose,
+  onSaved,
+}: Props) {
   const { t } = useTranslation('suppression');
   const locked = !!initialScope;
   const [scopeKind, setScopeKind] = useState<'node' | 'group'>(initialScope?.kind ?? 'node');
@@ -37,7 +47,11 @@ export function AddMuteModal({ groups, initialScope, onClose, onSaved }: Props) 
   const [nodeLabel, setNodeLabel] = useState(
     initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
   );
-  const [check, setCheck] = useState('');
+  const [check, setCheck] = useState(initialMetric ?? '');
+  // The liveness sentinel is an internal token, never shown to an operator (`AlertWhatText` renders
+  // it as "Reachability"). It still has to reach the API verbatim — a mute's identity is
+  // check_id(node, name) — so the value is kept and the *field* becomes a read-only line instead.
+  const livenessCheck = check === LIVENESS_METRIC;
   const [until, setUntil] = useState('');
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -147,18 +161,26 @@ export function AddMuteModal({ groups, initialScope, onClose, onSaved }: Props) 
       {scopeKind === 'node' && (
         <div className="modal-field">
           <label className="modal-field-label">{t('muteForm.metric')}</label>
-          <TextInput
-            className="mono"
-            placeholder={t('muteForm.metricPlaceholder')}
-            list="mute-check-presets"
-            value={check}
-            onChange={(e) => setCheck(e.target.value)}
-          />
-          <datalist id="mute-check-presets">
-            {METRIC_PRESETS.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
+          {livenessCheck ? (
+            <p className="modal-hint">
+              <strong>{t('format:liveness')}</strong>
+            </p>
+          ) : (
+            <>
+              <TextInput
+                className="mono"
+                placeholder={t('muteForm.metricPlaceholder')}
+                list="mute-check-presets"
+                value={check}
+                onChange={(e) => setCheck(e.target.value)}
+              />
+              <datalist id="mute-check-presets">
+                {METRIC_PRESETS.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </>
+          )}
         </div>
       )}
       <div className="modal-field">

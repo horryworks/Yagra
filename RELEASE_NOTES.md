@@ -11,6 +11,15 @@
 ## Unreleased
 
 ### Breaking changes
+- **The four Top-N endpoints now return an object, not a bare array.**
+  `GET /api/v1/metrics/top`, `/metrics/interface-top`, `/metrics/interface-delta` and
+  `/alerts/top-nodes` answer `{"entries": [...], "partial": false}`; what used to be the whole body
+  is now `entries`. `/metrics/interface-heatmap` keeps its shape and gains the same `partial` field.
+  `partial` is `true` when the ranking covers only the groups the calling account may see and rows
+  it is entitled to may be missing — a Top-N is ranked by the metric store, which knows nothing
+  about groups, so a scoped account's list is filtered afterwards and can come back short. It is
+  always `false` for an account with unrestricted visibility, which is every account today. The
+  WebUI is updated; an external client reading these endpoints must read `entries`.
 - **`:latest` now means the latest stable release, not the development trunk.** Until now every
   push to `main` published `ghcr.io/horryworks/yagra-*:<sha>` and moved `:latest`, so the default
   in `docker-compose.deploy.yml` and `docker-compose.poller.yml` handed you a development build.
@@ -49,6 +58,13 @@
   node. The popover states that only nodes are searched: alerts, events and groups have no
   server-side search, and a nodes-only result set that looks fleet-wide is worse than none.
   Mobile gets it as a tap-to-open row under the top bar.
+- **Topology ▸ Geo map is a real page.** It was a "Coming soon" placeholder; it now draws a pin per
+  node group that has coordinates, on a world outline, coloured by that group's worst member state,
+  with wheel/drag/pinch pan-zoom and click-through to the group's nodes. It reads the same
+  per-group health rollup the dashboard's Geo map widget does, so the two cannot disagree about a
+  site. The outline is bundled in the app — no tile server, no external request, no new dependency
+  — because a monitoring console is what you open when the network is broken, and a map that needs
+  the internet is blank exactly when it matters.
 - **Group coordinates can be set again.** `PUT /api/v1/node-groups/{id}/geo` was removed in
   v0.1.19 as an uncalled endpoint, but the dashboard's Geo map widget still read those
   coordinates — leaving a widget with no way to be populated. The endpoint is restored and the
@@ -56,6 +72,17 @@
 - **"Notify me" on a Troubleshoot run now notifies.** The choice was offered and stored, and
   consumed by nothing. A completion notice now appears from any page, with a link to the report.
   It fires only while Yagra is open in this browser, which the control now says.
+- **Active alerts can be muted from the row.** Alerts ▸ Active gains a working Mute action that
+  opens the mute dialog with the node fixed and the metric that fired pre-filled, so the mute
+  covers exactly the check being triaged rather than the whole node. It appears for operators and
+  admins — the roles `POST /api/v1/mutes` already accepts — and is absent for viewers instead of
+  offered and rejected. Muting suppresses *notification* only: the alert stays in the list and in
+  the history, unchanged.
+- **The permanently disabled "Open external" action is gone.** It had been shipped disabled since
+  it was written, promising a deep link into PagerDuty/JSM that no configuration could ever supply
+  — Yagra stores those integrations as outbound endpoints, not per-incident URLs. The `acked` pill
+  already names the tool and the person who acknowledged, which is the honest version of the same
+  information. No API changed.
 
 ### Bug Fixes
 - **Editing a URL monitor cleared its credential binding.** The form's own comment said every
@@ -204,6 +231,18 @@ TypeScript and closed a class of contract drift for good.
   same document, which removes 3,340 lines of hand-transcribed TypeScript that nothing was checking.
 
 ### Improvements
+- **Group-scoped visibility (ADR-014) is now enforced across the whole read surface.** Every
+  endpoint that returns node-associated data filters by the calling account's folder-group scope:
+  SQL lists gain an indexed predicate, rankings and in-memory aggregates are filtered after the
+  fact, both live SSE streams drop events for nodes outside the scope, and a per-node route answers
+  `404` — not `403` — for a node the caller cannot see, so node ids cannot be enumerated. Operator
+  actions that name a node in the request body (acknowledge, mute, maintenance window, immediate
+  poll, launch an analysis) are checked the same way. **No account can hold a scope yet**, so no
+  behaviour changes for any existing deployment; this is the enforcement that has to exist before
+  scopes can be issued. Five reads cannot be narrowed and refuse a scoped account with
+  `403 scope_unsupported` rather than answering with fleet-wide numbers: saved reports, the fleet
+  state timeline, aggregate throughput, and the fleet-wide `/flow/*` aggregates — each is stored or
+  computed already summed, with no per-node attribution left to filter on.
 - **Active alerts now say which device and what broke, instead of two UUIDs.** A triage row read
   `● 550e8400-… 7c9e6679-… 2m ago`. The node resolves to its name (the id is on hover, as everywhere
   else), and the check's id — a one-way hash of node and metric, so it has no name to resolve to —

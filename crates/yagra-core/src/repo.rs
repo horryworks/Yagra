@@ -108,70 +108,125 @@ const DEMO_NODE_ID: Uuid = Uuid::nil();
 /// fact in two places drifts, and the copy that is wrong is the one nobody reads).
 pub const NODE_SEARCH_MAX: i64 = 500;
 
+/// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).
+///
+/// This is deliberately a **group** filter and not a node-id list: expanding a scope to node ids
+/// would mean a full-fleet scan on every request, which is exactly what S2/S6/S7 removed. The
+/// caller builds it with `api::scope::NodeScope::group_filter`.
+///
+/// `Some(&[])` is meaningful and must survive: it means "no groups", i.e. match nothing. A scope
+/// naming only deleted groups produces it, and collapsing it into `None` would turn a broken scope
+/// into unrestricted access. Every query below binds it directly rather than branching on it, so
+/// there is no code path that can drop the predicate — see [`NodeRepo::SCOPE_PREDICATE`].
+pub type GroupFilter<'a> = Option<&'a [Uuid]>;
+
 /// A read-only source of the node inventory for the API. Implemented by [`NodeRepo`]
 /// (live, PostgreSQL) and [`StaticNodeList`] (skeleton mode), so the router doesn't care
 /// which is behind it.
+///
+/// Every method takes a [`GroupFilter`]. That is a signature change made on purpose: it is what
+/// forces each call site to answer "what may this caller see" rather than defaulting to the whole
+/// fleet, and the compiler asks the question at every one of them.
 #[async_trait]
 pub trait NodeListing: Send + Sync {
     /// One keyset page: nodes with `id > after` (or from the start), ordered by id,
     /// capped at `limit`. The API paginates with this so large inventories don't load
     /// everything (ui-conventions: scale-aware lists).
-    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>>;
-    /// Total node count — for the fleet summary, which needs the whole-inventory denominator
-    /// (the paged `list_page` only ever sees one page). Cheap `count(*)`, no row transfer.
-    async fn count(&self) -> anyhow::Result<i64>;
+    async fn list_page(
+        &self,
+        groups: GroupFilter<'_>,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>>;
+    /// Node count within the caller's scope — the denominator the fleet summary needs (the paged
+    /// `list_page` only ever sees one page). Cheap `count(*)`, no row transfer.
+    async fn count(&self, groups: GroupFilter<'_>) -> anyhow::Result<i64>;
     /// Every node's `(id, group_id)` — the lightweight join key for the per-group health rollup
     /// (site-matrix / region-rollup / geo-map widgets). Two columns only; the live state comes
     /// from the in-memory alert engine, so the grouping happens in-process (PG holds no live
     /// state). O(fleet) but a single indexed scan, computed server-side once per poll instead of
     /// shipping the whole inventory to every dashboard client (which under-counted every group
     /// past the first page — a correctness bug, S12/A-1).
-    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
+    async fn node_group_map(
+        &self,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
     /// Nodes whose name or address matches a case-insensitive substring (empty term ⇒ the first
     /// page ordered by name), capped at `limit`. Backs the node-picker's server-side typeahead so
     /// it never loads the whole inventory into the browser (ui-conventions: search is server-side
     /// at fleet scale, A-2).
-    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>>;
+    async fn search(
+        &self,
+        groups: GroupFilter<'_>,
+        term: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>>;
 }
 
 #[async_trait]
 impl NodeListing for NodeRepo {
-    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>> {
-        self.list_nodes_page(after, limit).await
+    async fn list_page(
+        &self,
+        groups: GroupFilter<'_>,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
+        self.list_nodes_page(groups, after, limit).await
     }
-    async fn count(&self) -> anyhow::Result<i64> {
-        Ok(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
-            .fetch_one(&self.pool)
-            .await?)
+    async fn count(&self, groups: GroupFilter<'_>) -> anyhow::Result<i64> {
+        Ok(sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT count(*) FROM nodes WHERE {}",
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .fetch_one(&self.pool)
+        .await?)
     }
-    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
-        let rows = sqlx::query("SELECT id, group_id FROM nodes")
-            .fetch_all(&self.pool)
-            .await?;
+    async fn node_group_map(
+        &self,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        let rows = sqlx::query(&format!(
+            "SELECT id, group_id FROM nodes WHERE {}",
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|row| Ok((row.try_get("id")?, row.try_get("group_id")?)))
             .collect()
     }
-    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>> {
+    async fn search(
+        &self,
+        groups: GroupFilter<'_>,
+        term: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
         let limit = limit.clamp(1, NODE_SEARCH_MAX);
         // Parameterized ILIKE (security.md — never string-format user input into SQL); the `%`
         // wildcards are concatenated in SQL so the term itself is a bound value. `host(address)`
         // strips the netmask so an IP-substring search matches the displayed address.
         let rows = if term.is_empty() {
             sqlx::query(&format!(
-                "SELECT {} FROM nodes ORDER BY name, id LIMIT $1",
-                Self::NODE_COLUMNS
+                "SELECT {} FROM nodes WHERE {} ORDER BY name, id LIMIT $2",
+                Self::NODE_COLUMNS,
+                Self::SCOPE_PREDICATE
             ))
+            .bind(Self::scope_bind(groups))
             .bind(limit)
             .fetch_all(&self.pool)
             .await?
         } else {
             sqlx::query(&format!(
                 "SELECT {} FROM nodes \
-                 WHERE name ILIKE '%' || $1 || '%' OR host(address) ILIKE '%' || $1 || '%' \
-                 ORDER BY name, id LIMIT $2",
-                Self::NODE_COLUMNS
+                 WHERE {} \
+                   AND (name ILIKE '%' || $2 || '%' OR host(address) ILIKE '%' || $2 || '%') \
+                 ORDER BY name, id LIMIT $3",
+                Self::NODE_COLUMNS,
+                Self::SCOPE_PREDICATE
             ))
+            .bind(Self::scope_bind(groups))
             .bind(term)
             .bind(limit)
             .fetch_all(&self.pool)
@@ -197,10 +252,35 @@ impl StaticNodeList {
     }
 }
 
+impl StaticNodeList {
+    /// The in-memory twin of [`NodeRepo::SCOPE_PREDICATE`]. The two are a mirror
+    /// (`extensibility.md` §2), so they are asserted against each other in the tests below rather
+    /// than each against itself — a skeleton that scoped differently from the live store would be a
+    /// silent behavioural difference exactly where nobody looks.
+    fn in_scope(groups: GroupFilter<'_>, node: &Node) -> bool {
+        match groups {
+            None => true,
+            // Mirrors `group_id = ANY($1)`: an ungrouped node matches no group, so it is invisible
+            // to a scoped caller — the same rule as `Scope::allows`.
+            Some(allowed) => node.group.is_some_and(|g| allowed.contains(&g.as_uuid())),
+        }
+    }
+}
+
 #[async_trait]
 impl NodeListing for StaticNodeList {
-    async fn list_page(&self, after: Option<Uuid>, limit: i64) -> anyhow::Result<Vec<Node>> {
-        let mut nodes: Vec<Node> = self.0.clone();
+    async fn list_page(
+        &self,
+        groups: GroupFilter<'_>,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
+        let mut nodes: Vec<Node> = self
+            .0
+            .iter()
+            .filter(|n| Self::in_scope(groups, n))
+            .cloned()
+            .collect();
         nodes.sort_by_key(|n| n.id.as_uuid());
         Ok(nodes
             .into_iter()
@@ -208,21 +288,31 @@ impl NodeListing for StaticNodeList {
             .take(limit.clamp(1, 501) as usize)
             .collect())
     }
-    async fn count(&self) -> anyhow::Result<i64> {
-        Ok(self.0.len() as i64)
+    async fn count(&self, groups: GroupFilter<'_>) -> anyhow::Result<i64> {
+        Ok(self.0.iter().filter(|n| Self::in_scope(groups, n)).count() as i64)
     }
-    async fn node_group_map(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+    async fn node_group_map(
+        &self,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
         Ok(self
             .0
             .iter()
+            .filter(|n| Self::in_scope(groups, n))
             .map(|n| (n.id.as_uuid(), n.group.map(|g| g.as_uuid())))
             .collect())
     }
-    async fn search(&self, term: &str, limit: i64) -> anyhow::Result<Vec<Node>> {
+    async fn search(
+        &self,
+        groups: GroupFilter<'_>,
+        term: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<Node>> {
         let t = term.to_lowercase();
         let mut nodes: Vec<Node> = self
             .0
             .iter()
+            .filter(|n| Self::in_scope(groups, n))
             .filter(|n| {
                 t.is_empty()
                     || n.name.to_lowercase().contains(&t)
@@ -317,6 +407,30 @@ impl NodeRepo {
     const NODE_COLUMNS: &'static str = "id, name, parent_id, host(address) AS address, \
          profile_id, pool, credential_id, vendor, model, group_id, tags";
 
+    /// The RBAC group-visibility predicate (ADR-014), **always bound as `$1`** in the queries that
+    /// use it. A `NULL` array means unrestricted; an empty array matches nothing.
+    ///
+    /// It is written as one always-present predicate rather than a conditionally-appended clause on
+    /// purpose. A conditional clause has a branch that can be forgotten — and forgetting it fails
+    /// *open*, returning the whole fleet to a scoped caller with no error anywhere. Here the only
+    /// way to get it wrong is to bind the wrong value, which [`Self::scope_bind`] is the single
+    /// source of.
+    ///
+    /// The trade-off is that the planner cannot use `nodes_group_idx` through the `OR`, so a scoped
+    /// list walks the primary-key index filtering as it goes. At the 50k-node target that is one
+    /// index scan for a paged query — cheap, and paid only by scoped callers, since an unrestricted
+    /// one binds `NULL` and the predicate collapses to true.
+    ///
+    /// ⚠️ When adding it to a query that already has a `WHERE`, **parenthesize the existing
+    /// condition**: `WHERE {SCOPE} AND (a OR b)`. Written as `WHERE {SCOPE} AND a OR b` it parses
+    /// as `({SCOPE} AND a) OR b`, and every row matching `b` escapes the scope entirely.
+    const SCOPE_PREDICATE: &'static str = "($1::uuid[] IS NULL OR group_id = ANY($1))";
+
+    /// The value to bind for [`Self::SCOPE_PREDICATE`]. `None` ⇒ SQL `NULL` ⇒ no restriction.
+    fn scope_bind(groups: GroupFilter<'_>) -> Option<Vec<Uuid>> {
+        groups.map(<[Uuid]>::to_vec)
+    }
+
     /// Every node in the inventory (internal use; the API paginates via [`Self::list_nodes_page`]).
     pub async fn list_nodes(&self) -> anyhow::Result<Vec<Node>> {
         let rows = sqlx::query(&format!("SELECT {} FROM nodes", Self::NODE_COLUMNS))
@@ -360,9 +474,13 @@ impl NodeRepo {
             .collect()
     }
 
-    /// One keyset page of nodes ordered by id, starting after `after`.
+    /// One keyset page of nodes ordered by id, starting after `after`, within `groups`.
+    ///
+    /// The scope predicate lives in the `WHERE`, the cursor in `id > $2` — they are independent, so
+    /// paging is unaffected by scoping (a page may simply contain fewer than `limit` rows).
     pub async fn list_nodes_page(
         &self,
+        groups: GroupFilter<'_>,
         after: Option<Uuid>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
@@ -372,9 +490,11 @@ impl NodeRepo {
         let rows = match after {
             Some(after) => {
                 sqlx::query(&format!(
-                    "SELECT {} FROM nodes WHERE id > $1 ORDER BY id LIMIT $2",
-                    Self::NODE_COLUMNS
+                    "SELECT {} FROM nodes WHERE {} AND id > $2 ORDER BY id LIMIT $3",
+                    Self::NODE_COLUMNS,
+                    Self::SCOPE_PREDICATE
                 ))
+                .bind(Self::scope_bind(groups))
                 .bind(after)
                 .bind(limit)
                 .fetch_all(&self.pool)
@@ -382,9 +502,11 @@ impl NodeRepo {
             }
             None => {
                 sqlx::query(&format!(
-                    "SELECT {} FROM nodes ORDER BY id LIMIT $1",
-                    Self::NODE_COLUMNS
+                    "SELECT {} FROM nodes WHERE {} ORDER BY id LIMIT $2",
+                    Self::NODE_COLUMNS,
+                    Self::SCOPE_PREDICATE
                 ))
+                .bind(Self::scope_bind(groups))
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
@@ -397,8 +519,13 @@ impl NodeRepo {
     /// id, starting after `after` (S7). Deliberately light: the topology/coverage endpoints don't
     /// need the full node row (address/creds/tags), and at 50k nodes a large page keeps the
     /// whole-graph assembly to a handful of round-trips instead of returning one unbounded JSON blob.
+    /// Scoping note: a scoped caller sees only the in-scope nodes, so a dependency edge whose
+    /// parent lies outside the scope arrives with a `parent_id` that is not in the response. The
+    /// graph renders it as a root, which is the honest reading — the caller cannot see the parent,
+    /// so they cannot be told the child hangs off it.
     pub async fn list_topology_page(
         &self,
+        groups: GroupFilter<'_>,
         after: Option<Uuid>,
         limit: i64,
     ) -> anyhow::Result<Vec<TopologyRow>> {
@@ -406,19 +533,26 @@ impl NodeRepo {
         let limit = limit.clamp(1, 5001);
         let rows = match after {
             Some(after) => {
-                sqlx::query(
-                    "SELECT id, name, parent_id FROM nodes WHERE id > $1 ORDER BY id LIMIT $2",
-                )
+                sqlx::query(&format!(
+                    "SELECT id, name, parent_id FROM nodes WHERE {} AND id > $2 \
+                     ORDER BY id LIMIT $3",
+                    Self::SCOPE_PREDICATE
+                ))
+                .bind(Self::scope_bind(groups))
                 .bind(after)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
             None => {
-                sqlx::query("SELECT id, name, parent_id FROM nodes ORDER BY id LIMIT $1")
-                    .bind(limit)
-                    .fetch_all(&self.pool)
-                    .await?
+                sqlx::query(&format!(
+                    "SELECT id, name, parent_id FROM nodes WHERE {} ORDER BY id LIMIT $2",
+                    Self::SCOPE_PREDICATE
+                ))
+                .bind(Self::scope_bind(groups))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
             }
         };
         rows.iter()
@@ -622,17 +756,25 @@ impl NodeRepo {
     /// by the tree's sort order, capped at `limit`. Backs the inventory tree's per-group lazy load
     /// (A-3): the tree fetches a group's members only when it is expanded, so the initial view never
     /// pulls the whole fleet. `IS NOT DISTINCT FROM` so a `NULL` group matches the ungrouped rows.
+    ///
+    /// The scope predicate rides alongside the group filter rather than replacing it: asking for
+    /// the ungrouped bucket (`group = None`) as a scoped caller correctly returns nothing, because
+    /// an ungrouped node is outside every group scope (`rbac.rs`).
     pub async fn list_nodes_in_group(
         &self,
+        groups: GroupFilter<'_>,
         group: Option<Uuid>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let limit = limit.clamp(1, 5001);
         let rows = sqlx::query(&format!(
-            "SELECT {} FROM nodes WHERE group_id IS NOT DISTINCT FROM $1::uuid \
-             ORDER BY sort_order, name, id LIMIT $2",
-            Self::NODE_COLUMNS
+            "SELECT {} FROM nodes \
+             WHERE {} AND group_id IS NOT DISTINCT FROM $2::uuid \
+             ORDER BY sort_order, name, id LIMIT $3",
+            Self::NODE_COLUMNS,
+            Self::SCOPE_PREDICATE
         ))
+        .bind(Self::scope_bind(groups))
         .bind(group)
         .bind(limit)
         .fetch_all(&self.pool)
@@ -778,14 +920,27 @@ impl NodeRepo {
     /// The display name of each of the given node ids, in one query. For joining TSDB results
     /// (which carry only the node id, ADR-011) back to human-readable names — e.g. the fleet
     /// Top-N endpoint. Ids absent from the map default to the id string at the call site.
-    pub async fn node_names(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, String>> {
+    ///
+    /// Scoped, because this is also the batch resolver behind `POST /api/v1/node-names`: a caller
+    /// supplies ids and receives names, so without the filter it would answer "does a node with
+    /// this id exist, and what is it called" for the entire fleet. An out-of-scope id is simply
+    /// omitted, which is what the endpoint already does for an unknown id.
+    pub async fn node_names(
+        &self,
+        groups: GroupFilter<'_>,
+        ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, String>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = sqlx::query("SELECT id, name FROM nodes WHERE id = ANY($1)")
-            .bind(ids)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(&format!(
+            "SELECT id, name FROM nodes WHERE {} AND id = ANY($2)",
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|row| Ok((row.try_get("id")?, row.try_get("name")?)))
             .collect()
@@ -795,12 +950,21 @@ impl NodeRepo {
     /// event-log search (which runs against the log store, ADR-024) still find events by node name
     /// without the name ever entering the log store: the API resolves the name → ids here and
     /// passes them as a `node_id` filter (query-time join, ADR-011).
-    pub async fn node_ids_by_name_like(&self, term: &str, cap: i64) -> anyhow::Result<Vec<Uuid>> {
-        let rows = sqlx::query("SELECT id FROM nodes WHERE name ILIKE '%' || $1 || '%' LIMIT $2")
-            .bind(term)
-            .bind(cap.clamp(1, 200))
-            .fetch_all(&self.pool)
-            .await?;
+    pub async fn node_ids_by_name_like(
+        &self,
+        groups: GroupFilter<'_>,
+        term: &str,
+        cap: i64,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        let rows = sqlx::query(&format!(
+            "SELECT id FROM nodes WHERE {} AND name ILIKE '%' || $2 || '%' LIMIT $3",
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(term)
+        .bind(cap.clamp(1, 200))
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
     }
 
@@ -1370,9 +1534,43 @@ mod tests {
             node(1, "a", "10.0.0.1", Some(100)),
             node(2, "b", "10.0.0.2", None),
         ]);
-        let map = list.node_group_map().await.unwrap();
+        let map = list.node_group_map(None).await.unwrap();
         assert!(map.contains(&(Uuid::from_u128(1), Some(Uuid::from_u128(100)))));
         assert!(map.contains(&(Uuid::from_u128(2), None)));
+    }
+
+    /// The skeleton store is a **mirror** of `NodeRepo::SCOPE_PREDICATE` (extensibility.md §2), so
+    /// this asserts the rules the SQL encodes rather than the Rust's own internal consistency:
+    /// `None` filters nothing, a group set admits only its members, an ungrouped node is invisible
+    /// to any scope, and an empty set matches nothing rather than everything.
+    #[tokio::test]
+    async fn the_skeleton_store_scopes_by_the_same_rules_as_the_sql_predicate() {
+        let tokyo = Uuid::from_u128(100);
+        let list = StaticNodeList(vec![
+            node(1, "in-tokyo", "10.0.0.1", Some(100)),
+            node(2, "ungrouped", "10.0.0.2", None),
+            node(3, "in-osaka", "10.0.0.3", Some(200)),
+        ]);
+
+        // No filter ⇒ everything, including the ungrouped node.
+        assert_eq!(list.count(None).await.unwrap(), 3);
+
+        // A group set ⇒ only its members. The ungrouped node is NOT included — matching
+        // `Scope::allows`, which never leaks an ungrouped node to a scoped principal.
+        let only_tokyo = list.list_page(Some(&[tokyo]), None, 50).await.unwrap();
+        assert_eq!(only_tokyo.len(), 1);
+        assert_eq!(only_tokyo[0].name, "in-tokyo");
+        assert_eq!(list.count(Some(&[tokyo])).await.unwrap(), 1);
+
+        // The inversion that would be a privilege escalation: an empty set matches nothing.
+        assert_eq!(list.count(Some(&[])).await.unwrap(), 0);
+        assert!(list.search(Some(&[]), "", 50).await.unwrap().is_empty());
+        assert!(list.node_group_map(Some(&[])).await.unwrap().is_empty());
+
+        // Scope is applied before the search term, not instead of it.
+        let hits = list.search(Some(&[tokyo]), "in-", 50).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "in-tokyo");
     }
 
     #[tokio::test]
@@ -1383,13 +1581,13 @@ mod tests {
             node(3, "nagoya-edge", "192.168.5.9", None),
         ]);
         // Name substring, case-insensitive.
-        assert_eq!(list.search("EDGE", 50).await.unwrap().len(), 2);
+        assert_eq!(list.search(None, "EDGE", 50).await.unwrap().len(), 2);
         // Address substring.
-        let by_addr = list.search("192.168", 50).await.unwrap();
+        let by_addr = list.search(None, "192.168", 50).await.unwrap();
         assert_eq!(by_addr.len(), 1);
         assert_eq!(by_addr[0].name, "nagoya-edge");
         // Empty term returns all, ordered by name and capped.
-        let capped = list.search("", 2).await.unwrap();
+        let capped = list.search(None, "", 2).await.unwrap();
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
         assert_eq!(capped[1].name, "osaka-core");
@@ -1424,7 +1622,7 @@ mod tests {
             .collect();
         let list = StaticNodeList(nodes);
         // Asking for more than the cap yields exactly the cap, not some smaller inner limit.
-        let hits = list.search("sw-", NODE_SEARCH_MAX * 2).await.unwrap();
+        let hits = list.search(None, "sw-", NODE_SEARCH_MAX * 2).await.unwrap();
         assert_eq!(hits.len() as i64, NODE_SEARCH_MAX);
     }
 }

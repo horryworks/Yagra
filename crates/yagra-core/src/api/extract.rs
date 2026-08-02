@@ -241,6 +241,99 @@ impl std::ops::Deref for Events {
     }
 }
 
+/// The caller's resolved group-visibility scope (ADR-014), for a handler that lists or aggregates
+/// node-associated data.
+///
+/// Taking this proves the handler *asked*; what it does with the answer is still its own business,
+/// which is why the route ledger records a scoping rule per endpoint and a test checks the two
+/// agree. Extracting it and then ignoring it is the one failure this cannot catch on its own.
+///
+/// Gated like [`RequireView`], **not** like [`Caller`]: a public-dashboard deployment has decided
+/// its reads are open, and its anonymous visitors resolve to [`NodeScope::All`]. Making this the
+/// stricter of the two would take the public dashboard offline rather than scope it.
+pub struct Scoped(pub super::scope::NodeScope);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Scoped {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        if st.public_dashboard && bearer(&parts.headers).is_none() {
+            return Ok(Self(super::scope::NodeScope::All));
+        }
+        let session = match st
+            .sessions
+            .authorize(bearer(&parts.headers), Permission::View)
+        {
+            Ok(session) => session,
+            Err(crate::auth::AuthError::Forbidden) => return Err(ApiError::forbidden()),
+            Err(_) => return Err(ApiError::unauthorized()),
+        };
+        Ok(Self(super::scope::resolve(st, &session.principal).await?))
+    }
+}
+
+impl std::ops::Deref for Scoped {
+    type Target = super::scope::NodeScope;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// A `:node_id` path parameter the caller is allowed to see, for a handler addressing one node.
+///
+/// **Out of scope answers `404 node_not_found`, not `403`.** A 403 confirms the node exists, which
+/// turns every per-node route into an id-enumeration oracle for a scoped operator — and node ids
+/// are the handles that appear in alerts, MCP tools and RCA requests, so they are guessable from
+/// things a scoped user legitimately holds. 404 is also the answer this API already gives when the
+/// inventory cannot answer at all (`api/nodes.rs`), so the WebUI's existing branch is unchanged.
+///
+/// Visibility is resolved from the alert engine's fleet-wide node metadata rather than a query, so
+/// this costs a hash lookup. A node the snapshot has not seen yet is treated as **not** visible —
+/// see [`crate::alerts::AlertManager::node_folder_group`].
+///
+/// Carries no value on purpose. It is a **proof**, not an accessor: every handler that takes it
+/// already extracts the id it needs from its own `Path` (often as part of a multi-param tuple), and
+/// a second copy of the same id in the signature is one more thing that can be used instead of the
+/// one that was parsed. `_visible: VisibleNode` in an argument list reads as what it is — the guard
+/// ran.
+pub struct VisibleNode;
+
+#[async_trait]
+impl FromRequestParts<ApiState> for VisibleNode {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        let Scoped(scope) = Scoped::from_request_parts(parts, st).await?;
+        // `Path` reads the captured params out of the request extensions without consuming them,
+        // so a handler may still extract its own `Path<…>` (including a multi-param tuple).
+        let params =
+            axum::extract::Path::<std::collections::HashMap<String, String>>::from_request_parts(
+                parts, st,
+            )
+            .await
+            .map(|p| p.0)
+            .unwrap_or_default();
+        // A route with no `:node_id`, or an unparseable one, is a mistake rather than a request to
+        // honour — fail closed with the same 404 rather than waving it through. The route ledger's
+        // `every_node_scoped_route_takes_the_visible_node_extractor` is what catches it at build
+        // time; this is the runtime backstop.
+        let node = params
+            .get("node_id")
+            .and_then(|v| uuid::Uuid::parse_str(v).ok())
+            .map(yagra_common::NodeId::from)
+            .ok_or_else(|| ApiError::not_found("node_not_found", "no such node"))?;
+        if scope.allows_node(st, node) {
+            Ok(Self)
+        } else {
+            Err(ApiError::not_found(
+                "node_not_found",
+                format!("no node {}", node.as_uuid()),
+            ))
+        }
+    }
+}
+
 /// Proof that this core currently holds HA leadership (ADR-016).
 ///
 /// Some pipelines exist only in the leader process: the event engine's persist and action channels

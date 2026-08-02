@@ -55,6 +55,16 @@ const DWELL_SAMPLES: u32 = 3;
 /// Flapping detection window and threshold.
 const FLAP_WINDOW_MS: i64 = 600_000;
 const FLAP_THRESHOLD: usize = 5;
+/// One SSE frame: the node it concerns, beside the already-serialized JSON body.
+///
+/// The node id travels *alongside* the payload rather than being parsed back out of it, because the
+/// only consumer that needs it is the group-scope filter on the stream handler (ADR-014) and
+/// deserializing every frame per subscriber to recover a field the sender already had would be pure
+/// waste. The body stays shared rather than owned: `broadcast` clones the value once **per
+/// receiver**, and a full sweep can emit one node-state frame per node, so with many dashboards open
+/// this is the difference between cloning a pointer and cloning the JSON N times.
+pub type StreamFrame = (NodeId, Arc<str>);
+
 /// SSE broadcast buffer. Sized generously so a briefly-slow subscriber doesn't lag past the
 /// window and miss events; if one does lag, the stream handler logs it and emits a `resync`
 /// hint so the client can re-fetch the active-alert list (see `stream_alerts` in api.rs).
@@ -79,13 +89,28 @@ pub enum NotifyAction {
     Suppress(Alert),
 }
 
-/// Per-node metadata used to resolve threshold scope (profile + groups).
+/// Per-node metadata used to resolve threshold scope, and to answer "may this caller see this
+/// node" without a database round-trip (`api/scope.rs`).
+///
+/// ⚠️ **The two group fields are different concepts and must not be confused.** [`Self::tag_groups`]
+/// holds *tag values* — free-form labels an operator puts on a node, which `ScopeLevel::Group`
+/// thresholds match against. [`Self::folder_group`] is the node's row in the inventory folder tree,
+/// which is what RBAC visibility is defined over (ADR-014).
+///
+/// The field was called `groups` until group scoping landed, and the collision was a live hazard:
+/// `Scope::allows` takes a `BTreeSet<String>`, so `principal.can_see(&meta.groups)` compiled, ran,
+/// and would have scoped visibility by *threshold tags* — failing **open** for any node whose tags
+/// happened to match, with nothing to catch it. Hence the rename and
+/// `node_meta_group_is_the_folder_group_not_a_tag_value`.
 #[derive(Debug, Clone, Default)]
 pub struct NodeMeta {
     /// Profile id (as text) the node belongs to, if any.
     pub profile: Option<String>,
-    /// Group identifiers (node tag values) for group-scoped thresholds.
-    pub groups: BTreeSet<String>,
+    /// Node **tag values**, for group-scoped thresholds. Not the folder tree — see the type docs.
+    pub tag_groups: BTreeSet<String>,
+    /// The node's folder group (`nodes.group_id`), for RBAC visibility. `None` = ungrouped, which
+    /// a scoped principal may **not** see.
+    pub folder_group: Option<Uuid>,
 }
 
 /// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
@@ -152,7 +177,9 @@ impl AlertConfig {
             ScopeLevel::Profile => {
                 meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str())
             }
-            ScopeLevel::Group => meta.is_some_and(|m| m.groups.contains(&t.scope_id)),
+            // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
+            // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
+            ScopeLevel::Group => meta.is_some_and(|m| m.tag_groups.contains(&t.scope_id)),
         }
     }
 }
@@ -219,11 +246,11 @@ pub struct AlertManager {
     /// Kept in sync with `live` on every liveness flip so `down_set()` is O(down) rather than a full
     /// O(live) scan on each transition — the hot path during a parent-down cascade (S3).
     down: Mutex<BTreeSet<NodeId>>,
-    tx: broadcast::Sender<String>,
+    tx: broadcast::Sender<StreamFrame>,
     /// Incremental node-state (rolled-up display state) change stream for the WebUI (S14) — a
     /// dedicated channel so the inventory/topology views patch one node live instead of re-fetching
     /// the whole fleet every 15s. Kept separate from `tx` so the two event schemas don't mix.
-    node_tx: broadcast::Sender<String>,
+    node_tx: broadcast::Sender<StreamFrame>,
     config: RwLock<AlertConfig>,
 }
 
@@ -249,16 +276,17 @@ impl AlertManager {
         *self.config.write().expect("config rwlock poisoned") = config;
     }
 
-    /// Subscribe to the live alert event stream (JSON strings; `resolved` flag included).
+    /// Subscribe to the live alert event stream ([`StreamFrame`]s; `resolved` flag included in the
+    /// JSON body).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+    pub fn subscribe(&self) -> broadcast::Receiver<StreamFrame> {
         self.tx.subscribe()
     }
 
     /// Subscribe to the incremental node-state stream (S14): JSON `{node_id, state, at_unix_ms}`
     /// per rolled-up display-state change, for the inventory/topology live-patch views.
     #[must_use]
-    pub fn subscribe_node_states(&self) -> broadcast::Receiver<String> {
+    pub fn subscribe_node_states(&self) -> broadcast::Receiver<StreamFrame> {
         self.node_tx.subscribe()
     }
 
@@ -270,7 +298,7 @@ impl AlertManager {
             "state": state,
             "at_unix_ms": at_unix_ms,
         });
-        let _ = self.node_tx.send(event.to_string());
+        let _ = self.node_tx.send((node, Arc::from(event.to_string())));
     }
 
     /// Snapshot of currently active alerts.
@@ -654,6 +682,23 @@ impl AlertManager {
             .contains(&node)
     }
 
+    /// The node's **folder group** (`nodes.group_id`) per the config snapshot, for RBAC visibility
+    /// (`api/scope.rs`). Not a tag value — see the [`NodeMeta`] docs.
+    ///
+    /// Returns `None` both for a genuinely ungrouped node and for one the snapshot has never seen
+    /// (created since the last config-generation refresh). The caller treats those the same and
+    /// hides the node from a scoped principal, which is the fail-closed direction: a node can be
+    /// briefly invisible to its owner, never briefly visible to someone outside its scope.
+    #[must_use]
+    pub fn node_folder_group(&self, node: NodeId) -> Option<Uuid> {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .node_meta
+            .get(&node)
+            .and_then(|m| m.folder_group)
+    }
+
     /// Insert an event-rule alert into the active set and broadcast it. Event alerts are
     /// edge-triggered (no `CheckState`/dwell — the rule's min-count/window gate and TTL do
     /// the damping upstream in `events.rs`), so this bypasses `process_check` on purpose.
@@ -705,7 +750,7 @@ impl AlertManager {
             "resolved": resolved,
         });
         // Fire-and-forget: no subscribers is not an error.
-        let _ = self.tx.send(event.to_string());
+        let _ = self.tx.send((alert.node, Arc::from(event.to_string())));
     }
 
     /// Broadcast an inbound ack-state change for one alert so subscribers update the read-only
@@ -739,7 +784,18 @@ impl AlertManager {
             "breach": alert.breach,
             "acked": acked,
         });
-        let _ = self.tx.send(event.to_string());
+        let _ = self.tx.send((alert.node, Arc::from(event.to_string())));
+    }
+
+    /// Push a frame onto the alert stream directly, for tests of the stream *plumbing*.
+    ///
+    /// The SSE scope filter is a property of the transport, not of the alert logic, so its tests
+    /// need to control which node each frame names without first driving a real alert to dwell —
+    /// including naming a node the engine has never observed, which is precisely the fail-closed
+    /// case worth covering.
+    #[cfg(test)]
+    pub(crate) fn broadcast_test_frame(&self, node: NodeId, body: &str) {
+        let _ = self.tx.send((node, Arc::from(body)));
     }
 }
 
@@ -1632,7 +1688,8 @@ mod tests {
 
         // First observation commits Ok and emits the initial node-state event.
         mgr.observe(&result(node, CheckOutcome::Reachable, 0));
-        let ev = rx.try_recv().expect("first observe emits state");
+        let (who, ev) = rx.try_recv().expect("first observe emits state");
+        assert_eq!(who, node, "the frame names the node it concerns");
         assert!(ev.contains("\"ok\""), "state ok in payload: {ev}");
         assert!(
             ev.contains(&node.as_uuid().to_string()),
@@ -1649,9 +1706,54 @@ mod tests {
             assert!(rx.try_recv().is_err(), "pre-dwell must not emit");
         }
         mgr.observe(&result(node, CheckOutcome::Unreachable, 100));
-        let ev = rx.try_recv().expect("dwell-crossing observe emits");
+        let (_, ev) = rx.try_recv().expect("dwell-crossing observe emits");
         assert!(ev.contains("\"unreachable\""), "state unreachable: {ev}");
         assert!(rx.try_recv().is_err(), "exactly one event per real change");
+    }
+
+    // ⚠️ The guard for the rename described in the `NodeMeta` docs. `tag_groups` (threshold scope)
+    // and `folder_group` (RBAC visibility) are different facts about a node, and `Scope::allows`
+    // takes a `BTreeSet<String>` — so wiring visibility to the tag set compiles and runs. This
+    // asserts the two stay independent: a node can carry tags and no folder, or a folder and no
+    // tags, and neither may be read as the other.
+    #[test]
+    fn node_meta_group_is_the_folder_group_not_a_tag_value() {
+        let node = NodeId::new();
+        let folder = Uuid::from_u128(42);
+        let mut meta = HashMap::new();
+        meta.insert(
+            node,
+            NodeMeta {
+                profile: None,
+                tag_groups: BTreeSet::from(["tokyo".to_owned()]),
+                folder_group: Some(folder),
+            },
+        );
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::new(Vec::new(), meta));
+
+        // The folder group is what visibility reads, and it is a uuid — never the tag string.
+        assert_eq!(mgr.node_folder_group(node), Some(folder));
+        // A node the snapshot has never seen resolves to `None` (⇒ invisible to a scoped caller),
+        // and so does a node carrying tags but sitting in no folder.
+        assert_eq!(mgr.node_folder_group(NodeId::new()), None);
+
+        let mut tagged_only = HashMap::new();
+        tagged_only.insert(
+            node,
+            NodeMeta {
+                profile: None,
+                tag_groups: BTreeSet::from(["tokyo".to_owned()]),
+                folder_group: None,
+            },
+        );
+        let mgr2 = AlertManager::new();
+        mgr2.set_config(AlertConfig::new(Vec::new(), tagged_only));
+        assert_eq!(
+            mgr2.node_folder_group(node),
+            None,
+            "a tag value must never be read as a folder group"
+        );
     }
 
     #[test]
@@ -2246,12 +2348,42 @@ mod tests {
             Some(serde_json::json!({ "by": "pd-user", "source": "pagerduty" })),
         );
 
-        let msg = rx.try_recv().expect("ack event broadcast");
+        let (who, msg) = rx.try_recv().expect("ack event broadcast");
         let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
         assert_eq!(v["acked"]["by"], "pd-user");
         // No `resolved` flag ⇒ the client upserts (keeps the alert), it doesn't clear it.
         assert!(v.get("resolved").is_none());
         assert_eq!(v["node"], serde_json::to_value(node).unwrap());
+        assert_eq!(who, node, "the frame names the node it concerns");
+    }
+
+    #[test]
+    fn every_stream_frame_names_the_node_its_body_describes() {
+        // The scope filter on both SSE streams trusts the frame's node id and never looks inside
+        // the JSON. If a sender ever attached the wrong id — or a placeholder — the filter would
+        // silently pass an out-of-scope alert to a scoped subscriber, or hide an in-scope one, with
+        // the payload looking perfectly correct either way. So the two must agree at the source.
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+        let mut alerts = mgr.subscribe();
+        let mut states = mgr.subscribe_node_states();
+        for i in 0..DWELL_SAMPLES {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
+        }
+
+        // The alert stream: the fire frame's id must match the `node` field of its own body.
+        let (who, body) = alerts.try_recv().expect("dwell commits a liveness alert");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(serde_json::to_value(who).unwrap(), v["node"]);
+
+        // The node-state stream writes the id as `node_id`; drain to the last frame it emitted.
+        let mut last = None;
+        while let Ok(frame) = states.try_recv() {
+            last = Some(frame);
+        }
+        let (who, body) = last.expect("liveness changes emit node-state frames");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(serde_json::to_value(who.as_uuid()).unwrap(), v["node_id"]);
     }
 
     #[tokio::test]

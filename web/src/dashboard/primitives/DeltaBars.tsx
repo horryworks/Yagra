@@ -19,15 +19,19 @@ interface Props {
   /** Fill color (CSS var); default series-4. */
   color?: string;
   empty?: string;
+  /** The backend's `partial` flag — see [`RankedBars`]'s prop of the same name. */
+  partial?: boolean;
 }
 
-export function DeltaBars({ rows, color = 'var(--series-4)', empty }: Props) {
+export function DeltaBars({ rows, color = 'var(--series-4)', empty, partial }: Props) {
   const { t } = useTranslation('dashboard');
   if (rows.length === 0) return <p className="muted">{empty ?? t('primitives.deltaBars.empty')}</p>;
   const peak = Math.max(...rows.map((r) => Math.abs(r.value)), 0);
   return (
-    <ul className="deltabars">
-      {rows.map((r) => {
+    <>
+      {partial && <p className="rankedbars-partial">{t('primitives.rankedBars.partial')}</p>}
+      <ul className="deltabars">
+        {rows.map((r) => {
         const pct = peak > 0 ? Math.max(0, Math.min(100, (Math.abs(r.value) / peak) * 100)) : 0;
         const arrow = r.value > 0 ? '▲' : r.value < 0 ? '▼' : '◆';
         return (
@@ -42,11 +46,12 @@ export function DeltaBars({ rows, color = 'var(--series-4)', empty }: Props) {
               <span className="deltabar-arrow" aria-hidden="true">
                 {arrow}
               </span>
-              {r.valueText ?? String(r.value)}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+                {r.valueText ?? String(r.value)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

@@ -32,6 +32,46 @@ pub(crate) struct CreatedId {
     pub id: Uuid,
 }
 
+// ⚠️ This type derives `ToSchema`, so its **doc comments are published verbatim to API clients** in
+// the generated OpenAPI document. Keep them outward-facing; the design rationale goes in plain `//`
+// comments like this one, which utoipa does not read. (See a7e0180 — internal notes shipped once.)
+//
+// Why an envelope rather than an added field: these endpoints returned a bare array, and there is
+// nowhere on an array to put a flag. Bare arrays were the wrong shape anyway — an endpoint that may
+// need to say something *about* its result has no room to grow.
+//
+// Why the flag exists at all: rankings come from stores that know nothing about folder groups (the
+// TSDB ranks by value, PostgreSQL by fire count), so a group-scoped caller's list is built by
+// over-fetching `N × RANKING_OVERFETCH` and dropping what they may not see (`api/scope.rs`). That
+// usually still fills N; when it does not, the short list is indistinguishable from "that is all
+// there is". `partial` is the difference between an answer and a wrong answer.
+//
+// `partial` is always `false` for an unrestricted caller — which is every caller until a scope can
+// be issued — so today's deployments pay one boolean and nothing else.
+/// A ranked Top-N result.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct Ranked<T> {
+    /// The ranked rows, highest first, at most the requested `limit`.
+    pub entries: Vec<T>,
+    /// `true` when this ranking covers only the groups the calling account may see and entries it
+    /// is entitled to may be missing. Always `false` for an account with unrestricted visibility.
+    pub partial: bool,
+}
+
+impl<T> Ranked<T> {
+    /// Build the envelope from an already-scope-filtered ranking.
+    ///
+    /// `partial` is derived here rather than at each call site so the rule cannot be spelled four
+    /// slightly different ways: the list is partial exactly when the filter left fewer rows than
+    /// asked for **and** the store had been asked for more than that. Deriving it from `truncate`'s
+    /// inputs is what makes it impossible to report `false` after silently dropping rows.
+    pub fn new(mut entries: Vec<T>, limit: usize, fetched: usize) -> Self {
+        let partial = entries.len() < limit && fetched > limit;
+        entries.truncate(limit);
+        Self { entries, partial }
+    }
+}
+
 /// `?limit=` on its own — the query shape for endpoints that cap a list but do not page it.
 ///
 /// Several of these used to borrow the alert-history query struct, which also carries a `before`
@@ -147,6 +187,46 @@ pub(crate) fn now_unix_s() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unrestricted_ranking_is_never_reported_as_partial() {
+        // The case every deployment is in today. `ranking_fetch_limit` returns the plain limit for
+        // an unrestricted caller, so `fetched == limit` and nothing was dropped — a `true` here
+        // would put a "may be incomplete" warning on every dashboard widget in the product.
+        let r = Ranked::new(vec![1, 2, 3], 5, 5);
+        assert_eq!(r.entries, vec![1, 2, 3]);
+        assert!(
+            !r.partial,
+            "a short list from a store that simply had less data is complete, not truncated"
+        );
+        // A full list is likewise complete.
+        assert!(!Ranked::new(vec![1, 2, 3, 4, 5], 5, 5).partial);
+    }
+
+    #[test]
+    fn a_scope_filter_that_eats_the_over_fetch_reports_partial() {
+        // The case the flag exists for: 50 rows were asked for to fill a list of 5, the scope
+        // filter left 2, and 2 is indistinguishable from "this caller has only 2 nodes" unless the
+        // response says otherwise.
+        let r = Ranked::new(vec![1, 2], 5, 50);
+        assert!(r.partial);
+        // …but if the over-fetch still filled the list, nothing was lost.
+        let r = Ranked::new(vec![1, 2, 3, 4, 5, 6, 7], 5, 50);
+        assert!(!r.partial);
+        assert_eq!(r.entries, vec![1, 2, 3, 4, 5], "and it is still truncated");
+    }
+
+    #[test]
+    fn truncation_and_the_flag_are_decided_together() {
+        // They are one function precisely so they cannot disagree. Deciding `partial` before
+        // truncating (or at a different call site) is how a list gets shortened while still
+        // claiming to be complete.
+        let r = Ranked::new((0..100).collect::<Vec<_>>(), 3, 30);
+        assert_eq!(r.entries.len(), 3);
+        assert!(!r.partial);
+        let empty = Ranked::new(Vec::<u8>::new(), 3, 30);
+        assert!(empty.partial, "nothing survived the filter — say so");
+    }
 
     #[test]
     fn parses_offsets_into_utc_and_rejects_anything_else() {

@@ -39,5 +39,13 @@
     },
     "emptyInventory": "No nodes in the inventory yet.",
     "emptyFiltered": "No matching nodes — adjust the search or filter."
+  },
+  "geo": {
+    "title": "Geo map",
+    "subtitle": "Sites placed by their group coordinates, coloured by worst member state.",
+    "empty": "No group has coordinates yet. Set latitude and longitude on a group under Nodes ▸ its Edit dialog, and it appears here.",
+    "error": "Could not load site health.",
+    "aria": "World map with {{count}} placed site(s)",
+    "pinTitle": "{{name}} — {{state}} · {{count}} node(s)"
   }
 }

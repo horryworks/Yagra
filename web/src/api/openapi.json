@@ -273,14 +273,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Nodes ranked by alert fires; empty when this deployment keeps no history",
+            "description": "Nodes ranked by alert fires; empty when this deployment keeps no history, and `partial` says the scope filter may have shortened the list",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AlertNodeCount"
-                  }
+                  "$ref": "#/components/schemas/Ranked_AlertNodeCount"
                 }
               }
             }
@@ -6480,14 +6477,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Interfaces ranked by signed throughput delta (bits/sec)",
+            "description": "Interfaces ranked by signed throughput delta (bits/sec); `partial` says the scope filter may have shortened the list",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/InterfaceTopEntry"
-                  }
+                  "$ref": "#/components/schemas/Ranked_InterfaceTopEntry"
                 }
               }
             }
@@ -6642,14 +6636,11 @@
         ],
         "responses": {
           "200": {
-            "description": "The busiest or most-erroring interfaces, ranked",
+            "description": "The busiest or most-erroring interfaces, ranked; `partial` says the scope filter may have shortened the list",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/InterfaceTopEntry"
-                  }
+                  "$ref": "#/components/schemas/Ranked_InterfaceTopEntry"
                 }
               }
             }
@@ -6797,14 +6788,11 @@
         ],
         "responses": {
           "200": {
-            "description": "The highest-value nodes, ranked; empty when the store cannot rank",
+            "description": "The highest-value nodes, ranked; `partial` says the scope filter may have shortened the list",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TopEntry"
-                  }
+                  "$ref": "#/components/schemas/Ranked_TopEntry"
                 }
               }
             }
@@ -18908,7 +18896,8 @@
         "required": [
           "links",
           "timestamps",
-          "values"
+          "values",
+          "partial"
         ],
         "properties": {
           "links": {
@@ -18916,6 +18905,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when the link set covers only the groups the calling account may see and links it is\nentitled to may be missing. Always `false` for an account with unrestricted visibility."
           },
           "timestamps": {
             "type": "array",
@@ -20975,6 +20968,153 @@
           },
           "suggested_model": {
             "type": "string"
+          }
+        }
+      },
+      "Ranked_AlertNodeCount": {
+        "type": "object",
+        "description": "A ranked Top-N result.",
+        "required": [
+          "entries",
+          "partial"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One chronic-offender row.",
+              "required": [
+                "node_id",
+                "name",
+                "count"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "node_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "description": "The ranked rows, highest first, at most the requested `limit`."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when this ranking covers only the groups the calling account may see and entries it\nis entitled to may be missing. Always `false` for an account with unrestricted visibility."
+          }
+        }
+      },
+      "Ranked_InterfaceTopEntry": {
+        "type": "object",
+        "description": "A ranked Top-N result.",
+        "required": [
+          "entries",
+          "partial"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One ranked interface in a fleet interface Top-N.",
+              "required": [
+                "node_id",
+                "node_name",
+                "ifindex",
+                "value"
+              ],
+              "properties": {
+                "if_alias": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "if_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "if_speed_bps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Configured speed (bits/sec) for util%; `null` if unknown."
+                },
+                "ifindex": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "node_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "node_name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "number",
+                  "format": "double",
+                  "description": "bits/sec for throughput metrics, errors|discards per second otherwise."
+                }
+              }
+            },
+            "description": "The ranked rows, highest first, at most the requested `limit`."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when this ranking covers only the groups the calling account may see and entries it\nis entitled to may be missing. Always `false` for an account with unrestricted visibility."
+          }
+        }
+      },
+      "Ranked_TopEntry": {
+        "type": "object",
+        "description": "A ranked Top-N result.",
+        "required": [
+          "entries",
+          "partial"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One ranked node in a Top-N result.",
+              "required": [
+                "node_id",
+                "name",
+                "value"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Display name, joined from PostgreSQL (ADR-011); falls back to the id string if the node has\nsince been deleted."
+                },
+                "node_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "value": {
+                  "type": "number",
+                  "format": "double"
+                }
+              }
+            },
+            "description": "The ranked rows, highest first, at most the requested `limit`."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when this ranking covers only the groups the calling account may see and entries it\nis entitled to may be missing. Always `false` for an account with unrestricted visibility."
           }
         }
       },

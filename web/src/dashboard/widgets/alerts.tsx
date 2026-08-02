@@ -113,13 +113,19 @@ export function TopAlertingNodesWidget() {
   const { data, loading, error } = usePolled(() => api.getAlertTopNodes({ limit: 6 }), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
-  const rows = (data ?? []).map((e) => ({
+  const rows = (data?.entries ?? []).map((e) => ({
     label: e.name,
     value: e.count,
     valueText: String(e.count),
     color: 'var(--series-2)',
   }));
-  return <RankedBars rows={rows} empty={t('widgets.topAlerting.empty')} />;
+  return (
+    <RankedBars
+      rows={rows}
+      empty={t('widgets.topAlerting.empty')}
+      partial={data?.partial}
+    />
+  );
 }
 
 export function AlertCalendarWidget() {

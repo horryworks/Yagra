@@ -118,7 +118,7 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Dp',
           },
-          { labelKey: 'topology.geo', path: '/topology/geo', implemented: false, mono: 'Ge' },
+          { labelKey: 'topology.geo', path: '/topology/geo', implemented: true, mono: 'Ge' },
         ],
       },
     ],

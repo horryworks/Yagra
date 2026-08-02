@@ -23,7 +23,7 @@
 //! Pollers view in [`super`] (it answers "which poller holds this", sharing that view's resolution
 //! helpers), and `GET /nodes/:id/interfaces` belongs to metrics.
 
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
 use super::{pool_resolver, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
@@ -269,6 +269,7 @@ async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummar
 )]
 async fn list_nodes(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodePageQuery>,
 ) -> ApiResult<Json<NodePage>> {
@@ -279,9 +280,13 @@ async fn list_nodes(
     // Search mode: a non-empty `search` filters by name/address server-side and returns a single
     // capped page (no keyset cursor) — the tree's filter searches the fleet without loading it.
     if let Some(term) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let nodes = st.nodes.search(term, limit).await.map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
-        })?;
+        let nodes = st
+            .nodes
+            .search(scope.group_filter(), term, limit)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
+            })?;
         return Ok(Json(NodePage {
             nodes: build_node_summaries(&st, nodes).await,
             next_cursor: None,
@@ -289,10 +294,13 @@ async fn list_nodes(
     }
     // Fetch one extra row to tell "exactly a full page" from "a full page with more after it",
     // so the client never makes a trailing request that returns an empty page at the boundary.
-    let mut nodes =
-        st.nodes.list_page(q.cursor, limit + 1).await.map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "list nodes", "failed to list nodes")
-        })?;
+    // Scoping is a `WHERE` predicate, so it composes with the cursor rather than perturbing it —
+    // a scoped page is simply shorter, and the cursor still advances by node id.
+    let mut nodes = st
+        .nodes
+        .list_page(scope.group_filter(), q.cursor, limit + 1)
+        .await
+        .map_err(|e| ApiError::from_internal(e.as_ref(), "list nodes", "failed to list nodes"))?;
     let has_more = i64::try_from(nodes.len()).unwrap_or(i64::MAX) > limit;
     if has_more {
         nodes.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
@@ -341,14 +349,19 @@ pub(crate) struct NodeSearchResult {
 )]
 async fn search_nodes(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodeSearchQuery>,
 ) -> ApiResult<Json<Vec<NodeSearchResult>>> {
     let term = q.q.unwrap_or_default();
     let limit = q.limit.unwrap_or(50);
-    let nodes = st.nodes.search(term.trim(), limit).await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
-    })?;
+    let nodes = st
+        .nodes
+        .search(scope.group_filter(), term.trim(), limit)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
+        })?;
     Ok(Json(
         nodes
             .into_iter()
@@ -389,15 +402,17 @@ const GROUP_NODES_CAP: i64 = 2000;
 )]
 async fn list_group_nodes(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<GroupNodesQuery>,
 ) -> ApiResult<Json<GroupNodes>> {
     let Some(admin) = st.admin.as_ref() else {
         // Skeleton mode has no group membership; the demo node is ungrouped. Return it for the
-        // ungrouped bucket, nothing for a specific group.
+        // ungrouped bucket, nothing for a specific group. A scoped caller gets nothing either way:
+        // an ungrouped node is outside every group scope, which `search` enforces for us.
         let nodes = if q.group.is_none() {
             st.nodes
-                .search("", GROUP_NODES_CAP)
+                .search(scope.group_filter(), "", GROUP_NODES_CAP)
                 .await
                 .unwrap_or_default()
         } else {
@@ -410,7 +425,7 @@ async fn list_group_nodes(
     };
     let mut nodes = admin
         .repo
-        .list_nodes_in_group(q.group, GROUP_NODES_CAP + 1)
+        .list_nodes_in_group(scope.group_filter(), q.group, GROUP_NODES_CAP + 1)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "list group nodes", "failed to load group nodes")
@@ -456,12 +471,13 @@ pub(crate) struct NodeNameEntry {
 )]
 async fn node_names_batch(
     _perm: RequireView,
+    Scoped(scope): Scoped,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Json(req): Json<NodeNamesReq>,
 ) -> ApiResult<Json<Vec<NodeNameEntry>>> {
     let mut ids = req.ids;
     ids.truncate(NODE_NAMES_BATCH_MAX);
-    let names = resolve_node_names(&st, ids.iter().copied()).await;
+    let names = resolve_node_names(&st, &scope, ids.iter().copied()).await;
     Ok(Json(
         ids.iter()
             .filter_map(|id| {
@@ -486,8 +502,14 @@ async fn node_names_batch(
 ///
 /// Ids are sorted and deduplicated first: a ranking that mentions the same node twice must not
 /// widen the `IN (…)`, and an empty input skips the query entirely.
+///
+/// **Scoped.** This is both the internal join and the resolver behind `POST /api/v1/node-names`,
+/// where the caller supplies the ids — so unscoped it would answer "what is node `<uuid>` called"
+/// for the whole fleet. An out-of-scope id is omitted exactly like an unknown one, so the caller's
+/// existing id-string fallback covers it and the two cases stay indistinguishable from outside.
 pub(crate) async fn resolve_node_names(
     st: &ApiState,
+    scope: &super::scope::NodeScope,
     ids: impl IntoIterator<Item = Uuid>,
 ) -> HashMap<Uuid, String> {
     let mut ids: Vec<Uuid> = ids.into_iter().collect();
@@ -497,7 +519,11 @@ pub(crate) async fn resolve_node_names(
         return HashMap::new();
     }
     match st.admin.as_ref() {
-        Some(admin) => admin.repo.node_names(&ids).await.unwrap_or_default(),
+        Some(admin) => admin
+            .repo
+            .node_names(scope.group_filter(), &ids)
+            .await
+            .unwrap_or_default(),
         None => HashMap::new(),
     }
 }
@@ -550,6 +576,7 @@ pub(crate) struct NodeDetail {
 )]
 async fn get_node(
     _perm: RequireView,
+    _visible: VisibleNode,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<NodeDetail>> {
@@ -622,6 +649,7 @@ pub(crate) async fn node_status(st: &ApiState, node_id: Uuid) -> NodeStatus {
 )]
 async fn get_node_status(
     _perm: RequireView,
+    _visible: VisibleNode,
     axum::extract::State(st): axum::extract::State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<NodeStatus>> {
@@ -1181,6 +1209,11 @@ pub(crate) async fn poll_now(
 )]
 async fn poll_node_now(
     _perm: RequireManageConfig,
+    // An operator action against one node, so it is scoped like a read of that node even though
+    // `ManageConfig` is admin-only today. The guard is here rather than resting on "admins are
+    // unscoped": that invariant lives in the account writer, and a write path that assumes it
+    // would be the thing that breaks when the invariant is relaxed.
+    _visible: VisibleNode,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<(StatusCode, Json<PollNowResult>)> {

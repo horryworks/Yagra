@@ -19,7 +19,8 @@
 //! left the builder.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{current_username, Admin, RequireManageConfig, RequireView};
+use super::extract::{current_username, Admin, RequireManageConfig, RequireView, Scoped};
+use super::scope::NodeScope;
 use super::util::{CreatedId, ListQuery, MAX_JSON_DOC_BYTES};
 use super::ApiState;
 use crate::reports::{self, ScheduleInput};
@@ -378,6 +379,30 @@ async fn run_report_definition(
         .ok_or_else(|| no_definition(id))
 }
 
+/// Refuse a group-scoped caller any report artefact (ADR-014).
+///
+/// **A report has no node scope to filter by, and this is structural rather than an omission.** A
+/// definition's `spec` is a list of section kinds with settings — "top 10 talkers", "alert summary",
+/// "capacity outlook" — every one of them a fleet-wide aggregate, and a run is the *rendered output*
+/// of those sections: HTML and a JSON blob with no node attribution left in it. There is nothing in
+/// a saved run that says which nodes it covered, so there is no honest filter to apply. Handing a
+/// scoped caller the document anyway would show them the whole fleet; handing them an empty list
+/// would claim no reports exist, which is false and hides that they are being restricted.
+///
+/// So it refuses, with a code the UI can render as "reports are fleet-wide" — the same fail-closed
+/// shape `POST /api/v1/api-tokens` and `/mcp` already use. Making reports scopable means giving a
+/// *definition* a scope and resolving it at generation time; that is a feature, not a filter.
+fn reports_are_fleet_wide(scope: &NodeScope) -> Result<(), ApiError> {
+    if scope.is_all() {
+        return Ok(());
+    }
+    Err(ApiError::forbidden_code(
+        "scope_unsupported",
+        "reports are rendered fleet-wide and carry no per-node attribution, so they cannot be \
+         narrowed to a group-scoped account",
+    ))
+}
+
 /// Saved runs, newest first. Empty in skeleton mode.
 #[utoipa::path(
     get, path = "/api/v1/reports/runs", tag = "reports",
@@ -390,9 +415,11 @@ async fn run_report_definition(
 )]
 async fn list_report_runs(
     _guard: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<reports::ReportRun>>> {
+    reports_are_fleet_wide(&scope)?;
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
@@ -416,9 +443,11 @@ async fn list_report_runs(
 )]
 async fn get_report_run(
     _guard: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<reports::ReportRunDetail>> {
+    reports_are_fleet_wide(&scope)?;
     let admin = st.admin.as_ref().ok_or_else(|| no_run(id))?;
     admin
         .reports
@@ -496,11 +525,13 @@ pub(super) struct ExportQuery {
 )]
 async fn export_report_run(
     _guard: RequireView,
+    Scoped(scope): Scoped,
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
     use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
+    reports_are_fleet_wide(&scope)?;
     let admin = st.admin.as_ref().ok_or_else(|| no_run(id))?;
     let detail = admin
         .reports
@@ -827,7 +858,12 @@ async fn delete_report_schedule(
         (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
     ),
 )]
-async fn stream_report_runs(_guard: RequireView, admin: Admin) -> Response {
+async fn stream_report_runs(_guard: RequireView, Scoped(scope): Scoped, admin: Admin) -> Response {
+    // Same rule as the run reads. A stream is not exempt because it is a stream: each frame is a
+    // run row, and a scoped caller has no business tracking the progress of a fleet-wide report.
+    if let Err(e) = reports_are_fleet_wide(&scope) {
+        return e.into_response();
+    }
     let stream = tokio_stream::wrappers::BroadcastStream::new(admin.reports.subscribe())
         .filter_map(|r| async move {
             match r {
