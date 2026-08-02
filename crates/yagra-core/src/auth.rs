@@ -5,9 +5,11 @@
 //! an opaque bearer token held in an in-memory [`SessionStore`] mapped to a [`Principal`]
 //! (role + scope). Mutating API endpoints call [`SessionStore::authorize`] with the
 //! required [`Permission`]. Read endpoints require `View` by default, but can be opened
-//! to anonymous access via `YAGRA_PUBLIC_DASHBOARD` (a public read-only dashboard);
-//! group-scope filtering of reads is Phase 2 (ADR-014). Tokens are process-local (lost on restart), which is
-//! acceptable for the single-core MVP; shared/persistent sessions come with HA.
+//! to anonymous access via `YAGRA_PUBLIC_DASHBOARD` (a public read-only dashboard). The scope half
+//! is enforced too (ADR-014): it is captured in the session at issue time and resolved per request
+//! by `api::scope`, which is why every mutation that narrows an account — a role change, a scope
+//! change, a disable — must call [`SessionStore::revoke_user`]. Tokens are process-local (lost on
+//! restart) unless a signing key is configured; shared/persistent sessions come with HA.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -971,6 +973,21 @@ impl UserStore {
         .await?;
         tx.commit().await?;
         Ok(UserMutation::Done)
+    }
+
+    /// One account's visibility scope, or `None` if there is no such account.
+    ///
+    /// Read on its own (rather than through [`Self::list`]) by API-token minting, which needs the
+    /// prospective owner's scope to refuse a token that would claim more than the account it acts as.
+    pub async fn scope_of(&self, id: Uuid) -> anyhow::Result<Option<Scope>> {
+        let row = sqlx::query("SELECT scope FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(row) => Some(parse_scope(row.try_get("scope")?, id)),
+            None => None,
+        })
     }
 
     /// Replace an account's visibility scope, refusing to narrow an **Admin** account.

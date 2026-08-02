@@ -7,11 +7,12 @@ import {
   EXPIRY_CHOICES,
   expiryFromChoice,
   ownerChoices,
+  ownerIsScoped,
   tokenState,
   toggleSurface,
 } from './tokenForm';
-import { TOKEN_SURFACES } from '../types/api';
 import type { UserSummary } from '../types/api';
+import { TOKEN_SURFACES } from '../types/api';
 
 const NOW = new Date('2026-08-02T00:00:00Z');
 
@@ -133,5 +134,29 @@ describe('token state', () => {
     expect(tokenState({ revoked_at: null, expires_at: null, owner: null, owner_active: false }, NOW)).toBe(
       'no-owner',
     );
+  });
+});
+
+describe('token owner scope', () => {
+  it('hides the scope picker only when the chosen owner is itself scoped', () => {
+    // A token can never exceed its owner, so one owned by a scoped account inherits that scope and
+    // the server refuses any other value. Offering a picker there is offering a choice that fails.
+    const plain = user({ username: 'svc-a', scope: 'All' });
+    const scoped = user({ username: 'svc-b', scope: { Groups: ['g1'] } });
+    const owners = [plain, scoped];
+    expect(ownerIsScoped(owners, 'svc-a', 'me')).toBe(false);
+    expect(ownerIsScoped(owners, 'svc-b', 'me')).toBe(true);
+  });
+
+  it('resolves an empty owner id to the signed-in account', () => {
+    const me = user({ username: 'me', scope: { Groups: ['g1'] } });
+    expect(ownerIsScoped([me], '', 'me')).toBe(true);
+    expect(ownerIsScoped([me], '', 'someone-else')).toBe(false);
+  });
+
+  it('treats an unresolvable owner as unscoped rather than guessing', () => {
+    // Guessing "scoped" would hide the control on a page whose account list failed to load, which
+    // reads as the feature being missing rather than as a load failure.
+    expect(ownerIsScoped([], 'nobody', 'me')).toBe(false);
   });
 });

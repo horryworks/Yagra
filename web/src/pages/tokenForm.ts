@@ -53,6 +53,27 @@ export function canSubmit(name: string, surfaces: readonly TokenSurface[]): bool
   return name.trim() !== '' && surfaces.length > 0;
 }
 
+/**
+ * Whether the account a token will belong to is itself group-scoped.
+ *
+ * A token can never exceed its owner: one owned by a scoped account **inherits** that account's
+ * scope at every request, so offering a scope picker there would let an admin pick a value the
+ * server refuses (`400 owner_is_scoped`) — and, if it did not refuse, one that silently had no
+ * effect. `ownerId` is the picker's value, empty meaning "me".
+ */
+export function ownerIsScoped(
+  owners: readonly UserSummary[],
+  ownerId: string,
+  myUsername: string,
+): boolean {
+  const owner = ownerId
+    ? owners.find((u) => u.id === ownerId)
+    : owners.find((u) => u.username === myUsername);
+  // An owner we cannot resolve is treated as unscoped: the picker is then offered and the server
+  // decides. Guessing "scoped" would hide the control on a page that failed to load its accounts.
+  return owner !== undefined && owner.scope !== 'All';
+}
+
 /** Toggle one surface in a selection, keeping `TOKEN_SURFACES` order stable for display. */
 export function toggleSurface(
   selected: readonly TokenSurface[],

@@ -15,7 +15,12 @@
     "expiryHint": "A bounded life limits what a leaked token can do.",
     "owner": "Owner",
     "ownerHint": "Prefer a service account for anything unattended, so the token outlives whoever created it.",
-    "ownerSelf": "{{username}} (you)"
+    "ownerSelf": "{{username}} (you)",
+    "scope": "Can see",
+    "scopeHint": "The token sees only these groups and everything beneath them.",
+    "scopeAllHint": "Nothing selected — the token sees the whole fleet.",
+    "scopeNoGroups": "No node groups exist yet, so this token sees the whole fleet.",
+    "scopeInherited": "This owner is limited to node groups, and the token sees exactly what the owner sees. To give a token a narrower view, own it with a service account scoped to what it should see."
   },
   "expiry": {
     "30d": "In 30 days",
@@ -36,11 +41,18 @@
     "role": "Role",
     "surfaces": "Surfaces",
     "owner": "Owner",
+    "scope": "Can see",
     "expires": "Expires",
     "status": "Status",
     "created": "Created",
     "lastUsed": "Last used",
     "actions": "Actions"
+  },
+  "scope": {
+    "all": "All groups",
+    "groups_one": "{{count}} group",
+    "groups_other": "{{count}} groups",
+    "none": "No groups"
   },
   "status": { "active": "Active", "revoked": "Revoked" },
   "state": {

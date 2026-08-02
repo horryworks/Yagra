@@ -1188,7 +1188,7 @@
             }
           },
           "400": {
-            "description": "Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account",
+            "description": "Bad name, a scope naming no groups or a group that does not exist, a scope on a token whose owner is itself group-scoped, no surface named, an expiry already in the past, or an owner id that names no account",
             "content": {
               "application/json": {
                 "schema": {
@@ -16833,7 +16833,7 @@
               },
               {
                 "$ref": "#/components/schemas/Scope",
-                "description": "Visibility scope; defaults to `All` when omitted. Only `\"All\"` is accepted today — a\ngroup scope is rejected with `400 unsupported_scope` rather than stored, because no account\ncan hold one yet."
+                "description": "Visibility scope; defaults to `All` when omitted. A group scope limits the token to those\nnode groups and everything beneath them. It must name groups that exist, and the owner must\nitself be unscoped — a token owned by a group-scoped account inherits that account's scope,\nso giving it a different one is refused rather than silently ignored."
               }
             ]
           },

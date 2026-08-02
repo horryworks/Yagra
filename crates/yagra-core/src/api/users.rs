@@ -314,14 +314,15 @@ pub(super) struct SetScope {
 }
 
 /// Check a requested scope against the folder groups that exist, returning the `400` a bad one
-/// deserves. `known` is every `node_groups.id`.
+/// deserves. `known` is every `node_groups.id`. Shared with API-token minting, which accepts the
+/// same value and would otherwise grow a second, drifting copy of these two rules.
 ///
 /// Both rejections exist because the failure they prevent is **silent**. A scope naming a group id
 /// that does not exist resolves to an empty visible set, and a scope naming no groups at all is
 /// already empty — either way the account signs in successfully and sees an inventory of nothing,
 /// with no error anywhere to explain it. `Scope::group_uuids` is deliberately built to fail closed
 /// on exactly these inputs; this is where an admin gets told instead.
-fn checked_scope(scope: &Scope, known: &HashSet<Uuid>) -> ApiResult<()> {
+pub(super) fn checked_scope(scope: &Scope, known: &HashSet<Uuid>) -> ApiResult<()> {
     let Scope::Groups(raw) = scope else {
         return Ok(());
     };

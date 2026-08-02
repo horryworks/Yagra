@@ -58,9 +58,10 @@ pub(super) struct CreateApiTokenBody {
     /// The role the token grants (`viewer` is the right default for a read-only client). Capped at
     /// the owner's role on every use, so this is a ceiling rather than a promise.
     role: Role,
-    /// Visibility scope; defaults to `All` when omitted. Only `"All"` is accepted today — a
-    /// group scope is rejected with `400 unsupported_scope` rather than stored, because no account
-    /// can hold one yet.
+    /// Visibility scope; defaults to `All` when omitted. A group scope limits the token to those
+    /// node groups and everything beneath them. It must name groups that exist, and the owner must
+    /// itself be unscoped — a token owned by a group-scoped account inherits that account's scope,
+    /// so giving it a different one is refused rather than silently ignored.
     scope: Option<yagra_common::Scope>,
     /// Which surfaces the token may authenticate. Defaults to `["mcp"]` when omitted, matching what
     /// every token issued before this field existed can do.
@@ -117,16 +118,17 @@ fn validate_create<'a>(
     }
     // Absent scope means the whole fleet, matching what the UI offers by default.
     let scope = body.scope.clone().unwrap_or(yagra_common::Scope::All);
-    // Group scoping is now enforced across the read surface, but no account can be *issued* one
-    // yet, and `/mcp` still refuses a non-`All` principal outright because its tools return
-    // unfiltered data. Minting one here would hand an admin a credential that is either rejected or
-    // silently unrestricted depending on where they point it. Refuse until issuance lands.
-    if scope != yagra_common::Scope::All {
-        return Err(ApiError::bad_request(
-            "unsupported_scope",
-            "group-scoped tokens are not supported yet — omit `scope` or send \"All\"",
-        ));
-    }
+    // A group scope is accepted here now. It used to be a `400 unsupported_scope`, because nothing
+    // enforced one: a token carrying it would have been silently unrestricted over REST and
+    // refused outright by `/mcp`, which is a credential whose meaning depended on where you
+    // pointed it. Both surfaces filter by it now, so the refusal has been lifted rather than
+    // relaxed — see `api/scope.rs` and `mcp/tools.rs::scope_of`.
+    //
+    // The token's own scope is what it gets; it is deliberately **not** intersected with the
+    // owner's. The role is capped at the owner's (`ApiTokenStore::verify`) because a role is a
+    // grant that can be revoked by demotion, whereas a scope on a token is a *narrowing* an admin
+    // chose for this credential — silently widening it when the owner's scope widens would make
+    // "this token only sees Tokyo" untrue without anyone editing the token.
     // Absent surfaces means MCP alone: the narrow, read-mostly surface, and what every token minted
     // before this field existed is limited to. Widening is opt-in in both directions.
     let surfaces = body
@@ -155,12 +157,59 @@ fn validate_create<'a>(
     })
 }
 
+/// Check a requested token scope against the groups that exist and against the prospective owner.
+///
+/// Two rules. The first is shared with `PUT /users/{id}/scope` — a scope naming no groups, or a
+/// group that does not exist, is refused rather than stored as an account that silently sees
+/// nothing.
+///
+/// The second is this endpoint's own: **a token owned by an already-scoped account may only be
+/// `All`**, and inherits the owner's scope at verification time. A token can never exceed its
+/// owner, so a different group set here could only ever be narrower — and honouring it would mean
+/// intersecting two scopes on every request, which needs the folder tree to get right (a token
+/// naming a child of one of the owner's roots is inside the owner's scope while sharing none of its
+/// ids). Refusing the combination keeps the cap a one-line replacement that cannot be wrong in the
+/// widening direction. To give a token a narrower view than its owner, own it with a service
+/// account scoped to what the token should see.
+async fn checked_token_scope(
+    admin: &Admin,
+    scope: &yagra_common::Scope,
+    owner: Uuid,
+) -> Result<(), ApiError> {
+    if *scope == yagra_common::Scope::All {
+        return Ok(());
+    }
+    let known: std::collections::HashSet<Uuid> = admin
+        .groups
+        .edges()
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "read group ids", "failed to read node groups")
+        })?
+        .into_iter()
+        .map(|(id, _parent)| id)
+        .collect();
+    super::users::checked_scope(scope, &known)?;
+    // An unknown owner id is left to the FK below, which already answers `400 unknown_owner`.
+    let owner_scope = admin.users.scope_of(owner).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "read owner scope", "failed to read the owner")
+    })?;
+    if owner_scope.is_some_and(|s| s != yagra_common::Scope::All) {
+        return Err(ApiError::bad_request(
+            "owner_is_scoped",
+            "this owner is already limited to groups, and a token inherits its owner's scope — \
+             omit `scope` or send \"All\"",
+        ));
+    }
+    Ok(())
+}
+
 #[utoipa::path(
     post, path = "/api/v1/api-tokens", tag = "api-tokens",
     request_body = CreateApiTokenBody,
     responses(
         (status = 201, description = "Token minted; `token` is the raw bearer and is returned only here", body = CreatedApiToken),
-        (status = 400, description = "Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account", body = super::error::ErrorBody),
+        (status = 400, description = "Bad name, a scope naming no groups or a group that does not exist, a scope on a token whose owner is itself group-scoped, no surface named, an expiry already in the past, or an owner id that names no account", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 409, description = "An API token with that name already exists", body = super::error::ErrorBody),
@@ -186,6 +235,7 @@ async fn create_api_token(
     // Default the owner to the person minting it. Naming somebody else is how a token is handed to
     // a service account; the FK below is what makes an unknown id a 400 rather than an orphan.
     let owner = body.owner_user_id.unwrap_or(caller.0.user_id);
+    checked_token_scope(&admin, &new.scope, owner).await?;
     let (id, raw) = admin
         .api_tokens
         .create(
@@ -379,11 +429,23 @@ mod tests {
     }
 
     #[test]
-    fn a_group_scoped_token_is_refused_rather_than_minted() {
-        // It would authenticate nowhere: `/mcp` rejects a non-`All` principal (fail-closed), and no
-        // account can be issued a scope yet. Minting one looks like least privilege and is not.
-        let err = check(&body("ro", Some(Scope::groups(["tokyo"])))).unwrap_err();
-        assert_eq!(err.code(), "unsupported_scope");
+    fn a_group_scoped_token_reaches_the_store_checks_rather_than_being_refused_outright() {
+        // This asserted the opposite until both surfaces filtered by scope (ADR-028 WS-F). The
+        // refusal lived here because a scoped token authenticated nowhere: `/mcp` rejected a
+        // non-`All` principal and REST ignored the scope entirely, so the same credential was
+        // either useless or unrestricted depending on where it was pointed.
+        //
+        // What is left in `validate_create` is only what needs no store. The rules that do — the
+        // groups must exist, and the owner must not itself be scoped — live in
+        // `checked_token_scope`, past the `Admin` extractor where a skeleton-mode test answers 503
+        // and could never reach them.
+        let req = body("ro", Some(Scope::groups(["tokyo"])));
+        let new = check(&req).expect("not refused here");
+        assert_eq!(
+            new.scope,
+            Scope::groups(["tokyo"]),
+            "and it is carried through unchanged"
+        );
     }
 
     #[test]

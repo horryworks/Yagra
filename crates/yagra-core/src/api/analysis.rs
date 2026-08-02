@@ -265,8 +265,54 @@ fn job_target(kind: Option<ScopeKind>, id: Option<Uuid>) -> ScopeTarget {
 }
 
 /// [`job_target`] for a stored row, whose `scope_kind` is still in its persisted text form.
-fn row_target(job: &AnalysisJob) -> ScopeTarget {
+pub(crate) fn row_target(job: &AnalysisJob) -> ScopeTarget {
     job_target(ScopeKind::from_str(&job.scope_kind), job.scope_id)
+}
+
+/// Refuse a run the caller may not see, as `404` rather than `403`.
+///
+/// The run row is the unit of visibility. Answering `403` here would confirm that a job with that
+/// id exists, which is the same enumeration oracle `scope::require_visible_node` avoids — and the
+/// two endpoints that read a run must agree, or `GET /jobs/{id}` answering 404 while
+/// `GET /jobs/{id}/findings` answers `200 []` is itself the oracle.
+pub(crate) fn require_visible_job(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    job: &AnalysisJob,
+) -> Result<(), ApiError> {
+    if scope.allows_target(st, row_target(job)) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(
+            "job_not_found",
+            format!("no analysis job {}", job.id),
+        ))
+    }
+}
+
+/// Drop the findings `scope` may not see.
+///
+/// Not redundant with [`require_visible_job`]: a run's scope is resolved to a node set when it
+/// *starts*, and a node can be moved to another group before anyone opens the results — so the
+/// group the run named is not proof about every node its findings name.
+pub(crate) fn visible_findings(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    findings: Vec<crate::analysis::AnalysisFinding>,
+) -> Vec<crate::analysis::AnalysisFinding> {
+    if scope.is_all() {
+        return findings;
+    }
+    findings
+        .into_iter()
+        .filter(|f| match f.node_id {
+            Some(n) => scope.allows_node(st, yagra_common::NodeId::from(n)),
+            // A finding attributed to no node — the flow-tier-off notice, a fleet-level summary
+            // row. Always shown to an unrestricted caller (handled above); hidden from a scoped one
+            // for the same reason an ungrouped node is, since nothing places it inside their scope.
+            None => false,
+        })
+        .collect()
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -394,12 +440,7 @@ async fn analysis_findings(
                 )
             })?
             .ok_or_else(|| ApiError::not_found("job_not_found", format!("no analysis job {id}")))?;
-        if !scope.allows_target(&st, row_target(&job)) {
-            return Err(ApiError::not_found(
-                "job_not_found",
-                format!("no analysis job {id}"),
-            ));
-        }
+        require_visible_job(&st, &scope, &job)?;
     }
     let findings = admin.analysis.findings(id).await.map_err(|e| {
         ApiError::from_internal(
@@ -408,20 +449,7 @@ async fn analysis_findings(
             "failed to load findings",
         )
     })?;
-    // Then filter per finding as well. Not redundant with the gate above: a run's scope is resolved
-    // to a node set when it *starts*, and a node can be moved to another group before anyone opens
-    // the results — so the group the run named is not proof about every node its findings name.
-    let findings = findings
-        .into_iter()
-        .filter(|f| match f.node_id {
-            Some(n) => scope.allows_node(&st, yagra_common::NodeId::from(n)),
-            // A finding attributed to no node — the flow-tier-off notice, a fleet-level summary
-            // row. Always shown to an unrestricted caller; hidden from a scoped one for the same
-            // reason an ungrouped node is, since nothing places it inside their scope.
-            None => scope.is_all(),
-        })
-        .collect();
-    Ok(Json(findings))
+    Ok(Json(visible_findings(&st, &scope, findings)))
 }
 
 /// Cap on one page of the cross-run findings search.
@@ -959,8 +987,10 @@ async fn require_visible_schedule(
 /// name a target inside their scope and cannot ask for `all`.
 ///
 /// Shared by the immediate launch and the schedule writers, because a schedule is a launch with a
-/// delay — checking one and not the other would make the schedule the way around the check.
-fn require_launchable_scope(
+/// delay — checking one and not the other would make the schedule the way around the check. The
+/// MCP `run_analysis` tool takes it too, for the same reason: two surfaces launching the same run
+/// must agree on who may launch it over what.
+pub(crate) fn require_launchable_scope(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     scope_kind: &str,

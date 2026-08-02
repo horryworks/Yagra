@@ -7374,7 +7374,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedApiToken"];
                 };
             };
-            /** @description Bad name, unsupported scope, no surface named, an expiry already in the past, or an owner id that names no account */
+            /** @description Bad name, a scope naming no groups or a group that does not exist, a scope on a token whose owner is itself group-scoped, no surface named, an expiry already in the past, or an owner id that names no account */
             400: {
                 headers: {
                     [name: string]: unknown;

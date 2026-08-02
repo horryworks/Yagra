@@ -41,6 +41,20 @@
   can point at a private registry holding unreleased builds.
 
 ### New Features
+- **Group-scoped API tokens and `/mcp` connections work.** The two refusals that stood in for
+  enforcement are lifted, and the promise made in v0.1.19 — *"group scoping will be accepted again
+  when the read paths actually filter by it"* — is kept. `POST /api/v1/api-tokens` accepts
+  `{"scope": {"Groups": [...]}}` instead of answering `400 unsupported_scope`, and `/mcp` admits a
+  group-scoped token instead of `403`-ing it. Every MCP tool now resolves the caller's scope and
+  applies the same rule its REST counterpart does: node lists and event searches filter in the
+  query, rankings and histories filter after, a tool naming an out-of-scope node answers exactly
+  what an unknown id answers, and `run_analysis` cannot be launched over a scope the caller does not
+  hold. Settings ▸ API tokens gained a scope picker and a **Can see** column.
+  Two containment rules: a token can never exceed its owner, so a token owned by a **group-scoped
+  account inherits that account's scope** (narrowing the account narrows its tokens at once, with
+  nothing to re-issue) and giving such a token a different scope is refused with
+  `400 owner_is_scoped`; and a token scope must name groups that exist. To give a token a narrower
+  view than its owner, own it with a service account scoped to what the token should see.
 - **Accounts can be limited to a set of node groups.** Settings ▸ Users ▸ *Change scope*
   (`PUT /api/v1/users/{id}/scope`) narrows what an account sees to the groups you pick and
   everything beneath them; `"All"` restores the whole fleet. Enforcement across the read surface

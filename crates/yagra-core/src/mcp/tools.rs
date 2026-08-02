@@ -11,9 +11,23 @@
 //! `poll_now`, WS-E). A write tool reads the authenticated [`McpIdentity`] from its `RequestContext`
 //! (propagated via the HTTP request `Parts`, WS-D), enforces its own [`Permission`]
 //! (`AckAlerts`/`ManageMaintenance`/`ManageConfig`), and records an audit entry. There are still no
-//! device-configuration tools (monitoring lane, ADR-015/029). Group-scope visibility on reads and the
-//! heavier writes (`run_probe`/`trigger_discovery`) remain future work. The plain-`async fn` shape
-//! (params in, DTO out) is what lets the ADR-029 RCA agent reuse these bodies in-process later.
+//! device-configuration tools (monitoring lane, ADR-015/029); the heavier writes
+//! (`run_probe`/`trigger_discovery`) remain future work. The plain-`async fn` shape (params in, DTO
+//! out) is what lets the ADR-029 RCA agent reuse these bodies in-process later.
+//!
+//! ## Every tool takes a `RequestContext`, and that is a security property (WS-F)
+//!
+//! `/mcp` used to refuse a group-scoped principal outright, so a tool could read the whole fleet and
+//! be correct. That refusal is gone: scoped callers are admitted and **each tool filters**, using
+//! [`YagraMcp::scope_of`] to resolve the caller's scope and then the same rule its REST counterpart
+//! carries in `api/route_table.rs` — a `group_id = ANY(…)` predicate where the query is ours, a
+//! post-filter where the store ranks or aggregates, and the id-shaped `no node with that id` where
+//! the tool names one node (never a distinct refusal, which would confirm the node exists).
+//!
+//! The consequence worth stating plainly: a tool that forgets to ask now returns the fleet, silently.
+//! A tool body cannot reach the caller except through its `RequestContext`, so `ctx` is the visible
+//! marker that the question was asked — and `every_tool_takes_a_request_context` fails if a new one
+//! does not take it.
 
 use chrono::Utc;
 use rmcp::handler::server::wrapper::Parameters;
@@ -32,6 +46,7 @@ use yagra_common::{NodeId, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
+use crate::api::scope::NodeScope;
 use crate::api::{ApiError, ApiState};
 use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
 use crate::mcp::dto::{
@@ -62,14 +77,22 @@ impl YagraMcp {
                        (ok/warning/critical/unknown/unreachable/maintenance), the number of active \
                        alerts, and which optional data tiers (metrics/flow/log) are enabled. Start here."
     )]
-    async fn get_fleet_summary(&self) -> Result<CallToolResult, McpError> {
+    async fn get_fleet_summary(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.fleet_summary_in(&scope).await,
+            Err(e) => tool_api_error("get_fleet_summary", &e),
+        }
+    }
+
+    async fn fleet_summary_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
         // Same tally as `GET /api/v1/fleet/summary`. This used to be a second implementation that
         // inserted only the states it had observed, so an AI client reading `states["warning"]`
         // got a missing key where the WebUI got a zero — the kind of difference that only shows up
         // as a model confidently reporting there is no warning data.
-        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
-        let summary =
-            crate::api::fleet::state_tally(&self.state, &crate::api::scope::NodeScope::All).await;
+        let summary = crate::api::fleet::state_tally(&self.state, scope).await;
         let dto = FleetSummaryDto {
             total_nodes: summary.total,
             states: summary
@@ -78,8 +101,16 @@ impl YagraMcp {
                 .map(|(k, v)| (k.to_owned(), v))
                 .collect(),
             // Beyond the shared tally, this surface adds what an AI client needs to know before
-            // trusting an answer: how much is currently wrong, and which tiers exist at all.
-            active_alerts: self.state.alerts.active_alerts().len(),
+            // trusting an answer: how much is currently wrong, and which tiers exist at all. The
+            // count is filtered like the tally is — a scoped caller reading "42 active alerts" over
+            // a 7-node summary would reasonably conclude the tally was wrong.
+            active_alerts: self
+                .state
+                .alerts
+                .active_alerts()
+                .iter()
+                .filter(|a| scope.allows_node(&self.state, a.node))
+                .count(),
             metrics_healthy: self.state.store.healthy().await,
             flow_tier_enabled: self.state.flows.is_some(),
             log_tier_enabled: self.state.logs.is_some(),
@@ -95,15 +126,27 @@ impl YagraMcp {
     async fn list_nodes(
         &self,
         Parameters(p): Parameters<ListNodesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.list_nodes_in(p, &scope).await,
+            Err(e) => tool_api_error("list_nodes", &e),
+        }
+    }
+
+    async fn list_nodes_in(
+        &self,
+        p: ListNodesParams,
+        scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(50).clamp(1, 100);
-        // Unrestricted, and safe only because `/mcp` is fail-closed on scope: `mcp/mod.rs` refuses
-        // a connection whose principal is not `Scope::All`, so nothing scoped ever reaches here.
-        // ⚠️ That refusal and this `None` are one decision in two files — lifting the refusal
-        // (ADR-028 WS-F) means threading the principal's scope through here in the same change.
+        // The scope goes into the query as the same indexed `group_id = ANY(…)` predicate the REST
+        // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
+        // can default to the whole fleet without saying so.
+        let groups = scope.group_filter();
         let nodes = match &p.search {
-            Some(term) => self.state.nodes.search(None, term, limit).await,
-            None => self.state.nodes.list_page(None, None, limit).await,
+            Some(term) => self.state.nodes.search(groups, term, limit).await,
+            None => self.state.nodes.list_page(groups, None, limit).await,
         };
         let nodes = match nodes {
             Ok(n) => n,
@@ -129,7 +172,25 @@ impl YagraMcp {
     async fn get_node_status(
         &self,
         Parameters(p): Parameters<NodeIdParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.node_status_in(p, &scope).await,
+            Err(e) => tool_api_error("get_node_status", &e),
+        }
+    }
+
+    async fn node_status_in(
+        &self,
+        p: NodeIdParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // Out of scope answers exactly what a nonexistent id answers, deliberately: a distinct
+        // "not allowed" would confirm the node exists, which is the enumeration oracle
+        // `scope::require_visible_node` avoids on the REST side.
+        if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
+            return tool_unavailable("get_node_status", "no node with that id");
+        }
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_node_status", "node detail requires live mode");
         };
@@ -168,8 +229,23 @@ impl YagraMcp {
     async fn get_active_alerts(
         &self,
         Parameters(p): Parameters<ActiveAlertsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.active_alerts_in(p, &scope).await,
+            Err(e) => tool_api_error("get_active_alerts", &e),
+        }
+    }
+
+    async fn active_alerts_in(
+        &self,
+        p: ActiveAlertsParams,
+        scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         let mut alerts = self.state.alerts.active_alerts();
+        // Filtered before the severity cut and the truncation, so a scoped caller's `limit` is
+        // spent on rows they can see rather than on rows that are about to be dropped.
+        alerts.retain(|a| scope.allows_node(&self.state, a.node));
         if let Some(node_id) = p.node_id {
             let nid = NodeId::from(node_id);
             alerts.retain(|a| a.node == nid);
@@ -181,7 +257,9 @@ impl YagraMcp {
         alerts.sort_by_key(|a| std::cmp::Reverse(a.at_unix_ms));
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
         alerts.truncate(limit);
-        let names = self.resolve_names(alerts.iter().map(|a| a.node.0)).await;
+        let names = self
+            .resolve_names(scope, alerts.iter().map(|a| a.node.0))
+            .await;
         let out: Vec<AlertDto> = alerts
             .iter()
             .map(|a| AlertDto::from_alert(a, names.get(&a.node.0).cloned()))
@@ -197,7 +275,12 @@ impl YagraMcp {
     async fn get_alert_history(
         &self,
         Parameters(p): Parameters<AlertHistoryParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("get_alert_history", &e),
+        };
         let Some(history) = self.state.history.as_ref() else {
             return tool_unavailable("get_alert_history", "alert history requires live mode");
         };
@@ -218,7 +301,16 @@ impl YagraMcp {
             Ok(r) => r,
             Err(e) => return tool_error("get_alert_history", "load history", &e),
         };
-        let names = self.resolve_names(rows.iter().map(|r| r.node)).await;
+        // Post-filtered, matching `GET /api/v1/alerts/history`: the store pages by timestamp and
+        // knows nothing about groups, so a scoped caller's page can come back short. Short is the
+        // correct answer here — `before` still advances by the oldest row returned.
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|r| scope.allows_node(&self.state, NodeId::from(r.node)))
+            .collect();
+        let names = self
+            .resolve_names(&scope, rows.iter().map(|r| r.node))
+            .await;
         let out: Vec<AlertHistoryDto> = rows
             .iter()
             .map(|r| AlertHistoryDto::from_row(r, names.get(&r.node).cloned()))
@@ -235,9 +327,19 @@ impl YagraMcp {
     async fn query_metrics(
         &self,
         Parameters(p): Parameters<QueryMetricsParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if !crate::api::is_valid_metric_name(&p.metric) {
             return tool_bad_params("query_metrics", "invalid metric name");
+        }
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("query_metrics", &e),
+        };
+        // A series is node data. The TSDB has never heard of groups, so this is the only place the
+        // question can be asked — and it is the same "no node with that id" a miss gets.
+        if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
+            return tool_unavailable("query_metrics", "no node with that id");
         }
         let key = SeriesKey::node(NodeId::from(p.node_id), p.metric.clone());
         let mode = p.mode.as_deref().unwrap_or("latest");
@@ -289,22 +391,19 @@ impl YagraMcp {
     async fn get_topology(
         &self,
         Parameters(p): Parameters<TopologyParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("get_topology", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_topology", "topology requires live mode");
         };
         // Same assembly as `GET /api/v1/topology`; only the page bound differs, because an AI
         // client wants a handful of edges where the graph view wants the fleet.
         let limit = p.limit.unwrap_or(200).clamp(1, 1000);
-        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
-        match crate::api::topology::topology_page(
-            &self.state,
-            admin,
-            &crate::api::scope::NodeScope::All,
-            p.after,
-            limit,
-        )
-        .await
+        match crate::api::topology::topology_page(&self.state, admin, &scope, p.after, limit).await
         {
             Ok(page) => ok_json("get_topology", &page),
             Err(e) => tool_api_error("get_topology", &e),
@@ -322,7 +421,24 @@ impl YagraMcp {
     async fn top_flows(
         &self,
         Parameters(p): Parameters<TopFlowsParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Both flow tools name a node, so they are node-scoped rather than the fleet-wide `/flow/*`
+        // endpoints REST refuses a scoped caller outright — the rows here are already one node's.
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.top_flows_in(p, &scope).await,
+            Err(e) => tool_api_error("top_flows", &e),
+        }
+    }
+
+    async fn top_flows_in(
+        &self,
+        p: TopFlowsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(deny) = deny_invisible_node(&self.state, scope, "top_flows", p.node_id) {
+            return deny;
+        }
         let Some(flows) = self.state.flows.as_ref() else {
             return tool_unavailable("top_flows", "flow tier not enabled on this core");
         };
@@ -376,7 +492,22 @@ impl YagraMcp {
     async fn flow_fanout(
         &self,
         Parameters(p): Parameters<TopFlowsParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.flow_fanout_in(p, &scope).await,
+            Err(e) => tool_api_error("flow_fanout", &e),
+        }
+    }
+
+    async fn flow_fanout_in(
+        &self,
+        p: TopFlowsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(deny) = deny_invisible_node(&self.state, scope, "flow_fanout", p.node_id) {
+            return deny;
+        }
         let Some(flows) = self.state.flows.as_ref() else {
             return tool_unavailable("flow_fanout", "flow tier not enabled on this core");
         };
@@ -414,15 +545,27 @@ impl YagraMcp {
         if authed_for(&ctx, Permission::AckAlerts).is_none() {
             return tool_forbidden("run_analysis", "this token lacks ack-alerts permission");
         }
+        let visible = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("run_analysis", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("run_analysis", "analysis requires live mode");
         };
-        // A readable label for the runs list (mirrors the WebUI's launch drawer). Built before
-        // validation because it needs a name lookup; an invalid scope is rejected either way.
         let scope = p.scope.as_deref().unwrap_or("all");
+        // The same launch-target rule as `POST /api/v1/analysis/jobs`: a run's findings are read
+        // back later, so an over-broad launch would hand a scoped caller fleet-wide data through
+        // the results. Checked before the label lookup — an invalid target should not first cost a
+        // name query, and the label must not name a node the caller cannot see.
+        if let Err(e) =
+            crate::api::analysis::require_launchable_scope(&self.state, &visible, scope, p.scope_id)
+        {
+            return tool_api_error("run_analysis", &e);
+        }
+        // A readable label for the runs list (mirrors the WebUI's launch drawer).
         let scope_label = match (scope, p.scope_id) {
             ("node", Some(id)) => self
-                .resolve_names(std::iter::once(id))
+                .resolve_names(&visible, std::iter::once(id))
                 .await
                 .get(&id)
                 .cloned()
@@ -478,7 +621,7 @@ impl YagraMcp {
             }
         };
         match crate::api::analysis::report(admin, final_job.id).await {
-            Ok(r) => ok_json_value("run_analysis", analysis_report_body(&r)),
+            Ok(r) => ok_json_value("run_analysis", self.scoped_report_body(&visible, r)),
             Err(e) => tool_api_error("run_analysis", &e),
         }
     }
@@ -491,14 +634,29 @@ impl YagraMcp {
     async fn get_analysis_findings(
         &self,
         Parameters(p): Parameters<AnalysisJobIdParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("get_analysis_findings", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_analysis_findings", "analysis requires live mode");
         };
-        match crate::api::analysis::report(admin, p.job_id).await {
-            Ok(r) => ok_json_value("get_analysis_findings", analysis_report_body(&r)),
-            Err(e) => tool_api_error("get_analysis_findings", &e),
+        let report = match crate::api::analysis::report(admin, p.job_id).await {
+            Ok(r) => r,
+            Err(e) => return tool_api_error("get_analysis_findings", &e),
+        };
+        // The run row is the unit of visibility — somebody else's fleet-wide run is not readable
+        // just because its id was guessed or came from a shared transcript.
+        if let Err(e) = crate::api::analysis::require_visible_job(&self.state, &scope, &report.job)
+        {
+            return tool_api_error("get_analysis_findings", &e);
         }
+        ok_json_value(
+            "get_analysis_findings",
+            self.scoped_report_body(&scope, report),
+        )
     }
 
     #[tool(
@@ -509,7 +667,12 @@ impl YagraMcp {
     async fn list_analyses(
         &self,
         Parameters(p): Parameters<ListAnalysesParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("list_analyses", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("list_analyses", "analysis requires live mode");
         };
@@ -520,7 +683,13 @@ impl YagraMcp {
             Ok(js) => js,
             Err(e) => return tool_error("list_analyses", "list analyses", &e),
         };
-        let out: Vec<AnalysisJobDto> = jobs.iter().map(AnalysisJobDto::from_job).collect();
+        // Post-filtered on each run's own target, matching `GET /api/v1/analysis/jobs`. A short
+        // page is correct: this is "recent activity", not a cursor-paged collection.
+        let out: Vec<AnalysisJobDto> = jobs
+            .iter()
+            .filter(|j| scope.allows_target(&self.state, crate::api::analysis::row_target(j)))
+            .map(AnalysisJobDto::from_job)
+            .collect();
         ok_json("list_analyses", &out)
     }
 
@@ -534,7 +703,12 @@ impl YagraMcp {
     async fn search_events(
         &self,
         Parameters(p): Parameters<EventSearchParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("search_events", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("search_events", "event search requires live mode");
         };
@@ -559,21 +733,13 @@ impl YagraMcp {
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
         // Same store routing too, including resolving a node-name term to ids so the name never
         // enters the log store (ADR-011).
-        // Unrestricted — `/mcp` admits only `Scope::All` principals today (see `list_nodes`).
-        let rows = match crate::api::eventlog::search(
-            &self.state,
-            admin,
-            &crate::api::scope::NodeScope::All,
-            &filter,
-            limit,
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => return tool_api_error("search_events", &e),
-        };
+        let rows =
+            match crate::api::eventlog::search(&self.state, admin, &scope, &filter, limit).await {
+                Ok(r) => r,
+                Err(e) => return tool_api_error("search_events", &e),
+            };
         let names = self
-            .resolve_names(rows.iter().filter_map(|r| r.node_id))
+            .resolve_names(&scope, rows.iter().filter_map(|r| r.node_id))
             .await;
         let out: Vec<EventDto> = rows
             .iter()
@@ -591,7 +757,12 @@ impl YagraMcp {
     async fn event_stats(
         &self,
         Parameters(p): Parameters<EventStatsParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("event_stats", &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("event_stats", "event stats requires live mode");
         };
@@ -607,9 +778,14 @@ impl YagraMcp {
             Ok(b) => b,
             Err(e) => return tool_error("event_stats", "event volume", &e),
         };
+        // Both of the per-node views carry a `node_id`, so the scope filter runs here rather than
+        // in the store — unlike `GET /api/v1/events/stats`, whose grouped counts arrive already
+        // summed and therefore need the restriction pushed into the query.
         let mut per_node: HashMap<Uuid, i64> = HashMap::new();
         for b in &buckets {
-            if p.node_id.is_none_or(|n| n == b.node_id) {
+            if p.node_id.is_none_or(|n| n == b.node_id)
+                && scope.allows_node(&self.state, NodeId::from(b.node_id))
+            {
                 *per_node.entry(b.node_id).or_default() += b.count;
             }
         }
@@ -617,7 +793,7 @@ impl YagraMcp {
         top_nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
         top_nodes.truncate(20);
         let names = self
-            .resolve_names(top_nodes.iter().map(|(id, _)| *id))
+            .resolve_names(&scope, top_nodes.iter().map(|(id, _)| *id))
             .await;
         let volume: Vec<Value> = top_nodes
             .iter()
@@ -633,7 +809,9 @@ impl YagraMcp {
             .unwrap_or_default();
         let mut sev_mix: BTreeMap<i16, i64> = BTreeMap::new();
         for s in &sev {
-            if p.node_id.is_none_or(|n| n == s.node_id) {
+            if p.node_id.is_none_or(|n| n == s.node_id)
+                && scope.allows_node(&self.state, NodeId::from(s.node_id))
+            {
                 *sev_mix.entry(s.severity).or_default() += s.count;
             }
         }
@@ -641,23 +819,38 @@ impl YagraMcp {
             .iter()
             .map(|(sev, c)| serde_json::json!({ "severity": sev, "count": c }))
             .collect();
-        // Top unmatched signatures (rule gaps) — cross-node, so the node filter isn't applied here.
-        let sigs = admin
-            .events
-            .event_unmatched_signatures(from_ms, to_ms, 20)
-            .await
-            .unwrap_or_default();
-        let unmatched: Vec<Value> = sigs
-            .iter()
-            .map(|s| {
-                serde_json::json!({ "kind": s.kind, "signature": s.signature, "count": s.count })
-            })
-            .collect();
+        // Top unmatched signatures (rule gaps) are aggregated **across** nodes, so a row retains no
+        // node to filter by — the same shape REST refuses a scoped caller for. Omitted with a note
+        // rather than served: a rule-gap ranking over the whole fleet, handed to an account that
+        // sees seven nodes, reads as a fact about those seven.
+        let (unmatched, note) = if scope.is_all() {
+            let sigs = admin
+                .events
+                .event_unmatched_signatures(from_ms, to_ms, 20)
+                .await
+                .unwrap_or_default();
+            let rows: Vec<Value> = sigs
+                .iter()
+                .map(|s| {
+                    serde_json::json!({ "kind": s.kind, "signature": s.signature, "count": s.count })
+                })
+                .collect();
+            (rows, Value::Null)
+        } else {
+            (
+                Vec::new(),
+                Value::from(
+                    "unmatched_signatures is omitted: it is aggregated across nodes and keeps no \
+                     node attribution, so it cannot be narrowed to this account's groups",
+                ),
+            )
+        };
         let body = serde_json::json!({
             "window": { "from": from_s, "to": to_s },
             "top_nodes_by_volume": volume,
             "severity_mix": severity_mix,
             "unmatched_signatures": unmatched,
+            "note": note,
         });
         ok_json_value("event_stats", body)
     }
@@ -676,6 +869,14 @@ impl YagraMcp {
         let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
             return tool_forbidden("ack_alert", "this token lacks ack-alerts permission");
         };
+        // A write is scoped like a read, and this one is also a read: the 200/404 difference would
+        // otherwise tell a scoped caller whether an invisible node currently has that alert.
+        if let Some(deny) = self
+            .deny_invisible_node_ctx(&ctx, "ack_alert", p.node_id)
+            .await
+        {
+            return deny;
+        }
         let Some(severity) = parse_severity(&p.severity) else {
             return tool_bad_params("ack_alert", "`severity` must be info, warning, or critical");
         };
@@ -736,6 +937,12 @@ impl YagraMcp {
                 "this token lacks manage-maintenance permission",
             );
         };
+        if let Some(deny) = self
+            .deny_invisible_node_ctx(&ctx, "open_maintenance", p.node_id)
+            .await
+        {
+            return deny;
+        }
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("open_maintenance", "maintenance requires live mode");
         };
@@ -815,6 +1022,16 @@ impl YagraMcp {
         let Some(identity) = authed_for(&ctx, Permission::ManageConfig) else {
             return tool_forbidden("poll_now", "this token lacks manage-config permission");
         };
+        // Belt-and-braces: `ManageConfig` is Admin, and an Admin cannot hold a group scope
+        // (`auth.rs::ADMIN_IS_UNSCOPED`), so this can only ever pass today. It is here so the tool
+        // does not depend on that invariant holding somewhere else — the check is one line, and
+        // "a permission that happens to imply unscoped" is not a property to build on silently.
+        if let Some(deny) = self
+            .deny_invisible_node_ctx(&ctx, "poll_now", p.node_id)
+            .await
+        {
+            return deny;
+        }
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("poll_now", "poll requires live mode");
         };
@@ -835,9 +1052,51 @@ impl YagraMcp {
         ok_json("poll_now", &result)
     }
 
+    /// The caller's resolved visibility scope for this request (ADR-028 WS-F).
+    ///
+    /// This is why every read tool takes a `RequestContext` it otherwise has no use for: a tool
+    /// body cannot ask for the caller any other way, and a scope resolved from anything but the
+    /// authenticated principal is not a scope.
+    ///
+    /// **Fails closed on a missing identity.** `mcp_auth_mw` inserts one into every request it lets
+    /// through, so the fallback is unreachable — which is exactly why it must resolve to "sees
+    /// nothing" rather than "sees everything". An unreachable branch is the one nobody notices
+    /// becoming reachable.
+    async fn scope_of(&self, ctx: &RequestContext<RoleServer>) -> Result<NodeScope, ApiError> {
+        let principal = identity_of(ctx).map(|id| id.principal).unwrap_or_else(|| {
+            tracing::error!("MCP tool ran with no authenticated identity; treating it as empty");
+            yagra_common::Principal::new(
+                yagra_common::Role::Viewer,
+                yagra_common::Scope::Groups(std::collections::BTreeSet::new()),
+            )
+        });
+        crate::api::scope::resolve(&self.state, &principal).await
+    }
+
+    /// [`deny_invisible_node`] for a tool that still holds its `RequestContext` (the write tools,
+    /// which need the identity anyway and so never took the scope as a parameter).
+    async fn deny_invisible_node_ctx(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        tool: &str,
+        node: Uuid,
+    ) -> Option<Result<CallToolResult, McpError>> {
+        match self.scope_of(ctx).await {
+            Ok(scope) => deny_invisible_node(&self.state, &scope, tool, node),
+            Err(e) => Some(tool_api_error(tool, &e)),
+        }
+    }
+
     /// Resolve node ids → display names via the live repo (empty in skeleton mode). Deduplicated so a
     /// repeated node in an alert list doesn't bloat the `IN (…)` query.
-    async fn resolve_names(&self, ids: impl Iterator<Item = Uuid>) -> HashMap<Uuid, String> {
+    ///
+    /// Takes the scope because a name is data: resolving ids the caller may not see would leak the
+    /// names of out-of-scope nodes through any list that happens to mention one.
+    async fn resolve_names(
+        &self,
+        scope: &NodeScope,
+        ids: impl Iterator<Item = Uuid>,
+    ) -> HashMap<Uuid, String> {
         let ids: Vec<Uuid> = {
             let mut seen: Vec<Uuid> = ids.collect();
             seen.sort_unstable();
@@ -847,11 +1106,32 @@ impl YagraMcp {
         if ids.is_empty() {
             return HashMap::new();
         }
-        // Unrestricted — see `list_nodes` above: `/mcp` admits only `Scope::All` principals today.
         match self.state.admin.as_ref() {
-            Some(admin) => admin.repo.node_names(None, &ids).await.unwrap_or_default(),
+            Some(admin) => admin
+                .repo
+                .node_names(scope.group_filter(), &ids)
+                .await
+                .unwrap_or_default(),
             None => HashMap::new(),
         }
+    }
+
+    /// [`analysis_report_body`] with the findings `scope` may not see removed.
+    ///
+    /// Shares the filter with the REST findings endpoint rather than repeating it, because the rule
+    /// it encodes is subtle: a run's scope is fixed when it starts, so a node can move between
+    /// groups before anyone reads the results, and a finding with no node at all belongs to nobody's
+    /// scope.
+    fn scoped_report_body(
+        &self,
+        scope: &NodeScope,
+        report: crate::api::analysis::AnalysisReport,
+    ) -> Value {
+        let findings = crate::api::analysis::visible_findings(&self.state, scope, report.findings);
+        analysis_report_body(&crate::api::analysis::AnalysisReport {
+            job: report.job,
+            findings,
+        })
     }
 
     /// Fill `src_as_name`/`dst_as_name` on conversation rows from the hot-swappable IP→ASN table
@@ -1168,15 +1448,37 @@ fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
     }
 }
 
-/// The authenticated caller `mcp_auth_mw` inserted into the request extensions, if it has `perm`
-/// (WS-D). rmcp forwards the HTTP request `Parts` into the tool's `RequestContext`, so the identity
-/// is read back from `parts.extensions`. Fail-closed: `None` ⇒ the write tool returns forbidden.
-fn authed_for(ctx: &RequestContext<RoleServer>, perm: Permission) -> Option<McpIdentity> {
+/// The authenticated caller `mcp_auth_mw` inserted into the request extensions (WS-D). rmcp forwards
+/// the HTTP request `Parts` into the tool's `RequestContext`, so the identity is read back from
+/// `parts.extensions`.
+fn identity_of(ctx: &RequestContext<RoleServer>) -> Option<McpIdentity> {
     ctx.extensions
         .get::<axum::http::request::Parts>()
         .and_then(|parts| parts.extensions.get::<McpIdentity>())
-        .filter(|id| id.principal.can(perm))
         .cloned()
+}
+
+/// [`identity_of`], but only if it holds `perm`. Fail-closed: `None` ⇒ the tool returns forbidden.
+fn authed_for(ctx: &RequestContext<RoleServer>, perm: Permission) -> Option<McpIdentity> {
+    identity_of(ctx).filter(|id| id.principal.can(perm))
+}
+
+/// The early return for a tool that names a node the caller may not see, or `None` to continue.
+///
+/// One helper rather than the check written out per tool: six tools take a `node_id`, and a missing
+/// check on any one of them is a silent leak with nothing to catch it. It answers exactly what a
+/// nonexistent id answers — a distinct refusal would confirm the node exists.
+fn deny_invisible_node(
+    st: &ApiState,
+    scope: &NodeScope,
+    tool: &str,
+    node: Uuid,
+) -> Option<Result<CallToolResult, McpError>> {
+    if scope.allows_node(st, NodeId::from(node)) {
+        None
+    } else {
+        Some(tool_unavailable(tool, "no node with that id"))
+    }
 }
 
 /// Best-effort audit record for an MCP write tool (a store hiccup must never fail the action — the
@@ -1268,6 +1570,47 @@ mod tests {
 
     fn json_of(r: &CallToolResult) -> Value {
         serde_json::from_str(&text_of(r)).expect("tool result body is JSON")
+    }
+
+    // ── The WS-F guard ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn every_tool_takes_a_request_context() {
+        // `/mcp` admits group-scoped principals now, so a tool that does not consult the caller
+        // returns the whole fleet — silently, with no compile error and no failing assertion
+        // anywhere. A tool body can only reach the caller through its `RequestContext`, so taking
+        // one is the observable marker that the question was asked. This does not prove the answer
+        // is *used* correctly; it proves nobody added a tool that cannot ask.
+        let src = include_str!("tools.rs");
+        // Assembled at runtime — this test reads its own file, so literal needles would match
+        // themselves and pass forever.
+        let attr = format!("#[{}(", "tool");
+        let ctx_param = format!("{}: RequestContext<RoleServer>", "ctx");
+        let mut checked = 0;
+        for (idx, _) in src.match_indices(&attr) {
+            let rest = &src[idx..];
+            // The tool's signature runs from its attribute to the opening brace of its body.
+            let body_at = rest
+                .find(") -> Result<CallToolResult")
+                .unwrap_or(rest.len());
+            let signature = &rest[..body_at];
+            let name = signature
+                .find("async fn ")
+                .map(|i| signature[i + 9..].split('(').next().unwrap_or("?"))
+                .unwrap_or("?");
+            assert!(
+                signature.contains(&ctx_param),
+                "MCP tool `{name}` does not take a RequestContext, so it cannot resolve the \
+                 caller's group scope and will answer fleet-wide to a scoped token"
+            );
+            checked += 1;
+        }
+        // The load-bearing half: if the parse stops matching, "everything is fine" must not be the
+        // answer. There were 17 tools when this was written.
+        assert!(
+            checked >= 17,
+            "only matched {checked} tools; parser drifted"
+        );
     }
 
     // ── Pure helpers ────────────────────────────────────────────────────────────────────────────
@@ -1416,9 +1759,27 @@ mod tests {
 
     // ── Tool bodies over a skeleton state ───────────────────────────────────────────────────────
 
+    /// The scope an unrestricted caller resolves to. The `#[tool]` wrappers are unreachable from a
+    /// test — rmcp's `RequestContext` needs a live `Peer`, whose constructor is crate-private — so
+    /// the tests drive the `*_in` bodies the wrappers delegate to. That split is what makes the
+    /// scoped behaviour testable at all; before it, the only reachable entry point required a
+    /// running MCP session.
+    fn unrestricted() -> NodeScope {
+        NodeScope::All
+    }
+
+    /// A scope naming a group that does not exist — i.e. one that can see nothing. The shape a
+    /// scoped caller has in skeleton mode, where there is no group store to expand.
+    fn sees_nothing() -> NodeScope {
+        NodeScope::Groups(Arc::new(crate::api::scope::ScopeSet {
+            visible: vec![Uuid::from_u128(1)],
+            breadcrumb: Vec::new(),
+        }))
+    }
+
     #[tokio::test]
     async fn fleet_summary_counts_never_observed_nodes_as_unknown() {
-        let r = mcp().get_fleet_summary().await.expect("ok");
+        let r = mcp().fleet_summary_in(&unrestricted()).await.expect("ok");
         let body = json_of(&r);
         assert_eq!(body["total_nodes"], 1, "the demo inventory has one node");
         assert_eq!(
@@ -1433,10 +1794,13 @@ mod tests {
     #[tokio::test]
     async fn list_nodes_returns_sanitized_summaries_and_clamps_the_limit() {
         let r = mcp()
-            .list_nodes(Parameters(ListNodesParams {
-                search: None,
-                limit: Some(10_000),
-            }))
+            .list_nodes_in(
+                ListNodesParams {
+                    search: None,
+                    limit: Some(10_000),
+                },
+                &unrestricted(),
+            )
             .await
             .expect("ok");
         let body = json_of(&r);
@@ -1457,32 +1821,83 @@ mod tests {
     async fn list_nodes_search_filters_by_name() {
         let m = mcp();
         let hit = m
-            .list_nodes(Parameters(ListNodesParams {
-                search: Some("demo".to_owned()),
-                limit: None,
-            }))
+            .list_nodes_in(
+                ListNodesParams {
+                    search: Some("demo".to_owned()),
+                    limit: None,
+                },
+                &unrestricted(),
+            )
             .await
             .expect("ok");
         assert_eq!(json_of(&hit).as_array().unwrap().len(), 1);
 
         let miss = m
-            .list_nodes(Parameters(ListNodesParams {
-                search: Some("no-such-node".to_owned()),
-                limit: None,
-            }))
+            .list_nodes_in(
+                ListNodesParams {
+                    search: Some("no-such-node".to_owned()),
+                    limit: None,
+                },
+                &unrestricted(),
+            )
             .await
             .expect("ok");
         assert!(json_of(&miss).as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
+    async fn a_scoped_caller_sees_neither_the_node_nor_its_name() {
+        // The demo node belongs to no group, so it is outside *every* group scope — the same rule
+        // `rbac.rs` applies to an ungrouped node, reproduced at this surface.
+        let m = mcp();
+        let scoped = sees_nothing();
+
+        let listed = m
+            .list_nodes_in(
+                ListNodesParams {
+                    search: None,
+                    limit: None,
+                },
+                &scoped,
+            )
+            .await
+            .expect("ok");
+        assert!(
+            json_of(&listed).as_array().unwrap().is_empty(),
+            "a scoped caller must not see an ungrouped node"
+        );
+
+        // …and naming it directly answers what a nonexistent id answers, not a distinct refusal:
+        // "you may not see this node" would confirm the node exists.
+        let status = m
+            .node_status_in(
+                NodeIdParams {
+                    // The demo inventory's one node (`repo::DEMO_NODE_ID`).
+                    node_id: Uuid::nil(),
+                },
+                &scoped,
+            )
+            .await
+            .expect("ok result");
+        let body = json_of(&status);
+        assert_eq!(body["available"], serde_json::json!(false));
+        assert_eq!(
+            body["reason"], "no node with that id",
+            "an out-of-scope node and an unknown id must be indistinguishable"
+        );
+    }
+
+    #[tokio::test]
     async fn active_alerts_is_empty_on_a_quiet_fleet() {
         let r = mcp()
-            .get_active_alerts(Parameters(ActiveAlertsParams {
-                node_id: None,
-                min_severity: None,
-                limit: None,
-            }))
+            .active_alerts_in(
+                ActiveAlertsParams {
+                    node_id: None,
+                    min_severity: None,
+                    limit: None,
+                },
+                &unrestricted(),
+            )
             .await
             .expect("ok");
         assert!(json_of(&r).as_array().unwrap().is_empty());
@@ -1495,15 +1910,18 @@ mod tests {
         let m = mcp();
 
         let flows = m
-            .top_flows(Parameters(flow_params(Uuid::new_v4())))
+            .top_flows_in(flow_params(Uuid::new_v4()), &unrestricted())
             .await
             .expect("ok result");
         assert_eq!(json_of(&flows)["available"], serde_json::json!(false));
 
         let status = m
-            .get_node_status(Parameters(NodeIdParams {
-                node_id: Uuid::new_v4(),
-            }))
+            .node_status_in(
+                NodeIdParams {
+                    node_id: Uuid::new_v4(),
+                },
+                &unrestricted(),
+            )
             .await
             .expect("ok result");
         assert_eq!(json_of(&status)["available"], serde_json::json!(false));

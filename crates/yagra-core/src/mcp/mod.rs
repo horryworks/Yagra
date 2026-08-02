@@ -9,9 +9,16 @@
 //!
 //! **Auth** is enforced in [`mcp_auth_mw`] before any tool runs: a valid bearer token (an API token,
 //! [`crate::apitokens`], or a session token, [`crate::auth`]) with `View`. MCP is **always
-//! authenticated even under `public_dashboard`** — an AI surface must never be anonymous. The gate is
-//! **fail-closed on scope**: only global-scope (`Scope::All`) principals may use MCP, because read
-//! tools do not yet filter output to a principal's visible groups (group-scope visibility is WS-F).
+//! authenticated even under `public_dashboard`** — an AI surface must never be anonymous.
+//!
+//! **Group-scoped principals are admitted** (WS-F, closed). They were refused here until every tool
+//! filtered, because admitting one would have handed it the whole fleet — the refusal *was* the
+//! enforcement. Each tool now resolves the caller's scope from the identity below
+//! ([`tools::YagraMcp::scope_of`]) and applies the same rule its REST counterpart does. Note what
+//! that trade means: a tool that forgets to ask now fails **open**, where before it could not,
+//! which is why `tools.rs` pins "every tool takes a `RequestContext`" with a test — taking one is
+//! the only way a tool body can reach the caller at all.
+//!
 //! The authenticated principal is propagated to tool bodies as an [`McpIdentity`] in the request
 //! extensions (WS-D): rmcp forwards the HTTP request `Parts` into each tool's `RequestContext`, so a
 //! **write** tool reads it back and enforces its own [`Permission`] (`ack_alert`→`AckAlerts`,
@@ -34,7 +41,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{tool_handler, ServerHandler};
 use tokio_util::sync::CancellationToken;
-use yagra_common::{Permission, Principal, Scope, TokenSurface};
+use yagra_common::{Permission, Principal, TokenSurface};
 
 use crate::api::ApiState;
 
@@ -182,13 +189,14 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity,
     if !principal.can(Permission::View) {
         return Err(forbidden("this token lacks view permission"));
     }
-    // Fail-closed for Increment 1: tools return unfiltered (global) data, so only a global-scope
-    // principal may use MCP. Group-scoped visibility inside tools ships in Increment 2.
-    if principal.scope != Scope::All {
-        return Err(forbidden(
-            "group-scoped tokens are not yet supported on /mcp — use a global-scope (All) token",
-        ));
-    }
+    // A group-scoped principal is admitted (ADR-028 WS-F). This used to be refused here, because
+    // the tools returned unfiltered data and admitting one would have handed it the fleet — the
+    // refusal was the whole enforcement. Every tool now resolves the caller's scope from this
+    // identity (`tools.rs::scope_of`) and filters, so the gate that replaced it is per tool.
+    //
+    // ⚠️ Which means a tool that forgets to ask fails **open** now, where it could not before.
+    // `mcp/tools.rs` has a test asserting every `#[tool]` takes a `RequestContext`, since taking
+    // one is the only way a body can reach the scope at all.
     Ok(McpIdentity { principal, actor })
 }
 
@@ -296,15 +304,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_scoped_token_is_forbidden_in_increment_1() {
+    async fn a_group_scoped_token_is_admitted_and_keeps_its_scope() {
+        // The inverse of what this asserted until WS-F closed. The scope must arrive at the tools
+        // *intact*: this gate is no longer the enforcement, so silently widening it here — or
+        // dropping it — would hand a scoped token the fleet with every tool believing it had asked.
         let sessions = Arc::new(SessionStore::new());
+        let scope = Scope::groups(["3f1b4c9e-0000-4000-8000-000000000001"]);
         let token = sessions.issue(
             uuid::Uuid::new_v4(),
-            Principal::new(Role::Operator, Scope::groups(["tokyo"])),
+            Principal::new(Role::Operator, scope.clone()),
             "op1",
         );
         let st = state_with_sessions(sessions);
-        let resp = authenticate(&st, Some(&token)).await.unwrap_err();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let identity = authenticate(&st, Some(&token)).await.expect("admitted");
+        assert_eq!(identity.principal.scope, scope);
     }
 }

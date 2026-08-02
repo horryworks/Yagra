@@ -257,7 +257,7 @@ impl ApiTokenStore {
         let row = sqlx::query(
             "SELECT t.id, t.name, t.role, t.scope, t.surfaces, \
                     u.id AS owner_id, u.username AS owner_username, u.role AS owner_role, \
-                    u.auth_source, u.last_login_at \
+                    u.scope AS owner_scope, u.auth_source, u.last_login_at \
                FROM api_tokens t \
                JOIN users u ON u.id = t.owner_user_id \
               WHERE t.token_hash = $1 \
@@ -287,9 +287,25 @@ impl ApiTokenStore {
 
         let principal = row_to_principal(&row).ok()?;
         let owner_role = parse_role(&row.try_get::<String, _>("owner_role").ok()?).ok()?;
+        // A token can never exceed its owner — in **either** dimension. The role is capped at the
+        // owner's current role, so demoting the account narrows every credential it holds; the
+        // scope is capped the same way, so narrowing the account's visibility narrows them too,
+        // immediately and without anyone having to remember to re-issue.
+        //
+        // A scoped owner's scope simply *replaces* the token's rather than being intersected with
+        // it, and `create` refuses to mint a non-`All` scope onto a scoped owner so the two can
+        // never disagree. Intersecting would need the group tree in here — and would have to get
+        // subtrees right, since a token naming a child of one of the owner's roots is inside the
+        // owner's scope while sharing none of its ids. Whoever got that wrong would get it wrong in
+        // the widening direction. To give a token a *narrower* view than its owner, own it with a
+        // service account scoped to what the token should see.
+        let owner_scope = owner_scope_of(&row);
         let capped = Principal::new(
             std::cmp::min(principal.role, owner_role),
-            principal.scope.clone(),
+            match owner_scope {
+                Scope::All => principal.scope.clone(),
+                narrowed => narrowed,
+            },
         );
 
         // Throttled last-used bump: skip the write unless it's stale, so a busy token doesn't write
@@ -324,6 +340,20 @@ fn row_to_principal(row: &sqlx::postgres::PgRow) -> anyhow::Result<Principal> {
     let scope_json: serde_json::Value = row.try_get("scope")?;
     let scope: Scope = serde_json::from_value(scope_json)?;
     Ok(Principal::new(role, scope))
+}
+
+/// The owning account's scope, defaulting to the **empty** scope on an unreadable value.
+///
+/// Fails closed for the same reason `auth.rs::parse_scope` does — this one caps a credential, so
+/// reading a corrupt owner row as `All` would let a storage fault widen a token rather than break
+/// it. There is no `?` here on purpose: an error must not fall through to "no cap applied".
+fn owner_scope_of(row: &sqlx::postgres::PgRow) -> Scope {
+    let empty = || Scope::Groups(std::collections::BTreeSet::new());
+    row.try_get::<serde_json::Value, _>("owner_scope")
+        .ok()
+        .map_or_else(empty, |raw| {
+            serde_json::from_value(raw).unwrap_or_else(|_| empty())
+        })
 }
 
 /// The surfaces a row names, dropping any this build does not recognise (N-1: a token written by a

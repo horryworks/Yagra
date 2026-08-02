@@ -17,10 +17,13 @@ import {
   TOKEN_SURFACES,
   type ApiTokenSummary,
   type CreatedApiToken,
+  type NodeGroup,
   type Role,
   type TokenSurface,
   type UserSummary,
 } from '../types/api';
+import { scopeFromSelection, scopeLabelKey } from './userScope';
+import './UsersPage.css';
 import {
   canSubmit,
   daysUntilExpiry,
@@ -28,6 +31,7 @@ import {
   EXPIRY_CHOICES,
   expiryFromChoice,
   ownerChoices,
+  ownerIsScoped,
   toggleSurface,
   tokenState,
   type ExpiryChoice,
@@ -108,6 +112,19 @@ function tokenColumns(
         ) : (
           <span className="muted">{t('owner.none')}</span>
         ),
+    },
+    {
+      key: 'scope',
+      header: t('cols.scope'),
+      width: '130px',
+      render: (r) => {
+        const { key, n } = scopeLabelKey(r.scope);
+        return key === 'all' ? (
+          <span className="muted">{t(`scope.${key}`, { count: n })}</span>
+        ) : (
+          <span>{t(`scope.${key}`, { count: n })}</span>
+        );
+      },
     },
     {
       key: 'status',
@@ -203,10 +220,19 @@ function CreateTokenModal({
   const [surfaces, setSurfaces] = useState<TokenSurface[]>(['mcp']);
   const [expiry, setExpiry] = useState<ExpiryChoice>(DEFAULT_EXPIRY);
   const [owner, setOwner] = useState('');
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
+  const [scopeGroups, setScopeGroups] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const choices = useMemo(() => ownerChoices(owners, username ?? ''), [owners, username]);
   const ready = canSubmit(name, surfaces);
+  // A token owned by a group-scoped account inherits that scope, so the picker is not offered —
+  // see `ownerIsScoped`. Recomputed when the owner changes, since that is what decides it.
+  const inherits = ownerIsScoped(owners, owner, username ?? '');
+
+  useEffect(() => {
+    api.listNodeGroups().then(setGroups).catch(() => setGroups([]));
+  }, []);
 
   const submit = () => {
     if (!ready) return;
@@ -220,6 +246,9 @@ function CreateTokenModal({
         expires_at: expiryFromChoice(expiry, new Date()),
         // Omitted means "me" — the server defaults the owner to the caller.
         owner_user_id: owner || undefined,
+        // Omitted when the owner is scoped: the token inherits, and sending anything else is a
+        // `400`. Otherwise an empty selection means the whole fleet, never an empty group set.
+        scope: inherits ? undefined : scopeFromSelection(scopeGroups),
       })
       .then((created) => onCreated(created))
       .catch((e: unknown) => {
@@ -296,6 +325,39 @@ function CreateTokenModal({
           ))}
         </Select>
         <span className="modal-hint">{t('field.ownerHint')}</span>
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label">{t('field.scope')}</label>
+        {inherits ? (
+          // Not a picker: a token owned by a scoped account inherits that account's scope, and the
+          // API refuses any other value (`400 owner_is_scoped`). Saying so beats a control whose
+          // every setting is rejected.
+          <span className="modal-hint">{t('field.scopeInherited')}</span>
+        ) : groups.length === 0 ? (
+          <span className="modal-hint">{t('field.scopeNoGroups')}</span>
+        ) : (
+          <>
+            <div className="users-scope-list">
+              {groups.map((g) => (
+                <label key={g.id} className="users-scope-row">
+                  <input
+                    type="checkbox"
+                    checked={scopeGroups.includes(g.id)}
+                    onChange={(e) =>
+                      setScopeGroups((prev) =>
+                        e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
+                      )
+                    }
+                  />
+                  <span className="users-scope-name">{g.name}</span>
+                </label>
+              ))}
+            </div>
+            <span className="modal-hint">
+              {scopeGroups.length === 0 ? t('field.scopeAllHint') : t('field.scopeHint')}
+            </span>
+          </>
+        )}
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('field.expiry')}</label>
