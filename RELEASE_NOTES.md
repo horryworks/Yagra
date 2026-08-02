@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Breaking changes
+- **`:latest` now means the latest stable release, not the development trunk.** Until now every
+  push to `main` published `ghcr.io/horryworks/yagra-*:<sha>` and moved `:latest`, so the default
+  in `docker-compose.deploy.yml` and `docker-compose.poller.yml` handed you a development build.
+  Development builds are no longer published at all — the registry holds releases and nothing else.
+  `:latest` moves when a release is tagged without a `-beta`/`-rc` suffix, and `:<sha>` exists only
+  for commits that were released. If you were following `main` through `:latest` you are now
+  following releases; pin an explicit tag if you wanted something else. Note `:latest` follows the
+  most recently pushed stable tag rather than the highest version, so a hotfix cut after a larger
+  release moves it backwards.
+- **`docker-compose.deploy.yml` takes a new `YAGRA_IMAGE_REPO`,** defaulting to
+  `ghcr.io/horryworks`. Leave it unset for published releases; it exists so a development machine
+  can point at a private registry holding unreleased builds.
+
 ### New Features
 - **URL monitors can present credentials.** A new `http_auth` credential kind covers Basic, Bearer
   and a custom header; bind one to a URL monitor and the poller presents it. The credential is

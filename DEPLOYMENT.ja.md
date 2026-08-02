@@ -118,7 +118,9 @@ YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml pull
 YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml up -d
 ```
 
-`YAGRA_IMAGE_TAG` はイメージタグを選びます: `latest` は `main` に追従、`v<version>` タグは安定リリース、不変の `<git-sha>` は特定ビルドを固定（ロールバック = 古い SHA で再実行）。
+`YAGRA_IMAGE_TAG` はイメージタグを選びます: `latest` は最新の**安定**リリース（プレリリースがこれを動かすことはありません）、`v<version>` タグは特定のリリースを固定、リリースの `<git-sha>` はそのビルドへの不変の参照（ロールバック = 古いタグで再実行）。公開されるのはリリースのみで、開発ビルドがレジストリに載ることはありません — つまり取得できるタグはすべてリリースです。
+
+動いているコンテナが何から作られたかを知りたいときは、`docker exec yagra-core-1 cat /etc/yagra-source-ref` でコミットが、`/etc/yagra-build-profile` でコンパイルプロファイルが出ます。
 
 **`.env` の設定**（`.env.example` からコピー）。要点:
 

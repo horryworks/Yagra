@@ -1,7 +1,8 @@
 # Continuous integration: validate the workspace on every push / PR. The `images` job builds the
-# Docker images (pushing to GHCR only on main) so build breakage — including the Dockerfile's pinned
-# Rust version (MSRV) — is caught here. CI does NOT deploy: see the note where the `deploy` job
-# used to be, at the bottom of this file.
+# Docker images so build breakage — including the Dockerfile's pinned Rust version (MSRV) — is
+# caught here. It publishes to GHCR on a **v* release tag only**: development builds never reach
+# the registry at all (see the tag-computation step). CI does NOT deploy: see the note where the
+# `deploy` job used to be, at the bottom of this file.
 #
 # Compute runs on SELF-HOSTED runners (label `yagra-build`) to avoid GitHub-hosted Actions-minute
 # billing — the repo and images (GHCR) stay on GitHub, only the execution is local. A runner host
@@ -95,7 +96,9 @@ jobs:
     needs: [backend, frontend]
     permissions:
       contents: read
-      packages: write          # push to GHCR on main
+      # `permissions` cannot be conditional, so this grant is declared for every ref. What actually
+      # gates registry access is the login step below, which runs on a v* tag only.
+      packages: write          # push to GHCR on a v* release tag
     strategy:
       # One docker build at a time: the self-hosted runners share a single dockerd, so concurrent
       # image builds contend on it (and earlier hung on the GHA cache). backend/frontend still
@@ -119,35 +122,56 @@ jobs:
       - uses: docker/setup-buildx-action@v4
         with:
           driver: docker
-      # Publish to GHCR on main and on a v* release tag; PRs build without pushing.
+      # Publish to GHCR on a v* release tag ONLY. main pushes and PRs build without pushing:
+      # development builds reach the test server through `/flashdeploy`'s private registry and
+      # never appear in GHCR, so the package list is the release history and nothing else.
       - name: Log in to GHCR
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Image tags: always the immutable :<sha>. :latest moves only on a main push (the
-      # test-server channel) — never on a tag, so a beta/rc tag can't hijack :latest. On a
-      # v* git tag, publish the version tag (e.g. :v0.1.0) so a release is pullable by it.
+      # Image tags.
+      #
+      # main / PR — one FIXED local tag, overwritten every run. Nothing is pushed, so a per-commit
+      # tag would only pile images up in the shared runner daemon that nothing ever consumes (it
+      # reached 363 images / 13 GB under the old scheme). The name carries no registry host, so it
+      # cannot be pushed anywhere by accident.
+      #
+      # v* tag — the release. `:v<version>` is what consumers pin, `:<sha>` is that release's
+      # immutable reference, and `:latest` means THE LATEST STABLE RELEASE, so it moves only when
+      # the version has no pre-release suffix. That test is what stops `/release-beta` from
+      # hijacking `:latest` (`v0.2.0-beta1` and `v0.2.0-rc1` both contain a `-`).
+      #
+      # Known and accepted: `:latest` follows the most recently pushed stable tag, not the highest
+      # version — a hotfix `v0.1.20` cut after `v0.2.0` moves it backwards. Pin `:v<version>` if
+      # that matters.
       - name: Compute image tags
         id: tags
         run: |
           {
             echo "list<<EOF"
-            echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.sha }}"
-            if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-              echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:latest"
-            fi
             if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
               echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.ref_name }}"
+              echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:${{ github.sha }}"
+              if [[ "${{ github.ref_name }}" != *-* ]]; then
+                echo "ghcr.io/horryworks/yagra-${{ matrix.name }}:latest"
+              fi
+            else
+              echo "yagra-${{ matrix.name }}:ci"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      # Compile profile for the Rust images (ignored by the web image). Only a real release (`/release`
-      # → v* tag → :v<version>) is built fully optimized; every other build — a `/flashdeploy` main
-      # push (:latest, the test-server channel) and PR validation builds — uses the fast-compile
-      # `ci-fast` profile so the dev cycle stays short. See [profile.ci-fast] in Cargo.toml.
+      # Compile profile for the Rust images (the web image takes no profile). Only a real release
+      # (`/release` → v* tag → :v<version>) is built fully optimized; main-push and PR validation
+      # builds use the fast-compile `ci-fast` profile so the dev cycle stays short. `/flashdeploy`
+      # builds its own `ci-fast` images outside CI. See [profile.ci-fast] in Cargo.toml.
+      #
+      # The profile is also baked into the image as `/etc/yagra-build-profile`, because a release
+      # and a flash build of the same commit are different binaries that write the *same*
+      # `/etc/yagra-source-ref` — without the profile marker, re-flashing a released commit would
+      # silently downgrade the test server with every provenance check still green.
       #
       # `SOURCE_REF` is the cache-bust. It changes every commit, and the Dockerfile *uses* it before
       # `COPY . .` — an unused ARG does not affect the cache at all, since Docker invalidates at an
@@ -161,13 +185,13 @@ jobs:
         run: |
           {
             echo "list<<EOF"
+            echo "SOURCE_REF=${{ github.sha }}"
             if [[ -n "${{ matrix.target }}" ]]; then
               if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
                 echo "CARGO_PROFILE=release"
               else
                 echo "CARGO_PROFILE=ci-fast"
               fi
-              echo "SOURCE_REF=${{ github.sha }}"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -178,9 +202,9 @@ jobs:
           file: ${{ matrix.dockerfile }}
           # core/poller share yagra-rust.Dockerfile and select a stage; web has no target (last stage).
           target: ${{ matrix.target }}
-          # Rust images only (empty target ⇒ web ⇒ no build-args); see the step above.
+          # SOURCE_REF for all three; CARGO_PROFILE for the Rust targets only. See the step above.
           build-args: ${{ steps.buildargs.outputs.list }}
-          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.tags.outputs.list }}
           # No type=gha cache: on the persistent self-hosted runner the local docker layer cache is
           # reused anyway, and the GHA cache service was hanging the build (stuck importing, no CPU).

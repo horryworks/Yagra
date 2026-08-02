@@ -1,0 +1,46 @@
+# Yagra — private image registry for DEVELOPMENT builds.
+#
+# Development builds are deliberately not published to GHCR: the container registry holds the
+# release history and nothing else. `/flashdeploy` builds the three images on the build host and
+# pushes them here instead, and the test server pulls them back over localhost.
+#
+# Why a registry rather than `docker save | ssh docker load`: a push HEADs every blob and skips the
+# ones the registry already has, so a rebuild ships only the layers that actually changed (tens of
+# MB) instead of the whole 145 MB image set every time. It also makes past development builds
+# addressable — rolling back is `YAGRA_IMAGE_TAG=<older sha>`, with no rebuild.
+#
+#   docker compose -p yagra-registry -f docker-compose.registry.yml up -d
+#
+# ⚠️ Run it under its OWN project name, as above. If it joined the `yagra` project, `/deploy`'s
+#    `--remove-orphans` could recreate the registry in the middle of a deploy that is pulling
+#    from it.
+#
+# ⚠️ SECURITY: this listens on :5000 with no authentication and no TLS. The content is your own
+#    build output, but an open registry is also a writable store for anyone who can reach the
+#    port. Keep it on a trusted LAN/VPN only — the same rule the NATS bus follows by default
+#    (see docker-compose.deploy.yml, the `nats` service). If it ever needs to be reachable from
+#    an untrusted network, put TLS + htpasswd in front of it first.
+#
+# The build host pushes to <host>:5000/yagra-*, which needs
+#   { "insecure-registries": ["<host>:5000"] }
+# in ITS /etc/docker/daemon.json (a plain-HTTP registry is refused otherwise). The test server
+# needs no such entry: it pulls via localhost, which Docker already treats as insecure.
+
+name: yagra-registry
+
+services:
+  registry:
+    image: registry:2
+    environment:
+      # Required for `registry garbage-collect` to reclaim anything — without it the API refuses
+      # manifest deletes and blobs are unreferenced but never freed. Each Rust build adds roughly
+      # 90 MB, so this is not optional maintenance on a test box.
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - regdata:/var/lib/registry
+    ports:
+      - "${YAGRA_REGISTRY_PORT:-5000}:5000"
+    restart: unless-stopped
+
+volumes:
+  regdata:

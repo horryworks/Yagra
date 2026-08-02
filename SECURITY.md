@@ -23,12 +23,17 @@ unless you prefer otherwise.
 
 ## Supported versions
 
-Only the most recent release is supported. Container tags carry the distinction:
+Only the most recent release is supported. Every image in the registry is a release — development
+builds are never published there:
 
 | Tag | Meaning |
 |---|---|
-| `ghcr.io/horryworks/yagra-*:v<version>` | A published release. This is what to run. |
-| `ghcr.io/horryworks/yagra-*:latest` | The `main` branch, built with a fast-compile profile. Development channel — not a stable release. |
+| `ghcr.io/horryworks/yagra-*:v<version>` | A published release. Pin this. |
+| `ghcr.io/horryworks/yagra-*:latest` | The latest **stable** release. Pre-releases (`-beta`, `-rc`) never move it. |
+| `ghcr.io/horryworks/yagra-*:<git-sha>` | The immutable reference for one release. |
+
+A running container reports what it was built from: `/etc/yagra-source-ref` holds the commit and
+`/etc/yagra-build-profile` holds the compile profile (`release` for anything published here).
 
 ## Scope
 

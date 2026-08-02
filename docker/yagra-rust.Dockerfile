@@ -24,10 +24,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
-# Compile profile (S1): `release` (default) is fully optimized for `/release` (v* tags). CI overrides
-# this to `ci-fast` for `/flashdeploy` (main → `:latest`) so the test-server channel builds quickly.
-# See [profile.ci-fast] in the workspace Cargo.toml. `release` → target/release, a custom profile →
-# target/<name>, so the copy path is parameterized by the profile name.
+# Compile profile (S1): `release` (default) is fully optimized and is what `/release` (v* tags)
+# publishes. `/flashdeploy` and CI's main/PR validation builds override it to `ci-fast` so the dev
+# cycle stays short. See [profile.ci-fast] in the workspace Cargo.toml. `release` → target/release,
+# a custom profile → target/<name>, so the copy path is parameterized by the profile name.
 ARG CARGO_PROFILE=release
 
 # Cache-bust the source copy and the compile, every commit.
@@ -51,6 +51,16 @@ ARG CARGO_PROFILE=release
 #     docker exec yagra-core-1 cat /etc/yagra-source-ref
 ARG SOURCE_REF=unknown
 RUN echo "${SOURCE_REF}" > /etc/yagra-source-ref
+
+# The commit alone does not identify the binary. A release and a `/flashdeploy` build of the SAME
+# commit are different binaries — `release` vs `ci-fast` — and both write the same source ref, so
+# re-flashing an already-released commit would swap an optimized binary for a fast-compile one with
+# every provenance check still green. Record the profile alongside the ref so `/deploy` can assert
+# `release` and `/flashdeploy` can assert `ci-fast`:
+#     docker exec yagra-core-1 cat /etc/yagra-build-profile
+# Separate file on purpose — the format of /etc/yagra-source-ref must not change, or images already
+# on a server stop matching the check that reads it.
+RUN echo "${CARGO_PROFILE}" > /etc/yagra-build-profile
 
 COPY . .
 # Reuse compiled deps + cargo registry across builds via BuildKit cache mounts. On the persistent
@@ -88,6 +98,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -u 10001 yagra
 COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
+COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile
 COPY --from=build /app/yagra-core /usr/local/bin/yagra-core
 USER yagra
 EXPOSE 8080
@@ -115,6 +126,7 @@ RUN useradd -r -u 10002 yagra \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
 COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
+COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile
 COPY --from=build /app/yagra-poller /usr/local/bin/yagra-poller
 # File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
 RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller

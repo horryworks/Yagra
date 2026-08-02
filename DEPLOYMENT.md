@@ -118,7 +118,9 @@ YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml pull
 YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml up -d
 ```
 
-`YAGRA_IMAGE_TAG` selects the image tag: `latest` tracks `main`; a `v<version>` tag is a stable release; an immutable `<git-sha>` pins an exact build (rollback = re-run with an older SHA).
+`YAGRA_IMAGE_TAG` selects the image tag: `latest` is the latest **stable** release (pre-releases never move it); a `v<version>` tag pins one release; the `<git-sha>` of a release is an immutable reference to exactly that build (rollback = re-run with an older tag). Only releases are published — development builds never reach the registry, so every tag you can pull is a release.
+
+Want to know what a running container was built from? `docker exec yagra-core-1 cat /etc/yagra-source-ref` prints the commit, and `/etc/yagra-build-profile` prints the compile profile.
 
 **Configure `.env`** (copied from `.env.example`). The essentials:
 

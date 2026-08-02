@@ -194,16 +194,20 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# Fast-compile profile for the test-server (`:latest`) image channel. Inherits `release` but trades
-# runtime optimization for a much faster compile — `codegen-units = 1` + thin LTO is the single
-# biggest cost in the `images` job (the core release build takes 3.5–6.5 min). Splitting codegen back
-# into 256 units and dropping LTO lets rustc parallelize across cores again, and `opt-level = 1` skips
-# the expensive optimization passes while keeping the binary far faster than a debug build.
+# Fast-compile profile for development builds — what the test server runs between releases.
+# Inherits `release` but trades runtime optimization for a much faster compile: `codegen-units = 1`
+# + thin LTO is the single biggest cost in an image build (the core release build takes 3.5–6.5 min).
+# Splitting codegen back into 256 units and dropping LTO lets rustc parallelize across cores again,
+# and `opt-level = 1` skips the expensive optimization passes while keeping the binary far faster
+# than a debug build.
 #
-# Wiring (docker/yagra-rust.Dockerfile `ARG CARGO_PROFILE`, .github/workflows/ci.yml): `/flashdeploy`
-# (main push → `:latest`) builds with `--profile ci-fast`; `/release` (v* tag → `:v<version>`) builds
-# with the full `[profile.release]` above. So the test server gets fast iteration and shipped releases
-# stay fully optimized. Local `cargo build --release` is unchanged.
+# Wiring (docker/yagra-rust.Dockerfile `ARG CARGO_PROFILE`): `ci-fast` is used by `/flashdeploy`
+# (which builds the images itself and pushes them to the test server's private registry) and by CI's
+# main/PR validation builds. `--profile release` is used only on a `v*` tag, i.e. by the images
+# `/release` publishes to GHCR. So iteration stays fast and shipped releases stay fully optimized.
+# Local `cargo build --release` is unchanged.
+#
+# Which one a running container was built with is readable at `/etc/yagra-build-profile`.
 [profile.ci-fast]
 inherits = "release"
 opt-level = 1

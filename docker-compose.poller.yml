@@ -21,7 +21,14 @@
 #
 #   docker compose -f docker-compose.poller.yml up -d
 #
-# Pin/rollback the image with YAGRA_IMAGE_TAG (default :latest).
+# Pin/rollback the image with YAGRA_IMAGE_TAG. The default, `latest`, is the latest stable
+# release — remote pollers only ever pull published releases from GHCR.
+#
+# That means a remote poller can be a release behind (or ahead of) a central core running an
+# unreleased build, so the usual N/N-1 bus-compatibility rules are doing real work here: new
+# message fields must be `#[serde(default)]`, and a new capability must be advertised in the
+# heartbeat before core relies on it. Pin an explicit `v<version>` if you need the two ends
+# locked together during an upgrade.
 
 name: yagra-poller
 
