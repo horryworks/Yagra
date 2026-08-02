@@ -42,24 +42,33 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 | Yagra-core | オーケストレーション、スケジューリング、北向き API | `crates/yagra-core` |
 | Yagra-poller | ICMP/SNMP/API の実ポーリング（ステートレス・水平スケール） | `crates/yagra-poller` |
 | Yagra-discovery | デバイス探索・分類 | `crates/yagra-discovery` |
-| Yagra-alert | 状態判定・ヒステリシス・依存抑制 | `crates/yagra-alert` |
-| Yagra-ingest | 受動イベント解析（syslog / SNMPトラップ）+ レート制限 | `crates/yagra-ingest` |
+| Yagra-alert | アラートのプリミティブ — dwell time・フラップ検出・ディスパッチ | `crates/yagra-alert` |
+| Yagra-ingest | 受動イベント解析（syslog / SNMPトラップ）+ フロー復号 + レート制限 | `crates/yagra-ingest` |
 | Yagra-forward | 転送フィルタ + ワイヤレンダラ（外部コレクタへのティー） | `crates/yagra-forward` |
 | Yagra-bus | ジョブ配信・ポーラ分散 | `crates/yagra-bus` |
 | Yagra-transport | ICMP/SNMP/HTTP の抽象化 | `crates/yagra-transport` |
 | Yagra-topology | 依存関係・マップ | `crates/yagra-topology` |
+| Yagra-secrets | 監視資格情報のエンベロープ暗号 | `crates/yagra-secrets` |
+| Yagra-authz | ポーラ単位にスコープした NATS 資格情報（Auth Callout） | `crates/yagra-authz` |
+| Yagra-telemetry | 構造化ログ + OpenTelemetry エクスポート | `crates/yagra-telemetry` |
+| Yagra-hoststats | 自己観測用のホスト CPU/ロード/メモリ/ディスク採取 | `crates/yagra-hoststats` |
 | Yagra-web | ダッシュボード・可視化 | `web/` |
 
-共有ライブラリ: `crates/yagra-common`（横断的な型）、`crates/yagra-secrets`
-（資格情報のエンベロープ暗号）。
+横断的な型は `crates/yagra-common` にあります。
 
-> クレートのディレクトリ名は上記の機能名 `Yagra-*` と一致しています（例: `crates/yagra-core`）。
+> クレート名が実体より狭いものが 2 つあるので、探しに行く前に知っておくと早いです。アラートの
+> **エンジン**（状態機械・依存抑制・メンテナンス期間）は `crates/yagra-core/src/alerts.rs` にあり、
+> `yagra-alert` はそれが組み合わせるプリミティブ群です。同様に `yagra-discovery` は識別とレート制御
+> だけで、ネットワークスイープは `crates/yagra-poller`、分類器は `crates/yagra-core` にあります。
 
 ## 技術スタック
 
 - **バックエンド:** Rust — Tokio / Axum / sqlx（PostgreSQL）。`crates/` 配下の Cargo ワークスペース。
 - **フロントエンド:** React + TypeScript + Vite、時系列グラフは uPlot。`web/` 配下。
-- **ストア:** PostgreSQL（メタデータ）、Redis（キャッシュ/ロック/ポーラ割当）、VictoriaMetrics（TSDB — メトリクス）。
+- **ストア（5 つ）:** PostgreSQL（メタデータと、リーダー選出に使う advisory lock）、
+  VictoriaMetrics（TSDB — メトリクス）、Redis（ポーラの生存/割当のミラー — 再構築可能）、
+  VictoriaLogs（受動イベントストア、任意）、ClickHouse（トラフィックフローストア、任意）。
+  後ろの 2 つはオプトインですが、既定の compose では起動します。
 - **バス:** NATS（core⇄poller）。
 - **北向き API:** REST（`/api/v1`）。
 - **デプロイ:** Docker / Docker Compose（MVP）→ Kubernetes（スケールアウト / HA）。
@@ -203,7 +212,8 @@ curl -sN http://<yagra-host>:8080/mcp \
 単一ノードのフルスタックを 1 コマンドで起動:
 
 ```bash
-docker compose up --build   # core + poller + web + PostgreSQL/Redis/NATS/VictoriaMetrics
+docker compose up --build   # core + poller + web、および PostgreSQL / Redis / NATS /
+                            # VictoriaMetrics / VictoriaLogs / ClickHouse
 ```
 
 WebUI は **http://localhost:3000**、API は **http://localhost:8080**。初回起動時、core は一度限りの

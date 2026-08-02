@@ -43,16 +43,25 @@ Each backend component is a workspace crate under `crates/`; the WebUI lives und
 | Yagra-core | Orchestration, scheduling, northbound API | `crates/yagra-core` |
 | Yagra-poller | ICMP/SNMP/API polling (stateless, scalable) | `crates/yagra-poller` |
 | Yagra-discovery | Device discovery & classification | `crates/yagra-discovery` |
-| Yagra-alert | State machine, hysteresis, dependency suppression | `crates/yagra-alert` |
-| Yagra-ingest | Passive-event parsing (syslog / SNMP traps) + rate limiting | `crates/yagra-ingest` |
+| Yagra-alert | Alert primitives — dwell time, flap detection, dispatch | `crates/yagra-alert` |
+| Yagra-ingest | Passive-event parsing (syslog / SNMP traps) + flow decoding + rate limiting | `crates/yagra-ingest` |
 | Yagra-forward | Forwarding filters + wire renderers (tee to external collectors) | `crates/yagra-forward` |
 | Yagra-bus | Job distribution, poller fan-out | `crates/yagra-bus` |
 | Yagra-transport | ICMP/SNMP/HTTP abstraction | `crates/yagra-transport` |
 | Yagra-topology | Dependency graph & map | `crates/yagra-topology` |
+| Yagra-secrets | Envelope encryption for monitoring credentials | `crates/yagra-secrets` |
+| Yagra-authz | Per-poller-scoped NATS credentials (Auth Callout) | `crates/yagra-authz` |
+| Yagra-telemetry | Structured logging + OpenTelemetry export | `crates/yagra-telemetry` |
+| Yagra-hoststats | Host CPU/load/memory/disk sampling for self-observability | `crates/yagra-hoststats` |
 | Yagra-web | Dashboards & visualization | `web/` |
 
-Shared libraries: `crates/yagra-common` (cross-cutting types) and `crates/yagra-secrets`
-(envelope encryption for credentials).
+Shared types live in `crates/yagra-common`.
+
+> Two crate names are narrower than they sound, and it is worth knowing before you go looking:
+> the alert **engine** (state machine, dependency suppression, maintenance windows) is
+> `crates/yagra-core/src/alerts.rs` — `yagra-alert` holds the primitives it composes. Likewise
+> `yagra-discovery` holds identification and rate limiting; the network sweep lives in
+> `crates/yagra-poller` and the classifier in `crates/yagra-core`.
 
 > Crate directory names match the functional `Yagra-*` names above (e.g. `crates/yagra-core`).
 
@@ -60,7 +69,10 @@ Shared libraries: `crates/yagra-common` (cross-cutting types) and `crates/yagra-
 
 - **Backend:** Rust — Tokio, Axum, sqlx (PostgreSQL). Cargo workspace under `crates/`.
 - **Frontend:** React + TypeScript + Vite, uPlot for time-series. Under `web/`.
-- **Stores:** PostgreSQL (metadata), Redis (cache/locks/poller-assignment), VictoriaMetrics (TSDB — metrics).
+- **Stores (five):** PostgreSQL (metadata, and the advisory locks that elect the leader),
+  VictoriaMetrics (TSDB — metrics), Redis (poller liveness/assignment mirror — rebuildable),
+  VictoriaLogs (passive-event store, optional), ClickHouse (traffic-flow store, optional).
+  The last two are opt-in but are started by the default compose file.
 - **Bus:** NATS (core⇄poller).
 - **Northbound API:** REST (`/api/v1`).
 - **Deploy:** Docker / Docker Compose (MVP) → Kubernetes (scale-out / HA).
@@ -207,7 +219,8 @@ curl -sN http://<yagra-host>:8080/mcp \
 Bring up a full single-node stack in one command:
 
 ```bash
-docker compose up --build   # core + poller + web + PostgreSQL/Redis/NATS/VictoriaMetrics
+docker compose up --build   # core + poller + web, plus PostgreSQL, Redis, NATS,
+                            # VictoriaMetrics, VictoriaLogs and ClickHouse
 ```
 
 WebUI on **http://localhost:3000**, API on **http://localhost:8080**. On first start core prints a
