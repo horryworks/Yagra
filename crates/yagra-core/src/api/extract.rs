@@ -371,15 +371,19 @@ impl FromRequestParts<ApiState> for Scoped {
         if st.public_dashboard && bearer(&parts.headers).is_none() {
             return Ok(Self(super::scope::NodeScope::All));
         }
-        let session = match st
-            .sessions
-            .authorize(bearer(&parts.headers), Permission::View)
-        {
-            Ok(session) => session,
-            Err(crate::auth::AuthError::Forbidden) => return Err(ApiError::forbidden()),
-            Err(_) => return Err(ApiError::unauthorized()),
+        // Read the credential `resolve_auth_mw` already resolved, exactly like `Require<P>` — never
+        // the session store directly. This asked `st.sessions.authorize` at first, which meant an
+        // **API token** — a credential the REST edge accepts — resolved to nothing here, so every
+        // endpoint taking this guard answered `401` to a token that `Require<P>` had just accepted.
+        // The same mistake `audit_mw` made and the reason this extension exists: one resolution per
+        // request, read by everything that needs an answer about the caller.
+        let Some(auth) = parts.extensions.get::<Authenticated>() else {
+            return Err(ApiError::unauthorized());
         };
-        Ok(Self(super::scope::resolve(st, &session.principal).await?))
+        if !auth.principal().can(Permission::View) {
+            return Err(ApiError::forbidden());
+        }
+        Ok(Self(super::scope::resolve(st, auth.principal()).await?))
     }
 }
 
@@ -627,6 +631,38 @@ mod tests {
                 .err()
                 .expect("a viewer token must not write");
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    // Every guard must resolve the caller from the *same* credential. `Scoped` asked the session
+    // store directly, so an API token — which `Require<P>` had just accepted — resolved to nothing
+    // and every scoped endpoint (most of the read surface) answered 401 to it. Nothing caught it:
+    // both guards were individually correct, and the sessions-only tests never presented a token.
+    #[tokio::test]
+    async fn a_token_resolves_a_scope_like_a_session_does() {
+        let st = private_state();
+        let scoped = Scoped::from_request_parts(&mut token_parts(Role::Viewer, "ro"), &st)
+            .await
+            .expect("an API token must reach a scoped read, not 401");
+        assert!(
+            scoped.0.is_all(),
+            "an unrestricted token resolves to unrestricted visibility"
+        );
+        // A session reaches it too, and an anonymous caller still does not.
+        let token = st.sessions.issue(
+            uuid::Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer1",
+        );
+        assert!(
+            Scoped::from_request_parts(&mut resolved(&st, Some(&token)).await, &st)
+                .await
+                .is_ok()
+        );
+        let err = Scoped::from_request_parts(&mut parts_with(None), &st)
+            .await
+            .err()
+            .expect("anonymous is refused on a private deployment");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 
     // The one power a token never gets, however privileged its owner: minting another. Without this

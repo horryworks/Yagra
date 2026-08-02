@@ -165,6 +165,13 @@
   information. No API changed.
 
 ### Bug Fixes
+- **An API token with the `rest` surface was refused by most read endpoints.** Anything that filters
+  by group scope — the node lists, the fleet summary, alerts, events, metric rankings, topology —
+  resolved the caller through the session store alone, so a valid `yat_…` token answered
+  `401 unauthorized` even though the same token passed the permission guard on the same request.
+  Introduced with group-scope enforcement earlier in this release, so no tagged version shipped it.
+  Both guards now read the one credential each request resolves, and a test pins that a token
+  reaches a scoped read.
 - **Editing a URL monitor cleared its credential binding.** The form's own comment said every
   field is sent explicitly *because* the request is a replace, and then omitted the credential.
   This was invisible while nothing consumed the binding; with the feature above it would have
