@@ -15,7 +15,9 @@ export function UserMenu() {
   const authed = useAuthStore((s) => s.authed);
   const setAuthed = useAuthStore((s) => s.setAuthed);
   const setRole = useAuthStore((s) => s.setRole);
+  const setScope = useAuthStore((s) => s.setScope);
   const role = useAuthStore((s) => s.role);
+  const scope = useAuthStore((s) => s.scope);
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -34,6 +36,7 @@ export function UserMenu() {
     void api.logout();
     setAuthed(false);
     setRole(null);
+    setScope(null);
     setOpen(false);
     navigate('/dashboard');
   };
@@ -55,6 +58,14 @@ export function UserMenu() {
             <div className="usermenu-role">
               {role ? t('shell.signedInAs', { role }) : t('shell.notSignedIn')}
             </div>
+            {/* Said out loud only when it restricts something. A scoped account's lists are simply
+                shorter than the fleet, with nothing else on screen to distinguish "you can see
+                three sites" from "there are three sites". */}
+            {scope && scope !== 'All' && (
+              <div className="usermenu-scope">
+                {t('shell.scopedTo', { count: scope.Groups.length })}
+              </div>
+            )}
           </div>
           {authed ? (
             <button className="usermenu-item" onClick={logout}>

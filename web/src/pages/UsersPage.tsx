@@ -10,7 +10,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import { ROLES, type Role, type UserKind, type UserSummary } from '../types/api';
+import { ROLES, type NodeGroup, type Role, type Scope, type UserKind, type UserSummary } from '../types/api';
+import {
+  canHoldScope,
+  sameScope,
+  scopeFromSelection,
+  scopeGroupIds,
+  scopeLabelKey,
+} from './userScope';
 
 /** The account kinds an admin can create here.
  *
@@ -30,7 +37,7 @@ import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { Monogram } from '../components/ui/tableCells';
-import { KeyIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
+import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
 import './UsersPage.css';
 
 const MIN_PW = 8;
@@ -53,6 +60,7 @@ export function UsersPage() {
   const [adding, setAdding] = useState(false);
   const [pwUser, setPwUser] = useState<UserSummary | null>(null);
   const [delUser, setDelUser] = useState<UserSummary | null>(null);
+  const [scopeUser, setScopeUser] = useState<UserSummary | null>(null);
 
   const load = useCallback(() => {
     api
@@ -194,6 +202,8 @@ export function UsersPage() {
                         <span title={u.last_login_at ?? undefined}>
                           {t('users.lastLogin', { time: last })}
                         </span>
+                        <span className="il-meta-sep">·</span>
+                        <ScopeSummary scope={u.scope} />
                       </div>
                     </div>
                     <div className="il-right">
@@ -217,6 +227,19 @@ export function UsersPage() {
                         <div className="il-actions">
                           <OverflowMenu
                             actions={[
+                              // Offered only where it can succeed: the API refuses to scope an
+                              // admin (409 `admin_is_unscoped`) because admin permissions are
+                              // fleet-wide, so showing the action there is showing a button that
+                              // must fail.
+                              ...(canHoldScope(u.role)
+                                ? [
+                                    {
+                                      label: t('users.action.changeScope'),
+                                      icon: <BoxIcon />,
+                                      onClick: () => setScopeUser(u),
+                                    },
+                                  ]
+                                : []),
                               {
                                 label: u.enabled
                                   ? t('users.action.disable')
@@ -270,8 +293,26 @@ export function UsersPage() {
           }}
         />
       )}
+      {scopeUser && (
+        <ChangeScopeModal
+          user={scopeUser}
+          onClose={() => setScopeUser(null)}
+          onDone={() => {
+            setScopeUser(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
+}
+
+/** One account's visibility, as a single meta line. Reads its wording off `scopeLabelKey`, so the
+ *  list, the modal and the account menu cannot describe the same scope differently. */
+function ScopeSummary({ scope }: { scope: Scope }) {
+  const { t } = useTranslation('access');
+  const { key, n } = scopeLabelKey(scope);
+  return <span>{t(`users.scope.${key}`, { count: n })}</span>;
 }
 
 /** Create a new account (focused-editing modal). */
@@ -444,6 +485,106 @@ function ChangePasswordModal({
         />
       </div>
       {mismatch && <p className="form-error">{t('users.changePw.mismatch')}</p>}
+      {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** Limit an account to a set of node groups, or restore fleet-wide visibility.
+ *
+ *  Ticking nothing means "the whole fleet" (`"All"`), not "nothing" — see `userScope.ts` for why
+ *  those two must never be spelled the same way. Every judgement here lives in that module; this
+ *  component is the form around it. */
+function ChangeScopeModal({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: UserSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('access');
+  const [groups, setGroups] = useState<NodeGroup[] | null>(null);
+  const [selected, setSelected] = useState<string[]>(() => scopeGroupIds(user.scope));
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .listNodeGroups()
+      .then(setGroups)
+      .catch((e: unknown) => {
+        setGroups([]);
+        setError(errMsg(e, t('users.err.loadGroups')));
+      });
+  }, [t]);
+
+  const next = scopeFromSelection(selected);
+  // Saving revokes every session the account holds, so an unchanged selection must not be savable:
+  // an admin who opens this and clicks Save would otherwise sign that person out for nothing.
+  const changed = !sameScope(next, user.scope);
+
+  const submit = () => {
+    if (!changed) return;
+    setBusy(true);
+    setError(null);
+    api
+      .setUserScope(user.id, next)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, t('users.err.changeScope')));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title={t('users.scopeModal.title', { name: user.username })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!changed || busy}>
+            {t('common:actions.save')}
+          </Button>
+        </>
+      }
+    >
+      <p className="modal-hint users-scope-intro">{t('users.scopeModal.intro')}</p>
+      <div className="modal-field">
+        <label className="modal-field-label">{t('users.scopeModal.groups')}</label>
+        {groups === null ? (
+          <p className="muted">{t('common:loading')}</p>
+        ) : groups.length === 0 ? (
+          <p className="muted">{t('users.scopeModal.noGroups')}</p>
+        ) : (
+          <div className="users-scope-list">
+            {groups.map((g) => (
+              <label key={g.id} className="users-scope-row">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(g.id)}
+                  onChange={(e) =>
+                    setSelected((prev) =>
+                      e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
+                    )
+                  }
+                />
+                <span className="users-scope-name">{g.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <span className="modal-hint">
+          {selected.length === 0
+            ? t('users.scopeModal.hintAll')
+            : t('users.scopeModal.hintGroups', { count: selected.length })}{' '}
+          {t('users.scopeModal.revokes')}
+        </span>
+      </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>
   );

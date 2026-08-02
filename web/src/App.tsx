@@ -21,29 +21,40 @@ export function App() {
   const authed = useAuthStore((s) => s.authed);
   const role = useAuthStore((s) => s.role);
   const setRole = useAuthStore((s) => s.setRole);
+  const scope = useAuthStore((s) => s.scope);
+  const setScope = useAuthStore((s) => s.setScope);
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
   const viewportMode = useViewportMode();
   const [config, setConfig] = useState<ClientConfig | null>(null);
 
-  // Resolve the current principal's role once we're authenticated but don't yet know it (e.g. after
-  // a page reload, where the token is in localStorage but the role isn't). Role-gated UI reads it
-  // from the auth store. Clears when signed out.
+  // Resolve the current principal's role and visibility scope once we're authenticated but don't
+  // yet know them (after a page reload the token is in localStorage but neither is), and after a
+  // login, which returns the role but not the scope. Role- and scope-gated UI read them from the
+  // auth store. Both clear when signed out.
+  //
+  // On failure nothing is set to a non-null value, which is what stops this retrying forever: a
+  // failed resolve leaves the state exactly as it found it, so no re-render is triggered.
   useEffect(() => {
     if (!authed || !getToken()) {
       setRole(null);
+      setScope(null);
       return;
     }
-    if (role != null) return;
+    if (role != null && scope != null) return;
     let cancelled = false;
     api
       .me()
-      .then((r) => !cancelled && setRole(r.role))
+      .then((r) => {
+        if (cancelled) return;
+        setRole(r.role);
+        setScope(r.scope);
+      })
       .catch(() => !cancelled && setRole(null));
     return () => {
       cancelled = true;
     };
-  }, [authed, role, setRole]);
+  }, [authed, role, scope, setRole, setScope]);
 
   // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).
   useEffect(() => {

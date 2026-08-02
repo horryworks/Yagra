@@ -41,6 +41,23 @@
   can point at a private registry holding unreleased builds.
 
 ### New Features
+- **Accounts can be limited to a set of node groups.** Settings ▸ Users ▸ *Change scope*
+  (`PUT /api/v1/users/{id}/scope`) narrows what an account sees to the groups you pick and
+  everything beneath them; `"All"` restores the whole fleet. Enforcement across the read surface
+  shipped earlier in this release — this is the part that hands a scope out, so a scope is now
+  something an account can actually hold rather than a value nothing could be set to. A node in no
+  group stays visible only to unrestricted accounts, and a node outside the scope answers `404` (the
+  same answer an unknown id gets, so the scope cannot be used to probe for what exists). Saving a
+  scope signs the account out of its current sessions, the way a role change does — the scope is
+  captured in the session token, so a live one would keep the old, wider view.
+  Two rules worth knowing: **an Admin cannot be scoped** (`409 admin_is_unscoped`) because
+  administration is fleet-wide, and promoting an account to Admin clears whatever scope it held; and
+  a scope naming **no** groups is refused (`400 empty_scope`) rather than stored, since it would
+  otherwise be an account that signs in successfully to an empty inventory with nothing to explain
+  why. `GET /api/v1/users` and `GET /api/v1/auth/me` now carry `scope`, and the account menu says so
+  out loud when the signed-in account is limited. SSO accounts are provisioned unrestricted and are
+  narrowed here; the stored assignment survives every subsequent login (mapping IdP groups to a
+  scope is a later increment).
 - **Scheduled analyses.** Troubleshoot ▸ Scheduled runs an analysis on a preset cadence — daily,
   weekly or monthly at a time of day (UTC), over the whole fleet, a site or one node. Until now
   every analysis had to be launched by hand, so a nightly anomaly sweep meant someone remembering.

@@ -235,6 +235,11 @@ export const USER_KINDS = ['local', 'oidc', 'service'] as const;
 /** How an account authenticates (snake_case). Pinned to `schemas.UserKind`. */
 export type UserKind = (typeof USER_KINDS)[number];
 
+/** What an account may see: `"All"`, or the node groups it is limited to (`{ Groups: [id, …] }`).
+ *  Entries are `node_groups.id` UUIDs, never group names — a name is editable and not unique, so
+ *  one would silently widen or void the scope the day somebody renames a folder. */
+export type Scope = components['schemas']['Scope'];
+
 /** A configured OIDC provider (`GET /api/v1/settings/oidc`). The client_secret is write-only and
  *  never returned; `has_secret` signals one is stored. */
 export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];

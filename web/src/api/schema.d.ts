@@ -2911,6 +2911,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * `PUT /api/v1/users/:id/scope` — set which node groups an account may see.
+         *     Limit an account to a set of node groups, or restore fleet-wide visibility with `"All"`.
+         * @description A scope narrows what the account can **see**: node lists, aggregates and rankings are filtered to
+         *     the allowed groups and everything beneath them, and a node outside it answers `404` — the same
+         *     answer an unknown id gets, so the scope cannot be used to probe for what exists. Endpoints whose
+         *     answer retains no per-node attribution (a rendered report, a pre-summed fleet timeline) refuse a
+         *     scoped caller rather than quietly serving fleet-wide numbers.
+         *
+         *     It is not a substitute for a role: a scoped Operator can still acknowledge alerts and open
+         *     maintenance windows, within their groups. An **Admin cannot be scoped** — administration is
+         *     fleet-wide, so promoting an account to Admin also clears whatever scope it held.
+         */
+        put: operations["set_user_scope"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/version": {
         parameters: {
             query?: never;
@@ -3324,6 +3353,12 @@ export interface components {
         /** @description The caller's own identity. */
         AuthMe: {
             role: components["schemas"]["Role"];
+            /**
+             * @description Which slice of the inventory this account sees: `"All"`, or the node groups it is limited
+             *     to. The UI reads it to say so out loud — an operator looking at a filtered node list has no
+             *     other way to tell a narrow scope from a small fleet.
+             */
+            scope: components["schemas"]["Scope"];
             username: string;
         };
         /** @description Where to send the browser to start the SSO handshake. */
@@ -6034,8 +6069,10 @@ export interface components {
             snapshots_published_total: number;
         };
         /**
-         * @description The set of groups a principal may see. Soft scoping (ADR-014): a node is visible if it
-         *     belongs to any allowed group. `All` is unrestricted (typically admins / global operators).
+         * @description Which slice of the inventory an account may see: everything, or a named set of node groups.
+         *
+         *     A node is visible if it belongs to an allowed group or to anything beneath one. A node in **no**
+         *     group is visible only under `All` — an unassigned node is not leaked to a scoped account.
          */
         Scope: "All" | {
             /** @description Visibility limited to these group identifiers. */
@@ -6075,6 +6112,10 @@ export interface components {
         /** @description Change-role request body. */
         SetRole: {
             role: string;
+        };
+        /** @description Change-scope request body. */
+        SetScope: {
+            scope: components["schemas"]["Scope"];
         };
         /** @description Enable/disable-account request body. */
         SetStatus: {
@@ -6404,6 +6445,11 @@ export interface components {
              */
             last_login_at?: string | null;
             role: string;
+            /**
+             * @description Which slice of the inventory this account may see: `"All"`, or the node groups it is
+             *     limited to. An Admin account is always `"All"` — administration is fleet-wide.
+             */
+            scope: components["schemas"]["Scope"];
             username: string;
         };
         /** @description Build version for Settings ▸ About. */
@@ -18157,6 +18203,85 @@ export interface operations {
                 };
             };
             /** @description Refused: this would demote the last admin account */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_user_scope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description User account id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetScope"];
+            };
+        };
+        responses: {
+            /** @description Scope changed and the account's sessions revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The scope names no groups, or names something that is not an existing group id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Refused: the account is an Admin, whose permissions are fleet-wide */
             409: {
                 headers: {
                     [name: string]: unknown;

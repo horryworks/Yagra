@@ -277,8 +277,13 @@ impl Permission {
     }
 }
 
-/// The set of groups a principal may see. Soft scoping (ADR-014): a node is visible if it
-/// belongs to any allowed group. `All` is unrestricted (typically admins / global operators).
+/// Which slice of the inventory an account may see: everything, or a named set of node groups.
+///
+/// A node is visible if it belongs to an allowed group or to anything beneath one. A node in **no**
+/// group is visible only under `All` — an unassigned node is not leaked to a scoped account.
+// Soft scoping, ADR-014: a visibility filter over one shared inventory, not tenancy. `///` on this
+// type is published verbatim in the OpenAPI document (and on the public site's API reference), so
+// design references belong in `//` like this one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum Scope {
     /// Unrestricted visibility.

@@ -115,6 +115,8 @@
     "comingSoonText": "{{label}} is part of the planned information architecture. Its screen will appear here once the backing API lands — the navigation entry is kept so the structure stays stable. Check back in a future release.",
     "userMenu": "User menu",
     "signedInAs": "Signed in · {{role}}",
+    "scopedTo_one": "Limited to {{count}} node group",
+    "scopedTo_other": "Limited to {{count}} node groups",
     "notSignedIn": "Not signed in",
     "logOut": "Log out",
     "signIn": "Sign in"

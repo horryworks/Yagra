@@ -101,6 +101,7 @@ import type {
   RoutingRule,
   SavedFinding,
   SavedFindingsQuery,
+  Scope,
   ScopeLevel,
   Severity,
   StateHistory,
@@ -1464,6 +1465,13 @@ export const api = {
   /** Change a user's role. Refused (409 `last_admin`) when demoting the last admin. */
   setUserRole: (id: string, role: Role): Promise<void> =>
     apiPut('/api/v1/users/{id}/role', { path: { id }, body: { role } }),
+
+  /** Limit an account to a set of node groups, or restore fleet-wide visibility with `'All'`.
+   *  Revokes the account's sessions server-side — the scope is captured in the session token, so a
+   *  live one would keep the old, wider view. Refused (409 `admin_is_unscoped`) for an admin, and
+   *  (400) for a scope naming no groups or something that is not an existing group id. */
+  setUserScope: (id: string, scope: Scope): Promise<void> =>
+    apiPut('/api/v1/users/{id}/scope', { path: { id }, body: { scope } }),
 
   /** Enable or disable a user account. Refused (409 `last_admin`) when disabling the last
    *  admin that can still log in. A disabled account is kept for the audit trail. */

@@ -15109,6 +15109,103 @@
         }
       }
     },
+    "/api/v1/users/{id}/scope": {
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "`PUT /api/v1/users/:id/scope` — set which node groups an account may see.\nLimit an account to a set of node groups, or restore fleet-wide visibility with `\"All\"`.",
+        "description": "A scope narrows what the account can **see**: node lists, aggregates and rankings are filtered to\nthe allowed groups and everything beneath them, and a node outside it answers `404` — the same\nanswer an unknown id gets, so the scope cannot be used to probe for what exists. Endpoints whose\nanswer retains no per-node attribution (a rendered report, a pre-summed fleet timeline) refuse a\nscoped caller rather than quietly serving fleet-wide numbers.\n\nIt is not a substitute for a role: a scoped Operator can still acknowledge alerts and open\nmaintenance windows, within their groups. An **Admin cannot be scoped** — administration is\nfleet-wide, so promoting an account to Admin also clears whatever scope it held.",
+        "operationId": "set_user_scope",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetScope"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Scope changed and the account's sessions revoked"
+          },
+          "400": {
+            "description": "The scope names no groups, or names something that is not an existing group id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: the account is an Admin, whose permissions are fleet-wide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/version": {
       "get": {
         "tags": [
@@ -16050,11 +16147,16 @@
         "description": "The caller's own identity.",
         "required": [
           "role",
-          "username"
+          "username",
+          "scope"
         ],
         "properties": {
           "role": {
             "$ref": "#/components/schemas/Role"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope",
+            "description": "Which slice of the inventory this account sees: `\"All\"`, or the node groups it is limited\nto. The UI reads it to say so out loud — an operator looking at a filtered node list has no\nother way to tell a narrow scope from a small fleet."
           },
           "username": {
             "type": "string"
@@ -22671,7 +22773,7 @@
             }
           }
         ],
-        "description": "The set of groups a principal may see. Soft scoping (ADR-014): a node is visible if it\nbelongs to any allowed group. `All` is unrestricted (typically admins / global operators)."
+        "description": "Which slice of the inventory an account may see: everything, or a named set of node groups.\n\nA node is visible if it belongs to an allowed group or to anything beneath one. A node in **no**\ngroup is visible only under `All` — an unassigned node is not leaked to a scoped account."
       },
       "ScopeLevel": {
         "type": "string",
@@ -22779,6 +22881,18 @@
         "properties": {
           "role": {
             "type": "string"
+          }
+        }
+      },
+      "SetScope": {
+        "type": "object",
+        "description": "Change-scope request body.",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
           }
         }
       },
@@ -23549,7 +23663,8 @@
           "role",
           "created_at",
           "enabled",
-          "auth_source"
+          "auth_source",
+          "scope"
         ],
         "properties": {
           "auth_source": {
@@ -23577,6 +23692,10 @@
           },
           "role": {
             "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope",
+            "description": "Which slice of the inventory this account may see: `\"All\"`, or the node groups it is\nlimited to. An Admin account is always `\"All\"` — administration is fleet-wide."
           },
           "username": {
             "type": "string"

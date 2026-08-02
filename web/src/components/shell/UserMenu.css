@@ -41,6 +41,14 @@
   color: var(--text-secondary);
 }
 
+/* Shown only for a group-scoped account, so it should read as a standing condition rather than
+   decoration — no accent colour, no badge. */
+.usermenu-scope {
+  margin-top: 2px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
 .usermenu-item {
   display: block;
   width: 100%;

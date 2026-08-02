@@ -132,7 +132,24 @@
       "enable": "Enable account",
       "disable": "Disable account",
       "changePassword": "Change password",
+      "changeScope": "Change scope",
       "delete": "Delete user"
+    },
+    "scope": {
+      "all": "All groups",
+      "groups_one": "{{count}} group",
+      "groups_other": "{{count}} groups",
+      "none": "No groups"
+    },
+    "scopeModal": {
+      "title": "Visibility scope — {{name}}",
+      "intro": "Choose which node groups this account can see. Everything beneath a chosen group is included. A node in no group is visible only to accounts that can see the whole fleet. This limits what the account sees, not what its role lets it do.",
+      "groups": "Node groups",
+      "noGroups": "No node groups exist yet, so there is nothing to limit this account to.",
+      "hintAll": "Nothing selected — this account sees the whole fleet.",
+      "hintGroups_one": "This account will see {{count}} group and everything beneath it.",
+      "hintGroups_other": "This account will see {{count}} groups and everything beneath them.",
+      "revokes": "Saving signs the account out of its current sessions."
     },
     "field": {
       "username": "Username",
@@ -161,7 +178,9 @@
       "changeStatus": "failed to change account status",
       "create": "failed to create user",
       "delete": "failed to delete user",
-      "changePw": "failed to change password"
+      "changePw": "failed to change password",
+      "changeScope": "failed to change scope",
+      "loadGroups": "failed to load node groups"
     }
   },
   "roles": {

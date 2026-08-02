@@ -6,3 +6,39 @@
 .users-error {
   margin-bottom: 10px;
 }
+
+/* Scope dialog: a bounded, scrollable list of node groups. Bounded because the group tree is the
+   one list here that grows with the customer's estate rather than with what an admin typed in. */
+.users-scope-intro {
+  margin: 0 0 14px;
+}
+
+.users-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--bg-primary);
+}
+
+.users-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  min-height: var(--touch-target, 44px);
+}
+
+.users-scope-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.users-scope-name {
+  color: var(--text-primary);
+}

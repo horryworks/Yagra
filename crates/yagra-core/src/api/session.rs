@@ -22,7 +22,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use yagra_common::Role;
+use yagra_common::{Role, Scope};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -58,6 +58,10 @@ pub(crate) struct LoginOk {
 pub(crate) struct AuthMe {
     role: Role,
     username: String,
+    /// Which slice of the inventory this account sees: `"All"`, or the node groups it is limited
+    /// to. The UI reads it to say so out loud — an operator looking at a filtered node list has no
+    /// other way to tell a narrow scope from a small fleet.
+    scope: Scope,
 }
 
 /// Exchange a username and password for a bearer token.
@@ -148,6 +152,7 @@ async fn auth_me(caller: Caller) -> ApiResult<Json<AuthMe>> {
     Ok(Json(AuthMe {
         role: caller.0.principal.role,
         username: caller.0.username,
+        scope: caller.0.principal.scope,
     }))
 }
 

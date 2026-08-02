@@ -380,6 +380,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
     ("PUT", "/api/v1/users/:id/enabled", ADMIN_CFG),
     ("PUT", "/api/v1/users/:id/password", ADMIN_CFG),
     ("PUT", "/api/v1/users/:id/role", ADMIN_CFG),
+    ("PUT", "/api/v1/users/:id/scope", ADMIN_CFG),
     ("GET", "/api/v1/version", DEPLOY_WIDE),
     ("GET", "/healthz", Global("unauthenticated liveness probe")),
     ("GET", "/readyz", Global("unauthenticated readiness probe")),

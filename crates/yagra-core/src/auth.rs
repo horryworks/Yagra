@@ -605,6 +605,24 @@ fn parse_role(s: &str) -> Role {
         .unwrap_or(Role::Viewer)
 }
 
+/// Parse the stored `users.scope` JSONB into a [`Scope`], failing **closed**.
+///
+/// A value this binary cannot read becomes `Groups([])` — an account that sees nothing — rather
+/// than `All`. The two are not interchangeable: treating a corrupt or future-version row as
+/// unrestricted would turn a storage fault into a privilege escalation, whereas failing closed
+/// costs an operator a visible complaint. `Scope::group_uuids` makes the same choice for entries
+/// inside the set, and for the same reason.
+fn parse_scope(raw: serde_json::Value, user_id: Uuid) -> Scope {
+    serde_json::from_value(raw).unwrap_or_else(|e| {
+        tracing::error!(
+            error = %e,
+            user_id = %user_id,
+            "account scope is unreadable; treating it as empty (sees nothing)"
+        );
+        Scope::Groups(std::collections::BTreeSet::new())
+    })
+}
+
 /// User-account metadata for the API — never includes the password hash.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct UserSummary {
@@ -621,6 +639,9 @@ pub struct UserSummary {
     pub enabled: bool,
     /// How the account authenticates: `"local"` (password) or `"oidc"` (external IdP).
     pub auth_source: String,
+    /// Which slice of the inventory this account may see: `"All"`, or the node groups it is
+    /// limited to. An Admin account is always `"All"` — administration is fleet-wide.
+    pub scope: Scope,
 }
 
 /// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
@@ -639,6 +660,9 @@ pub enum UserMutation {
     NotFound,
     /// Refused: this is the only remaining admin (removing/demoting it would orphan the system).
     LastAdmin,
+    /// Refused: the target is an Admin, and an Admin is unscoped by construction
+    /// (see `ADMIN_IS_UNSCOPED`). Only [`UserStore::set_scope`] can return this.
+    AdminIsUnscoped,
 }
 
 /// PostgreSQL-backed user accounts for local auth.
@@ -684,7 +708,8 @@ impl UserStore {
         password: &str,
     ) -> anyhow::Result<Option<(Uuid, Principal)>> {
         let row = sqlx::query(
-            "SELECT id, password_hash, role, enabled, auth_source FROM users WHERE username = $1",
+            "SELECT id, password_hash, role, enabled, auth_source, scope \
+             FROM users WHERE username = $1",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -720,8 +745,8 @@ impl UserStore {
             if let Err(e) = touch {
                 tracing::warn!(error = %e, "failed to record last_login_at");
             }
-            // MVP: every account has unrestricted scope; group-scope filtering is Phase 2.
-            Ok(Some((id, Principal::new(parse_role(&role), Scope::All))))
+            let scope = parse_scope(row.try_get("scope")?, id);
+            Ok(Some((id, Principal::new(parse_role(&role), scope))))
         } else {
             Ok(None)
         }
@@ -731,21 +756,23 @@ impl UserStore {
     pub async fn list(&self) -> anyhow::Result<Vec<UserSummary>> {
         let rows = sqlx::query(
             "SELECT id, username, role, created_at::text AS created_at, \
-             last_login_at::text AS last_login_at, enabled, auth_source \
+             last_login_at::text AS last_login_at, enabled, auth_source, scope \
              FROM users ORDER BY created_at, username",
         )
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
             .map(|row| {
+                let id: Uuid = row.try_get("id")?;
                 Ok(UserSummary {
-                    id: row.try_get("id")?,
+                    id,
                     username: row.try_get("username")?,
                     role: row.try_get("role")?,
                     created_at: row.try_get("created_at")?,
                     last_login_at: row.try_get("last_login_at")?,
                     enabled: row.try_get("enabled")?,
                     auth_source: row.try_get("auth_source")?,
+                    scope: parse_scope(row.try_get("scope")?, id),
                 })
             })
             .collect()
@@ -842,12 +869,23 @@ impl UserStore {
             if !enabled {
                 anyhow::bail!("account is disabled");
             }
-            sqlx::query("UPDATE users SET role = $2, last_login_at = now() WHERE id = $1")
-                .bind(id)
-                .bind(role_str)
-                .execute(&self.pool)
-                .await?;
-            return Ok((id, Principal::new(role, Scope::All)));
+            // The **stored** scope wins, not one derived from the IdP. The role is refreshed from
+            // the directory on every login because the directory is authoritative about who someone
+            // is; the scope is a Yagra-side assignment an admin made here, and re-deriving it would
+            // silently widen it back to unrestricted on the user's next sign-in. Mapping IdP groups
+            // to a scope is a later increment — when it lands it must replace this read, not race it.
+            //
+            // Returned by the same statement that refreshes the role, so the promotion and the
+            // scope it invalidates cannot be observed apart (see `ADMIN_IS_UNSCOPED`).
+            let scope: serde_json::Value = sqlx::query_scalar(&format!(
+                "UPDATE users SET role = $2, last_login_at = now(), {ADMIN_IS_UNSCOPED} \
+                 WHERE id = $1 RETURNING scope"
+            ))
+            .bind(id)
+            .bind(role_str)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok((id, Principal::new(role, parse_scope(scope, id))));
         }
         // New identity → JIT-provision. Disambiguate a colliding username.
         let taken: bool =
@@ -875,6 +913,10 @@ impl UserStore {
         .bind(provider_id)
         .execute(&self.pool)
         .await?;
+        // A just-provisioned account is unrestricted (the column default) — matching what every
+        // account got before scopes could be issued. Narrowing it is an explicit admin action on
+        // the account that now exists, which is also the only order that works: nobody can be given
+        // a scope before their first sign-in reveals which account they are.
         Ok((id, Principal::new(role, Scope::All)))
     }
 
@@ -917,9 +959,41 @@ impl UserStore {
         if current == "admin" && new_role != "admin" && admin_count(&mut tx).await? <= 1 {
             return Ok(UserMutation::LastAdmin);
         }
-        sqlx::query("UPDATE users SET role = $2 WHERE id = $1")
+        // Promoting to Admin also clears any group scope — see `ADMIN_IS_UNSCOPED`. In the same
+        // statement, so there is no window in which the account is an admin with a stale narrow
+        // view of the fleet it can already reconfigure.
+        sqlx::query(&format!(
+            "UPDATE users SET role = $2, {ADMIN_IS_UNSCOPED} WHERE id = $1"
+        ))
+        .bind(id)
+        .bind(new_role)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(UserMutation::Done)
+    }
+
+    /// Replace an account's visibility scope, refusing to narrow an **Admin** account.
+    ///
+    /// The caller must revoke the account's sessions afterwards: the principal — scope included —
+    /// is captured in the session token when it is issued, so a live token keeps the old, wider
+    /// view until it is cut. That is the same rule a role change follows (`api/users.rs`).
+    pub async fn set_scope(&self, id: Uuid, scope: &Scope) -> anyhow::Result<UserMutation> {
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query("SELECT role FROM users WHERE id = $1 FOR UPDATE")
             .bind(id)
-            .bind(new_role)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(UserMutation::NotFound);
+        };
+        let role: String = row.try_get("role")?;
+        if role == "admin" && *scope != Scope::All {
+            return Ok(UserMutation::AdminIsUnscoped);
+        }
+        sqlx::query("UPDATE users SET scope = $2 WHERE id = $1")
+            .bind(id)
+            .bind(serde_json::to_value(scope)?)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -979,6 +1053,23 @@ impl UserStore {
 /// once because two guards that disagree about who counts is precisely that bug, half-fixed.
 const CAN_LOG_IN: &str = "auth_source <> 'service'";
 
+/// SQL `SET` fragment resetting an Admin account's scope to unrestricted. **Requires the new role
+/// to be bound at `$2`** — PostgreSQL cannot read another `SET` column's new value, so the fragment
+/// has to look at the parameter rather than at `role`.
+///
+/// Admin permissions are fleet-wide by construction: `ManageConfig` writes are not scope-filtered
+/// (an ADR-014 non-goal), so an admin holding a group scope would read a narrowed inventory while
+/// still being able to edit — and break — the nodes that inventory hides. Reads answering `404`
+/// where writes answer `200` is not a safety property, it is a confusing one.
+///
+/// So the invariant is *"an Admin is unscoped"*, and it is enforced on every path that can reach
+/// admin: `set_scope` refuses to narrow one, and both role-setting paths — [`UserStore::set_role`]
+/// and the SSO role refresh in [`UserStore::upsert_oidc_user`] — clear the scope in the same
+/// statement that grants the role. The ledger's `ADMIN_CFG` reason ("an Admin is unscoped by
+/// construction") is true because of this constant.
+const ADMIN_IS_UNSCOPED: &str =
+    "scope = CASE WHEN $2 = 'admin' THEN '\"All\"'::jsonb ELSE scope END";
+
 /// Count of admin accounts within an open transaction (lock-out guard helper).
 async fn admin_count(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> anyhow::Result<i64> {
     let n: i64 = sqlx::query(&format!(
@@ -1007,6 +1098,55 @@ async fn enabled_admin_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_stored_scope_sees_nothing_rather_than_everything() {
+        let id = Uuid::nil();
+        // The two states that must never collapse into one another.
+        assert_eq!(parse_scope(serde_json::json!("All"), id), Scope::All);
+        assert_eq!(
+            parse_scope(serde_json::json!({"Groups": ["a"]}), id),
+            Scope::groups(["a"])
+        );
+        // Garbage, a null, or a variant this binary has never heard of: all fail **closed**.
+        // Reading any of them as `All` would make a corrupt row a privilege escalation.
+        for bad in [
+            serde_json::json!("all"),
+            serde_json::json!(null),
+            serde_json::json!(7),
+            serde_json::json!({"Tenants": ["x"]}),
+        ] {
+            let scope = parse_scope(bad.clone(), id);
+            assert_ne!(scope, Scope::All, "{bad} was read as unrestricted");
+            assert!(!scope.allows(&std::collections::BTreeSet::from(["a".to_owned()])));
+        }
+    }
+
+    #[test]
+    fn every_statement_that_sets_a_role_also_clears_an_admins_scope() {
+        // An Admin holding a group scope reads a narrowed inventory while still being able to
+        // reconfigure the nodes it hides. The invariant is enforced by one SQL fragment, so the
+        // failure mode is a *new* role-setting statement that forgets it — which nothing else
+        // catches, since it compiles and works.
+        let src = include_str!("auth.rs");
+        // Assembled at runtime: this test reads its own file, so a literal needle would match
+        // itself and pass forever.
+        let fragment = format!("{}_IS_{}", "ADMIN", "UNSCOPED");
+        let setter = format!("SET {} = $2", "role");
+        let sites: Vec<&str> = src.match_indices(&setter).map(|(i, _)| &src[i..]).collect();
+        assert!(
+            sites.len() >= 2,
+            "expected the local role change and the SSO role refresh; found {}",
+            sites.len()
+        );
+        for site in sites {
+            let statement = &site[..site.find("WHERE").unwrap_or(site.len())];
+            assert!(
+                statement.contains(&fragment),
+                "a statement setting `role` does not clear an admin's scope: {statement}"
+            );
+        }
+    }
 
     #[test]
     fn issued_token_resolves_and_authorizes_by_role() {

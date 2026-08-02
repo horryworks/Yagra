@@ -6,8 +6,9 @@
 //! come from the [`MetricStore`] (VictoriaMetrics live, in-memory for the skeleton) and
 //! the inventory from a [`NodeListing`]. A node's display state and the alert endpoints are
 //! served from the live [`AlertManager`] (committed liveness + threshold roll-up + active
-//! alerts). Cursor pagination is in; RBAC scoping is **not** — `Principal::can_see` has no caller
-//! here yet, so a group scope restricts nothing on this surface (ADR-014 / ADR-028 WS-F).
+//! alerts). Cursor pagination is in, and so is **RBAC group scoping** (ADR-014): every route
+//! declares how it treats the caller's scope in [`route_table`], and [`scope`] is the one place
+//! that resolves it — see that module for what each rule means and where it is applied.
 //!
 //! ## Layout
 //!

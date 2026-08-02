@@ -7,7 +7,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { severityRank } from './lib/format';
 import { getToken } from './services/api';
-import type { Alert } from './types/api';
+import type { Alert, Scope } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 
 // sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -26,15 +26,22 @@ interface AuthStore {
   authed: boolean;
   /** Current principal's role (e.g. 'admin' | 'operator' | 'viewer'), or null when unknown/signed out. */
   role: string | null;
+  /** Current principal's visibility scope, or null when unknown/signed out. Held because a scoped
+   *  account otherwise has no way to tell a filtered inventory from a small one — every list it
+   *  sees is simply shorter, with nothing on screen saying why. */
+  scope: Scope | null;
   setAuthed: (authed: boolean) => void;
   setRole: (role: string | null) => void;
+  setScope: (scope: Scope | null) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   authed: getToken() != null,
   role: null,
+  scope: null,
   setAuthed: (authed) => set({ authed }),
   setRole: (role) => set({ role }),
+  setScope: (scope) => set({ scope }),
 }));
 
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces
