@@ -46,6 +46,7 @@
     "empty": "No group has coordinates yet. Set latitude and longitude on a group under Nodes ▸ its Edit dialog, and it appears here.",
     "error": "Could not load site health.",
     "aria": "World map with {{count}} placed site(s)",
-    "pinTitle": "{{name}} — {{state}} · {{count}} node(s)"
+    "pinTitle": "{{name}} — {{state}} · {{count}} node(s)",
+    "resize": "Drag to resize the map (double-click to reset)"
   }
 }

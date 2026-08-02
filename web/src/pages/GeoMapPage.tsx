@@ -22,6 +22,13 @@ import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, worstStateFromCounts } from '../dashboard/widgets/util';
 import { stateColorVar, stateLabel } from '../lib/format';
 import { api } from '../services/api';
+import { useMapPaneStore } from '../store';
+import {
+  clampPaneHeight,
+  defaultPaneHeight,
+  heightFromDrag,
+  heightFromKey,
+} from './mapPaneHeight';
 import {
   clampGeoScale,
   fitPins,
@@ -57,6 +64,15 @@ export function GeoMapPage() {
   const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
 
+  // Pane height: the operator's stored preference, or one derived from this window. Re-clamped on
+  // read so a height saved on a big monitor cannot swallow a laptop screen.
+  const storedHeight = useMapPaneStore((s) => s.geoHeight);
+  const setStoredHeight = useMapPaneStore((s) => s.setGeoHeight);
+  const viewportH = typeof window === 'undefined' ? 0 : window.innerHeight;
+  const paneHeight =
+    storedHeight == null ? defaultPaneHeight(viewportH) : clampPaneHeight(storedHeight, viewportH);
+  const resize = useRef<{ y: number; h: number } | null>(null);
+
   const placed = useMemo(() => placedOnly(groups.data ?? []), [groups.data]);
 
   const fit = useCallback(() => {
@@ -73,6 +89,18 @@ export function GeoMapPage() {
       setView(fitPins(placed, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
     }
   }, [view, placed]);
+
+  // Refit when the operator resizes the pane. This deliberately *does* stomp the current pan/zoom,
+  // unlike the poll refresh above: dragging the pane is a direct request for more (or less) map, and
+  // leaving the old transform would just add empty space at the new size. The inline height is
+  // applied in the same render, so `clientHeight` is already the new one by the time this runs.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (el && el.clientWidth > 0) setView(fitPins(placed, el.clientWidth, el.clientHeight));
+    // `placed` is intentionally not a dependency — a poll that returns the same sites must not
+    // refit. Only a height change should.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paneHeight]);
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     const el = wrapRef.current;
@@ -157,6 +185,37 @@ export function GeoMapPage() {
     }
   }, []);
 
+  // ── Pane resize (the handle along the bottom edge) ─────────────────────────
+  const onResizeDown = useCallback(
+    (e: React.PointerEvent) => {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      resize.current = { y: e.clientY, h: paneHeight };
+    },
+    [paneHeight],
+  );
+  const onResizeMove = useCallback(
+    (e: React.PointerEvent) => {
+      const r = resize.current;
+      if (!r) return;
+      setStoredHeight(heightFromDrag(r.h, r.y, e.clientY, window.innerHeight));
+    },
+    [setStoredHeight],
+  );
+  const onResizeUp = useCallback((e: React.PointerEvent) => {
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
+    resize.current = null;
+  }, []);
+  const onResizeKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Keyboard-operable, like every other primary control (ui-conventions.md).
+      const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (dir === 0) return;
+      e.preventDefault();
+      setStoredHeight(heightFromKey(paneHeight, dir, window.innerHeight));
+    },
+    [paneHeight, setStoredHeight],
+  );
+
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
   const counts = summary?.groups ?? {};
   const busy = (loading && !summary) || (groups.loading && !groups.data);
@@ -175,7 +234,7 @@ export function GeoMapPage() {
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}
           {placed.length === 0 && <p className="geopage-empty muted">{t('geo.empty')}</p>}
-          <div className="geopage-map" ref={wrapRef}>
+          <div className="geopage-map" ref={wrapRef} style={{ height: `${paneHeight}px` }}>
             <div className="geopage-controls">
               <button
                 className="geopage-ctl"
@@ -267,6 +326,27 @@ export function GeoMapPage() {
                 })}
               </g>
             </svg>
+          </div>
+          {/* Drag the bottom edge to make the map taller or shorter; the size is remembered.
+              A slider role rather than a bare div so it is announced, focusable and arrow-key
+              operable — the map is the content of this page, so how much of the screen it gets is
+              a real control, not decoration. */}
+          <div
+            className="geopage-resize"
+            role="slider"
+            tabIndex={0}
+            aria-label={t('geo.resize')}
+            aria-orientation="vertical"
+            aria-valuenow={paneHeight}
+            onPointerDown={onResizeDown}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeUp}
+            onPointerCancel={onResizeUp}
+            onKeyDown={onResizeKey}
+            onDoubleClick={() => setStoredHeight(defaultPaneHeight(window.innerHeight))}
+            title={t('geo.resize')}
+          >
+            <span className="geopage-resize-grip" aria-hidden="true" />
           </div>
           {/* Never colour alone (ui-conventions.md): the legend names each state in text. */}
           <ul className="geopage-legend">

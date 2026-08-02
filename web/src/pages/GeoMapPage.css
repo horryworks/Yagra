@@ -13,15 +13,57 @@
   margin: 0 0 8px;
 }
 
-/* Scroll discipline (ui-conventions.md): the parent hides overflow, this pane owns the space. */
+/* The pane's height comes from the component (an inline style), because it is an operator
+   preference that persists — see `mapPaneHeight.ts`. `flex: 1` was tried first and collapsed the
+   pane to a ~150px strip: the app shell's content area is not a height-constrained flex column, so
+   there is no free space for a flex child to claim. The topology map uses an explicit height for
+   exactly the same reason. */
 .geopage-map {
   position: relative;
-  flex: 1;
-  min-height: 0;
   overflow: hidden;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+/* Resize handle along the bottom edge — it reads as the map's own bottom rail, not as a separate
+   widget, so it is continuous with the pane's border. */
+.geopage-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  cursor: ns-resize;
+  touch-action: none; /* the drag is ours; the browser must not scroll the page instead */
+}
+
+.geopage-resize-grip {
+  width: 34px;
+  height: 3px;
+  background: var(--border-color);
+  border-radius: 2px;
+  transition: background var(--transition);
+}
+
+.geopage-resize:hover .geopage-resize-grip,
+.geopage-resize:focus-visible .geopage-resize-grip {
+  background: var(--accent-color);
+}
+
+.geopage-resize:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* Touch: a 14px rail is not a 44px target, so give it a taller hit area on touch devices. */
+@media (hover: none) {
+  .geopage-resize {
+    height: 22px;
+  }
 }
 
 .geopage-svg {
@@ -34,14 +76,17 @@
   cursor: grabbing;
 }
 
+/* Land is the figure, ocean is the ground — so land takes the *lighter* surface of the two. The
+   first cut had these the other way round and the continents read as dark holes. */
 .geopage-ocean {
-  fill: var(--bg-tertiary);
+  fill: var(--bg-secondary);
 }
 
 .geopage-land {
-  fill: var(--bg-secondary);
+  fill: var(--bg-tertiary);
   stroke: var(--border-color);
-  stroke-width: 0.6;
+  stroke-width: 0.5;
+  stroke-linejoin: round;
   vector-effect: non-scaling-stroke; /* the coastline stays hairline at every zoom */
 }
 

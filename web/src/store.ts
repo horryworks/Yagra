@@ -57,6 +57,27 @@ export const useRangeStore = create<RangeStore>()(
   ),
 );
 
+// How tall the operator dragged the Geo map's pane. A layout preference, so it persists — snapping
+// back to the default on every navigation is exactly the annoyance `design-guidelines.md`'s
+// "画面状態の永続化" is about. localStorage rather than sessionStorage (unlike the chart range):
+// this is a stable preference about how you like the page, not part of "reload shows the same
+// view". `null` = never resized, so the page picks a height from the current window instead of
+// pinning whatever the window happened to be on the day it was first opened.
+interface MapPaneStore {
+  geoHeight: number | null;
+  setGeoHeight: (px: number) => void;
+}
+
+export const useMapPaneStore = create<MapPaneStore>()(
+  persist(
+    (set) => ({
+      geoHeight: null,
+      setGeoHeight: (geoHeight) => set({ geoHeight }),
+    }),
+    { name: 'yagra.mappane' },
+  ),
+);
+
 export function alertKey(a: Pick<Alert, 'node' | 'check' | 'severity'>): string {
   return `${a.node}|${a.check}|${a.severity}`;
 }
