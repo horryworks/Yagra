@@ -578,6 +578,7 @@ mod tests {
             listeners: Vec::new(),
             caps: Vec::new(),
             host: None,
+            leaving: false,
         };
         SyncBus::publish_heartbeat(&bus, hb.clone()).await.unwrap();
 

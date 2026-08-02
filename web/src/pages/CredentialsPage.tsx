@@ -37,9 +37,17 @@ import {
   V3_PRIV_PROTOCOLS,
   type V3State,
 } from './v3Credential';
+import {
+  buildHttpAuthSecret,
+  emptyHttpAuth,
+  httpAuthReady,
+  HTTP_AUTH_SCHEMES,
+  type HttpAuthScheme,
+  type HttpAuthState,
+} from './httpAuthCredential';
 import './CredentialsPage.css';
 
-const KINDS = ['snmp_v2c', 'snmp_v3', 'api_token'] as const;
+const KINDS = ['snmp_v2c', 'snmp_v3', 'http_auth', 'api_token'] as const;
 type Kind = (typeof KINDS)[number];
 
 // Kind → { i18n label key, icon }. The label is resolved with `t` at the call site (never at
@@ -47,6 +55,7 @@ type Kind = (typeof KINDS)[number];
 const KIND_META: Record<string, { labelKey: string; Icon: ComponentType }> = {
   snmp_v2c: { labelKey: 'cred.kind.snmp_v2c', Icon: HashIcon },
   snmp_v3: { labelKey: 'cred.kind.snmp_v3', Icon: ShieldIcon },
+  http_auth: { labelKey: 'cred.kind.http_auth', Icon: KeyIcon },
   api_token: { labelKey: 'cred.kind.api_token', Icon: KeyIcon },
   // Meraki keys are created via Settings ▸ Integrations; shown here read-only.
   meraki_api: { labelKey: 'cred.kind.meraki_api', Icon: KeyIcon },
@@ -64,6 +73,91 @@ const usageLabel = (n: number, t: TFunction) =>
 
 
 /** The SNMPv3 (USM) sub-form. Controlled — the same fields back the add and edit modals. */
+/** The HTTP-auth sub-form. Only the selected scheme's fields render, but every field stays in
+ *  state, so switching scheme and back does not discard what was typed. */
+function HttpAuthFields({
+  value,
+  onChange,
+}: {
+  value: HttpAuthState;
+  onChange: (v: HttpAuthState) => void;
+}) {
+  const { t } = useTranslation('access');
+  const set = (patch: Partial<HttpAuthState>) => onChange({ ...value, ...patch });
+  return (
+    <>
+      <div className="modal-field">
+        <label className="modal-field-label">{t('cred.http.scheme')}</label>
+        <Select
+          value={value.scheme}
+          onChange={(e) => set({ scheme: e.target.value as HttpAuthScheme })}
+        >
+          {HTTP_AUTH_SCHEMES.map((s) => (
+            <option key={s} value={s}>
+              {t(`cred.http.schemeName.${s}`)}
+            </option>
+          ))}
+        </Select>
+      </div>
+      {value.scheme === 'basic' && (
+        <>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('cred.http.username')}</label>
+            <TextInput value={value.username} onChange={(e) => set({ username: e.target.value })} />
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('cred.http.password')}</label>
+            <TextInput
+              className="mono"
+              type="password"
+              value={value.password}
+              onChange={(e) => set({ password: e.target.value })}
+              autoComplete="new-password"
+            />
+          </div>
+        </>
+      )}
+      {value.scheme === 'bearer' && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('cred.http.token')}</label>
+          <TextInput
+            className="mono"
+            type="password"
+            value={value.token}
+            onChange={(e) => set({ token: e.target.value })}
+            autoComplete="new-password"
+          />
+        </div>
+      )}
+      {value.scheme === 'header' && (
+        <>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('cred.http.headerName')}</label>
+            <TextInput
+              className="mono"
+              placeholder="X-API-Key"
+              value={value.headerName}
+              onChange={(e) => set({ headerName: e.target.value })}
+            />
+            <span className="modal-hint">{t('cred.http.headerNameHint')}</span>
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('cred.http.headerValue')}</label>
+            <TextInput
+              className="mono"
+              type="password"
+              value={value.headerValue}
+              onChange={(e) => set({ headerValue: e.target.value })}
+              autoComplete="new-password"
+            />
+          </div>
+        </>
+      )}
+      <span className="modal-hint">{t('cred.http.hint')}</span>
+    </>
+  );
+}
+
 function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) => void }) {
   const { t } = useTranslation('access');
   const needsAuth = value.level !== 'noauth';
@@ -152,18 +246,30 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [kind, setKind] = useState<Kind>('snmp_v2c');
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
+  const [httpAuth, setHttpAuth] = useState<HttpAuthState>(emptyHttpAuth);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const isV3 = kind === 'snmp_v3';
-  const ready = name.trim() !== '' && (isV3 ? v3Ready(v3) : secret !== '');
+  const isHttpAuth = kind === 'http_auth';
+  const ready =
+    name.trim() !== '' &&
+    (isV3 ? v3Ready(v3) : isHttpAuth ? httpAuthReady(httpAuth) : secret !== '');
 
   const submit = () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
     api
-      .createCredential({ name: name.trim(), kind, secret: isV3 ? buildV3Secret(v3) : secret })
+      .createCredential({
+        name: name.trim(),
+        kind,
+        secret: isV3
+          ? buildV3Secret(v3)
+          : isHttpAuth
+            ? buildHttpAuthSecret(httpAuth)
+            : secret,
+      })
       .then(() => {
         onSaved();
         onClose();
@@ -210,6 +316,8 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
       </div>
       {isV3 ? (
         <V3Fields value={v3} onChange={setV3} />
+      ) : isHttpAuth ? (
+        <HttpAuthFields value={httpAuth} onChange={setHttpAuth} />
       ) : (
         <div className="modal-field">
           <label className="modal-field-label">{t('cred.field.secret')}</label>

@@ -28,7 +28,7 @@ pub use meraki::{
     MerakiOrgInfo,
 };
 
-pub use yagra_common::{DnsChain, DnsRecordType, HttpMethod, MerakiTier};
+pub use yagra_common::{DnsChain, DnsRecordType, HttpAuth, HttpMethod, MerakiTier};
 
 /// Outcome of an ICMP probe. Raw observations only — no derived rates.
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +99,8 @@ pub struct HttpProbeSpec {
     pub verify_tls: bool,
     /// Follow 3xx redirects.
     pub follow_redirects: bool,
+    /// Credentials to present, already decrypted by core. `None` ⇒ an anonymous probe.
+    pub auth: Option<HttpAuth>,
 }
 
 /// What a DNS name-resolution probe needs from the job (ADR-033). The poller maps a

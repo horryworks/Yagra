@@ -116,6 +116,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 method: http.method,
                 verify_tls: http.verify_tls,
                 follow_redirects: http.follow_redirects,
+                auth: http.auth.clone(),
             };
             match transport.probe_http(&spec, timeout).await {
                 Ok(probe) => {
@@ -1314,6 +1315,7 @@ mod tests {
             verify_tls: true,
             follow_redirects: true,
             timeout_ms: 5000,
+            auth: None,
         }
     }
 

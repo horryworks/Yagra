@@ -34,6 +34,8 @@ export interface UrlCheckDraft {
   verifyTls: boolean;
   followRedirects: boolean;
   timeoutMs: string;
+  /** Bound auth credential id; empty string means none. */
+  credentialId: string;
 }
 
 /** The DNS-monitor edit form, as the inputs hold it. */
@@ -78,6 +80,7 @@ export function urlDraftFrom(cfg: UrlCheckConfig): UrlCheckDraft {
     verifyTls: cfg.verify_tls ?? URL_DEFAULTS.verifyTls,
     followRedirects: cfg.follow_redirects ?? URL_DEFAULTS.followRedirects,
     timeoutMs: String(cfg.timeout_ms ?? URL_DEFAULTS.timeoutMs),
+    credentialId: cfg.credential ?? '',
   };
 }
 
@@ -137,6 +140,10 @@ export function urlBodyFrom(d: UrlCheckDraft): { body: UrlCheckConfig } | { erro
       verify_tls: d.verifyTls,
       follow_redirects: d.followRedirects,
       timeout_ms,
+      // Explicit like every other field, because this PUT is a *replace*: omitting the binding
+      // cleared it. That was invisible while nothing consumed the credential — the moment one is
+      // used, editing a timeout would have logged the monitor out.
+      credential: d.credentialId === '' ? null : d.credentialId,
     },
   };
 }

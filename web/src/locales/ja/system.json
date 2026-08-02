@@ -47,8 +47,11 @@
         "poller": "ポーラー",
         "pool": "プール",
         "window": "時刻",
+        "passive": "失われた受動データ",
         "duration": "継続時間"
       },
+      "passiveNone": "バインドなし",
+      "passiveHint": "この時間帯に届いた syslog・トラップ・フローエクスポートは破棄されました。ポーリングしたメトリクスと違い、後から埋める元がありません。SNMP インフォームは例外で、送信側が ACK を受け取るまで再送します。",
       "durSecs": "{{count}}秒",
       "durMins": "{{count}}分",
       "durHours": "{{hours}}時間{{mins}}分"

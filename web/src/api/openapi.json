@@ -19842,7 +19842,8 @@
           "started_at",
           "ended_at",
           "duration_secs",
-          "recorded_at"
+          "recorded_at",
+          "listeners"
         ],
         "properties": {
           "duration_secs": {
@@ -19858,6 +19859,13 @@
             "type": "string",
             "format": "uuid",
             "description": "Row id."
+          },
+          "listeners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Passive listeners the poller had bound when the gap began (e.g. `syslog:514`, `trap:162`).\n\nEmpty ⇒ the poller had none, so the gap cost no passive data. Non-empty ⇒ whatever those\nlisteners would have received in the window is **gone**: syslog, traps and flow exports are\nfire-and-forget, so unlike active polling there is no buffer to backfill from. (SNMP informs\nare the exception — the sender retries until acknowledged.)"
           },
           "poller_id": {
             "type": "string",
@@ -22557,7 +22565,7 @@
               },
               {
                 "$ref": "#/components/schemas/CredentialId",
-                "description": "Optional auth credential (Basic/Bearer/Header) — reserved; unused in the MVP probe."
+                "description": "Optional auth credential (Basic/Bearer/custom header). A reference only — core resolves it\nto an [`HttpAuth`] and inlines that into the poll job, the same path SNMP credentials take."
               }
             ]
           },

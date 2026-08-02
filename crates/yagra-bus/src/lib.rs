@@ -20,7 +20,7 @@ pub use messages::{
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
     MerakiDeviceRef, NodeJobs, PollJob, PollResult, RawFlowDatagram, RawFlowProto, Sample,
     SnmpCheck, SnmpColumn, SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncMsg,
-    SyncRequest, TraceContext, WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY,
+    SyncRequest, TraceContext, WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH,
     CAP_RAW_CAPTURE, HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]

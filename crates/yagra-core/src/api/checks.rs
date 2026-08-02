@@ -161,6 +161,15 @@ impl CheckKind for UrlCheck {
 
     fn validate(cfg: Self::Config) -> Result<Self::Config, ApiError> {
         validate_monitor_url(&cfg.url)?;
+        // Credentials over an unverified TLS connection are credentials handed to whoever answers.
+        // Refusing the combination at the edge is the only place it can be refused: by poll time
+        // the secret is already inlined into a job on the bus.
+        if cfg.credential.is_some() && !cfg.verify_tls {
+            return Err(ApiError::bad_request(
+                "credential_needs_tls",
+                "a monitor that presents credentials must verify TLS",
+            ));
+        }
         Ok(cfg)
     }
 

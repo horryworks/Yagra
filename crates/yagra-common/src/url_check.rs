@@ -93,6 +93,63 @@ const fn default_timeout_ms() -> u32 {
     5000
 }
 
+/// The auth schemes a URL monitor can present. The runtime array is what makes per-member coverage
+/// testable — the UI builds a `t()` key from it (extensibility.md §4).
+pub const HTTP_AUTH_SCHEMES: [&str; 3] = ["basic", "bearer", "header"];
+
+/// Resolved credentials for a URL monitor — the *decrypted* value, inlined into the poll job by
+/// core exactly as SNMP auth is (ADR-018/020). The stored side is a [`CredentialId`] reference.
+///
+/// **This type deliberately does not derive `Debug`.** It travels inside `HttpCheck` → `CheckSpec`
+/// → `PollJob`, all of which do derive it, so a single `tracing::debug!(?job)` anywhere would
+/// otherwise print the password. The manual impl below prints the shape and redacts the value.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scheme", rename_all = "snake_case")]
+pub enum HttpAuth {
+    /// RFC 7617 Basic — sent as an `Authorization: Basic` header.
+    Basic { username: String, password: String },
+    /// RFC 6750 Bearer — sent as an `Authorization: Bearer` header.
+    Bearer { token: String },
+    /// An arbitrary header, for APIs that use their own (e.g. `X-API-Key`).
+    Header { name: String, value: String },
+}
+
+impl HttpAuth {
+    /// The scheme token, matching the serde tag and [`HTTP_AUTH_SCHEMES`].
+    #[must_use]
+    pub const fn scheme(&self) -> &'static str {
+        match self {
+            Self::Basic { .. } => "basic",
+            Self::Bearer { .. } => "bearer",
+            Self::Header { .. } => "header",
+        }
+    }
+}
+
+impl std::fmt::Debug for HttpAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // The username is structural (it identifies which account, not how to use it) and is
+            // what makes a misconfiguration diagnosable; the password never appears.
+            Self::Basic { username, .. } => f
+                .debug_struct("HttpAuth::Basic")
+                .field("username", username)
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Bearer { .. } => f
+                .debug_struct("HttpAuth::Bearer")
+                .field("token", &"<redacted>")
+                .finish(),
+            // The header *name* is not a secret and is the field most likely to be wrong.
+            Self::Header { name, .. } => f
+                .debug_struct("HttpAuth::Header")
+                .field("name", name)
+                .field("value", &"<redacted>")
+                .finish(),
+        }
+    }
+}
+
 /// A node's URL-monitoring configuration (1:1 with the node). No secrets: the optional auth
 /// `credential` is a reference; core resolves/inlines the decrypted value (ADR-018/020).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -114,7 +171,8 @@ pub struct UrlCheckConfig {
     /// Per-request timeout, in milliseconds (default 5000).
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u32,
-    /// Optional auth credential (Basic/Bearer/Header) — reserved; unused in the MVP probe.
+    /// Optional auth credential (Basic/Bearer/custom header). A reference only — core resolves it
+    /// to an [`HttpAuth`] and inlines that into the poll job, the same path SNMP credentials take.
     #[serde(default)]
     pub credential: Option<CredentialId>,
 }
@@ -265,6 +323,63 @@ mod tests {
         assert!(cfg.follow_redirects);
         assert_eq!(cfg.timeout_ms, 5000);
         assert_eq!(cfg.credential, None);
+    }
+
+    #[test]
+    fn http_auth_debug_never_prints_a_secret() {
+        // This type rides inside HttpCheck -> CheckSpec -> PollJob, every one of which derives
+        // Debug, so one tracing::debug!(?job) would dump the password if the impl regressed.
+        let basic = HttpAuth::Basic {
+            username: "probe".to_owned(),
+            password: "hunter2".to_owned(),
+        };
+        let shown = format!("{basic:?}");
+        assert!(
+            shown.contains("probe"),
+            "the username is diagnostic and should be shown"
+        );
+        assert!(!shown.contains("hunter2"));
+
+        let bearer = HttpAuth::Bearer {
+            token: "tok-abc".to_owned(),
+        };
+        assert!(!format!("{bearer:?}").contains("tok-abc"));
+
+        let header = HttpAuth::Header {
+            name: "X-API-Key".to_owned(),
+            value: "sekrit".to_owned(),
+        };
+        let shown = format!("{header:?}");
+        assert!(
+            shown.contains("X-API-Key"),
+            "the header name is not a secret"
+        );
+        assert!(!shown.contains("sekrit"));
+    }
+
+    #[test]
+    fn every_scheme_token_matches_its_serde_tag_and_the_runtime_list() {
+        // Two mechanisms produce this token — scheme() and serde(rename_all) — and nothing makes
+        // them agree, so a disagreement means core writes a shape the poller cannot read.
+        let all = [
+            HttpAuth::Basic {
+                username: String::new(),
+                password: String::new(),
+            },
+            HttpAuth::Bearer {
+                token: String::new(),
+            },
+            HttpAuth::Header {
+                name: String::new(),
+                value: String::new(),
+            },
+        ];
+        for a in &all {
+            let json = serde_json::to_value(a).unwrap();
+            assert_eq!(json["scheme"], a.scheme());
+            assert!(HTTP_AUTH_SCHEMES.contains(&a.scheme()));
+        }
+        assert_eq!(all.len(), HTTP_AUTH_SCHEMES.len());
     }
 
     #[test]

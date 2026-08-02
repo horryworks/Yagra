@@ -19,8 +19,24 @@
     "kind": {
       "snmp_v2c": "SNMP v2c (community)",
       "snmp_v3": "SNMP v3 (user/password)",
+      "http_auth": "HTTP auth (URL monitors)",
       "api_token": "API token",
       "meraki_api": "Cisco Meraki API key"
+    },
+    "http": {
+      "scheme": "Scheme",
+      "schemeName": {
+        "basic": "Basic (username / password)",
+        "bearer": "Bearer token",
+        "header": "Custom header"
+      },
+      "username": "Username",
+      "password": "Password",
+      "token": "Token",
+      "headerName": "Header name",
+      "headerNameHint": "A header the request may set — not Host, Authorization, or a hop-by-hop header.",
+      "headerValue": "Header value",
+      "hint": "Presented by URL monitors bound to this credential. Stored encrypted and never returned by the API."
     },
     "cols": {
       "name": "Name",

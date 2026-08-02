@@ -63,6 +63,14 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
             ));
         }
     }
+    if kind == crate::secrets::KIND_HTTP_AUTH {
+        if let Err(reason) = crate::secrets::parse_http_auth(kind, secret) {
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("invalid HTTP auth credential: {reason}"),
+            ));
+        }
+    }
     Ok(())
 }
 

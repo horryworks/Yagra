@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpMethod, IfIndex, InterfaceField,
-    MerakiTier, MetricKind, NodeId, SeriesKey,
+    DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth, HttpMethod, IfIndex,
+    InterfaceField, MerakiTier, MetricKind, NodeId, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -44,6 +44,17 @@ pub const CAP_RAW_CAPTURE: &str = "raw-capture";
 /// attaches raw bytes to events but publishes no flow datagrams at all, so a flow destination fed
 /// only by such pollers receives nothing rather than degraded output.
 pub const CAP_FLOW_RELAY: &str = "flow-relay";
+
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can present credentials
+/// on a URL check ([`HttpCheck::auth`]).
+///
+/// This gate exists because the failure mode is a *false alert*, not degraded output. A poller that
+/// does not understand `auth` drops the field and probes the endpoint anonymously; the endpoint
+/// answers 401; `http_up` goes to 0 and the operator is paged for a service that is fine. So core
+/// withholds an authenticated URL check from any pool with no live poller advertising this, and
+/// records a monitoring gap instead — which is the whole point of the rolling-upgrade contract:
+/// upgrading pollers must not require the operator to notice.
+pub const CAP_HTTP_AUTH: &str = "http-auth";
 
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
@@ -523,6 +534,23 @@ pub struct HeartbeatMsg {
     /// pollers can't reach it directly), so this heartbeat field is that path.
     #[serde(default)]
     pub host: Option<HostSample>,
+    /// Set on the **final** beat a poller sends, immediately before it exits on SIGTERM.
+    ///
+    /// Without it a shutdown is indistinguishable from a network partition, so core waits out
+    /// [`OFFLINE_AFTER_SECS`] (three missed beats) before dropping the poller from its pool's hash
+    /// ring. During a rolling upgrade that is up to 30 seconds in which the departing poller's
+    /// nodes are assigned to something that is no longer running — and if the restart finishes
+    /// inside the window, core never reassigns at all and the nodes are simply unpolled for the
+    /// duration. One flag turns that into an immediate, deliberate hand-off.
+    ///
+    /// A field on the existing heartbeat rather than a new message on purpose: a new subject would
+    /// need a matching `yagra-authz` publish grant, whose absence fails at runtime with no compile
+    /// error. The poller already holds publish rights here.
+    ///
+    /// An N-1 poller never sets it (falling back to timeout detection) and an N-1 core ignores it,
+    /// so the two upgrade in either order.
+    #[serde(default)]
+    pub leaving: bool,
 }
 
 /// A poller's request for a fresh full snapshot, published on [`crate::subjects::sync_request`]
@@ -648,6 +676,15 @@ pub struct HttpCheck {
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_http_timeout_ms")]
     pub timeout_ms: u32,
+    /// Resolved credentials to present, if the monitor is bound to one. Core decrypts and inlines
+    /// this exactly as it does SNMP auth; the poller never reads a credential store.
+    ///
+    /// A field rather than a new [`CheckSpec`] variant, so an N-1 poller drops it rather than
+    /// failing to decode the whole working-set chunk. It would then probe *unauthenticated* and
+    /// read a 401 as "down", so core withholds authenticated checks from pollers that do not
+    /// advertise [`CAP_HTTP_AUTH`] — see that constant.
+    #[serde(default)]
+    pub auth: Option<HttpAuth>,
 }
 
 const fn default_http_timeout_ms() -> u32 {
@@ -2056,6 +2093,84 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_tolerates_a_missing_leaving_flag() {
+        // An N-1 poller sends no `leaving`, and must read as a normal beat rather than failing to
+        // decode — a heartbeat that does not parse is a poller core believes is dead.
+        let json = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "incarnation": "00000000-0000-0000-0000-000000000000"
+        }"#;
+        let hb: HeartbeatMsg = serde_json::from_str(json).unwrap();
+        assert!(!hb.leaving);
+
+        // And the flag round-trips when an N poller does set it.
+        let mut bye = hb;
+        bye.leaving = true;
+        let wire = serde_json::to_string(&bye).unwrap();
+        let back: HeartbeatMsg = serde_json::from_str(&wire).unwrap();
+        assert!(back.leaving);
+    }
+    #[test]
+    fn http_check_tolerates_missing_and_unknown_fields() {
+        // N-1 producer: no `auth` at all. It must decode as an unauthenticated check rather than
+        // failing — a failed decode inside a working-set chunk takes the whole chunk down.
+        let json = r#"{
+            "url": "https://example.test/health",
+            "timeout_ms": 5000,
+            "future_field": 1
+        }"#;
+        let check: HttpCheck = serde_json::from_str(json).unwrap();
+        assert!(check.auth.is_none());
+        assert!(
+            check.verify_tls,
+            "an absent verify_tls must not read as disabled"
+        );
+
+        // N producer: the field round-trips through its tagged form.
+        let with_auth = HttpCheck {
+            url: "https://example.test/health".into(),
+            method: HttpMethod::Get,
+            expected_status: ExpectedStatus::TwoXx,
+            verify_tls: true,
+            follow_redirects: true,
+            timeout_ms: 5000,
+            auth: Some(HttpAuth::Bearer {
+                token: "tok".into(),
+            }),
+        };
+        let wire = serde_json::to_string(&with_auth).unwrap();
+        assert!(wire.contains("\"scheme\":\"bearer\""));
+        let back: HttpCheck = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.auth, with_auth.auth);
+    }
+
+    #[test]
+    fn a_poll_job_debug_never_prints_url_credentials() {
+        // PollJob, CheckSpec and HttpCheck all derive Debug, so this is one `debug!(?job)` away
+        // from being a credential leak if HttpAuth's manual impl is ever replaced by a derive.
+        let job = PollJob::http(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            "10.0.0.1".parse().unwrap(),
+            HttpCheck {
+                url: "https://example.test/health".into(),
+                method: HttpMethod::Get,
+                expected_status: ExpectedStatus::TwoXx,
+                verify_tls: true,
+                follow_redirects: true,
+                timeout_ms: 5000,
+                auth: Some(HttpAuth::Basic {
+                    username: "probe".into(),
+                    password: "hunter2".into(),
+                }),
+            },
+            60,
+        );
+        assert!(!format!("{job:?}").contains("hunter2"));
+    }
+
+    #[test]
     fn snapshot_chunk_round_trips_and_carries_snake_case_tag() {
         let msg = SyncMsg::SnapshotChunk(WorkingSetSnapshot {
             poller_id: "edge-1".into(),
@@ -2158,6 +2273,7 @@ mod tests {
             results_total: 100,
             listeners: vec!["syslog:514".into()],
             caps: vec![CAP_RAW_CAPTURE.to_owned()],
+            leaving: false,
             host: Some(yagra_common::HostSample {
                 cpu_pct: 12.5,
                 mem_used_bytes: 2,

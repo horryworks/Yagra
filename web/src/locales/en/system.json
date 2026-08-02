@@ -50,8 +50,11 @@
         "poller": "Poller",
         "pool": "Pool",
         "window": "When",
+        "passive": "Passive data lost",
         "duration": "Duration"
       },
+      "passiveNone": "none bound",
+      "passiveHint": "Syslog, traps and flow exports arriving in this window were dropped — unlike polled metrics there is nothing to backfill from. SNMP informs are the exception: the sender retries until acknowledged.",
       "durSecs": "{{count}}s",
       "durMins": "{{count}}m",
       "durHours": "{{hours}}h {{mins}}m"

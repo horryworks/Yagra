@@ -14,7 +14,7 @@ use crate::{HttpProbe, HttpProbeSpec, TransportError};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use yagra_common::{is_ssrf_blocked, HttpMethod};
+use yagra_common::{is_ssrf_blocked, HttpAuth, HttpMethod};
 
 /// Run one HTTP(S) probe. See the module docs for the reachable-vs-error contract.
 pub(crate) async fn probe_http(
@@ -71,8 +71,20 @@ pub(crate) async fn probe_http(
         HttpMethod::Post => reqwest::Method::POST,
     };
 
+    let mut req = client.request(method, url).timeout(timeout);
+    // Present credentials, if core resolved any. `basic_auth`/`bearer_auth` set `Authorization`,
+    // which reqwest strips on a cross-origin redirect; a custom header is **not** stripped, so the
+    // header scheme is refused at the API edge unless redirects are off (see `api/checks.rs`).
+    if let Some(auth) = &spec.auth {
+        req = match auth {
+            HttpAuth::Basic { username, password } => req.basic_auth(username, Some(password)),
+            HttpAuth::Bearer { token } => req.bearer_auth(token),
+            HttpAuth::Header { name, value } => req.header(name, value),
+        };
+    }
+
     let started = Instant::now();
-    match client.request(method, url).timeout(timeout).send().await {
+    match req.send().await {
         Ok(resp) => {
             let response_time_ms = started.elapsed().as_secs_f64() * 1000.0;
             let status_code = Some(resp.status().as_u16());
@@ -232,6 +244,7 @@ mod tests {
             method: HttpMethod::Get,
             verify_tls: true,
             follow_redirects: true,
+            auth: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));
@@ -245,6 +258,7 @@ mod tests {
             method: HttpMethod::Get,
             verify_tls: true,
             follow_redirects: true,
+            auth: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));
@@ -257,6 +271,7 @@ mod tests {
             method: HttpMethod::Get,
             verify_tls: true,
             follow_redirects: true,
+            auth: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));

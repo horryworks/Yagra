@@ -34,8 +34,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
 use yagra_bus::{
-    HeartbeatMsg, JobSpec, NodeJobs, SyncBus, SyncMsg, SyncRequest, WorkingSetDelta,
-    WorkingSetSnapshot, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    CheckSpec, HeartbeatMsg, JobSpec, NodeJobs, SyncBus, SyncMsg, SyncRequest, WorkingSetDelta,
+    WorkingSetSnapshot, CAP_HTTP_AUTH, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 use yagra_common::{HostSample, NodeId};
 
@@ -203,6 +203,10 @@ pub struct Coordinator {
     store: Option<Arc<dyn MetricStore>>,
     /// The registry + published baselines + result counters.
     state: Mutex<CoordState>,
+    /// Nudge for the sweep loop, so a membership change is reconciled at once rather than at the
+    /// next scheduled round. A [`tokio::sync::Notify`] rather than a channel because the signal
+    /// carries nothing and coalescing several nudges into one sweep is exactly right.
+    sweep_wake: tokio::sync::Notify,
 }
 
 /// Current Unix time in milliseconds (UTC), saturating on the impossible pre-epoch case.
@@ -233,6 +237,7 @@ impl Coordinator {
             stats,
             store,
             state: Mutex::new(CoordState::default()),
+            sweep_wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -246,7 +251,27 @@ impl Coordinator {
     /// Returns `true` iff this beat closed a **monitoring gap** — a known poller reappearing after
     /// its heartbeats had lapsed past the offline window (Phase 3, store-and-forward).
     pub async fn observe_heartbeat(&self, hb: HeartbeatMsg, now: Instant) -> bool {
-        let (doc, do_pg, gap) = {
+        // A departing poller announces itself on its way out (SIGTERM). Drop it now rather than
+        // waiting out three missed beats: for that window its nodes are assigned to a process that
+        // is already gone, and if the restart completes inside the window the ring never changes at
+        // all, so the nodes go unpolled for the whole restart instead of moving to a live poller.
+        if hb.leaving {
+            let mut st = self.state.lock().expect("coordinator state poisoned");
+            st.pollers.remove(&hb.poller_id);
+            st.published.remove(&hb.poller_id);
+            drop(st);
+            tracing::info!(
+                poller = %hb.poller_id,
+                pool = %hb.pool,
+                "poller announced it is leaving — reassigning its nodes now"
+            );
+            metrics::counter!("yagra_poller_graceful_leave_total").increment(1);
+            // Ask for a sweep instead of reconciling here: the coordinator holds no desired set,
+            // and the sweep is the one place that builds it.
+            self.wake_sweep();
+            return false;
+        }
+        let (doc, do_pg, gap, gap_listeners) = {
             let mut st = self.state.lock().expect("coordinator state poisoned");
             let epoch = self.epoch;
             let known = st.pollers.contains_key(&hb.poller_id);
@@ -292,6 +317,10 @@ impl Coordinator {
             } else {
                 None
             };
+            // The listener set the poller had *going into* the gap — captured before the refresh
+            // below overwrites it. That is the set whose datagrams were dropped on the floor, and
+            // it is not necessarily what the poller reports now (a restart can change its binds).
+            let gap_listeners = entry.listeners.clone();
             // Liveness + telemetry refresh regardless of new/known.
             entry.last_seen = now;
             entry.working_set_nodes = hb.working_set_nodes;
@@ -322,7 +351,7 @@ impl Coordinator {
                 results_total: hb.results_total,
                 seen_unix_ms: now_unix_ms(),
             };
-            (doc, do_pg, offline_gap)
+            (doc, do_pg, offline_gap, gap_listeners)
         };
         // A monitoring gap healed: record the window (store-and-forward backfills its metrics; alerts
         // resume from "now"). One durable row per offline→online transition (Phase 3).
@@ -339,7 +368,13 @@ impl Coordinator {
             );
             if let Some(repo) = &self.pollers_repo {
                 if let Err(e) = repo
-                    .insert_monitoring_gap(&hb.poller_id, &hb.pool, started_ms, ended_ms)
+                    .insert_monitoring_gap(
+                        &hb.poller_id,
+                        &hb.pool,
+                        started_ms,
+                        ended_ms,
+                        &gap_listeners,
+                    )
                     .await
                 {
                     tracing::warn!(error = %e, poller = %hb.poller_id, "failed to record monitoring gap");
@@ -498,7 +533,31 @@ impl Coordinator {
                 if let Some(owner) = ring.assign(*node) {
                     assign_map.insert(node.as_uuid(), owner.to_owned());
                     if let Some(set) = targets.get_mut(owner) {
-                        set.insert(*node, specs.clone());
+                        // Withhold a spec its assigned poller cannot honour. Today that is only an
+                        // authenticated URL check: an N-1 poller drops the unknown `auth` field and
+                        // probes anonymously, the endpoint answers 401, and `http_up` goes to 0 —
+                        // a page for a healthy service, purely because a rolling upgrade was in
+                        // progress. Withholding produces a monitoring gap instead, which is
+                        // recoverable and does not wake anyone.
+                        let capable = poller_has_cap(&st, owner, CAP_HTTP_AUTH);
+                        let kept: Vec<JobSpec> = specs
+                            .iter()
+                            .filter(|s| capable || !spec_needs_http_auth(s))
+                            .cloned()
+                            .collect();
+                        if kept.len() != specs.len() {
+                            tracing::warn!(
+                                poller = %owner,
+                                node = %node,
+                                withheld = specs.len() - kept.len(),
+                                "poller does not advertise http-auth; withholding authenticated URL check until it is upgraded"
+                            );
+                            metrics::counter!("yagra_specs_withheld_total", "cap" => CAP_HTTP_AUTH)
+                                .increment((specs.len() - kept.len()) as u64);
+                        }
+                        // An empty set still registers the node as assigned, so the sweep does not
+                        // treat it as unowned and hand it to a second poller.
+                        set.insert(*node, kept);
                     }
                 }
             }
@@ -716,6 +775,24 @@ impl Coordinator {
             .collect()
     }
 
+    /// Ask the sweep loop to run now rather than at its next scheduled round.
+    ///
+    /// Coalescing: several nudges before the sweep wakes produce one sweep, which is what is wanted
+    /// — the sweep is idempotent and rebuilds the whole desired set anyway.
+    pub fn wake_sweep(&self) {
+        self.sweep_wake.notify_one();
+    }
+
+    /// Wait for a nudge from [`Self::wake_sweep`].
+    ///
+    /// The sweep selects on this against its own interval, so a poller leaving is reconciled in
+    /// about the time it takes to publish a delta instead of waiting for the next round. Without
+    /// it the `leaving` beat only shortens *detection*, and the actual hand-off still waits out the
+    /// sweep period — which for a fleet of one-minute monitors is most of the benefit lost.
+    pub async fn sweep_nudged(&self) {
+        self.sweep_wake.notified().await;
+    }
+
     /// Ids of online pollers whose build does **not** advertise `cap`. The Forwarding page uses this
     /// to say "byte-exact is configured but these pollers can't supply the original bytes yet"
     /// instead of silently shipping re-rendered output.
@@ -751,6 +828,30 @@ fn is_live(st: &CoordState, poller_id: &str, now: Instant) -> bool {
 
 /// The sorted ids of the pool's live members (heartbeat within [`OFFLINE_AFTER`] of `now`). Sorted
 /// so the ring built from them is deterministic across sweeps.
+/// Whether `poller` advertised `cap` in its most recent heartbeat.
+///
+/// Absence is treated as "cannot", which is the safe direction: a poller too old to send caps at
+/// all is exactly the one that would mishandle a new field.
+fn poller_has_cap(st: &CoordState, poller: &str, cap: &str) -> bool {
+    st.pollers
+        .get(poller)
+        .is_some_and(|e| e.caps.iter().any(|c| c == cap))
+}
+
+/// Whether this spec carries credentials a poller must understand to poll correctly.
+fn spec_needs_http_auth(spec: &JobSpec) -> bool {
+    match &spec.check {
+        CheckSpec::Http(http) => http.auth.is_some(),
+        CheckSpec::Icmp(_)
+        | CheckSpec::Snmp(_)
+        | CheckSpec::SnmpTable(_)
+        | CheckSpec::SnmpV3(_)
+        | CheckSpec::SnmpV3Table(_)
+        | CheckSpec::Dns(_)
+        | CheckSpec::MerakiCollect(_) => false,
+    }
+}
+
 fn live_members(st: &CoordState, pool: &str, now: Instant) -> Vec<String> {
     let mut members: Vec<String> = st
         .pollers
@@ -799,9 +900,55 @@ mod tests {
             listeners: Vec::new(),
             caps: Vec::new(),
             host: None,
+            leaving: false,
         }
     }
 
+    #[tokio::test]
+    async fn a_leaving_poller_is_dropped_at_once_not_after_three_missed_beats() {
+        // The whole point of the flag: without it core waits OFFLINE_AFTER_SECS before the ring
+        // changes, so a rolling upgrade leaves nodes assigned to a process that has already gone.
+        let (coord, _bus, _stats) = coordinator();
+        let now = Instant::now();
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        coord
+            .observe_heartbeat(heartbeat("edge-2", "tokyo", Uuid::nil()), now)
+            .await;
+        assert_eq!(coord.poller_views(now).len(), 2);
+
+        let mut bye = heartbeat("edge-1", "tokyo", Uuid::nil());
+        bye.leaving = true;
+        coord.observe_heartbeat(bye, now).await;
+
+        // Gone immediately — not merely marked offline, and with no time having passed.
+        let left: Vec<String> = coord.poller_views(now).into_iter().map(|v| v.id).collect();
+        assert_eq!(left, vec!["edge-2".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn a_leaving_poller_that_comes_back_is_registered_again() {
+        // A restart is leave-then-rejoin. The rejoin must be a clean first sighting, so the poller
+        // gets a full snapshot rather than a delta against a baseline core threw away.
+        let (coord, _bus, _stats) = coordinator();
+        let now = Instant::now();
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        let mut bye = heartbeat("edge-1", "tokyo", Uuid::nil());
+        bye.leaving = true;
+        coord.observe_heartbeat(bye, now).await;
+        assert!(coord.poller_views(now).is_empty());
+
+        let fresh = Uuid::new_v4();
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", fresh), now)
+            .await;
+        let views = coord.poller_views(now);
+        assert_eq!(views.len(), 1);
+        assert!(views[0].online);
+    }
     #[tokio::test]
     async fn reappearing_poller_after_offline_window_records_one_gap() {
         // Store-and-forward (Phase 3): a *known* poller whose heartbeats lapsed past the offline

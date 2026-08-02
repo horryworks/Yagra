@@ -4919,6 +4919,15 @@ export interface components {
              * @description Row id.
              */
             id: string;
+            /**
+             * @description Passive listeners the poller had bound when the gap began (e.g. `syslog:514`, `trap:162`).
+             *
+             *     Empty ⇒ the poller had none, so the gap cost no passive data. Non-empty ⇒ whatever those
+             *     listeners would have received in the window is **gone**: syslog, traps and flow exports are
+             *     fire-and-forget, so unlike active polling there is no buffer to backfill from. (SNMP informs
+             *     are the exception — the sender retries until acknowledged.)
+             */
+            listeners: string[];
             /** @description The poller whose visibility lapsed. */
             poller_id: string;
             /** @description Pool it serves. */

@@ -2210,7 +2210,12 @@ async fn run_scheduler(
                 stats.set_pool_modes(c.desired_by_pool.len() as u64, 0);
                 let sleep_secs = c.min_interval;
                 metrics::counter!("yagra_sweep_cache_hits_total").increment(1);
-                tokio::time::sleep(Duration::from_secs(u64::from(sleep_secs))).await;
+                // Wake early if a poller announced it is leaving: the ring changed, so the desired
+                // set must be re-pushed now rather than after a full poll interval.
+                tokio::select! {
+                    () = tokio::time::sleep(Duration::from_secs(u64::from(sleep_secs))) => {}
+                    () = coordinator.sweep_nudged() => {}
+                }
                 continue;
             }
         }
@@ -2240,7 +2245,12 @@ async fn run_scheduler(
                         "scheduler: loading folder pools failed and none is cached — skipping the round \
                          rather than routing the fleet to the wrong pool"
                     );
-                    tokio::time::sleep(Duration::from_secs(u64::from(default_secs))).await;
+                    // Wake early if a poller announced it is leaving: the ring changed, so the desired
+                    // set must be re-pushed now rather than after a full poll interval.
+                    tokio::select! {
+                        () = tokio::time::sleep(Duration::from_secs(u64::from(default_secs))) => {}
+                        () = coordinator.sweep_nudged() => {}
+                    }
                     continue;
                 };
                 tracing::warn!(error = %e, "scheduler: loading folder pools failed; reusing the last-known map");
@@ -2385,7 +2395,12 @@ async fn run_scheduler(
             }
             Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
         }
-        tokio::time::sleep(Duration::from_secs(u64::from(min_interval))).await;
+        // Wake early if a poller announced it is leaving: the ring changed, so the desired
+        // set must be re-pushed now rather than after a full poll interval.
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_secs(u64::from(min_interval))) => {}
+            () = coordinator.sweep_nudged() => {}
+        }
     }
 }
 

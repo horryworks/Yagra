@@ -19,8 +19,8 @@ use yagra_bus::{
     SnmpMetaColumn, SnmpTableCheck, SnmpV3Check, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
-    builtin_interface_meta_columns, CollectionItem, CollectionKind, DnsCheckConfig, Node, NodeId,
-    NodeKind, NodeRows, ProfileId, UrlCheckConfig,
+    builtin_interface_meta_columns, CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node,
+    NodeId, NodeKind, NodeRows, ProfileId, UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -106,7 +106,7 @@ pub fn build_snmp_v3_table_job(
 /// Map a stored [`UrlCheckConfig`] into the bus [`HttpCheck`]. Auth is not inlined yet (MVP probe
 /// is unauthenticated); when it lands, core resolves/decrypts `cfg.credential` here (ADR-018/020).
 #[must_use]
-pub fn build_http_check(cfg: &UrlCheckConfig) -> HttpCheck {
+pub fn build_http_check(cfg: &UrlCheckConfig, auth: Option<HttpAuth>) -> HttpCheck {
     HttpCheck {
         url: cfg.url.clone(),
         method: cfg.method,
@@ -114,6 +114,7 @@ pub fn build_http_check(cfg: &UrlCheckConfig) -> HttpCheck {
         verify_tls: cfg.verify_tls,
         follow_redirects: cfg.follow_redirects,
         timeout_ms: cfg.timeout_ms,
+        auth,
     }
 }
 
@@ -276,10 +277,17 @@ pub enum SnmpAuth {
 /// [`NodeKind::resolve`] and nowhere else — it used to be expressed twice here (the load order of
 /// [`PollDispatcher::build_scheduled_jobs_hinted`] and again in `assemble_node_jobs`), and a third
 /// time as the Meraki short-circuit below, with nothing checking that the three agreed.
-#[derive(Debug, Clone, Copy)]
+// Not `Copy`: the resolved credential is owned (`String`s), and a credential that copies
+// implicitly is one that is easy to leave lying around in a second place.
+#[derive(Debug, Clone)]
 pub enum SpecialMonitor<'a> {
-    /// The node has a `url_checks` row: one HTTP job.
-    Url(&'a UrlCheckConfig),
+    /// The node has a `url_checks` row: one HTTP job. `auth` is the *resolved* credential, filled
+    /// in by [`SpecialMonitor::with_http_auth`] after the store lookup — [`Self::resolve`] is sync
+    /// and has no store, so it always produces `None` and the caller upgrades it.
+    Url {
+        cfg: &'a UrlCheckConfig,
+        auth: Option<HttpAuth>,
+    },
     /// The node has a `dns_checks` row: one DNS job.
     Dns(&'a DnsCheckConfig),
 }
@@ -302,9 +310,18 @@ impl<'a> SpecialMonitor<'a> {
             dns: dns.is_some(),
         };
         match NodeKind::resolve(rows) {
-            NodeKind::Url => url.map(Self::Url),
+            NodeKind::Url => url.map(|cfg| Self::Url { cfg, auth: None }),
             NodeKind::Dns => dns.map(Self::Dns),
             NodeKind::Meraki | NodeKind::Device => None,
+        }
+    }
+
+    /// Attach resolved HTTP credentials. A no-op for a DNS monitor, which has none.
+    #[must_use]
+    pub fn with_http_auth(self, auth: Option<HttpAuth>) -> Self {
+        match self {
+            Self::Url { cfg, .. } => Self::Url { cfg, auth },
+            Self::Dns(cfg) => Self::Dns(cfg),
         }
     }
 }
@@ -329,8 +346,13 @@ pub fn assemble_node_jobs(
     // *not* added — a URL target may be non-pingable (e.g. behind a CDN), and a name has no
     // address of its own — and SNMP doesn't apply to either.
     match monitor {
-        Some(SpecialMonitor::Url(cfg)) => {
-            let job = build_http_job(node, build_http_check(cfg), interval_secs, Uuid::new_v4());
+        Some(SpecialMonitor::Url { cfg, auth }) => {
+            let job = build_http_job(
+                node,
+                build_http_check(cfg, auth),
+                interval_secs,
+                Uuid::new_v4(),
+            );
             return vec![(job, "http")];
         }
         Some(SpecialMonitor::Dns(cfg)) => {
@@ -529,6 +551,15 @@ impl PollDispatcher {
         // Single-purpose monitors replace ICMP/SNMP entirely, so neither the credential nor the
         // collection lookup is worth paying for them.
         if let Some(monitor) = SpecialMonitor::resolve(url.as_ref(), dns.as_ref()) {
+            // A URL monitor may be bound to a credential; that lookup is the same `creds.open` +
+            // parse + static-reason-warn path SNMP takes, and costs one round trip per bound URL
+            // monitor per sweep. Unbound monitors and DNS monitors pay nothing.
+            let monitor = if let SpecialMonitor::Url { cfg, .. } = &monitor {
+                let auth = resolve_http_auth(&self.creds, node, cfg.credential).await;
+                monitor.with_http_auth(auth)
+            } else {
+                monitor
+            };
             return assemble_node_jobs(node, None, &[], Some(monitor), interval_secs);
         }
         let auth = resolve_snmp_auth(&self.creds, node, self.env_community.as_deref()).await;
@@ -614,6 +645,38 @@ async fn resolve_node_collection(collection: &CollectionRepo, node: &Node) -> Ve
 /// ADR-018/020). The credential `kind` picks the protocol: `snmp_v3` secrets are USM JSON docs;
 /// anything else is treated as a v2c community (back-compat with credentials created before kinds
 /// were meaningful). The env community is a v2c fallback for nodes without a bound credential.
+/// Resolve a URL monitor's bound credential into the [`HttpAuth`] the poll job carries.
+///
+/// Mirrors [`resolve_snmp_auth`]: open the sealed secret, parse it, and on any failure warn with a
+/// **static** reason and fall back to an unauthenticated probe. The alternative — skipping the poll
+/// — would read as an outage; an unauthenticated probe against an endpoint that needs credentials
+/// reads as a 401, which is closer to the truth and visible in the status code metric.
+async fn resolve_http_auth(
+    creds: &CredentialStore,
+    node: &Node,
+    credential: Option<yagra_common::CredentialId>,
+) -> Option<HttpAuth> {
+    let cred = credential?;
+    match creds.open(cred.as_uuid()).await {
+        Ok(Some((kind, bytes))) => match secrets::parse_http_auth(&kind, &bytes) {
+            Ok(auth) => Some(auth),
+            // Static reason only — never echo any part of the secret.
+            Err(reason) => {
+                tracing::warn!(node = %node.id, %reason, "invalid http auth credential");
+                None
+            }
+        },
+        Ok(None) => {
+            tracing::warn!(node = %node.id, "bound credential not found");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(node = %node.id, error = %e, "credential decrypt failed");
+            None
+        }
+    }
+}
+
 async fn resolve_snmp_auth(
     creds: &CredentialStore,
     node: &Node,
@@ -1049,7 +1112,7 @@ mod tests {
         let url = UrlCheckConfig::new("https://api.example.com/health");
         let dns = DnsCheckConfig::new("horryworks.net");
         let monitor = SpecialMonitor::resolve(Some(&url), Some(&dns));
-        assert!(matches!(monitor, Some(SpecialMonitor::Url(_))));
+        assert!(matches!(monitor, Some(SpecialMonitor::Url { .. })));
         let jobs = assemble_node_jobs(&node("both"), None, &[], monitor, 30);
         assert_eq!(kinds(&jobs), vec!["http"]);
     }
@@ -1062,7 +1125,7 @@ mod tests {
         let dns = DnsCheckConfig::new("horryworks.net");
         assert!(matches!(
             SpecialMonitor::resolve(Some(&url), None),
-            Some(SpecialMonitor::Url(_))
+            Some(SpecialMonitor::Url { .. })
         ));
         assert!(matches!(
             SpecialMonitor::resolve(None, Some(&dns)),
@@ -1097,7 +1160,7 @@ mod tests {
                 NodeKind::Meraki | NodeKind::Device => None,
             };
             let actual = SpecialMonitor::resolve(u, d).map(|m| match m {
-                SpecialMonitor::Url(_) => "url",
+                SpecialMonitor::Url { .. } => "url",
                 SpecialMonitor::Dns(_) => "dns",
             });
             assert_eq!(actual, expected, "rows {rows:?} resolved differently");

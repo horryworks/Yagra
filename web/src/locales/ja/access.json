@@ -19,8 +19,24 @@
     "kind": {
       "snmp_v2c": "SNMP v2c（コミュニティ）",
       "snmp_v3": "SNMP v3（ユーザー/パスワード）",
+      "http_auth": "HTTP 認証 (URL 監視)",
       "api_token": "API トークン",
       "meraki_api": "Cisco Meraki API キー"
+    },
+    "http": {
+      "scheme": "方式",
+      "schemeName": {
+        "basic": "Basic (ユーザー名 / パスワード)",
+        "bearer": "Bearer トークン",
+        "header": "カスタムヘッダー"
+      },
+      "username": "ユーザー名",
+      "password": "パスワード",
+      "token": "トークン",
+      "headerName": "ヘッダー名",
+      "headerNameHint": "リクエストに設定できるヘッダー名です — Host / Authorization / hop-by-hop ヘッダーは指定できません。",
+      "headerValue": "ヘッダー値",
+      "hint": "この資格情報を紐付けた URL 監視が提示します。暗号化して保存され、API から返ることはありません。"
     },
     "cols": {
       "name": "名前",

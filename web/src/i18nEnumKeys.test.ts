@@ -37,7 +37,10 @@ import { MONITOR_KINDS } from './pages/monitorKinds';
 import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES } from './reports/runStatus';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES } from './troubleshoot/data';
+import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 
+import enAccess from './locales/en/access.json';
+import jaAccess from './locales/ja/access.json';
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
 import enFormat from './locales/en/format.json';
@@ -112,6 +115,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', SCOPE_LEVELS);
     expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
+  });
+
+  it('every HTTP auth scheme has a label (access:cred.http.schemeName.*)', () => {
+    // The credential dialog builds the key from the runtime array, so a scheme added without
+    // strings ships as a raw key in *both* locales — which parity passes and nobody notices.
+    expectKeys(
+      'http auth scheme',
+      { en: enAccess, ja: jaAccess },
+      'cred.http.schemeName.',
+      HTTP_AUTH_SCHEMES,
+    );
   });
 
   it('every forwarding source and destination kind has a label (settings-forwarding)', () => {

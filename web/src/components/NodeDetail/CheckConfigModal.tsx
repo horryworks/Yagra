@@ -6,13 +6,13 @@
 // The form's judgement — defaults, parsing, what blank means, the `expected_status` union — lives
 // in `checkConfigForm.ts` where a test can reach it. This file is layout plus the call.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FieldHint, RequiredMark, Select, TextInput } from '../ui/Field';
-import type { DnsCheckConfig, UrlCheckConfig } from '../../types/api';
+import type { CredentialSummary, DnsCheckConfig, UrlCheckConfig } from '../../types/api';
 import {
   dnsBodyFrom,
   dnsDraftFrom,
@@ -25,6 +25,10 @@ import {
 
 const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
+
+/** Credential kinds a URL monitor can present. `http_auth` is the current kind; `api_token`
+ *  predates it and is accepted as a bearer token (see `secrets.rs::KIND_API_TOKEN`). */
+const HTTP_CRED_KINDS: string[] = ['http_auth', 'api_token'];
 
 /** One labelled row. Local to this dialog because the shared `Field` exports the controls, not the
  *  label+hint wrapper, and every other modal spells this out the same way. */
@@ -65,6 +69,15 @@ export function UrlCheckModal({
   const [d, setD] = useState<UrlCheckDraft>(() => urlDraftFrom(config));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Credentials a URL monitor can present. Filtered to the kinds the probe understands, so the
+  // picker cannot offer an SNMP community that would be rejected at poll time.
+  const [creds, setCreds] = useState<CredentialSummary[]>([]);
+  useEffect(() => {
+    api
+      .listCredentials()
+      .then((list) => setCreds(list.filter((c) => HTTP_CRED_KINDS.includes(c.kind))))
+      .catch(() => setCreds([]));
+  }, []);
   const set = <K extends keyof UrlCheckDraft>(k: K, v: UrlCheckDraft[K]) =>
     setD((prev) => ({ ...prev, [k]: v }));
 
@@ -180,6 +193,24 @@ export function UrlCheckModal({
         />
         <span>{t('checkEdit.followRedirects')}</span>
       </label>
+      <Row label={t('checkEdit.credential')}>
+        <Select
+          value={d.credentialId}
+          onChange={(e) => set('credentialId', e.target.value)}
+        >
+          <option value="">{t('checkEdit.credentialNone')}</option>
+          {creds.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      {/* The server refuses this pair (400 credential_needs_tls); saying so here avoids a round
+          trip, and says *why* rather than just refusing. */}
+      {d.credentialId !== '' && !d.verifyTls && (
+        <FieldHint error>{t('checkEdit.credentialNeedsTls')}</FieldHint>
+      )}
       {error && <p className="form-error">{error}</p>}
     </Modal>
   );

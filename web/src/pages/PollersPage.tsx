@@ -217,7 +217,7 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-const GAP_COLS = '1.4fr 120px 1fr 120px';
+const GAP_COLS = '1.4fr 120px 1fr 1.2fr 120px';
 
 /** Recent core↔poller visibility outages (store-and-forward, Phase 3). Each row is a window during
  *  which core couldn't hear from the poller; if the poller stayed alive but partitioned, it backfills
@@ -245,6 +245,7 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
             <div className="ytable-h">{t('pollers.gaps.cols.poller')}</div>
             <div className="ytable-h">{t('pollers.gaps.cols.pool')}</div>
             <div className="ytable-h">{t('pollers.gaps.cols.window')}</div>
+            <div className="ytable-h">{t('pollers.gaps.cols.passive')}</div>
             <div className="ytable-h right">{t('pollers.gaps.cols.duration')}</div>
           </div>
           {gaps.map((g) => (
@@ -258,6 +259,18 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
                 title={`${formatExactTime(g.started_at)} → ${formatExactTime(g.ended_at)}`}
               >
                 {relativeTime(g.ended_at)}
+              </div>
+              {/* Active polling is backfilled from the poller's buffer; passive reception is not,
+                  so naming the listeners turns an unexplained silence in the event log into a
+                  known loss. */}
+              <div className="ytable-cell">
+                {g.listeners.length === 0 ? (
+                  <span className="muted">{t('pollers.gaps.passiveNone')}</span>
+                ) : (
+                  <span className="mono" title={t('pollers.gaps.passiveHint')}>
+                    {g.listeners.join(', ')}
+                  </span>
+                )}
               </div>
               <div className="ytable-cell right mono">{duration(g.duration_secs)}</div>
             </div>

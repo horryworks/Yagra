@@ -54,6 +54,13 @@ pub struct MonitoringGapRow {
     pub duration_secs: i64,
     /// When core recorded the gap (RFC 3339).
     pub recorded_at: String,
+    /// Passive listeners the poller had bound when the gap began (e.g. `syslog:514`, `trap:162`).
+    ///
+    /// Empty ⇒ the poller had none, so the gap cost no passive data. Non-empty ⇒ whatever those
+    /// listeners would have received in the window is **gone**: syslog, traps and flow exports are
+    /// fire-and-forget, so unlike active polling there is no buffer to backfill from. (SNMP informs
+    /// are the exception — the sender retries until acknowledged.)
+    pub listeners: Vec<String>,
 }
 
 /// PostgreSQL-backed durable poller inventory (`pollers`).
@@ -138,15 +145,18 @@ impl PollerRepo {
         pool: &str,
         started_ms: i64,
         ended_ms: i64,
+        listeners: &[String],
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT INTO monitoring_gaps (poller_id, pool, started_at_unix_ms, ended_at_unix_ms) \
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO monitoring_gaps \
+             (poller_id, pool, started_at_unix_ms, ended_at_unix_ms, listeners) \
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(poller_id)
         .bind(pool)
         .bind(started_ms)
         .bind(ended_ms)
+        .bind(listeners.join(","))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -156,8 +166,8 @@ impl PollerRepo {
     /// monitoring gaps" section.
     pub async fn list_monitoring_gaps(&self, limit: i64) -> anyhow::Result<Vec<MonitoringGapRow>> {
         let rows = sqlx::query(
-            "SELECT id, poller_id, pool, started_at_unix_ms, ended_at_unix_ms, recorded_at \
-             FROM monitoring_gaps ORDER BY recorded_at DESC LIMIT $1",
+            "SELECT id, poller_id, pool, started_at_unix_ms, ended_at_unix_ms, listeners, \
+             recorded_at FROM monitoring_gaps ORDER BY recorded_at DESC LIMIT $1",
         )
         .bind(limit.clamp(1, 1000))
         .fetch_all(&self.pool)
@@ -175,6 +185,12 @@ impl PollerRepo {
                     ended_at: ms_to_rfc3339(ended),
                     duration_secs: (ended - started).max(0) / 1000,
                     recorded_at: recorded_at.to_rfc3339(),
+                    listeners: row
+                        .try_get::<String, _>("listeners")?
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
                 })
             })
             .collect()
@@ -220,6 +236,22 @@ mod tests {
         assert_eq!(ms_to_rfc3339(i64::MIN), "");
     }
 
+    #[test]
+    fn the_gap_insert_and_read_agree_on_the_listeners_column() {
+        // The column is written by one SQL string and read by another; nothing makes them agree,
+        // and a mismatch means rows the writer produces are rows the reader cannot parse. Both
+        // needles are assembled at runtime so this test does not match its own source.
+        let src = production_source();
+        let col = format!("{}s", "listener");
+        assert!(
+            src.contains(&format!("ended_at_unix_ms, {col})")),
+            "insert omits the column"
+        );
+        assert!(
+            src.contains(&format!("ended_at_unix_ms, {col}, ")),
+            "select omits the column"
+        );
+    }
     #[test]
     fn a_gaps_duration_is_never_negative() {
         // `started`/`ended` are both poller-supplied, so a clock stepping backwards mid-gap would

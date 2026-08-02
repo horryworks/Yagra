@@ -225,21 +225,23 @@ async fn main() -> anyhow::Result<()> {
     // Heartbeat (ADR-009): liveness + telemetry every HEARTBEAT_SECS. The host collector rides the
     // beat so this poller's CPU/load/mem/disk reach core even across NAT/FW (self-observability).
     let host_collector = Arc::new(yagra_hoststats::HostCollector::from_env());
-    spawn_cancellable(
-        &shutdown,
-        run_heartbeat_loop(
-            bus.clone(),
-            identity.id.clone(),
-            identity.pool.clone(),
-            identity.incarnation,
-            identity.version,
-            working_set.clone(),
-            results_total.clone(),
-            inflight.clone(),
-            listener_labels,
-            host_collector,
-        ),
-    );
+    // Deliberately NOT `spawn_cancellable`: this loop must *observe* the shutdown token rather than
+    // be aborted by it, because its last act is to publish a `leaving` beat so core reassigns this
+    // poller's nodes immediately instead of waiting three missed heartbeats. Being cancelled
+    // mid-publish would put us back to timeout detection. It exits on its own once that beat is out.
+    tokio::spawn(run_heartbeat_loop(
+        bus.clone(),
+        identity.id.clone(),
+        identity.pool.clone(),
+        identity.incarnation,
+        identity.version,
+        working_set.clone(),
+        results_total.clone(),
+        inflight.clone(),
+        listener_labels,
+        host_collector,
+        shutdown.clone(),
+    ));
 
     // Local scheduler: every 500ms, drain due specs into a bounded channel feeding the worker loop.
     let (jobs_tx, jobs_rx) = mpsc::channel::<PollJob>(256);
@@ -380,12 +382,19 @@ async fn run_heartbeat_loop<B>(
     inflight: Arc<AtomicU64>,
     listeners: Vec<String>,
     host_collector: Arc<yagra_hoststats::HostCollector>,
+    shutdown: CancellationToken,
 ) where
     B: SyncBus + 'static,
 {
     let mut tick = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
     loop {
-        tick.tick().await;
+        // A shutdown must not wait out the next tick: the point of the final beat is that it
+        // arrives before the process is gone, so core can hand this poller's nodes over
+        // immediately instead of waiting three missed beats.
+        let leaving = tokio::select! {
+            () = shutdown.cancelled() => true,
+            _ = tick.tick() => false,
+        };
         let (nodes, specs, epoch, last_seq) = {
             let ws = working_set.lock().expect("working set mutex poisoned");
             let (nodes, specs) = ws.stats();
@@ -411,11 +420,20 @@ async fn run_heartbeat_loop<B>(
             caps: vec![
                 yagra_bus::CAP_RAW_CAPTURE.to_owned(),
                 yagra_bus::CAP_FLOW_RELAY.to_owned(),
+                // This build understands `HttpCheck::auth`. Without the claim core withholds every
+                // authenticated URL check from this poller rather than let it probe anonymously and
+                // report the resulting 401 as an outage.
+                yagra_bus::CAP_HTTP_AUTH.to_owned(),
             ],
             host: Some(host_collector.sample()),
+            leaving,
         };
         if let Err(e) = bus.publish_heartbeat(hb).await {
             tracing::warn!(error = %e, "failed to publish heartbeat");
+        }
+        if leaving {
+            tracing::info!("published leaving heartbeat — core can reassign this poller's nodes");
+            return;
         }
     }
 }

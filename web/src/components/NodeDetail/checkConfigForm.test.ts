@@ -23,6 +23,7 @@ const urlDraft = (over: Partial<UrlCheckDraft> = {}): UrlCheckDraft => ({
   verifyTls: true,
   followRedirects: true,
   timeoutMs: '5000',
+  credentialId: '',
   ...over,
 });
 
@@ -74,6 +75,7 @@ describe('urlDraftFrom', () => {
       verify_tls: false,
       follow_redirects: false,
       timeout_ms: 1234,
+      credential: null,
     };
     expect(body(urlBodyFrom(urlDraftFrom(cfg)))).toEqual(cfg);
   });
@@ -85,7 +87,15 @@ describe('urlBodyFrom', () => {
     // operator is looking at.
     const b = body(urlBodyFrom(urlDraft({ verifyTls: false })));
     expect(Object.keys(b).sort()).toEqual(
-      ['expected_status', 'follow_redirects', 'method', 'timeout_ms', 'url', 'verify_tls'].sort(),
+      [
+        'credential',
+        'expected_status',
+        'follow_redirects',
+        'method',
+        'timeout_ms',
+        'url',
+        'verify_tls',
+      ].sort(),
     );
     expect(b.verify_tls).toBe(false);
   });
@@ -185,5 +195,35 @@ describe('dnsBodyFrom', () => {
     expect(dnsBodyFrom(dnsDraft({ resolverPort: '65536' }))).toEqual({ error: 'resolverPort' });
     expect(dnsBodyFrom(dnsDraft({ maxDepth: '0' }))).toEqual({ error: 'maxDepth' });
     expect(dnsBodyFrom(dnsDraft({ timeoutMs: 'abc' }))).toEqual({ error: 'timeout' });
+  });
+});
+
+describe('urlBodyFrom credential binding (regression)', () => {
+  it('sends the credential explicitly, because the PUT is a replace', () => {
+    // The body omitted `credential` while its own doc comment said every field is sent explicitly
+    // *because* this is a replace. Editing any other field therefore cleared the binding — silent
+    // while nothing consumed it, and an instant logout for the monitor once something did.
+    const body = urlBodyFrom(urlDraft({ credentialId: 'cred-1', timeoutMs: '9000' }));
+    expect('body' in body && body.body.credential).toBe('cred-1');
+  });
+
+  it('clears the binding with null rather than by omission', () => {
+    const body = urlBodyFrom(urlDraft({ credentialId: '' }));
+    expect('body' in body && body.body.credential).toBeNull();
+  });
+
+  it('round-trips a bound credential through draft and body', () => {
+    const draft = urlDraftFrom({
+      url: 'https://example.test/health',
+      method: 'GET',
+      expected_status: { kind: 'two_xx' },
+      verify_tls: true,
+      follow_redirects: true,
+      timeout_ms: 5000,
+      credential: 'cred-9',
+    });
+    expect(draft.credentialId).toBe('cred-9');
+    const body = urlBodyFrom(draft);
+    expect('body' in body && body.body.credential).toBe('cred-9');
   });
 });

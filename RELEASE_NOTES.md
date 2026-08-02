@@ -11,6 +11,23 @@
 ## Unreleased
 
 ### New Features
+- **URL monitors can present credentials.** A new `http_auth` credential kind covers Basic, Bearer
+  and a custom header; bind one to a URL monitor and the poller presents it. The credential is
+  envelope-encrypted at rest and inlined into the poll job at dispatch time, the same path SNMP
+  credentials already take — the poller never reads a credential store. The existing `api_token`
+  kind, which until now was creatable and consumed by nothing, is accepted as a bearer token.
+  A monitor that presents credentials must verify TLS (`400 credential_needs_tls` otherwise).
+- **Pollers hand their nodes over when they shut down.** A poller now sends a final heartbeat
+  marked `leaving` on SIGTERM, so core drops it from its pool's hash ring immediately and
+  reassigns its nodes. Previously a shutdown was indistinguishable from a network partition, so
+  core waited out three missed beats (30s) — and if the restart finished inside that window the
+  ring never changed at all and those nodes went unpolled for the whole restart. Rolling upgrades
+  now hand over in seconds without the operator doing anything.
+- **Monitoring gaps say what passive data was lost.** A gap row now records which passive
+  listeners the poller had bound (`syslog:514`, `trap:162`, …). Polled metrics are backfilled from
+  the poller's buffer on reconnect; syslog, traps and flow exports are not, so this is the
+  difference between an unexplained silence in the event log and a known loss. (SNMP informs are
+  the exception — the sender retries until acknowledged.)
 - **The global search box in the top bar works.** It has been present but permanently disabled
   since the shell was built, with a code comment saying no search endpoint existed —
   `GET /api/v1/nodes/search` has existed since the node picker was added. It searches nodes,
@@ -27,6 +44,10 @@
   It fires only while Yagra is open in this browser, which the control now says.
 
 ### Bug Fixes
+- **Editing a URL monitor cleared its credential binding.** The form's own comment said every
+  field is sent explicitly *because* the request is a replace, and then omitted the credential.
+  This was invisible while nothing consumed the binding; with the feature above it would have
+  logged a monitor out on any unrelated edit.
 - **Filtering the node inventory returned at most 100 matches, silently.** The API clamped the
   limit to 500 and documented that as the maximum, while the query re-clamped to 100 — so a filter
   matching thousands of nodes showed 100, with nothing indicating the list had been cut. The cap is

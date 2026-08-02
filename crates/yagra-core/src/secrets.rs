@@ -13,6 +13,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+use yagra_common::HttpAuth;
 use yagra_secrets::{key_provider_from_file, EnvelopeCipher, SealedSecret, StaticKeyProvider};
 
 /// Credential metadata returned by the API — never includes the secret value.
@@ -103,6 +104,91 @@ impl MerakiApiSecret {
         }
         Ok(secret)
     }
+}
+
+/// Credential kind for HTTP auth on a URL monitor (the secret is an [`HttpAuth`] JSON doc).
+///
+/// One kind with an internal `scheme` discriminator, mirroring how `snmp_v3` carries
+/// `security_level` — three separate kinds would triple the kind list, the kind filter and the
+/// per-kind form for no gain.
+pub const KIND_HTTP_AUTH: &str = "http_auth";
+
+/// Legacy credential kind that predates [`KIND_HTTP_AUTH`].
+///
+/// It has been creatable in the UI since the credentials page shipped and was consumed by nothing —
+/// an operator could store one and it would never be used by anything. Rather than leave the orphan
+/// (or migrate rows), a URL monitor accepts it as a bearer token: the stored bytes *are* the token,
+/// which is what an operator storing an "API token" meant. New credentials should use
+/// [`KIND_HTTP_AUTH`], which can also express Basic and custom headers.
+pub const KIND_API_TOKEN: &str = "api_token";
+
+/// Parse a sealed credential into the [`HttpAuth`] a poll job carries.
+///
+/// `Err` carries a static description only — never any field content, since the message reaches
+/// the operator through the API and the log.
+pub fn parse_http_auth(kind: &str, bytes: &[u8]) -> Result<HttpAuth, &'static str> {
+    if kind == KIND_API_TOKEN {
+        let token = std::str::from_utf8(bytes).map_err(|_| "api_token is not valid UTF-8")?;
+        if token.trim().is_empty() {
+            return Err("api_token must not be empty");
+        }
+        return Ok(HttpAuth::Bearer {
+            token: token.to_owned(),
+        });
+    }
+    if kind != KIND_HTTP_AUTH {
+        return Err("credential kind cannot be used for HTTP authentication");
+    }
+    let auth: HttpAuth =
+        serde_json::from_slice(bytes).map_err(|_| "not a valid http_auth JSON document")?;
+    match &auth {
+        HttpAuth::Basic { username, password } => {
+            if username.is_empty() || password.is_empty() {
+                return Err("basic auth needs both a username and a password");
+            }
+        }
+        HttpAuth::Bearer { token } => {
+            if token.trim().is_empty() {
+                return Err("bearer auth needs a token");
+            }
+        }
+        HttpAuth::Header { name, value } => {
+            if !is_valid_header_name(name) {
+                return Err("header name must be a valid HTTP token and not a reserved header");
+            }
+            if value.trim().is_empty() {
+                return Err("header auth needs a value");
+            }
+        }
+    }
+    Ok(auth)
+}
+
+/// Whether `name` is a header a URL monitor may set.
+///
+/// Rejects anything that is not an RFC 7230 token, plus the headers whose meaning the probe owns:
+/// setting `Host` retargets the request, `Authorization` collides with the Basic/Bearer schemes,
+/// and hop-by-hop headers belong to the connection rather than the request.
+#[must_use]
+pub fn is_valid_header_name(name: &str) -> bool {
+    const RESERVED: [&str; 8] = [
+        "host",
+        "authorization",
+        "connection",
+        "content-length",
+        "transfer-encoding",
+        "upgrade",
+        "te",
+        "trailer",
+    ];
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    if RESERVED.contains(&name.to_ascii_lowercase().as_str()) {
+        return false;
+    }
+    name.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
 /// Load the key-encryption-key provider from `YAGRA_KEK_FILE`, falling back to an ephemeral

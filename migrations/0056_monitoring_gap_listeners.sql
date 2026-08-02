@@ -1,0 +1,21 @@
+-- 0056_monitoring_gap_listeners — say which passive listeners were down during a visibility gap.
+-- Additive only (ADR-017 expand-contract): one nullable column with a default, so an N-1 binary
+-- neither writes nor reads it and nothing about existing rows changes.
+--
+-- Why it is worth a column. A monitoring gap already records that core could not see a poller. For
+-- *active* polling that window is recoverable: the poller's store-and-forward buffer backfills the
+-- metrics on reconnect. For *passive* reception it is not — syslog and SNMP traps are fire-and-
+-- forget UDP, and NetFlow/sFlow have no retransmit either, so whatever arrived while the listener
+-- socket was gone is simply lost. (SNMP *informs* are the exception: the sender waits for an ACK
+-- and retries, so they survive the window. That is worth knowing when choosing between trap and
+-- inform on a device.)
+--
+-- Without this column the loss is invisible: the operator sees an empty stretch in the event log
+-- and cannot tell "nothing happened" from "we were not listening". Recording the listener set the
+-- poller had at the time turns silence into an explanation.
+--
+-- Empty string ⇒ the poller had no passive listeners bound, so the gap cost no passive data.
+-- NULL is not used: it would be a third state meaning "an older core wrote this row", which the
+-- UI would have to render differently for no benefit.
+ALTER TABLE monitoring_gaps
+    ADD COLUMN IF NOT EXISTS listeners TEXT NOT NULL DEFAULT '';
