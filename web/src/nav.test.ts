@@ -120,11 +120,11 @@ describe('sidebarGroups', () => {
     }
   });
 
-  it('collects the known placeholders (Scheduled, Saved findings)', () => {
+  it('collects the known placeholders (Scheduled)', () => {
     const soonPaths = NAV.flatMap((s) => sidebarGroups(s))
       .filter((g) => g.comingSoon)
       .flatMap((g) => g.items.map((i) => i.path));
-    for (const p of ['/troubleshoot/scheduled', '/troubleshoot/findings']) {
+    for (const p of ['/troubleshoot/scheduled']) {
       expect(soonPaths).toContain(p);
     }
     // Lifted placeholders. Both halves of lifting one — `implemented: true` in `nav.ts` and the
@@ -132,5 +132,6 @@ describe('sidebarGroups', () => {
     // working page rendered inside a greyed-out "Coming soon" group, and no test fails.
     expect(soonPaths).not.toContain('/settings/auth');
     expect(soonPaths).not.toContain('/topology/geo');
+    expect(soonPaths).not.toContain('/troubleshoot/findings');
   });
 });

@@ -28,6 +28,45 @@
       "requeueFailed": "分析を再実行できませんでした。"
     }
   },
+  "findings": {
+    "pageNote": "全実行を横断した分析の検出結果（新しい順）",
+    "signInPrompt": "保存された検出結果を検索するにはサインインしてください。",
+    "fleetWide": "フリート全体",
+    "finding_other": "件",
+    "cols": {
+      "severity": "重大度",
+      "score": "スコア",
+      "node": "ノード",
+      "what": "内容",
+      "tool": "分析",
+      "at": "検出時刻"
+    },
+    "severity": {
+      "crit": "重大",
+      "warn": "警告",
+      "info": "情報"
+    },
+    "range": {
+      "24h": "過去 24 時間",
+      "7d": "過去 7 日",
+      "30d": "過去 30 日",
+      "all": "全期間"
+    },
+    "filter": {
+      "allTools": "すべての分析",
+      "allSeverities": "すべての重大度"
+    },
+    "filterToolAria": "分析で絞り込む",
+    "filterSeverityAria": "重大度で絞り込む",
+    "empty": {
+      "none": "検出結果はまだありません。分析を実行してください。",
+      "filtered": "この条件に一致する検出結果はありません。"
+    },
+    "err": {
+      "load": "検出結果を読み込めませんでした。",
+      "loadMore": "追加の検出結果を読み込めませんでした。"
+    }
+  },
   "actions": {
     "run": "実行",
     "runAnalysis": "分析を実行",

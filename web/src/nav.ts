@@ -209,8 +209,9 @@ export const NAV: NavSection[] = [
           },
           {
             labelKey: 'troubleshoot.findings',
+            descKey: 'descriptions.troubleshootFindings',
             path: '/troubleshoot/findings',
-            implemented: false,
+            implemented: true,
             mono: 'Sf',
           },
         ],

@@ -107,6 +107,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analysis/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Findings across every run — the Saved-findings screen.
+         * @description Complements `GET /analysis/jobs/{id}/findings`, which answers "what did this run find". This one
+         *     answers the question an operator actually starts from — "has anything been found about this node
+         *     / this site / this week" — which no single run can answer because the runs are what get
+         *     enumerated otherwise.
+         *
+         *     Skeleton mode has no job store, so it answers an empty list rather than a 503: the screen is a
+         *     search, and an error where "nothing yet" is the truthful answer reads as a broken page.
+         */
+        get: operations["saved_findings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analysis/jobs": {
         parameters: {
             query?: never;
@@ -5796,6 +5822,37 @@ export interface components {
             error?: string | null;
             matched: boolean;
         };
+        /** @description One finding as the cross-run search returns it: the finding, plus the run it came from. */
+        SavedFinding: {
+            /**
+             * @description When the finding was written (RFC 3339). Pass it back as `before`, with `id` as
+             *     `before_id`, to fetch the next page.
+             */
+            at: string;
+            duration: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description The analysis run that produced this finding.
+             */
+            job_id: string;
+            kind: string;
+            metric: string;
+            /**
+             * Format: uuid
+             * @description The node this finding is about; absent for a fleet-level finding.
+             */
+            node_id?: string | null;
+            node_name: string;
+            /** Format: double */
+            score: number;
+            /** @description `crit`, `warn` or `info`. */
+            severity: string;
+            /** @description Which diagnostic produced it, as that run recorded it (e.g. `anomaly`). */
+            tool: string;
+            when_label: string;
+        };
         /** @description A scan's current status returned by the API. */
         ScanStatus: {
             candidates: components["schemas"]["Candidate"][];
@@ -6503,6 +6560,83 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    saved_findings: {
+        parameters: {
+            query?: {
+                /** @description Page cursor: the `at` of the previous page's last row (RFC 3339). */
+                before?: string;
+                /**
+                 * @description Page cursor tiebreak: that same row's `id`. Findings written by one run share a millisecond
+                 *     routinely, so a cursor without it would repeat or skip the rows sharing the boundary
+                 *     instant. Omitting it reads as "strictly before this instant".
+                 */
+                before_id?: string;
+                /** @description Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor. */
+                since?: string;
+                /** @description Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`). */
+                tool?: string;
+                /** @description Restrict to `crit`, `warn` or `info`. */
+                severity?: string;
+                /** @description Restrict to findings about one node. */
+                node_id?: string;
+                /** @description Restrict to findings about nodes in one folder group **and everything beneath it**. */
+                group_id?: string;
+                /** @description Page size, clamped to 200 (default 100). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching findings, newest first; empty when this deployment has no runner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedFinding"][];
+                };
+            };
+            /** @description A cursor or range bound is not RFC 3339, or the tool/severity is unknown */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The requested node or group filter is outside the caller's scope */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

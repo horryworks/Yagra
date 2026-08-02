@@ -47,6 +47,7 @@ import { DependencyPage } from './pages/DependencyPage';
 import { GeoMapPage } from './pages/GeoMapPage';
 import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
 import { RunsPage } from './troubleshoot/RunsPage';
+import { SavedFindingsPage } from './troubleshoot/SavedFindingsPage';
 import { ReportRoutePage } from './troubleshoot/report/ReportRoutePage';
 
 /** Redirect that keeps the query string — a bare `<Navigate to="/x"/>` drops it, which would strip
@@ -114,7 +115,7 @@ export function AppRoutes() {
         element={<RedirectPreservingQuery to="/troubleshoot/report/anomaly" />}
       />
         <Route path="troubleshoot/scheduled" element={<ComingSoon />} />
-        <Route path="troubleshoot/findings" element={<ComingSoon />} />
+        <Route path="troubleshoot/findings" element={<SavedFindingsPage />} />
 
         {/* Settings — the tab lands on System health (the first sidebar item). */}
         <Route path="settings" element={<Navigate to="/settings/system-health" replace />} />

@@ -8,7 +8,7 @@
 // via these helpers + `t()`, and treats `when_label`/`duration` as a **fallback only** (a row written
 // by an older core, or a malformed detail).
 
-import type { AnalysisFinding } from '../../types/api';
+import type { AnalysisFinding, FindingSeverity } from '../../types/api';
 import type { SummaryStat } from './types';
 
 /**
@@ -17,8 +17,12 @@ import type { SummaryStat } from './types';
  */
 export const MAX_FINDINGS = 60;
 
-/** Narrow a finding's severity defensively (anything unknown reads as `info`). */
-export function sevOf(f: AnalysisFinding): 'crit' | 'warn' | 'info' {
+/** Narrow a finding's severity defensively (anything unknown reads as `info`).
+ *
+ *  Takes the field rather than the row so the Saved-findings screen — whose rows are
+ *  `SavedFinding`, not `AnalysisFinding` — narrows by the same rule instead of a second copy of
+ *  it. A defensive narrowing written twice is two answers to "what does an unknown severity mean". */
+export function sevOf(f: { severity: string }): FindingSeverity {
   return f.severity === 'crit' || f.severity === 'warn' ? f.severity : 'info';
 }
 

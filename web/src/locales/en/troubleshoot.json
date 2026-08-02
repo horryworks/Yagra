@@ -29,6 +29,46 @@
       "requeueFailed": "Could not re-queue the analysis."
     }
   },
+  "findings": {
+    "pageNote": "Everything the analyses have found, newest first — across every run",
+    "signInPrompt": "Sign in to search saved findings.",
+    "fleetWide": "Fleet-wide",
+    "finding_one": "finding",
+    "finding_other": "findings",
+    "cols": {
+      "severity": "Severity",
+      "score": "Score",
+      "node": "Node",
+      "what": "What",
+      "tool": "Analysis",
+      "at": "Found"
+    },
+    "severity": {
+      "crit": "Critical",
+      "warn": "Warning",
+      "info": "Info"
+    },
+    "range": {
+      "24h": "Last 24 hours",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "all": "All time"
+    },
+    "filter": {
+      "allTools": "All analyses",
+      "allSeverities": "All severities"
+    },
+    "filterToolAria": "Filter by analysis",
+    "filterSeverityAria": "Filter by severity",
+    "empty": {
+      "none": "No findings yet — run an analysis to produce some.",
+      "filtered": "No findings match these filters."
+    },
+    "err": {
+      "load": "Could not load findings.",
+      "loadMore": "Could not load more findings."
+    }
+  },
   "actions": {
     "run": "Run",
     "runAnalysis": "Run analysis",

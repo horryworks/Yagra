@@ -81,6 +81,7 @@
     "alertsMutes": "通知のみ停止 — 状態・SLA は不変",
     "topologyDependency": "親子の依存リンクを管理",
     "troubleshootRuns": "バックグラウンド分析ジョブとレポート",
+    "troubleshootFindings": "全実行を横断した分析の検出結果",
     "settingsCredentials": "SNMP・API 認証情報（暗号化して保存）",
     "settingsPollers": "分散ポーラーの状態",
     "settingsForwarding": "受信した syslog・トラップを外部コレクタへ中継",

@@ -25,7 +25,10 @@
 // **Never hand-write an `interface` for something the API returns.** If a shape is missing or wrong,
 // fix the Rust annotation and regenerate — adding it here recreates the mirror ADR-035 deleted.
 
-import type { components } from '../api/schema';
+// `paths` as well as `components`: a query-parameter bag is described by the operation, not by a
+// schema, so a filter type derived from it is still generated rather than hand-written (kind 1
+// above, reached through the other door).
+import type { components, paths } from '../api/schema';
 
 /** Compile-time equality. Resolves to `true` only when A and B are the same type in *both*
  *  directions, and to `never` otherwise — so assigning `true` to it stops compiling the moment
@@ -669,6 +672,15 @@ export type AnalysisFinding = components['schemas']['AnalysisFinding'];
 /** Request body to launch an analysis (`POST /api/v1/analysis/jobs`). */
 export type AnalysisJobInput = components['schemas']['CreateAnalysisJob'];
 
+/** One row of the cross-run findings search (`GET /api/v1/analysis/findings`). Carries the run it
+ *  came from, so the row can link to that run's report; no `detail` — open the report for that. */
+export type SavedFinding = components['schemas']['SavedFinding'];
+
+/** Query params for the cross-run findings search — keyset-paged on `(before, before_id)`. */
+export type SavedFindingsQuery = NonNullable<
+  paths['/api/v1/analysis/findings']['get']['parameters']['query']
+>;
+
 // ── Reports (Dashboard → Reports) ──
 // Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
 // preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
@@ -867,6 +879,14 @@ export type AnalysisToolKey =
   // Cross-store
   | 'saturation'
   | 'incident_correlate';
+
+/** The severity buckets a finding carries, most severe first. Rust:
+ *  `yagra_core::analysis::FINDING_SEVERITIES`, serialized into `AnalysisFinding.severity` /
+ *  `SavedFinding.severity` as a `String`, so — like `AnalysisToolKey` — the document offers no
+ *  union to pin this to. An array rather than a bare union because the Saved-findings filter
+ *  iterates it and `i18nEnumKeys.test.ts` needs it at runtime (`extensibility.md` §4). */
+export const FINDING_SEVERITIES = ['crit', 'warn', 'info'] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
 
 /** Schedule cadence presets. `unknown` is a *storage* degradation the backend emits when a row was
  *  written by a newer core — never something an operator may pick, which is why the schedule form

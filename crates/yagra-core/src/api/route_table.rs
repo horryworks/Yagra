@@ -109,6 +109,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
     ("GET", "/api/v1/alerts/history", PostFiltered),
     ("GET", "/api/v1/alerts/top-nodes", PostFiltered),
     ("GET", "/api/v1/alerts/transitions", PostFiltered),
+    ("GET", "/api/v1/analysis/findings", GroupFiltered),
     ("GET", "/api/v1/analysis/jobs", PostFiltered),
     ("POST", "/api/v1/analysis/jobs", NodeScoped),
     ("GET", "/api/v1/analysis/jobs/:id", NodeScoped),

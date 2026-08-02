@@ -362,6 +362,149 @@
         }
       }
     },
+    "/api/v1/analysis/findings": {
+      "get": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "Findings across every run — the Saved-findings screen.",
+        "description": "Complements `GET /analysis/jobs/{id}/findings`, which answers \"what did this run find\". This one\nanswers the question an operator actually starts from — \"has anything been found about this node\n/ this site / this week\" — which no single run can answer because the runs are what get\nenumerated otherwise.\n\nSkeleton mode has no job store, so it answers an empty list rather than a 503: the screen is a\nsearch, and an error where \"nothing yet\" is the truthful answer reads as a broken page.",
+        "operationId": "saved_findings",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Page cursor: the `at` of the previous page's last row (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "description": "Page cursor tiebreak: that same row's `id`. Findings written by one run share a millisecond\nroutinely, so a cursor without it would repeat or skip the rows sharing the boundary\ninstant. Omitting it reads as \"strictly before this instant\".",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Restrict to `crit`, `warn` or `info`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "description": "Restrict to findings about one node.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "description": "Restrict to findings about nodes in one folder group **and everything beneath it**.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, clamped to 200 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching findings, newest first; empty when this deployment has no runner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedFinding"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A cursor or range bound is not RFC 3339, or the tool/severity is unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested node or group filter is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analysis/jobs": {
       "get": {
         "tags": [
@@ -21837,6 +21980,73 @@
           },
           "matched": {
             "type": "boolean"
+          }
+        }
+      },
+      "SavedFinding": {
+        "type": "object",
+        "description": "One finding as the cross-run search returns it: the finding, plus the run it came from.",
+        "required": [
+          "id",
+          "job_id",
+          "tool",
+          "score",
+          "severity",
+          "node_name",
+          "metric",
+          "kind",
+          "when_label",
+          "duration",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When the finding was written (RFC 3339). Pass it back as `before`, with `id` as\n`before_id`, to fetch the next page."
+          },
+          "duration": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The analysis run that produced this finding."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this finding is about; absent for a fleet-level finding."
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "severity": {
+            "type": "string",
+            "description": "`crit`, `warn` or `info`."
+          },
+          "tool": {
+            "type": "string",
+            "description": "Which diagnostic produced it, as that run recorded it (e.g. `anomaly`)."
+          },
+          "when_label": {
+            "type": "string"
           }
         }
       },

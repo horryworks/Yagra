@@ -27,6 +27,7 @@ import {
   EVENT_ACTIONS,
   EVENT_MATCH_KINDS,
   DNS_FAILURE_KINDS,
+  FINDING_SEVERITIES,
   RCA_CONFIDENCES,
   TOKEN_SURFACES,
   USER_KINDS,
@@ -39,6 +40,7 @@ import { MONITOR_KINDS } from './pages/monitorKinds';
 import { CADENCE, RUN_STATUS, SELECTABLE_FREQUENCIES } from './reports/runStatus';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES } from './troubleshoot/data';
+import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 
 import enAccess from './locales/en/access.json';
@@ -225,6 +227,27 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'runs.state.',
       TERMINAL_JOB_STATES,
+    );
+  });
+
+  it('every finding severity has a label (troubleshoot:findings.severity.*)', () => {
+    // `severity` is a bare string in the schema (Rust: `FINDING_SEVERITIES`), and the Saved-findings
+    // screen builds both the column and the filter option from `findings.severity.${sev}` — so a
+    // bucket added without strings would put a raw key in a dropdown an operator picks from.
+    expectKeys(
+      'finding severity',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'findings.severity.',
+      FINDING_SEVERITIES,
+    );
+  });
+
+  it('every findings time range has a label (troubleshoot:findings.range.*)', () => {
+    expectKeys(
+      'findings range',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'findings.range.',
+      FINDING_RANGES,
     );
   });
 

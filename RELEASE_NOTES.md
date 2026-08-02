@@ -41,6 +41,12 @@
   can point at a private registry holding unreleased builds.
 
 ### New Features
+- **Saved findings — search what the analyses found, across every run.** Troubleshoot ▸ Saved
+  findings (`GET /api/v1/analysis/findings`) lists findings from every analysis, newest first,
+  filterable by node or site, by analysis, by severity and by time window. Until now a finding was
+  only reachable through the run that produced it, so "has anything been found about this switch
+  lately" meant opening runs one at a time. Rows link back to the run's report. The endpoint is
+  keyset-paged: pass the last row's `at` and `id` back as `before` and `before_id`.
 - **The REST API accepts an API token.** Until now a `yat_…` token authenticated `/mcp` alone and
   the REST API answered `401`, so unattended automation had to store a password and log in on every
   run. A token now names the **surfaces** it may be presented at, and one that includes `rest` works

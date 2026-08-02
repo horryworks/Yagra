@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use tokio::sync::{broadcast, Semaphore};
@@ -305,6 +305,70 @@ pub struct AnalysisFinding {
     pub detail: serde_json::Value,
 }
 
+// ⚠️ Every `///` on this type is published verbatim to API clients through the OpenAPI document
+// (ADR-035), so the rationale below is a `//` comment. The same slip shipped once already
+// (commit a7e0180) and had to be reverted out of the generated contract.
+//
+// The row deliberately omits the run's `scope_label`. A label is a node or group *name*, and a
+// finding can outlive the grouping its run was launched over — a node moved between folders after
+// the run finished is visible to whoever holds its new group, while the run's label still names the
+// old one. `job_id` + `tool` is enough to link to the report, and the report is itself gated on the
+// run row (`GET /analysis/jobs/{id}` answers 404 out of scope), so the link stays honest without
+// this row carrying somebody else's group name.
+//
+// `tool` and `severity` are strings rather than enums because a row written by a newer core may
+// name a tool this build has never heard of, and dropping such a row would be a worse answer than
+// showing its raw key.
+/// One finding as the cross-run search returns it: the finding, plus the run it came from.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct SavedFinding {
+    pub id: Uuid,
+    /// The analysis run that produced this finding.
+    pub job_id: Uuid,
+    /// Which diagnostic produced it, as that run recorded it (e.g. `anomaly`).
+    pub tool: String,
+    pub score: f64,
+    /// `crit`, `warn` or `info`.
+    pub severity: String,
+    /// The node this finding is about; absent for a fleet-level finding.
+    pub node_id: Option<Uuid>,
+    pub node_name: String,
+    pub metric: String,
+    pub kind: String,
+    pub when_label: String,
+    pub duration: String,
+    /// When the finding was written (RFC 3339). Pass it back as `before`, with `id` as
+    /// `before_id`, to fetch the next page.
+    pub at: String,
+}
+
+/// One page of the cross-run findings search.
+///
+/// The cursor is `(before, before_id)` and not `before` alone. A run writes its findings in a tight
+/// loop, so several rows routinely share a millisecond — and with a timestamp-only cursor the rows
+/// sharing the boundary instant are either repeated forever or skipped without trace, depending on
+/// whether the comparison is `<` or `<=`. The id makes the ordering total.
+#[derive(Debug, Clone, Default)]
+pub struct FindingSearch<'a> {
+    /// Page cursor: the `at`/`id` of the last row of the previous page. `before_id` may be omitted,
+    /// which reads as "strictly before this instant" rather than "before this row".
+    pub before: Option<DateTime<Utc>>,
+    pub before_id: Option<Uuid>,
+    /// Inclusive lower bound on the finding's own timestamp (the range filter, not the cursor).
+    pub since: Option<DateTime<Utc>>,
+    /// Restrict to one diagnostic.
+    pub tool: Option<AnalysisTool>,
+    /// Restrict to one of [`FINDING_SEVERITIES`]; validated at the API edge.
+    pub severity: Option<&'a str>,
+    /// Restrict to findings about one node.
+    pub node_id: Option<Uuid>,
+    /// The **caller's** group scope (ADR-014). `None` is unrestricted; `Some(&[])` matches nothing.
+    pub groups: crate::repo::GroupFilter<'a>,
+    /// The folder-group subtree the caller asked to filter *by* — a request, unlike `groups`.
+    pub in_group: Option<&'a [Uuid]>,
+    pub limit: i64,
+}
+
 /// A finding before persistence (the engine fills these; the repo assigns ids).
 #[derive(Debug, Clone)]
 struct NewFinding {
@@ -319,14 +383,25 @@ struct NewFinding {
     detail: serde_json::Value,
 }
 
+/// The three severity buckets a finding can carry, most severe first.
+///
+/// One list, because there are now two readers: [`severity_for`] writes them and the Saved-findings
+/// search validates `?severity=` against them. A hand-written copy of the set at the API edge is the
+/// duplicated-constant trap `extensibility.md` names — and the copy that drifts would be the one
+/// that decides which values a client is allowed to ask for.
+pub const FINDING_SEVERITIES: [&str; 3] = [SEV_CRIT, SEV_WARN, SEV_INFO];
+const SEV_CRIT: &str = "crit";
+const SEV_WARN: &str = "warn";
+const SEV_INFO: &str = "info";
+
 /// Severity bucket from a 0..100 score (matches the WebUI: ≥90 crit, ≥75 warn, else info).
 fn severity_for(score: f64) -> &'static str {
     if score >= 90.0 {
-        "crit"
+        SEV_CRIT
     } else if score >= 75.0 {
-        "warn"
+        SEV_WARN
     } else {
-        "info"
+        SEV_INFO
     }
 }
 
@@ -353,6 +428,45 @@ const JOB_COLS: &str = "id, tool, scope_kind, scope_id, scope_label, params, sta
      (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_ms, \
      (EXTRACT(EPOCH FROM started_at) * 1000)::bigint AS started_ms, \
      (EXTRACT(EPOCH FROM finished_at) * 1000)::bigint AS finished_ms";
+
+/// The `WHERE` of the cross-run findings search — one always-present clause per filter, `NULL`
+/// meaning "no filter".
+///
+/// Written this way rather than appended per filter because of `$7`, the caller's group scope: a
+/// conditionally-added restriction has a branch that can be forgotten, and forgetting *that* one
+/// fails **open**, returning the whole fleet's findings. `NodeRepo::SCOPE_PREDICATE` and
+/// `EVENT_FILTER_WHERE` are the same shape for the same reason.
+///
+/// ⚠️ `$7` and `$8` look alike and are not alike. `$7` is what the caller **may** see and is never
+/// optional; `$8` is the group they **asked** to narrow to, and is dropped when they don't. Binding
+/// a request into `$7` would let a caller widen their own scope by omitting a query parameter.
+///
+/// A finding with no `node_id` (the flow-tier-off notice, a fleet-level summary row) matches
+/// neither group clause — `NULL IN (…)` is never true — so it is visible only to a caller with no
+/// group restriction at all. That is the same rule the per-job endpoint applies in Rust, and the
+/// same one `Scope::allows` applies to an ungrouped node.
+const FINDING_SEARCH_WHERE: &str = "\
+     ($1::timestamptz IS NULL OR (f.created_at, f.id) < \
+        ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
+     AND ($3::timestamptz IS NULL OR f.created_at >= $3) \
+     AND ($4::text IS NULL OR j.tool = $4) \
+     AND ($5::text IS NULL OR f.severity = $5) \
+     AND ($6::uuid IS NULL OR f.node_id = $6) \
+     AND ($7::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($7))) \
+     AND ($8::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($8)))";
+
+/// The cross-run findings query. `ORDER BY` matches the cursor in [`FINDING_SEARCH_WHERE`] column
+/// for column, and both match `analysis_findings_created_idx` (migration 0058) — if those three
+/// ever disagree the paging silently drops rows, which is why a test pins them together.
+fn finding_search_sql() -> String {
+    format!(
+        "SELECT f.id, f.job_id, j.tool, f.score, f.severity, f.node_id, f.node_name, \
+         f.metric, f.kind, f.when_label, f.duration, f.created_at \
+         FROM analysis_findings f JOIN analysis_jobs j ON j.id = f.job_id \
+         WHERE {FINDING_SEARCH_WHERE} \
+         ORDER BY f.created_at DESC, f.id DESC LIMIT $9"
+    )
+}
 
 fn job_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisJob> {
     Ok(AnalysisJob {
@@ -538,6 +652,47 @@ impl AnalysisRepo {
             .collect()
     }
 
+    /// Findings across **every** run, newest first — the Saved-findings search.
+    ///
+    /// The join to `analysis_jobs` is what makes `?tool=` possible at all: a finding row records
+    /// what was found, never which diagnostic found it.
+    pub async fn search_findings(
+        &self,
+        q: &FindingSearch<'_>,
+    ) -> anyhow::Result<Vec<SavedFinding>> {
+        let rows = sqlx::query(&finding_search_sql())
+            .bind(q.before)
+            .bind(q.before_id)
+            .bind(q.since)
+            .bind(q.tool.map(AnalysisTool::as_str))
+            .bind(q.severity)
+            .bind(q.node_id)
+            .bind(q.groups.map(<[Uuid]>::to_vec))
+            .bind(q.in_group.map(<[Uuid]>::to_vec))
+            .bind(q.limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let at: DateTime<Utc> = row.try_get("created_at")?;
+                Ok(SavedFinding {
+                    id: row.try_get("id")?,
+                    job_id: row.try_get("job_id")?,
+                    tool: row.try_get("tool")?,
+                    score: row.try_get("score")?,
+                    severity: row.try_get("severity")?,
+                    node_id: row.try_get("node_id")?,
+                    node_name: row.try_get("node_name")?,
+                    metric: row.try_get("metric")?,
+                    kind: row.try_get("kind")?,
+                    when_label: row.try_get("when_label")?,
+                    duration: row.try_get("duration")?,
+                    at: at.to_rfc3339(),
+                })
+            })
+            .collect()
+    }
+
     /// On startup, fail any job left `running` by a previous core process (it can't resume).
     pub async fn fail_orphans(&self) -> anyhow::Result<u64> {
         let res = sqlx::query(
@@ -652,6 +807,14 @@ impl AnalysisRunner {
     /// A job's findings.
     pub async fn findings(&self, id: Uuid) -> anyhow::Result<Vec<AnalysisFinding>> {
         self.repo.findings(id).await
+    }
+
+    /// Findings across every run (the Saved-findings search).
+    pub async fn search_findings(
+        &self,
+        q: &FindingSearch<'_>,
+    ) -> anyhow::Result<Vec<SavedFinding>> {
+        self.repo.search_findings(q).await
     }
 
     /// Request cancellation of a running job; the task observes the flag between phases.
@@ -2827,6 +2990,64 @@ mod tests {
         assert_eq!(severity_for(95.0), "crit");
         assert_eq!(severity_for(80.0), "warn");
         assert_eq!(severity_for(50.0), "info");
+    }
+
+    #[test]
+    fn every_severity_the_engine_writes_is_one_the_search_accepts() {
+        // The two readers of the same set: `severity_for` writes it, the Saved-findings edge
+        // validates `?severity=` against `FINDING_SEVERITIES`. A value the engine can produce but
+        // the edge rejects would be findings nobody can filter for — so sweep the whole score
+        // range rather than the three thresholds.
+        for score in (-50..=150).map(f64::from) {
+            let written = severity_for(score);
+            assert!(
+                FINDING_SEVERITIES.contains(&written),
+                "severity_for({score}) = {written:?}, which is not in FINDING_SEVERITIES"
+            );
+        }
+    }
+
+    #[test]
+    fn the_findings_search_orders_on_exactly_the_columns_its_cursor_pages_on() {
+        // The three that must agree or paging silently drops rows: the cursor predicate, the
+        // ORDER BY, and the index in migration 0058. The events list has its own version of this
+        // test because the same disagreement shipped there once.
+        let sql = finding_search_sql();
+        assert!(
+            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $9"),
+            "{sql}"
+        );
+        assert!(sql.contains(FINDING_SEARCH_WHERE), "{sql}");
+        assert!(
+            FINDING_SEARCH_WHERE.contains("(f.created_at, f.id) <"),
+            "the cursor must be the row value, not the timestamp alone: {FINDING_SEARCH_WHERE}"
+        );
+        // Findings carry no tool of their own; `?tool=` is only answerable through the run.
+        assert!(
+            sql.contains("JOIN analysis_jobs j ON j.id = f.job_id"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn the_findings_search_restricts_by_scope_unconditionally() {
+        // The inversion that would be a privilege escalation: the caller's scope must be a clause
+        // that is always in the statement, with NULL — not absence — meaning unrestricted. It must
+        // also be bound, never interpolated (security.md).
+        assert!(FINDING_SEARCH_WHERE.contains(
+            "($7::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($7)))"
+        ));
+        // …and the group the caller *asked* for is a separate bind, so dropping the request cannot
+        // drop the restriction.
+        assert!(FINDING_SEARCH_WHERE.contains("ANY($8)"));
+        // The only quoted literal in the predicate is the cursor's nil-uuid floor. Anything else
+        // would mean a value reached SQL as text instead of as a bind.
+        assert_eq!(
+            FINDING_SEARCH_WHERE.matches('\'').count(),
+            2,
+            "the nil-uuid cursor floor is the only literal that belongs here: \
+             {FINDING_SEARCH_WHERE}"
+        );
     }
 
     #[test]

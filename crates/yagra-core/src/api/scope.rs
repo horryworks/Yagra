@@ -298,6 +298,18 @@ async fn edges(st: &ApiState) -> Result<GroupEdges, ApiError> {
     Ok(fresh)
 }
 
+/// A folder group and everything beneath it, from the same cached edges the scope resolver uses.
+///
+/// For the endpoints that let a caller *filter by* a group. That is a different thing from the
+/// caller's own scope — it narrows a result set the caller was already entitled to — but it wants
+/// the same subtree reading: asking for a site means asking for its racks too, and a caller who had
+/// to name every descendant would get a different answer from the one the same group id gives a
+/// scope. `require_visible_group` is what keeps the two from being confused: an out-of-scope group
+/// is refused before it ever reaches this.
+pub async fn subtree_of(st: &ApiState, root: Uuid) -> Result<Vec<Uuid>, ApiError> {
+    Ok(group_subtree(&edges(st).await?, root))
+}
+
 /// Resolve a principal's scope for this request.
 pub async fn resolve(st: &ApiState, principal: &Principal) -> Result<NodeScope, ApiError> {
     let Some(roots) = principal.scope.group_uuids() else {

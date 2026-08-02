@@ -49,6 +49,7 @@ use uuid::Uuid;
     create_analysis_job,
     get_analysis_job,
     analysis_findings,
+    saved_findings,
     cancel_analysis_job,
     stream_analysis
 ))]
@@ -57,6 +58,7 @@ pub(super) struct Doc;
 /// The analysis routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
+        .route("/api/v1/analysis/findings", get(saved_findings))
         .route(
             "/api/v1/analysis/jobs",
             get(list_analysis_jobs).post(create_analysis_job),
@@ -408,6 +410,147 @@ async fn analysis_findings(
         })
         .collect();
     Ok(Json(findings))
+}
+
+/// Cap on one page of the cross-run findings search.
+///
+/// Lower than the runs list's 200 and deliberately so: a findings page is a row per *finding*, and
+/// a busy fleet produces them faster than it produces runs. The screen pages, so the cap is a
+/// bound on one round trip rather than on what an operator can see.
+const FINDINGS_PAGE_MAX: i64 = 200;
+
+/// Query params for the cross-run findings search.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct SavedFindingsQuery {
+    /// Page cursor: the `at` of the previous page's last row (RFC 3339).
+    before: Option<String>,
+    /// Page cursor tiebreak: that same row's `id`. Findings written by one run share a millisecond
+    /// routinely, so a cursor without it would repeat or skip the rows sharing the boundary
+    /// instant. Omitting it reads as "strictly before this instant".
+    before_id: Option<Uuid>,
+    /// Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor.
+    since: Option<String>,
+    /// Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`).
+    tool: Option<String>,
+    /// Restrict to `crit`, `warn` or `info`.
+    severity: Option<String>,
+    /// Restrict to findings about one node.
+    node_id: Option<Uuid>,
+    /// Restrict to findings about nodes in one folder group **and everything beneath it**.
+    group_id: Option<Uuid>,
+    /// Page size, clamped to 200 (default 100).
+    limit: Option<i64>,
+}
+
+/// Findings across every run — the Saved-findings screen.
+///
+/// Complements `GET /analysis/jobs/{id}/findings`, which answers "what did this run find". This one
+/// answers the question an operator actually starts from — "has anything been found about this node
+/// / this site / this week" — which no single run can answer because the runs are what get
+/// enumerated otherwise.
+///
+/// Skeleton mode has no job store, so it answers an empty list rather than a 503: the screen is a
+/// search, and an error where "nothing yet" is the truthful answer reads as a broken page.
+#[utoipa::path(
+    get, path = "/api/v1/analysis/findings", tag = "analysis",
+    params(SavedFindingsQuery),
+    responses(
+        (status = 200, description = "Matching findings, newest first; empty when this deployment has no runner", body = Vec<crate::analysis::SavedFinding>),
+        (status = 400, description = "A cursor or range bound is not RFC 3339, or the tool/severity is unknown", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 404, description = "The requested node or group filter is outside the caller's scope", body = super::error::ErrorBody),
+    ),
+)]
+async fn saved_findings(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    Query(q): Query<SavedFindingsQuery>,
+) -> ApiResult<Json<Vec<crate::analysis::SavedFinding>>> {
+    // Validate before consulting availability, unlike the plain reads. A malformed filter is the
+    // caller's own request being wrong, and answering `200 []` for it would mean a client with a
+    // typo in its cursor pages forever through an empty result and never learns why.
+    let tool = q
+        .tool
+        .as_deref()
+        .map(|t| {
+            AnalysisTool::from_str(t).ok_or_else(|| {
+                ApiError::bad_request(
+                    "invalid_tool",
+                    format!(
+                        "unknown analysis tool {t:?}; must be one of: {}",
+                        AnalysisTool::token_list()
+                    ),
+                )
+            })
+        })
+        .transpose()?;
+    // Validated against the list the engine writes from, not against a copy of it.
+    if let Some(sev) = q.severity.as_deref() {
+        if !crate::analysis::FINDING_SEVERITIES.contains(&sev) {
+            return Err(ApiError::bad_request(
+                "invalid_severity",
+                format!(
+                    "unknown severity {sev:?}; must be one of: {}",
+                    crate::analysis::FINDING_SEVERITIES.join(", ")
+                ),
+            ));
+        }
+    }
+    // Filtering *by* a node or a group is still naming one, so both go through the same check the
+    // rest of the surface uses. Answering `200 []` instead would be a slower way of saying the same
+    // thing for a group that exists, and a way of confirming one that does not.
+    if let Some(n) = q.node_id {
+        super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(n))?;
+    }
+    let in_group = match q.group_id {
+        None => None,
+        Some(g) => {
+            super::scope::require_visible_group(&scope, g)?;
+            Some(super::scope::subtree_of(&st, g).await?)
+        }
+    };
+    let before = bound(q.before.as_deref(), "before")?;
+    let since = bound(q.since.as_deref(), "since")?;
+    // Skeleton mode has no job store, so there is nothing to search — and "nothing found" is a
+    // truthful answer to a search, unlike the 503 an unconfigured subsystem owes a reader.
+    let Some(admin) = st.admin.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    let filter = crate::analysis::FindingSearch {
+        before,
+        before_id: q.before_id,
+        since,
+        tool,
+        severity: q.severity.as_deref(),
+        node_id: q.node_id,
+        groups: scope.group_filter(),
+        in_group: in_group.as_deref(),
+        limit: q.limit.unwrap_or(100).clamp(1, FINDINGS_PAGE_MAX),
+    };
+    let found = admin.analysis.search_findings(&filter).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "search findings", "failed to search findings")
+    })?;
+    Ok(Json(found))
+}
+
+/// Parse an optional RFC 3339 bound, rejecting rather than dropping an unparseable one.
+///
+/// Dropping it would widen the query — a malformed `since` would silently search all of history —
+/// which is the edge-parsing rule in `security.md`: an unparseable filter is an error, never a
+/// default.
+fn bound(
+    raw: Option<&str>,
+    field: &'static str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
+    raw.map(|s| {
+        super::util::parse_rfc3339(s).ok_or_else(|| {
+            ApiError::bad_request("invalid_time", format!("`{field}` is not RFC 3339"))
+        })
+    })
+    .transpose()
 }
 
 /// Request body to launch an analysis (launch drawer / report config bar).
@@ -803,5 +946,116 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(&bytes[..], b"[]");
+    }
+
+    // ── The cross-run findings search ────────────────────────────────────────
+
+    /// GET `/api/v1/analysis/findings` with `query`, unauthenticated against public-dashboard
+    /// state (reads are open there, so this exercises the handler rather than the gate).
+    async fn search(query: &str) -> (StatusCode, String) {
+        let resp = router(public_state())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/analysis/findings{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_malformed_filter_is_rejected_rather_than_widening_the_search() {
+        // Each of these would otherwise be *dropped*, and a dropped filter searches more than the
+        // caller asked for. `since` is the one that matters most: silently ignoring it turns "this
+        // week" into all of history.
+        for (q, code) in [
+            ("?since=yesterday", "invalid_time"),
+            ("?before=2026-13-45", "invalid_time"),
+            ("?tool=teleport", "invalid_tool"),
+            ("?severity=urgent", "invalid_severity"),
+        ] {
+            let (status, body) = search(q).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{q} → {body}");
+            assert!(body.contains(code), "{q} → {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_severity_filter_names_the_values_the_engine_actually_writes() {
+        // The message enumerates `FINDING_SEVERITIES`, so it cannot drift from what a finding can
+        // hold — the same property `an_unknown_tool_is_rejected_with_the_real_list_of_tools` pins
+        // for tools.
+        let (_, body) = search("?severity=urgent").await;
+        for sev in crate::analysis::FINDING_SEVERITIES {
+            assert!(body.contains(sev), "{sev} missing from: {body}");
+        }
+        // …and every value it names is accepted.
+        for sev in crate::analysis::FINDING_SEVERITIES {
+            let (status, body) = search(&format!("?severity={sev}")).await;
+            assert_eq!(status, StatusCode::OK, "{sev} → {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_findings_search_is_empty_not_broken_without_a_runner() {
+        // Same reasoning as the runs list: a search over nothing found nothing.
+        let (status, body) = search("").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "[]");
+    }
+
+    #[tokio::test]
+    async fn a_scoped_caller_cannot_filter_by_a_node_or_group_it_cannot_see() {
+        // Filtering *by* an id is naming it, so both answer 404 — the same answer an unknown id
+        // gets, because a 403 here would confirm the id exists (`extract::VisibleNode`).
+        let st = private_state();
+        let token = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(
+                Role::Viewer,
+                Scope::groups([Uuid::from_u128(1).to_string()]),
+            ),
+            "scoped1",
+        );
+        let app = router(st);
+        for q in [
+            format!("?node_id={}", Uuid::from_u128(7)),
+            format!("?group_id={}", Uuid::from_u128(8)),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/v1/analysis/findings{q}"))
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{q}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_findings_search_is_gated_before_it_reports_anything() {
+        // Authenticate first, then availability (api-conventions): an anonymous caller learns only
+        // that it is unauthenticated, never whether this deployment has a runner.
+        let resp = router(private_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/analysis/findings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

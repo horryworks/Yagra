@@ -97,6 +97,8 @@ import type {
   Role,
   RoleMatrix,
   RoutingRule,
+  SavedFinding,
+  SavedFindingsQuery,
   ScopeLevel,
   Severity,
   StateHistory,
@@ -727,6 +729,11 @@ export const api = {
   /** A job's findings (the report list), highest score first. */
   getAnalysisFindings: (id: string): Promise<AnalysisFinding[]> =>
     apiGet('/api/v1/analysis/jobs/{id}/findings', { path: { id } }),
+
+  /** Findings across every run (Saved findings), newest first. Keyset-paged: pass the last row's
+   *  `at`/`id` back as `before`/`before_id`. */
+  searchFindings: (query: SavedFindingsQuery): Promise<SavedFinding[]> =>
+    apiGet('/api/v1/analysis/findings', { query }),
 
   /** Launch a background analysis job; the returned row progresses over SSE. */
   createAnalysisJob: (body: AnalysisJobInput): Promise<AnalysisJob> =>

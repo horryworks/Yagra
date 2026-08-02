@@ -953,6 +953,39 @@ html[data-viewport='mobile'] .ts-cfgbar .field {
 }
 
 /* ============================================================
+   Saved findings (/troubleshoot/findings)
+   ============================================================ */
+
+/* The scope picker sits in a toolbar rather than a form row, so it needs a width of its own —
+   without one it collapses to its label and jumps around as the chosen scope's name changes. */
+.ts-sf-scope {
+  min-width: 200px;
+}
+
+.ts-sf-sev {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+}
+
+/* Status colour is paired with the label, never carrying the meaning alone (ui-conventions). */
+.ts-sf-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.ts-sf-metric {
+  color: var(--text-primary);
+}
+
+.ts-sf-kind {
+  margin-left: 8px;
+  color: var(--text-tertiary);
+}
+
+/* ============================================================
    Reduced motion — stop spinners/slides for motion-sensitive users
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
