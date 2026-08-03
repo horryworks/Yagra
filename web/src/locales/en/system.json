@@ -153,6 +153,41 @@
     "err": {
       "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
       "save": "failed to save setting"
+    },
+    "retention": {
+      "title": "Data retention",
+      "note": "How long each store keeps what. Lowering a window deletes data older than it on the next sweep. Two rows are set by a store's own start flag and cannot be changed from here.",
+      "band": "({{min}}–{{max}})",
+      "storeValue": "{{value}} (set on the container)",
+      "storeUnknown": "Unknown — the store did not report a retention flag",
+      "notConfigured": "Not configured in this deployment",
+      "indefinite": "Kept indefinitely",
+      "unit": {
+        "days": "days",
+        "hours": "hours"
+      },
+      "field": {
+        "alert_linked_days": "Alert-linked data",
+        "unmatched_event_hours": "Unmatched events",
+        "report_run_days": "Report runs",
+        "flow_days": "Traffic flows"
+      },
+      "subject": {
+        "alert_history": "Alert history",
+        "node_state_snapshots": "Node-state snapshots",
+        "dns_chain_changes": "DNS chain changes",
+        "events_matched": "Matched events",
+        "events_unmatched": "Unmatched events",
+        "report_runs": "Report runs",
+        "flow_records": "Traffic flows",
+        "event_log_store": "Event log",
+        "metrics": "Metrics",
+        "audit_log": "Audit log"
+      },
+      "err": {
+        "range": "{{name}}: enter a whole number between {{min}} and {{max}}.",
+        "save": "failed to save retention settings"
+      }
     }
   },
   "integrations": {

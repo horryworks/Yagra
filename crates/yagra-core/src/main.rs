@@ -53,6 +53,7 @@ mod ratelimit;
 mod rca;
 mod repo;
 mod reports;
+mod retention;
 mod ring;
 mod scheduler;
 mod secrets;
@@ -156,15 +157,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         "Yagra-core starting (live mode)"
     );
 
+    // The KEK, before anything that seals or opens a secret. Loaded once and shared by all five
+    // envelope stores (credentials, notification channels, forwarding destinations, OIDC, LLM
+    // config). A configured-but-unreadable key file fails startup here rather than later and
+    // silently: booting on a substituted key leaves every stored credential undecryptable while
+    // the deployment looks healthy (ADR-018/ADR-040).
+    let kek = secrets::load_key_provider()?;
+
     // Metadata store: connect, migrate, seed demo inventory if empty.
     let repo = Arc::new(NodeRepo::connect(&cfg.database_url).await?);
     repo.migrate().await?;
     repo.seed_demo_nodes_if_empty().await?;
     repo.seed_builtin_profiles().await?;
-    // Seed the runtime-settings singleton, honoring YAGRA_POLL_INTERVAL_SECS as the *initial*
-    // default on first boot only (ON CONFLICT DO NOTHING preserves later UI edits). After this the
-    // DB value is authoritative and the scheduler re-reads it each round.
-    repo.seed_default_poll_interval(cfg.poll_interval_secs)
+    // Seed the runtime-settings singleton, honoring YAGRA_POLL_INTERVAL_SECS and
+    // YAGRA_FLOW_RETENTION_DAYS as the *initial* defaults on first boot only (ON CONFLICT DO
+    // NOTHING preserves later UI edits). After this the DB value is authoritative and the
+    // scheduler / prune loops re-read it each round.
+    repo.seed_app_settings(cfg.poll_interval_secs, cfg.flow_retention_days)
         .await?;
     let mib = Arc::new(MibRepo::new(repo.pool()));
     mib.seed_builtin().await?;
@@ -197,12 +206,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // ClickHouse URL is set, core subscribes to `yagra.flows`, writes flow records, and serves the
     // flow-query API; when unset the flow receiver is disabled and the API returns 503. On the read
     // side this client is on `ApiState` for all cores; the writer runs leader-only (in `leader_work`).
-    let flows: Option<Arc<dyn FlowStore>> = cfg.flow_url.as_deref().map(|u| {
-        Arc::new(ChStore::with_retention(u, cfg.flow_retention_days)) as Arc<dyn FlowStore>
-    });
+    // Retention comes from the database, not from `cfg`: YAGRA_FLOW_RETENTION_DAYS only seeds the
+    // settings row on first boot (above), and after that the operator's value is authoritative.
+    // Constructing from `cfg` here would make every restart quietly revert an edit made in the UI.
+    let flow_retention_days = repo.get_retention_settings().await.flow_days;
+    let flows: Option<Arc<dyn FlowStore>> = cfg
+        .flow_url
+        .as_deref()
+        .map(|u| Arc::new(ChStore::with_retention(u, flow_retention_days)) as Arc<dyn FlowStore>);
     if flows.is_some() {
         tracing::info!(
-            retention_days = cfg.flow_retention_days,
+            retention_days = flow_retention_days,
             "ClickHouse flow store enabled (ADR-031)"
         );
     }
@@ -244,7 +258,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
     let notifier = Arc::new(Notifier::from_env());
-    let notifications = Arc::new(NotificationRepo::from_env(repo.pool()));
+    let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
     // Inbound ack reflection from external tools (PagerDuty / JSM); read-only display (ADR-015).
     let acks = Arc::new(AckRepo::new(repo.pool()));
@@ -417,7 +431,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     event_engine.reload(&repo).await;
 
     // Credential store, shared by the API admin and the scheduler's SNMP resolution.
-    let creds = Arc::new(CredentialStore::from_env(repo.pool()));
+    let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
 
     // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
     // community is a fallback for nodes without one. What to collect comes from the node's
@@ -535,7 +549,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Forwarding ("tee", ADR-034): received syslog/traps are also relayed to external collectors.
     // The store backs Settings ▸ Forwarding on every core; the dispatcher is leader-only (below) so
     // a passive core never double-sends. With no destinations configured this is inert.
-    let forward_store = Arc::new(forward_store::ForwardStore::from_env(repo.pool()));
+    let forward_store = Arc::new(forward_store::ForwardStore::new(repo.pool(), kek.clone()));
     let (forward_handle, forward_runner) = forward::prepare(forward_store.clone());
 
     // `is_leader` drives `/readyz` and the `yagra_core_is_leader` gauge. With HA off this core is
@@ -595,7 +609,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // plus one outbound call, so there is nothing for a standby to double-do. With no config row
     // (the default) the orchestrator answers 503 and nothing leaves the building.
     let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
-    let llm_repo = Arc::new(rca::store::RcaRepo::from_env(repo.pool()));
+    let llm_repo = Arc::new(rca::store::RcaRepo::new(repo.pool(), kek.clone()));
     let rca = Some(Arc::new(rca::orchestrator::RcaOrchestrator::new(
         llm_repo.clone(),
         repo.clone(),
@@ -703,7 +717,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     };
     // External-IdP login (OIDC, ADR-010 Phase 3): provider store (envelope-encrypted secret) + the
     // in-memory in-flight authorization map.
-    let oidc = Some(Arc::new(oidc::OidcRepo::from_env(repo.pool())));
+    let oidc = Some(Arc::new(oidc::OidcRepo::new(repo.pool(), kek.clone())));
     let oidc_flight = Arc::new(oidc::OidcFlight::new());
 
     let nodes: Arc<dyn NodeListing> = repo;
@@ -1087,7 +1101,10 @@ impl LeaderTasks {
             ),
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
-        spawn_cancellable(&self.shutdown, run_report_scheduler(self.reports.clone()));
+        spawn_cancellable(
+            &self.shutdown,
+            run_report_scheduler(self.reports.clone(), self.repo.clone()),
+        );
         // Analysis schedule-firing loop (60s tick) — same cadence maths, different admission rules.
         spawn_cancellable(
             &self.shutdown,
@@ -1490,9 +1507,13 @@ async fn run_fleet_health_timeline(
     dns_checks: Arc<dns_check::DnsCheckRepo>,
 ) {
     const SNAPSHOT_SECS: u64 = 300;
-    const RETENTION_SECS: i64 = 90 * 86_400;
     loop {
         tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
+        // Re-read the operator's retention policy every tick (ADR-040), the same way the scheduler
+        // re-reads the poll interval, so an edit in Settings applies on the next sweep without a
+        // restart. A read failure degrades to the compiled defaults rather than skipping the prune.
+        let retention = repo.get_retention_settings().await;
+        let alert_linked_secs = retention.alert_linked_secs();
         let states = alerts.node_states();
         let mut counts: HashMap<String, i64> = HashMap::new();
         for s in states.values() {
@@ -1502,23 +1523,26 @@ async fn run_fleet_health_timeline(
         if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
             tracing::warn!(error = %e, "node-state snapshot failed");
         }
-        if let Err(e) = repo.prune_state_snapshots(RETENTION_SECS).await {
+        if let Err(e) = repo.prune_state_snapshots(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune state snapshots failed");
         }
-        if let Err(e) = history.prune_old(RETENTION_SECS).await {
+        if let Err(e) = history.prune_old(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune alert history failed");
         }
         // Passive events in PostgreSQL: matched rows follow alert-history retention, unmatched
-        // (rule-authoring material) are pruned at 24h — see events.rs constants. When the log store
-        // is enabled (ADR-024) unmatched rows never land in PostgreSQL, so this pruning naturally
-        // trims PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
-        if let Err(e) = events_repo.prune_old().await {
+        // (rule-authoring material) get their own shorter window. When the log store is enabled
+        // (ADR-024) unmatched rows never land in PostgreSQL, so this pruning naturally trims
+        // PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
+        if let Err(e) = events_repo
+            .prune_old(alert_linked_secs, retention.unmatched_event_secs())
+            .await
+        {
             tracing::warn!(error = %e, "prune events failed");
         }
         // DNS chain history is append-on-change, so a healthy fleet writes almost nothing here —
         // the canonicalization in `DnsChain::content_key` is exactly what keeps it that way. Prune
-        // on the same 90-day window as alert history so the retention story stays consistent.
-        if let Err(e) = dns_checks.prune_chain_changes(RETENTION_SECS).await {
+        // on the same window as alert history so the retention story stays consistent.
+        if let Err(e) = dns_checks.prune_chain_changes(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune dns chain history failed");
         }
     }
@@ -2523,10 +2547,9 @@ async fn run_meraki_scheduler(
 /// scheduled), and advance `next_run_at` from the preset cadence. Generation is in-process in core
 /// (no device I/O), so this loop only enqueues — the runner's background task does the work. Failures
 /// degrade to a warn so one bad schedule never stalls the others.
-async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
+async fn run_report_scheduler(reports: Arc<reports::ReportRunner>, settings: Arc<NodeRepo>) {
     use chrono::Utc;
     const TICK_SECS: u64 = 60;
-    const RETENTION_SECS: i64 = 90 * 86_400;
     // Prune ~hourly (every 60 ticks) rather than every minute.
     let mut tick: u64 = 0;
     let repo = reports.repo();
@@ -2569,7 +2592,11 @@ async fn run_report_scheduler(reports: Arc<reports::ReportRunner>) {
             Err(e) => tracing::warn!(error = %e, "report scheduler: due-query failed"),
         }
         if tick.is_multiple_of(60) {
-            if let Err(e) = repo.prune_runs(RETENTION_SECS).await {
+            // Report runs have their own window (ADR-040): the artefacts are regenerable from their
+            // definition, so lowering this must not be able to touch alert history. `settings` is
+            // the NodeRepo purely as the app_settings reader — `repo` above is the report store.
+            let secs = settings.get_retention_settings().await.report_run_secs();
+            if let Err(e) = repo.prune_runs(secs).await {
                 tracing::warn!(error = %e, "prune report runs failed");
             }
         }

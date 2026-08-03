@@ -43,6 +43,19 @@ pub trait KeyProvider: Send + Sync {
     fn active_key_id(&self) -> u32;
 }
 
+/// Lets one loaded provider be shared by every envelope-encrypted store behind an `Arc`, instead of
+/// each store loading the KEK for itself. That is not just tidier: when the load falls back to an
+/// ephemeral key, per-store loading produces a *different* key per store, so two stores could not
+/// open each other's seals — which the shared-KEK doc comment claimed they could.
+impl<T: KeyProvider + ?Sized> KeyProvider for std::sync::Arc<T> {
+    fn kek(&self, key_id: u32) -> Option<[u8; 32]> {
+        (**self).kek(key_id)
+    }
+    fn active_key_id(&self) -> u32 {
+        (**self).active_key_id()
+    }
+}
+
 /// An in-memory key provider (tests, and the default until a file is mounted).
 pub struct StaticKeyProvider {
     keys: HashMap<u32, [u8; 32]>,

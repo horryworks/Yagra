@@ -5,7 +5,8 @@
 //! whether they talk to ClickHouse ([`ChStore`], live) or an in-memory fake ([`InMemoryFlowStore`],
 //! tests). ClickHouse is the **5th store** added to ADR-004's split (after VictoriaLogs, ADR-024's
 //! 4th data class) — a *loss-tolerant* tier
-//! (ADR-017): 1-month TTL, single-node MVP, no must-never-lose guarantee. It exists because the flow
+//! (ADR-017): operator-set TTL (30 days by default), single-node MVP, no must-never-lose
+//! guarantee. It exists because the flow
 //! tuple `(src ip × dst ip × src port × dst port × proto)` is extreme cardinality and must never
 //! reach VictoriaMetrics (CLAUDE.md §7.1); ClickHouse's column store + TTL + materialized-view
 //! rollups keep that cardinality contained.
@@ -18,6 +19,7 @@
 //! ADR-011).
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -26,8 +28,9 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Default flow retention in days (ADR-031). Tunable via `YAGRA_FLOW_RETENTION_DAYS`.
-pub const DEFAULT_FLOW_RETENTION_DAYS: u32 = 30;
+/// Default flow retention in days (ADR-031). Seeded from `YAGRA_FLOW_RETENTION_DAYS` on first boot,
+/// operator-editable thereafter — the policy table is [`crate::retention`] (ADR-040).
+pub use crate::retention::DEFAULT_FLOW_DAYS as DEFAULT_FLOW_RETENTION_DAYS;
 
 /// One flow row to insert (a poller's per-bucket top-N record, with `node_id` resolved by core).
 #[derive(Debug, Clone)]
@@ -241,6 +244,18 @@ pub trait FlowStore: Send + Sync {
     }
     /// Create the flow tables / rollup MV / TTL if absent (idempotent). Run once at startup.
     async fn ensure_schema(&self) -> anyhow::Result<()>;
+    /// Apply an operator's retention change to the store (ADR-040).
+    ///
+    /// This exists because `ensure_schema` cannot do it: its statements are
+    /// `CREATE TABLE IF NOT EXISTS`, which is a no-op once the tables exist, so the TTL an existing
+    /// deployment runs with is whatever it was created with — for years, `YAGRA_FLOW_RETENTION_DAYS`
+    /// silently did nothing on any volume that was not brand new. `ALTER TABLE … MODIFY TTL` is not
+    /// the nicer option here, it is the only one.
+    ///
+    /// Defaults to a no-op so the in-memory fake (which has no TTL) need not pretend to have one.
+    async fn set_retention_days(&self, _days: u32) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Insert a batch of flow rows (best-effort tier — a store hiccup is logged, never fatal).
     async fn insert_batch(&self, rows: &[FlowRow]) -> anyhow::Result<()>;
     /// Top source hosts by bytes for a node/window.
@@ -364,13 +379,56 @@ fn conversations_sql(q: &FlowQuery) -> String {
     )
 }
 
+/// The `ALTER` that moves a flow table's TTL. `table` is never operator input — callers pass a
+/// name they read back from the `IN ('flow_records', 'flow_rollup_5m')` list above.
+fn ttl_modify_sql(table: &str, days: u32) -> String {
+    format!("ALTER TABLE {table} MODIFY TTL ts + INTERVAL {days} DAY DELETE")
+}
+
+/// Whether a `system.tables.engine_full` string already declares a `days`-day TTL.
+///
+/// Two spellings have to be understood: `INTERVAL 30 DAY`, which is what we write, and
+/// `toIntervalDay(30)`, which is how ClickHouse normalizes it back. The number is parsed and
+/// compared, never substring-matched — a prefix match would read `toIntervalDay(3)` as satisfying a
+/// request for 30 days and leave the TTL permanently wrong, which is the whole reason this is a
+/// named function with tests rather than an inline `contains`.
+fn engine_full_declares_ttl_days(engine_full: &str, days: u32) -> bool {
+    ttl_days_of(engine_full) == Some(days)
+}
+
+/// The TTL in whole days declared by an `engine_full` string, if it declares one in days.
+fn ttl_days_of(engine_full: &str) -> Option<u32> {
+    let lower = engine_full.to_ascii_lowercase();
+    if let Some(idx) = lower.find("tointervalday(") {
+        return leading_u32(&lower[idx + "tointervalday(".len()..]);
+    }
+    if let Some(idx) = lower.find("interval ") {
+        let rest = lower[idx + "interval ".len()..].trim_start();
+        let n = leading_u32(rest)?;
+        let after = rest
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start();
+        // `INTERVAL 30 HOUR` is a TTL, just not one measured in days — do not claim it matches.
+        return after.starts_with("day").then_some(n);
+    }
+    None
+}
+
+/// Leading decimal digits of `s` as a `u32`, or `None` when it does not start with a digit.
+fn leading_u32(s: &str) -> Option<u32> {
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 // ─── ClickHouse (live) ────────────────────────────────────────────────────────────────
 
 /// A [`FlowStore`] backed by ClickHouse over its HTTP interface.
 pub struct ChStore {
     http: reqwest::Client,
     base: String,
-    retention_days: u32,
+    /// Atomic because the store is shared behind an `Arc<dyn FlowStore>` and an operator can change
+    /// the retention at runtime through `set_retention_days` (ADR-040).
+    retention_days: AtomicU32,
 }
 
 impl ChStore {
@@ -385,8 +443,53 @@ impl ChStore {
         Self {
             http,
             base: base.into(),
-            retention_days: retention_days.max(1),
+            retention_days: AtomicU32::new(retention_days.max(1)),
         }
+    }
+
+    /// Bring both flow tables' declared TTL in line with `days`, issuing an `ALTER` **only where it
+    /// actually differs**.
+    ///
+    /// The conditional is the load-bearing part. `ALTER … MODIFY TTL` runs with
+    /// `materialize_ttl_after_modify = 1` by default, which schedules a mutation across every
+    /// existing part; firing it unconditionally would re-mutate the whole flow table on every core
+    /// start. Materialization stays on for the case where it *does* fire — an operator who lowers
+    /// retention expects the old rows to actually go.
+    async fn sync_ttl(&self, days: u32) -> anyhow::Result<()> {
+        let rows = self
+            .query_json(
+                "SELECT name, engine_full FROM system.tables \
+                 WHERE database = currentDatabase() \
+                   AND name IN ('flow_records', 'flow_rollup_5m') FORMAT JSONEachRow",
+            )
+            .await?;
+        for row in rows {
+            let Some(name) = row.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let engine_full = row
+                .get("engine_full")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if engine_full_declares_ttl_days(engine_full, days) {
+                tracing::info!(
+                    table = name,
+                    retention_days = days,
+                    "flow TTL already current"
+                );
+                continue;
+            }
+            // Loud on purpose: a shrink schedules a mutation that deletes rows, and the operator
+            // needs to be able to find the reason in the log afterwards.
+            tracing::warn!(
+                table = name,
+                to_days = days,
+                engine = engine_full,
+                "altering flow TTL"
+            );
+            self.exec(&ttl_modify_sql(name, days)).await?;
+        }
+        Ok(())
     }
 
     /// POST a statement with no row body (DDL / plain query); returns the response text.
@@ -429,7 +532,7 @@ impl FlowStore for ChStore {
     }
 
     async fn ensure_schema(&self) -> anyhow::Result<()> {
-        let ttl = self.retention_days;
+        let ttl = self.retention_days.load(Ordering::Relaxed);
         // Fact table: one row per poller-aggregated top-N flow, partitioned by day, TTL-expired.
         self.exec(&format!(
             "CREATE TABLE IF NOT EXISTS flow_records (
@@ -476,7 +579,20 @@ impl FlowStore for ChStore {
                 FROM flow_records GROUP BY ts, node_id, proto",
         )
         .await?;
+        // The CREATEs above are no-ops on an existing deployment, so they cannot carry a changed
+        // retention onto tables that already exist. Reconcile the declared TTL explicitly, which is
+        // also what makes the setting survive a restart after an operator edits it (ADR-040).
+        self.sync_ttl(ttl).await?;
         tracing::info!(retention_days = ttl, "ClickHouse flow schema ensured");
+        Ok(())
+    }
+
+    async fn set_retention_days(&self, days: u32) -> anyhow::Result<()> {
+        let days = days.max(1);
+        self.sync_ttl(days).await?;
+        // Stored only after the ALTER succeeds, so a failed change does not leave the process
+        // believing a TTL that ClickHouse never accepted.
+        self.retention_days.store(days, Ordering::Relaxed);
         Ok(())
     }
 
@@ -968,6 +1084,54 @@ mod tests {
             packets: bytes / 100,
             flows: 1,
         }
+    }
+
+    #[test]
+    fn ttl_is_read_from_both_spellings() {
+        // What ClickHouse hands back in system.tables.engine_full…
+        let normalized = "MergeTree PARTITION BY toDate(ts) ORDER BY (node_id, ts) \
+                          TTL ts + toIntervalDay(30) SETTINGS index_granularity = 8192";
+        assert!(engine_full_declares_ttl_days(normalized, 30));
+        // …and what we write ourselves.
+        assert!(engine_full_declares_ttl_days(
+            "MergeTree TTL ts + INTERVAL 30 DAY DELETE",
+            30
+        ));
+    }
+
+    /// The bug this helper exists to not have: a substring test would accept `toIntervalDay(3)` as
+    /// a 30-day TTL, so the ALTER would never fire and the retention would stay wrong forever.
+    #[test]
+    fn a_shorter_ttl_is_not_a_prefix_match_for_a_longer_one() {
+        let three = "MergeTree TTL ts + toIntervalDay(3) SETTINGS index_granularity = 8192";
+        assert!(!engine_full_declares_ttl_days(three, 30));
+        assert!(engine_full_declares_ttl_days(three, 3));
+        assert!(!engine_full_declares_ttl_days(
+            "MergeTree TTL ts + INTERVAL 3 DAY DELETE",
+            30
+        ));
+    }
+
+    #[test]
+    fn a_table_with_no_day_ttl_never_matches() {
+        assert_eq!(ttl_days_of("MergeTree ORDER BY (node_id, ts)"), None);
+        // An hour-denominated TTL is a TTL, but not one measured in days.
+        assert_eq!(ttl_days_of("MergeTree TTL ts + INTERVAL 30 HOUR"), None);
+        assert!(!engine_full_declares_ttl_days("MergeTree", 30));
+    }
+
+    #[test]
+    fn the_alter_names_the_table_and_the_window() {
+        assert_eq!(
+            ttl_modify_sql("flow_records", 7),
+            "ALTER TABLE flow_records MODIFY TTL ts + INTERVAL 7 DAY DELETE"
+        );
+        // Round trip: what we emit is what the reader accepts, so a sync converges in one pass
+        // instead of re-issuing the same ALTER on every startup.
+        assert!(engine_full_declares_ttl_days(
+            &ttl_modify_sql("flow_rollup_5m", 45),
+            45
+        ));
     }
 
     #[test]

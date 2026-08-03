@@ -2548,6 +2548,58 @@
         }
       }
     },
+    "/api/v1/credentials/health": {
+      "get": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "Report whether every stored credential can still be decrypted.",
+        "description": "This is the check a restore cannot skip. A database can come back whole — right row counts,\nhealthy API — while the key-encryption key is a different one, in which case every credential is\npermanently unreadable and nothing says so until the next poll fails. `scripts/yagra-restore-verify.sh`\nasserts on this endpoint for exactly that reason, and it is worth looking at after any KEK\nrotation or restore.\n\nIt decrypts in memory and reports booleans; no secret value crosses this boundary.",
+        "operationId": "credential_health",
+        "responses": {
+          "200": {
+            "description": "Per-credential decryptability. `failures` is empty on a healthy deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialHealth"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageCredentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Credential storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/credentials/{id}": {
       "put": {
         "tags": [
@@ -13816,6 +13868,128 @@
         }
       }
     },
+    "/api/v1/settings/retention": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "operationId": "get_retention",
+        "responses": {
+          "200": {
+            "description": "The deployment's retention policy: editable windows plus the full table, including rows set by a store's own start flag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPolicy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update the retention windows. Applies immediately: the PostgreSQL prune loops re-read the policy\non their next tick, and the flow store's table TTL is altered before this returns.",
+        "operationId": "update_retention",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionValues"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Retention updated. Lowering a window deletes data older than it on the next prune"
+          },
+          "400": {
+            "description": "A window is outside the allowed range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The flow store rejected the retention change; nothing was saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/shared-dashboard": {
       "get": {
         "tags": [
@@ -17395,6 +17569,36 @@
           },
           "token": {
             "type": "string"
+          }
+        }
+      },
+      "CredentialHealth": {
+        "type": "object",
+        "description": "Whether the stored credentials can actually be decrypted with the KEK this process loaded.",
+        "required": [
+          "total",
+          "decryptable",
+          "failures"
+        ],
+        "properties": {
+          "decryptable": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of them the current key opened successfully.",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UndecryptableCredential"
+            },
+            "description": "The ones that failed, if any. A non-empty list means polling with those credentials will\nfail until the correct key file is restored."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many credentials are stored.",
+            "minimum": 0
           }
         }
       },
@@ -22431,6 +22635,127 @@
           "unknown"
         ]
       },
+      "RetentionPolicy": {
+        "type": "object",
+        "description": "The full retention policy: the editable windows plus every row of the table.",
+        "required": [
+          "settings",
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionRow"
+            },
+            "description": "Every retained subject, including the ones no API can change."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/RetentionValues",
+            "description": "The windows this endpoint can change."
+          }
+        }
+      },
+      "RetentionRow": {
+        "type": "object",
+        "description": "One line of the retention table.",
+        "required": [
+          "subject",
+          "store",
+          "enforcement",
+          "tunable",
+          "field",
+          "unit",
+          "store_configured",
+          "note"
+        ],
+        "properties": {
+          "enforcement": {
+            "type": "string",
+            "description": "How the window is applied: `pg_prune`, `store_ttl`, `store_flag` or `unlimited`."
+          },
+          "field": {
+            "type": "string",
+            "description": "Which field of `settings` this row binds to, or `store_owned` / `unlimited`."
+          },
+          "note": {
+            "type": "string",
+            "description": "Operator-facing explanation. For a read-only row it names the flag that does change it."
+          },
+          "store": {
+            "type": "string",
+            "description": "The store that holds it."
+          },
+          "store_configured": {
+            "type": "boolean",
+            "description": "Whether the backing store is configured in this deployment. A row for an unconfigured\noptional store retains nothing."
+          },
+          "store_reported": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the store itself reports for a `store_flag` row, verbatim (e.g. `12`, `30d`). Absent\nwhen the store is unreachable or is running its own default — in which case the value is\ngenuinely unknown and is not guessed."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Stable identifier for the retained data, e.g. `alert_history`."
+          },
+          "tunable": {
+            "type": "string",
+            "description": "Where it can be changed: `settings` (here), `store_flag_read_only` (the store's own\ncommand-line flag), or `by_decision` (not retained on a schedule at all)."
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit of `value`: `days`, `hours`, or empty when the row has no configurable number."
+          },
+          "value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The configured window, for rows this deployment controls.",
+            "minimum": 0
+          }
+        }
+      },
+      "RetentionValues": {
+        "type": "object",
+        "description": "The operator-editable retention windows.",
+        "required": [
+          "alert_linked_days",
+          "unmatched_event_hours",
+          "report_run_days",
+          "flow_days"
+        ],
+        "properties": {
+          "alert_linked_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days to keep alert history, node-state snapshots, DNS chain changes and matched events.",
+            "minimum": 0
+          },
+          "flow_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days to keep traffic-flow records, applied as a ClickHouse table TTL.",
+            "minimum": 0
+          },
+          "report_run_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days to keep generated report runs.",
+            "minimum": 0
+          },
+          "unmatched_event_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Hours to keep passive events that matched no rule.",
+            "minimum": 0
+          }
+        }
+      },
       "Role": {
         "type": "string",
         "description": "Predefined roles, ordered least → most privileged.",
@@ -23550,6 +23875,27 @@
             "items": {
               "$ref": "#/components/schemas/TopologyNode"
             }
+          }
+        }
+      },
+      "UndecryptableCredential": {
+        "type": "object",
+        "description": "A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,\nor anything derived from the ciphertext.",
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

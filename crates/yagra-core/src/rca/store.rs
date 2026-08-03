@@ -14,11 +14,11 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_secrets::{EnvelopeCipher, SealedSecret, StaticKeyProvider};
+use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
 use super::answer::RcaAnswer;
 use super::{ProviderConfig, ProviderKind, DEFAULT_MAX_OUTPUT_TOKENS};
-use crate::secrets::load_key_provider;
+use crate::secrets::Kek;
 
 /// Bounds on `max_output_tokens`, matching the CHECK in migration 0053. Below the floor a model
 /// cannot finish a sentence; the ceiling is far above what an RCA needs and exists to stop a typo
@@ -134,15 +134,15 @@ pub struct NewReport<'a> {
 /// PostgreSQL-backed store for the provider config and the generated reports.
 pub struct RcaRepo {
     pool: PgPool,
-    cipher: EnvelopeCipher<StaticKeyProvider>,
+    cipher: EnvelopeCipher<Kek>,
 }
 
 impl RcaRepo {
     #[must_use]
-    pub fn from_env(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, kek: Kek) -> Self {
         Self {
             pool,
-            cipher: EnvelopeCipher::new(load_key_provider()),
+            cipher: EnvelopeCipher::new(kek),
         }
     }
 

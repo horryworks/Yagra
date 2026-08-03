@@ -1004,3 +1004,17 @@ export type RcaEvidence = components['schemas']['IncidentContext'];
  *  now *declares* the shape (`#[schema(value_type = ReportBody)]` over a column that stays loose so
  *  an older row still reads back), which is what retired the mirror. */
 export type RcaReportBody = components['schemas']['ReportBody'];
+
+/** The data-retention policy (ADR-040): the operator-editable windows plus the whole table,
+ *  including the two rows a store's own start flag owns and the audit log that is never pruned. */
+export type RetentionPolicy = components['schemas']['RetentionPolicy'];
+
+/** One line of the retention table. `tunable` decides whether it renders as a control. */
+export type RetentionRow = components['schemas']['RetentionRow'];
+
+/** The four windows `PUT /api/v1/settings/retention` accepts. */
+export type RetentionValues = components['schemas']['RetentionValues'];
+
+/** Whether every stored credential still decrypts under the loaded KEK — the assertion a database
+ *  restore cannot make on its own, since rows can come back whole while the key did not. */
+export type CredentialHealth = components['schemas']['CredentialHealth'];

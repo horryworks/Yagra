@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_forward::{DestKind, FilterExpr, SourceKind};
-use yagra_secrets::{EnvelopeCipher, SealedSecret, StaticKeyProvider};
+use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
-use crate::secrets::load_key_provider;
+use crate::secrets::Kek;
 
 /// Ceiling on configured destinations. Bounds both the forwarder's per-message fan-out cost and the
 /// cardinality of the `dest` metric label (monitoring-conventions: labels must be bounded).
@@ -109,7 +109,7 @@ pub struct OpenDestination {
 /// PostgreSQL-backed store for forwarding destinations.
 pub struct ForwardStore {
     pool: PgPool,
-    cipher: EnvelopeCipher<StaticKeyProvider>,
+    cipher: EnvelopeCipher<Kek>,
 }
 
 const PUBLIC_COLUMNS: &str = "id, name, enabled, source_kind, dest_kind, target, pool, verbatim, \
@@ -130,10 +130,10 @@ const UPDATE_SQL: &str = "UPDATE forward_destinations SET \
 impl ForwardStore {
     /// Build the store, reusing the same KEK as the credential store.
     #[must_use]
-    pub fn from_env(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, kek: Kek) -> Self {
         Self {
             pool,
-            cipher: EnvelopeCipher::new(load_key_provider()),
+            cipher: EnvelopeCipher::new(kek),
         }
     }
 

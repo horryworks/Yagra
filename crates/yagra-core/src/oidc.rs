@@ -33,9 +33,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::Role;
-use yagra_secrets::{EnvelopeCipher, SealedSecret, StaticKeyProvider};
+use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
-use crate::secrets::load_key_provider;
+use crate::secrets::Kek;
 
 /// How long an in-flight authorization (state→nonce/PKCE) is honored before it's pruned.
 const FLIGHT_TTL: Duration = Duration::from_secs(600);
@@ -363,15 +363,15 @@ pub async fn complete_callback(
 /// credentials/notification channels) and never returned by a read.
 pub struct OidcRepo {
     pool: PgPool,
-    cipher: EnvelopeCipher<StaticKeyProvider>,
+    cipher: EnvelopeCipher<Kek>,
 }
 
 impl OidcRepo {
     #[must_use]
-    pub fn from_env(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, kek: Kek) -> Self {
         Self {
             pool,
-            cipher: EnvelopeCipher::new(load_key_provider()),
+            cipher: EnvelopeCipher::new(kek),
         }
     }
 

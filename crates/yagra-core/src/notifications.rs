@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::Severity;
-use yagra_secrets::{EnvelopeCipher, SealedSecret, StaticKeyProvider};
+use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
-use crate::secrets::load_key_provider;
+use crate::secrets::Kek;
 
 /// A delivery channel kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -144,16 +144,16 @@ fn parse_severity(s: Option<String>) -> Option<Severity> {
 /// PostgreSQL-backed store for notification channels + routing rules.
 pub struct NotificationRepo {
     pool: PgPool,
-    cipher: EnvelopeCipher<StaticKeyProvider>,
+    cipher: EnvelopeCipher<Kek>,
 }
 
 impl NotificationRepo {
     /// Build the store, reusing the same KEK as the credential store.
     #[must_use]
-    pub fn from_env(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, kek: Kek) -> Self {
         Self {
             pool,
-            cipher: EnvelopeCipher::new(load_key_provider()),
+            cipher: EnvelopeCipher::new(kek),
         }
     }
 

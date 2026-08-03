@@ -30,6 +30,7 @@ use uuid::Uuid;
 #[derive(utoipa::OpenApi)]
 #[openapi(paths(
     list_credentials,
+    credential_health,
     create_credential,
     update_credential,
     delete_credential
@@ -43,10 +44,86 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
         )
+        .route("/api/v1/credentials/health", get(credential_health))
         .route(
             "/api/v1/credentials/:id",
             put(update_credential).delete(delete_credential),
         )
+}
+
+/// A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,
+/// or anything derived from the ciphertext.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct UndecryptableCredential {
+    id: Uuid,
+    name: String,
+    kind: String,
+}
+
+/// Whether the stored credentials can actually be decrypted with the KEK this process loaded.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct CredentialHealth {
+    /// How many credentials are stored.
+    total: u32,
+    /// How many of them the current key opened successfully.
+    decryptable: u32,
+    /// The ones that failed, if any. A non-empty list means polling with those credentials will
+    /// fail until the correct key file is restored.
+    failures: Vec<UndecryptableCredential>,
+}
+
+/// Report whether every stored credential can still be decrypted.
+///
+/// This is the check a restore cannot skip. A database can come back whole — right row counts,
+/// healthy API — while the key-encryption key is a different one, in which case every credential is
+/// permanently unreadable and nothing says so until the next poll fails. `scripts/yagra-restore-verify.sh`
+/// asserts on this endpoint for exactly that reason, and it is worth looking at after any KEK
+/// rotation or restore.
+///
+/// It decrypts in memory and reports booleans; no secret value crosses this boundary.
+#[utoipa::path(
+    get, path = "/api/v1/credentials/health", tag = "credentials",
+    responses(
+        (status = 200, description = "Per-credential decryptability. `failures` is empty on a healthy deployment", body = CredentialHealth),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageCredentials", body = super::error::ErrorBody),
+        (status = 503, description = "Credential storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn credential_health(
+    _perm: RequireManageCredentials,
+    admin: Admin,
+) -> ApiResult<Json<CredentialHealth>> {
+    let report = admin.creds.decrypt_report().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "credential health",
+            "failed to check credential health",
+        )
+    })?;
+    let total = u32::try_from(report.len()).unwrap_or(u32::MAX);
+    let failures: Vec<_> = report
+        .iter()
+        .filter(|(_, _, _, ok)| !ok)
+        .map(|(id, name, kind, _)| UndecryptableCredential {
+            id: *id,
+            name: name.clone(),
+            kind: kind.clone(),
+        })
+        .collect();
+    if !failures.is_empty() {
+        // Loud: this is a data-loss condition in progress, not a routine 200.
+        tracing::error!(
+            failed = failures.len(),
+            total,
+            "stored credentials cannot be decrypted with the loaded KEK"
+        );
+    }
+    Ok(Json(CredentialHealth {
+        decryptable: total - u32::try_from(failures.len()).unwrap_or(0),
+        total,
+        failures,
+    }))
 }
 
 /// Reject a structurally invalid secret for its kind, at the edge.

@@ -38,3 +38,26 @@
   color: var(--status-ok);
   font-size: var(--font-sm);
 }
+
+/* Retention card: rows are label + a control that may be an input or a read-only fact. */
+.sys-setting-band,
+.sys-setting-readonly {
+  font-size: var(--font-sm);
+}
+
+.sys-setting-readonly {
+  text-align: right;
+}
+
+.sys-setting-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* The card stacks several rows, unlike the single-row polling card above. */
+.sys-setting + .sys-setting {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color);
+}

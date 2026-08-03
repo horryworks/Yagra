@@ -94,6 +94,14 @@ pub trait MetricStore: Send + Sync {
     async fn healthy(&self) -> bool {
         true
     }
+    /// The retention window this store is actually enforcing, as it reports it (ADR-040).
+    ///
+    /// Retention here is a process start flag with no runtime API, so Yagra cannot change it — it
+    /// can only report it honestly. `None` means unknown: unreachable, or running the product's own
+    /// default. Never substitute a guess; the UI shows "unknown" instead.
+    async fn retention_flag(&self) -> Option<String> {
+        None
+    }
     /// Persist every sample in a completed poll.
     async fn write(&self, result: &PollResult);
     /// Persist the samples of a **batch** of completed polls in as few round-trips as possible —
@@ -796,6 +804,12 @@ impl MetricStore for VmStore {
                 false
             }
         }
+    }
+
+    async fn retention_flag(&self) -> Option<String> {
+        let url = format!("{}/flags", self.base);
+        let body = self.http.get(&url).send().await.ok()?.text().await.ok()?;
+        crate::retention::parse_retention_flag(&body)
     }
 
     async fn write(&self, result: &PollResult) {

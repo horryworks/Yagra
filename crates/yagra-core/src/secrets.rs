@@ -2,19 +2,25 @@
 //! Credential store: encrypted monitoring credentials at rest (ADR-018, Workstream D).
 //!
 //! Secrets are sealed with [`yagra_secrets`] envelope encryption (per-secret DEK under a
-//! KEK) and only ciphertext + wrapped DEK are persisted. The KEK is loaded from a mounted
-//! file (`YAGRA_KEK_FILE`); with no file we fall back to an **ephemeral** dev key (logged
-//! loudly — secrets won't survive a restart, which is correct for local dev only). The
-//! API never returns a secret value; `secret()` exists for core-side credential
-//! resolution (used when SNMP polling lands).
+//! KEK) and only ciphertext + wrapped DEK are persisted. The KEK is loaded once from a mounted
+//! file (`YAGRA_KEK_FILE`) and shared by every envelope store; with **no file configured** we fall
+//! back to an ephemeral dev key (logged loudly — secrets won't survive a restart, which is correct
+//! for local dev only), but a file that is configured and unreadable **stops startup** rather than
+//! booting on a key that cannot open anything already stored. The API never returns a secret value;
+//! `secret()` exists for core-side credential resolution (used when SNMP polling lands).
 
 use std::path::Path;
+use std::sync::Arc;
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::HttpAuth;
 use yagra_secrets::{key_provider_from_file, EnvelopeCipher, SealedSecret, StaticKeyProvider};
+
+/// The shared KEK handle every envelope-encrypted store is built with.
+pub type Kek = Arc<StaticKeyProvider>;
 
 /// Credential metadata returned by the API — never includes the secret value.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -191,44 +197,54 @@ pub fn is_valid_header_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
-/// Load the key-encryption-key provider from `YAGRA_KEK_FILE`, falling back to an ephemeral
-/// dev key (logged loudly — secrets won't survive a restart, dev-only). Shared by every
-/// envelope-encrypted store (credentials, notification channels) so they all use one KEK.
-pub fn load_key_provider() -> StaticKeyProvider {
-    match std::env::var("YAGRA_KEK_FILE") {
-        Ok(path) => match key_provider_from_file(Path::new(&path)) {
-            Ok(p) => {
-                tracing::info!(%path, "loaded KEK from mounted file");
-                p
-            }
-            Err(e) => {
-                tracing::error!(error = %e, %path, "KEK file load failed; using EPHEMERAL dev key");
-                StaticKeyProvider::single(rand::random::<[u8; 32]>())
-            }
-        },
-        Err(_) => {
-            tracing::warn!(
-                "YAGRA_KEK_FILE not set — using EPHEMERAL dev KEK (credentials will not \
-                 survive a restart; set a mounted KEK file for real use)"
-            );
-            StaticKeyProvider::single(rand::random::<[u8; 32]>())
-        }
-    }
+/// Load the key-encryption-key provider from `YAGRA_KEK_FILE`, or fall back to an ephemeral dev key
+/// when the variable is unset. Loaded **once** and shared (via `Arc`) by every envelope-encrypted
+/// store — credentials, notification channels, forwarding destinations, OIDC, LLM config — so they
+/// genuinely all use one KEK.
+///
+/// **A configured-but-unreadable KEK is a hard error, not a fallback.** Substituting a random key
+/// there let core start and serve traffic while every stored credential was silently undecryptable:
+/// the deployment looked healthy, and the damage only surfaced the next time something tried to use
+/// a credential. Failing to start is loud, immediate, and recoverable. This is the same rule
+/// `token::load_session_key` already applies to the session key.
+pub fn load_key_provider() -> anyhow::Result<Arc<StaticKeyProvider>> {
+    key_provider_from_env(std::env::var("YAGRA_KEK_FILE").ok())
+}
+
+/// The decision behind [`load_key_provider`], split from the environment read so it is testable
+/// without mutating process-wide state.
+pub(crate) fn key_provider_from_env(
+    path: Option<String>,
+) -> anyhow::Result<Arc<StaticKeyProvider>> {
+    let Some(path) = path.map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()) else {
+        tracing::warn!(
+            "YAGRA_KEK_FILE not set — using EPHEMERAL dev KEK (credentials will not \
+             survive a restart; set a mounted KEK file for real use)"
+        );
+        return Ok(Arc::new(StaticKeyProvider::single(
+            rand::random::<[u8; 32]>(),
+        )));
+    };
+    // `SecretError` carries a path and an io reason or a byte length — never key material — so it
+    // is safe to surface in the startup error.
+    let provider = key_provider_from_file(Path::new(&path))
+        .with_context(|| format!("load KEK from {path}"))?;
+    tracing::info!(%path, "loaded KEK from mounted file");
+    Ok(Arc::new(provider))
 }
 
 /// PostgreSQL-backed, envelope-encrypted credential store.
 pub struct CredentialStore {
     pool: PgPool,
-    cipher: EnvelopeCipher<StaticKeyProvider>,
+    cipher: EnvelopeCipher<Kek>,
 }
 
 impl CredentialStore {
-    /// Build the store, loading the KEK from `YAGRA_KEK_FILE` or falling back to an
-    /// ephemeral dev key (never for production — secrets are lost on restart).
-    pub fn from_env(pool: PgPool) -> Self {
+    /// Build the store on the process-wide KEK loaded at startup ([`load_key_provider`]).
+    pub fn new(pool: PgPool, kek: Kek) -> Self {
         Self {
             pool,
-            cipher: EnvelopeCipher::new(load_key_provider()),
+            cipher: EnvelopeCipher::new(kek),
         }
     }
 
@@ -362,11 +378,96 @@ impl CredentialStore {
             .map_err(|e| anyhow::anyhow!("open credential: {e}"))?;
         Ok(Some((kind, plaintext)))
     }
+
+    /// Try to unseal **every** stored credential and report which ones the current KEK cannot open.
+    ///
+    /// This is the "did the restore actually work" check (ADR-040). Losing the KEK is the one
+    /// failure a database restore cannot reveal on its own: rows come back, row counts match, the
+    /// API answers 200, and yet nothing can be polled because the ciphertext is unreadable. Nothing
+    /// short of attempting a decrypt proves otherwise.
+    ///
+    /// Plaintext is dropped immediately and never returned, logged, or counted by length — the
+    /// answer is a boolean per credential and nothing more (security.md).
+    pub async fn decrypt_report(&self) -> anyhow::Result<Vec<(Uuid, String, String, bool)>> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \
+             FROM credentials ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let name: String = row.try_get("name")?;
+            let kind: String = row.try_get("kind")?;
+            let key_id: i64 = row.try_get("key_id")?;
+            let sealed = SealedSecret {
+                key_id: u32::try_from(key_id).unwrap_or(0),
+                wrapped_dek: row.try_get("wrapped_dek")?,
+                dek_nonce: row.try_get("dek_nonce")?,
+                ciphertext: row.try_get("ciphertext")?,
+                ct_nonce: row.try_get("ct_nonce")?,
+            };
+            out.push((id, name, kind, self.cipher.open(&sealed).is_ok()));
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yagra_secrets::KeyProvider;
+
+    /// The regression this whole change exists for: a KEK file that is *configured* but cannot be
+    /// read used to log an error and boot on a fresh random key, leaving every stored credential
+    /// undecryptable while the deployment looked healthy. It must stop startup instead.
+    #[test]
+    fn a_configured_but_missing_kek_file_is_an_error() {
+        let missing = std::env::temp_dir().join("yagra-no-such-kek-file-9d3f1a");
+        // `expect_err` would need `Debug` on the provider, and a key provider must never have one.
+        let Err(err) = key_provider_from_env(Some(missing.display().to_string())) else {
+            panic!("a missing KEK file must not fall back to an ephemeral key");
+        };
+        // The path is in the message so an operator can see which file to fix; the error chain
+        // carries an io reason, never key material.
+        assert!(err.to_string().contains("load KEK from"));
+    }
+
+    #[test]
+    fn a_kek_file_of_the_wrong_length_is_an_error() {
+        let path = std::env::temp_dir().join("yagra-short-kek-9d3f1a.bin");
+        std::fs::write(&path, b"too short").unwrap();
+        let Err(err) = key_provider_from_env(Some(path.display().to_string())) else {
+            panic!("a 9-byte KEK is not an AES-256 key");
+        };
+        assert!(err.to_string().contains("load KEK from"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Unset stays a warning and an ephemeral key: that is the local-dev path, and `docker-compose.yml`
+    /// (dev) sets no `YAGRA_KEK_FILE` at all, so this is what keeps dev byte-identical.
+    #[test]
+    fn an_unset_kek_still_yields_an_ephemeral_provider() {
+        assert!(key_provider_from_env(None).is_ok());
+        // A blank value is "unset", not "a file named empty string".
+        assert!(key_provider_from_env(Some("   ".to_owned())).is_ok());
+    }
+
+    /// The property the shared `Arc` buys, and the one the restore-verification script depends on:
+    /// all five envelope stores open each other's seals because there is genuinely one key. Before
+    /// this, each store called the loader itself, so on the ephemeral path they got five different
+    /// keys while the doc comment claimed they shared one.
+    #[test]
+    fn two_stores_built_from_one_provider_share_the_key() {
+        let kek = key_provider_from_env(None).unwrap();
+        let a = EnvelopeCipher::new(kek.clone());
+        let b = EnvelopeCipher::new(kek.clone());
+        let sealed = a.seal(b"community-string").unwrap();
+        let opened = b.open(&sealed).unwrap();
+        assert_eq!(opened, b"community-string");
+        assert_eq!(kek.active_key_id(), 1);
+    }
 
     #[test]
     fn v3_secret_parses_and_validates_levels() {

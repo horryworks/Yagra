@@ -19,6 +19,9 @@ use sqlx::Row;
 use uuid::Uuid;
 use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
+// Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
+use crate::retention::RetentionSettings;
+
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ProfileSummary {
@@ -1198,14 +1201,76 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Seed the singleton settings row on first boot with `secs` (the env-var initial default).
-    /// Idempotent: `ON CONFLICT DO NOTHING` preserves any operator-edited value across restarts.
-    pub async fn seed_default_poll_interval(&self, secs: u32) -> anyhow::Result<()> {
+    /// Seed the singleton settings row on first boot from the env-var initial defaults.
+    /// Idempotent: `ON CONFLICT DO NOTHING` preserves any operator-edited value across restarts,
+    /// which is also why an *existing* deployment keeps the column defaults from migration 0061
+    /// rather than importing `YAGRA_FLOW_RETENTION_DAYS` — see that migration's header for why
+    /// importing it would delete flow rows nobody asked to lose.
+    pub async fn seed_app_settings(
+        &self,
+        poll_interval_secs: u32,
+        flow_retention_days: u32,
+    ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT INTO app_settings (id, default_poll_interval_secs) VALUES (TRUE, $1) \
-             ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO app_settings (id, default_poll_interval_secs, flow_retention_days) \
+             VALUES (TRUE, $1, $2) ON CONFLICT (id) DO NOTHING",
         )
-        .bind(i32::try_from(secs).unwrap_or(i32::MAX))
+        .bind(i32::try_from(poll_interval_secs).unwrap_or(i32::MAX))
+        .bind(i32::try_from(flow_retention_days).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The operator-configured retention windows (ADR-040). Like `get_meraki_polling_enabled`, this
+    /// returns a value rather than a `Result` and degrades to the compiled defaults on any read
+    /// failure: a transient database blip must never silently widen or narrow how long data is
+    /// kept, and the prune loops call this every tick.
+    pub async fn get_retention_settings(&self) -> RetentionSettings {
+        let fallback = RetentionSettings::default();
+        let Ok(Some(row)) = sqlx::query(
+            "SELECT alert_linked_retention_days, unmatched_event_retention_hours, \
+                    report_run_retention_days, flow_retention_days \
+             FROM app_settings WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        else {
+            return fallback;
+        };
+        let read = |col: &str, default: u32| -> u32 {
+            row.try_get::<i32, _>(col)
+                .ok()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(default)
+        };
+        RetentionSettings {
+            alert_linked_days: read("alert_linked_retention_days", fallback.alert_linked_days),
+            unmatched_event_hours: read(
+                "unmatched_event_retention_hours",
+                fallback.unmatched_event_hours,
+            ),
+            report_run_days: read("report_run_retention_days", fallback.report_run_days),
+            flow_days: read("flow_retention_days", fallback.flow_days),
+        }
+    }
+
+    /// Set every retention window at once, upserting the singleton row. The API edge validates the
+    /// bounds (`retention::days_in_bounds` / `hours_in_bounds`); the table CHECKs are the backstop.
+    pub async fn set_retention_settings(&self, s: &RetentionSettings) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, alert_linked_retention_days, \
+                 unmatched_event_retention_hours, report_run_retention_days, \
+                 flow_retention_days, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, now()) \
+             ON CONFLICT (id) DO UPDATE SET alert_linked_retention_days = $1, \
+                 unmatched_event_retention_hours = $2, report_run_retention_days = $3, \
+                 flow_retention_days = $4, updated_at = now()",
+        )
+        .bind(i32::try_from(s.alert_linked_days).unwrap_or(i32::MAX))
+        .bind(i32::try_from(s.unmatched_event_hours).unwrap_or(i32::MAX))
+        .bind(i32::try_from(s.report_run_days).unwrap_or(i32::MAX))
+        .bind(i32::try_from(s.flow_days).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())

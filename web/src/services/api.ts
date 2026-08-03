@@ -131,6 +131,9 @@ import type {
   LlmTestResult,
   RcaReport,
   RcaRequestInput,
+  RetentionPolicy,
+  RetentionValues,
+  CredentialHealth,
 } from '../types/api';
 import { buildUrl, type Op, type Ok, type OptsArg, type PathsWith } from './typedPaths';
 
@@ -368,6 +371,16 @@ export const api = {
   /** Update the global default polling interval (seconds). ManageConfig-gated. */
   updateConfig: (body: { default_poll_interval_secs: number }): Promise<void> =>
     apiPut('/api/v1/config', { body }),
+
+  /** The data-retention policy: the editable windows plus every row of the table (ADR-040). */
+  getRetention: (): Promise<RetentionPolicy> => apiGet('/api/v1/settings/retention'),
+
+  /** Update the retention windows. ManageConfig-gated; applies without a restart. */
+  updateRetention: (body: RetentionValues): Promise<void> =>
+    apiPut('/api/v1/settings/retention', { body }),
+
+  /** Whether every stored credential can still be decrypted with the loaded KEK (ADR-040). */
+  getCredentialHealth: (): Promise<CredentialHealth> => apiGet('/api/v1/credentials/health'),
 
   /** Latest reading for one node metric. */
   getNodeMetric: (

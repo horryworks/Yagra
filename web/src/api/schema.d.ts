@@ -570,6 +570,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/credentials/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report whether every stored credential can still be decrypted.
+         * @description This is the check a restore cannot skip. A database can come back whole — right row counts,
+         *     healthy API — while the key-encryption key is a different one, in which case every credential is
+         *     permanently unreadable and nothing says so until the next poll fails. `scripts/yagra-restore-verify.sh`
+         *     asserts on this endpoint for exactly that reason, and it is worth looking at after any KEK
+         *     rotation or restore.
+         *
+         *     It decrypts in memory and reports booleans; no secret value crosses this boundary.
+         */
+        get: operations["credential_health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/credentials/{id}": {
         parameters: {
             query?: never;
@@ -2577,6 +2603,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_retention"];
+        /**
+         * Update the retention windows. Applies immediately: the PostgreSQL prune loops re-read the policy
+         *     on their next tick, and the flow store's table TTL is altered before this returns.
+         */
+        put: operations["update_retention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shared-dashboard": {
         parameters: {
             query?: never;
@@ -3835,6 +3881,24 @@ export interface components {
             /** Format: uuid */
             id: string;
             token: string;
+        };
+        /** @description Whether the stored credentials can actually be decrypted with the KEK this process loaded. */
+        CredentialHealth: {
+            /**
+             * Format: int32
+             * @description How many of them the current key opened successfully.
+             */
+            decryptable: number;
+            /**
+             * @description The ones that failed, if any. A non-empty list means polling with those credentials will
+             *     fail until the correct key file is restored.
+             */
+            failures: components["schemas"]["UndecryptableCredential"][];
+            /**
+             * Format: int32
+             * @description How many credentials are stored.
+             */
+            total: number;
         };
         /**
          * Format: uuid
@@ -5934,6 +5998,72 @@ export interface components {
          * @enum {string}
          */
         ReportScheduleStatus: "queued" | "missing-definition" | "error" | "unknown";
+        /** @description The full retention policy: the editable windows plus every row of the table. */
+        RetentionPolicy: {
+            /** @description Every retained subject, including the ones no API can change. */
+            rows: components["schemas"]["RetentionRow"][];
+            /** @description The windows this endpoint can change. */
+            settings: components["schemas"]["RetentionValues"];
+        };
+        /** @description One line of the retention table. */
+        RetentionRow: {
+            /** @description How the window is applied: `pg_prune`, `store_ttl`, `store_flag` or `unlimited`. */
+            enforcement: string;
+            /** @description Which field of `settings` this row binds to, or `store_owned` / `unlimited`. */
+            field: string;
+            /** @description Operator-facing explanation. For a read-only row it names the flag that does change it. */
+            note: string;
+            /** @description The store that holds it. */
+            store: string;
+            /**
+             * @description Whether the backing store is configured in this deployment. A row for an unconfigured
+             *     optional store retains nothing.
+             */
+            store_configured: boolean;
+            /**
+             * @description What the store itself reports for a `store_flag` row, verbatim (e.g. `12`, `30d`). Absent
+             *     when the store is unreachable or is running its own default — in which case the value is
+             *     genuinely unknown and is not guessed.
+             */
+            store_reported?: string | null;
+            /** @description Stable identifier for the retained data, e.g. `alert_history`. */
+            subject: string;
+            /**
+             * @description Where it can be changed: `settings` (here), `store_flag_read_only` (the store's own
+             *     command-line flag), or `by_decision` (not retained on a schedule at all).
+             */
+            tunable: string;
+            /** @description Unit of `value`: `days`, `hours`, or empty when the row has no configurable number. */
+            unit: string;
+            /**
+             * Format: int32
+             * @description The configured window, for rows this deployment controls.
+             */
+            value?: number | null;
+        };
+        /** @description The operator-editable retention windows. */
+        RetentionValues: {
+            /**
+             * Format: int32
+             * @description Days to keep alert history, node-state snapshots, DNS chain changes and matched events.
+             */
+            alert_linked_days: number;
+            /**
+             * Format: int32
+             * @description Days to keep traffic-flow records, applied as a ClickHouse table TTL.
+             */
+            flow_days: number;
+            /**
+             * Format: int32
+             * @description Days to keep generated report runs.
+             */
+            report_run_days: number;
+            /**
+             * Format: int32
+             * @description Hours to keep passive events that matched no rule.
+             */
+            unmatched_event_hours: number;
+        };
         /**
          * @description Predefined roles, ordered least → most privileged.
          * @enum {string}
@@ -6378,6 +6508,16 @@ export interface components {
             /** @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one. */
             next_cursor?: string | null;
             nodes: components["schemas"]["TopologyNode"][];
+        };
+        /**
+         * @description A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,
+         *     or anything derived from the ciphertext.
+         */
+        UndecryptableCredential: {
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            name: string;
         };
         /**
          * @description Update body. `name` is required; `secret` is optional — see the module doc for why omitting it
@@ -8517,6 +8657,53 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    credential_health: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-credential decryptability. `failures` is empty on a healthy deployment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialHealth"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageCredentials */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Credential storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17118,6 +17305,120 @@ export interface operations {
                 };
             };
             /** @description This deployment does not persist SSO configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_retention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deployment's retention policy: editable windows plus the full table, including rows set by a store's own start flag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionPolicy"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_retention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionValues"];
+            };
+        };
+        responses: {
+            /** @description Retention updated. Lowering a window deletes data older than it on the next prune */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A window is outside the allowed range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The flow store rejected the retention change; nothing was saved */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

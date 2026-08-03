@@ -153,6 +153,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
     ("PUT", "/api/v1/config", ADMIN_CFG),
     ("GET", "/api/v1/credentials", ADMIN_CFG),
     ("POST", "/api/v1/credentials", ADMIN_CFG),
+    ("GET", "/api/v1/credentials/health", ADMIN_CFG),
     ("DELETE", "/api/v1/credentials/:id", ADMIN_CFG),
     ("PUT", "/api/v1/credentials/:id", ADMIN_CFG),
     (
@@ -344,6 +345,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
     ("POST", "/api/v1/settings/oidc", ADMIN_CFG),
     ("DELETE", "/api/v1/settings/oidc/:id", ADMIN_CFG),
     ("PUT", "/api/v1/settings/oidc/:id", ADMIN_CFG),
+    (
+        "GET",
+        "/api/v1/settings/retention",
+        Global("deployment-wide retention policy; the same for every group, and it names no node"),
+    ),
+    ("PUT", "/api/v1/settings/retention", ADMIN_CFG),
     (
         "GET",
         "/api/v1/shared-dashboard",

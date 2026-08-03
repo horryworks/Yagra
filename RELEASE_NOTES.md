@@ -10,6 +10,52 @@
 
 ## Unreleased
 
+### Breaking changes
+- **Core no longer starts when `YAGRA_KEK_FILE` points at a file it cannot read.** It used to log an
+  error and boot on a freshly generated random key — which meant the deployment looked healthy while
+  every stored monitoring credential had become permanently undecryptable, and nothing said so until
+  the next poll failed. That silent data-loss path is now a loud startup failure naming the path
+  (`load KEK from <path>`). **Unset stays unchanged**: no `YAGRA_KEK_FILE` still means the ephemeral
+  dev key, so the dev compose is byte-identical. Only a deployment that was *already* broken is
+  affected; point the variable at the real key file, or unset it.
+- **`YAGRA_FLOW_RETENTION_DAYS` now seeds a brand-new deployment only.** On an existing one, flow
+  retention comes from Settings ▸ System settings ▸ Data retention. The env var previously had no
+  effect at all on an existing ClickHouse volume (see Bug Fixes), so nothing changes on upgrade —
+  existing deployments keep the 30 days their tables are actually enforcing.
+
+### New Features
+- **Data retention is configurable from the UI** (Settings ▸ System settings ▸ Data retention,
+  ADR-040). Alert-linked data, unmatched events, report runs and traffic flows each get their own
+  window; changes apply on the next sweep with no restart, and a flow change is applied to
+  ClickHouse immediately. The card lists **every** retained subject, including the ones Yagra cannot
+  change: VictoriaMetrics and VictoriaLogs take retention as a container start flag with no runtime
+  API, so those rows are read-only and show the value read back from the store's own `/flags`
+  endpoint — what it is really enforcing, rather than a number mirrored from configuration. The
+  audit log is listed as kept indefinitely, by design.
+- **`GET /api/v1/settings/retention`** (View) and **`PUT`** (ManageConfig) expose the same policy.
+- **`GET /api/v1/credentials/health`** (ManageCredentials) reports whether every stored credential
+  still decrypts under the loaded key. This is the assertion a database restore cannot make on its
+  own: rows can come back whole while the key-encryption key is a different one.
+- **A backup procedure that ships as scripts, and a way to prove it works.**
+  `scripts/yagra-backup.sh` takes the tier-1 set (KEK first, then a full `pg_dump`, then a
+  VictoriaMetrics snapshot) with a manifest; `scripts/yagra-restore-verify.sh` restores it into a
+  throwaway stack and asserts `/readyz`, the node count, the audit-log row count, and that
+  credentials actually decrypt. ADR-017 has required a backup and rollback path for destructive
+  migrations since it was written, and until now the repository contained no `pg_dump` at all.
+
+### Bug Fixes
+- **`YAGRA_FLOW_RETENTION_DAYS` did nothing on an existing deployment.** The ClickHouse TTL was only
+  ever emitted inside `CREATE TABLE IF NOT EXISTS`, which is a no-op once the tables exist, so the
+  retention an existing volume ran with was whatever it was created with — while `DEPLOYMENT.md`
+  documented the variable as live. Retention changes are now applied with `ALTER TABLE … MODIFY TTL`,
+  and only when the declared TTL actually differs (issuing it unconditionally would re-mutate every
+  part on each restart). **Lowering the window deletes flow rows older than it**, so the change is
+  logged at `warn` with the old and new values.
+- **The five envelope-encrypted stores each loaded their own key.** Credentials, notification
+  channels, forwarding destinations, OIDC and LLM config called the key loader independently, so on
+  the ephemeral (unset) path each got a *different* random key — despite the code's own comment
+  saying they shared one. They now share a single loaded key.
+
 ## v0.1.20 — Group-scoped visibility, end to end
 
 Group scoping went from a type nothing consulted to a working control: the read surface filters by

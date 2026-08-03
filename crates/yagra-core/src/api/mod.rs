@@ -61,6 +61,7 @@ mod pollers;
 mod profiles;
 mod rca;
 mod reports;
+mod retention;
 #[cfg(test)]
 mod route_table;
 pub(crate) mod scope;
@@ -335,6 +336,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(pollers::routes())
         .merge(health::routes())
         .merge(reports::routes())
+        .merge(retention::routes())
         .merge(meraki::routes())
         // Passive events: sources/rules CRUD + manual alert close, in `api/events.rs`.
         .merge(events::routes())

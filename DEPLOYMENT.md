@@ -159,7 +159,7 @@ Install and start, reachable from the host that will run core:
   CREATE DATABASE yagra OWNER yagra;
   ```
 - **NATS 2.x with JetStream** — `nats-server -js`
-- **VictoriaMetrics** — `victoria-metrics-prod --retentionPeriod=12` (12 months, single tier)
+- **VictoriaMetrics** — `victoria-metrics-prod --retentionPeriod=12` (12 months, single tier; see [Data retention](#data-retention))
 - **Redis 7** *(optional)* — only enables the poller liveness/assignment mirror
 
 ### 2. Build the workspace
@@ -359,7 +359,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_SMTP_PORT` | `465` (implicit TLS) | SMTP port |
 | `YAGRA_SMTP_USER` / `_PASS` | unset ⇒ no auth | SMTP credentials; applied only when **both** are set |
 | **Traffic flow & AS enrichment** | | |
-| `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days (ClickHouse TTL) |
+| `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days. **Seeds a brand-new deployment only** — afterwards Settings ▸ System settings ▸ Data retention is authoritative |
 | `YAGRA_IPASN_DB` | unset ⇒ enrichment off | Path to an offline iptoasn.com TSV for flow IP→ASN enrichment |
 | `YAGRA_IPASN_RELOAD_SECS` | `0` ⇒ load once at startup | Hot-reload period (seconds) for the IP→ASN file; `>0` reloads without a restart |
 | **High availability** | | |
@@ -453,9 +453,112 @@ Upgrades are designed to be low-effort and **never** lose or corrupt data:
 - **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; there is no manual migration CLI.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
 - **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **B**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
-- **Back up the persistent stores before a major upgrade:** the `pgdata` (PostgreSQL), `vmdata` (VictoriaMetrics), and `kekdata` (KEK) volumes — or their native equivalents. **Redis is rebuildable**, so losing it is non-fatal.
+- **Take a backup before a major upgrade** — see [Backup & restore](#backup--restore) below.
 
-> **Do not lose the KEK.** If the `kekdata` volume / KEK file is destroyed, every stored monitoring credential becomes permanently undecryptable. Back it up alongside the database.
+---
+
+## Backup & restore<a id="backup--restore"></a>
+
+Yagra does not ship a backup product. PostgreSQL, VictoriaMetrics and ClickHouse each have mature
+mechanisms of their own, and layering Yagra-specific orchestration on top would make the *restore*
+procedure depend on the Yagra version that took the backup. What Yagra ships is the procedure, as a
+script, plus a second script that proves a backup can actually be restored.
+
+### What to back up
+
+| Tier | Data | Required? |
+|---|---|---|
+| **1 — must not lose** | **KEK** (`kekdata` / `YAGRA_KEK_FILE`), PostgreSQL (`pgdata`), VictoriaMetrics (`vmdata`) | **Yes** |
+| 2 — loss-tolerant, TTL'd | VictoriaLogs (`vldata`, 30 days), ClickHouse flow store (`chdata`, 30 days) | No — both expire on their own schedule and hold no must-preserve state |
+| 3 — rebuildable | Redis | No — it mirrors state PostgreSQL already owns |
+
+**The PostgreSQL dump is the whole configuration**, not just part of it: nodes, folders, profiles,
+thresholds, classification rules, notification channels, routing rules, forwarding destinations,
+URL/DNS checks, users, alert history and the audit log.
+
+> **The KEK is item #1, and it must live somewhere the database dump does not.**
+> Losing it makes every stored monitoring credential permanently undecryptable — a database that
+> restores perfectly and yet cannot poll anything. Keeping both copies in one place means the single
+> incident that destroys that place destroys the pair. Take `YAGRA_SESSION_KEY_FILE` and
+> `YAGRA_NATS_CALLOUT_SEED_FILE` with it when they are set.
+
+### Taking one
+
+```bash
+./scripts/yagra-backup.sh /srv/backups/yagra          # writes the tier-1 set + a manifest
+```
+
+### Verifying it — this is the part that matters
+
+```bash
+./scripts/yagra-restore-verify.sh /srv/backups/yagra/yagra-backup-<stamp>
+```
+
+It restores into a **throwaway** compose project (`yagra-verify`, torn down with `down -v` on exit,
+and it refuses to run if you point it at the production project name) and asserts four things:
+
+1. `/readyz` returns 200 — core starts against the restored data,
+2. the node count matches the manifest — the configuration came back,
+3. **every credential still decrypts** — the KEK came back *and matches the ciphertext*,
+4. the `audit_log` row count matches — the "who changed what" trail survived.
+
+Assertion 3 is the one nothing else can infer: a restore can look perfect while the key is a
+different one, and nothing says so until the next poll fails. You can check it at any time with
+`GET /api/v1/credentials/health`. A backup containing no credentials reports **SKIPPED**, not PASS.
+
+**Run the verification before a destructive migration** (the built-in-catalog reseeds, migrations
+`0020`–`0022`), which is what ADR-017 requires a rollback path for.
+
+### Restoring forward only
+
+The restore target must be **the same version as the backup, or newer** — migrations only move
+forward. **Downgrade restore is unsupported**, and the verification script refuses it rather than
+letting it corrupt data quietly.
+
+---
+
+## Data retention<a id="data-retention"></a>
+
+How long each store keeps what. Most of it is editable at **Settings ▸ System settings ▸ Data
+retention**; changes apply on the next sweep, with no restart.
+
+| Data | Store | Default | Change it |
+|---|---|---|---|
+| Alert history, node-state snapshots, DNS chain changes, matched events | PostgreSQL | 90 days | Settings |
+| Unmatched passive events | PostgreSQL | 24 hours | Settings |
+| Report runs | PostgreSQL | 90 days | Settings |
+| Traffic flows | ClickHouse | 30 days | Settings |
+| Event log | VictoriaLogs | 30 days | **Container flag** (below) |
+| Metrics | VictoriaMetrics | 12 months | **Container flag** (below) |
+| Audit log | PostgreSQL | **kept indefinitely** | Not pruned, by design |
+
+**The audit log is never pruned.** Who changed what must not be swept away as a side effect of
+tidying logs.
+
+### The two rows Yagra cannot change
+
+VictoriaMetrics and VictoriaLogs take their retention as a **process start flag** and expose no API
+to change it at runtime. Yagra therefore reports these values (read back from each store's own
+`/flags` endpoint, so what you see is what the store is really enforcing) but cannot set them.
+Changing one is a deployment edit:
+
+```bash
+# docker-compose.deploy.yml
+#   victoriametrics: command: ["--retentionPeriod=24"]   # months
+#   victorialogs:    command: ["-retentionPeriod=90d"]
+docker compose -p yagra -f docker-compose.deploy.yml up -d victoriametrics
+```
+
+Only the edited container is recreated; the stack keeps running. Note that **shortening a window
+does not delete data immediately** — VictoriaMetrics and VictoriaLogs drop out-of-retention data as
+their storage merges proceed.
+
+If a row shows *"Unknown — the store did not report a retention flag"*, the flag is not set at all
+and the store is running its own built-in default; Yagra shows that rather than guessing a number.
+
+`YAGRA_FLOW_RETENTION_DAYS` seeds the flow window on a **brand-new** deployment only. After first
+boot the Settings value is authoritative, and the change is applied to ClickHouse immediately
+(`ALTER TABLE … MODIFY TTL`) — including on an existing volume, where it previously had no effect.
 
 ---
 

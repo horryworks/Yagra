@@ -56,6 +56,14 @@ pub trait LogStore: Send + Sync {
     async fn healthy(&self) -> bool {
         true
     }
+    /// The retention window this store is actually enforcing, as it reports it (ADR-040).
+    ///
+    /// Same story as [`crate::store::MetricStore::retention_flag`]: VictoriaLogs keeps retention in
+    /// a start flag Yagra cannot change at runtime, so it is reported, not set. `None` means
+    /// unknown (unreachable, or the product default) and must never be rendered as a number.
+    async fn retention_flag(&self) -> Option<String> {
+        None
+    }
     /// Persist a batch of received events (best-effort — a store hiccup must not stop alerting).
     async fn ingest_batch(&self, records: &[PersistRecord]);
     /// Search the event log, newest first. `name_node_ids` are node ids the API resolved from a
@@ -476,6 +484,12 @@ impl LogStore for VlStore {
                 false
             }
         }
+    }
+
+    async fn retention_flag(&self) -> Option<String> {
+        let url = format!("{}/flags", self.base);
+        let body = self.http.get(&url).send().await.ok()?.text().await.ok()?;
+        crate::retention::parse_retention_flag(&body)
     }
 
     async fn ingest_batch(&self, records: &[PersistRecord]) {

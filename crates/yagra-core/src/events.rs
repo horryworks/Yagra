@@ -56,10 +56,8 @@ const DEDUP_WINDOW_MS: i64 = 5_000;
 const DEDUP_CAP: usize = 4096;
 /// TTL sweeper cadence.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
-/// Matched events follow the alert-history retention.
-pub const MATCHED_RETENTION_SECS: i64 = 90 * 86_400;
-/// Unmatched events exist for rule authoring only.
-pub const UNMATCHED_RETENTION_SECS: i64 = 86_400;
+// Retention windows are no longer declared here: they are operator-configurable and live in
+// `crate::retention` (ADR-040). `prune_old` takes them as arguments so this store has no opinion.
 /// Bounded queue between the (single) event matcher and the async batch persist writer. The event
 /// log is a best-effort observational tier (ADR-024): sustained overload sheds the newest event
 /// rather than blocking the matcher or growing memory unbounded.
@@ -1191,14 +1189,20 @@ impl EventRepo {
             .collect())
     }
 
-    /// Asymmetric retention: matched events keep the alert-history window; unmatched
-    /// rows are rule-authoring material only. Returns (matched, unmatched) rows removed.
-    pub async fn prune_old(&self) -> anyhow::Result<(u64, u64)> {
+    /// Asymmetric retention: matched events keep the alert-history window; unmatched rows are
+    /// rule-authoring material only and get a shorter one. Both windows come from the caller
+    /// (`crate::retention`, ADR-040) so the policy is declared in one place, not here.
+    /// Returns (matched, unmatched) rows removed.
+    pub async fn prune_old(
+        &self,
+        matched_secs: i64,
+        unmatched_secs: i64,
+    ) -> anyhow::Result<(u64, u64)> {
         let matched = sqlx::query(
             "DELETE FROM events WHERE matched_rule_id IS NOT NULL \
              AND recorded_at < now() - $1 * interval '1 second'",
         )
-        .bind(MATCHED_RETENTION_SECS)
+        .bind(matched_secs)
         .execute(&self.pool)
         .await?
         .rows_affected();
@@ -1206,7 +1210,7 @@ impl EventRepo {
             "DELETE FROM events WHERE matched_rule_id IS NULL \
              AND recorded_at < now() - $1 * interval '1 second'",
         )
-        .bind(UNMATCHED_RETENTION_SECS)
+        .bind(unmatched_secs)
         .execute(&self.pool)
         .await?
         .rows_affected();

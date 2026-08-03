@@ -171,7 +171,9 @@ services:
     restart: unless-stopped
 
   # TSDB — VictoriaMetrics (ADR resolved) is the metrics body store.
-  # Retention is 12 months (single tier); see requirements §8 "確定したパラメータ".
+  # Retention is 12 months (single tier). This flag is the ONLY way to change it: VictoriaMetrics
+  # has no runtime API for retention, so Yagra reports this value (read back from /flags) but
+  # cannot set it — see ADR-040. Edit here, then `up -d victoriametrics` to recreate just this one.
   victoriametrics:
     # Pinned, not `:latest` — this holds the metrics history, and ADR-017 makes "an upgrade must
     # never lose or corrupt data" a top-tier policy. A floating tag lets an unrelated `docker
@@ -186,7 +188,9 @@ services:
   # Event log store — VictoriaLogs (ADR-024, the 4th data class). Holds the full passive-event
   # firehose (syslog/trap/webhook) for full-text search; sibling to VictoriaMetrics (same ops
   # model). Retention is 30 days (search/forensics window); the 90-day must-preserve subset is
-  # the alert-linked rows in PostgreSQL. Internal only (port 9428, no host mapping).
+  # the alert-linked rows in PostgreSQL. As with victoriametrics above, this flag is the only way
+  # to change it — VictoriaLogs has no runtime retention API, so Yagra reports the value it reads
+  # back from /flags but cannot set it (ADR-040). Internal only (port 9428, no host mapping).
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
     image: victoriametrics/victoria-logs:v1.52.0

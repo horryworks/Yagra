@@ -150,6 +150,41 @@
     "err": {
       "range": "{{min}}〜{{max}} の範囲で秒数を整数で入力してください。",
       "save": "設定の保存に失敗しました"
+    },
+    "retention": {
+      "title": "データ保持期間",
+      "note": "各ストアがどのデータをどれだけ保持するか。期間を短くすると、次回の掃引でそれより古いデータが削除されます。2 行はストア自身の起動フラグで決まるため、ここからは変更できません。",
+      "band": "({{min}}〜{{max}})",
+      "storeValue": "{{value}}（コンテナ側で設定）",
+      "storeUnknown": "不明 — ストアが保持期間のフラグを報告しませんでした",
+      "notConfigured": "このデプロイでは未設定",
+      "indefinite": "無期限に保持",
+      "unit": {
+        "days": "日",
+        "hours": "時間"
+      },
+      "field": {
+        "alert_linked_days": "アラート連動データ",
+        "unmatched_event_hours": "未マッチイベント",
+        "report_run_days": "レポート実行",
+        "flow_days": "トラフィックフロー"
+      },
+      "subject": {
+        "alert_history": "アラート履歴",
+        "node_state_snapshots": "ノード状態スナップショット",
+        "dns_chain_changes": "DNS チェーンの変化",
+        "events_matched": "マッチ済みイベント",
+        "events_unmatched": "未マッチイベント",
+        "report_runs": "レポート実行",
+        "flow_records": "トラフィックフロー",
+        "event_log_store": "イベントログ",
+        "metrics": "メトリクス",
+        "audit_log": "監査ログ"
+      },
+      "err": {
+        "range": "{{name}}: {{min}}〜{{max}} の範囲で整数を入力してください。",
+        "save": "保持期間の保存に失敗しました"
+      }
     }
   },
   "integrations": {

@@ -263,6 +263,9 @@ services:
     # a floating tag would silently roll the storage engine on an unrelated code deploy. Bump this
     # deliberately, with a backup.
     image: victoriametrics/victoria-metrics:v1.148.0
+    # Retention (months). This flag is the ONLY way to change it: VictoriaMetrics has no runtime
+    # retention API, so Yagra reports this value (read back from /flags) but cannot set it —
+    # ADR-040. Edit here, then `up -d victoriametrics` to recreate just this container.
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
@@ -273,6 +276,8 @@ services:
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
     image: victoriametrics/victoria-logs:v1.52.0
+    # As with victoriametrics: this flag is the only way to change retention (no runtime API), so
+    # Yagra reports it from /flags but cannot set it (ADR-040).
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
     volumes:
       - vldata:/victoria-logs-data
