@@ -24,6 +24,7 @@ const group = (over: Partial<NodeGroup> = {}): NodeGroup => ({
   sort_order: 0,
   latitude: null,
   longitude: null,
+  geo_source: 'unset',
   pool: null,
   ...over,
 });

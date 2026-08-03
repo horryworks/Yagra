@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Topology ▸ Geo map. A pin per placed node group on a bundled world outline, coloured by that
-// group's worst member state — "which of my sites is in trouble, and where is it".
+// Topology ▸ Geo map. A pin per placed node group on a bundled world outline, coloured by the
+// worst state of everything that resolves to that pin — "which of my sites is in trouble, and
+// where is it". "Everything that resolves here" is geo inheritance: a folder with no coordinates
+// of its own belongs to its nearest placed ancestor, so a site pin covers its racks and floors
+// rather than only the nodes filed directly under it. The server does that resolution
+// (`groups.rs::resolve_group_geo` → `geo_group`); this page only folds by it.
 //
 // The **write** side of this already existed: `PUT /api/v1/node-groups/{id}/geo`, edited from the
 // group dialog. What was missing was anywhere to look at the result except a small dashboard widget.
@@ -19,7 +23,7 @@ import { Card } from '../components/ui/Card';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
-import { countsTotal, worstStateFromCounts } from '../dashboard/widgets/util';
+import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
 import { stateColorVar, stateLabel } from '../lib/format';
 import { api } from '../services/api';
 import { useMapPaneStore } from '../store';
@@ -217,7 +221,9 @@ export function GeoMapPage() {
   );
 
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
-  const counts = summary?.groups ?? {};
+  // Per-pin totals, not per-folder: a group with no coordinates of its own is counted at the
+  // nearest placed ancestor's pin (geo inheritance), which the server resolved into `geo_group`.
+  const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
   const busy = (loading && !summary) || (groups.loading && !groups.data);
 
   return (
@@ -286,7 +292,7 @@ export function GeoMapPage() {
                 ))}
                 {placed.map((g) => {
                   const p = project(g.latitude, g.longitude);
-                  const c = counts[g.id];
+                  const c = pins[g.id];
                   const worst = c ? worstStateFromCounts(c) : 'ok';
                   const total = c ? countsTotal(c) : 0;
                   // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that

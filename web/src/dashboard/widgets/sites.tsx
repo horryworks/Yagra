@@ -3,8 +3,10 @@
 // (`useGroupSummary`, A-1) joined to the node-group tree — so they aggregate the WHOLE fleet per
 // group, not the first page of a node slice (the old `useNodes()` path under-counted every group
 // past the first 100 nodes). Site matrix = a tile per group (worst direct-member state + up/total);
-// region rollup = % healthy per top-level group summing descendants; geo map = a pin per placed
-// group coloured by its direct members' worst state.
+// region rollup = % healthy per top-level group summing descendants; geo map = a pin per group
+// carrying its own coordinates, coloured by every group that resolves to that pin (geo inheritance
+// — `pinRollupFromCounts`). The site matrix stays direct-member: a folder tile is about that
+// folder, whereas a pin is about a place, and a place contains its racks.
 
 import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../../lib/format';
@@ -12,7 +14,12 @@ import { api } from '../../services/api';
 import { RankedBars } from '../primitives/RankedBars';
 import { useGroupSummary } from '../useGroupSummary';
 import { usePolled } from '../usePolled';
-import { countsTotal, topLevelRollupFromCounts, worstStateFromCounts } from './util';
+import {
+  countsTotal,
+  pinRollupFromCounts,
+  topLevelRollupFromCounts,
+  worstStateFromCounts,
+} from './util';
 
 export function SiteHealthMatrixWidget() {
   const { t } = useTranslation('dashboard');
@@ -84,7 +91,9 @@ export function GeoMapWidget() {
   if ((loading && !summary) || (groups.loading && !groups.data)) {
     return <p className="muted">{t('common:loading')}</p>;
   }
-  const counts = summary?.groups ?? {};
+  // A pin per group carrying its OWN coordinates, counting everything that resolves to it — a
+  // site whose nodes all sit in rack sub-folders is the normal case, and it read as empty before.
+  const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
   const placed = (groups.data ?? []).filter(
     (g) => g.latitude != null && g.longitude != null,
   );
@@ -103,7 +112,7 @@ export function GeoMapWidget() {
   return (
     <div className="geo" role="img" aria-label={t('widgets.geoMap.aria')}>
       {placed.map((g) => {
-        const c = counts[g.id];
+        const c = pins[g.id];
         const worst = c ? worstStateFromCounts(c) : 'ok';
         const count = c ? countsTotal(c) : 0;
         const x = 6 + norm(g.longitude as number, minLon, maxLon) * 88;

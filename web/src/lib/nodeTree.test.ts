@@ -31,6 +31,7 @@ const group = (
   sort_order,
   latitude: null,
   longitude: null,
+  geo_source: 'unset',
   pool: null,
 });
 

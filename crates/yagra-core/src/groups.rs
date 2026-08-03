@@ -11,8 +11,17 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
+
+/// Longest ancestor chain any group walk will follow before giving up.
+///
+/// `node_groups.parent_id` is a self-FK with no cycle constraint — [`would_create_cycle`] guards
+/// the three endpoints that can set a parent, but `GroupRepo::delete`'s re-parenting does not
+/// re-check — so every upward walk is bounded by this *and* a visited set. A real folder tree is
+/// nowhere near this deep. Lives here rather than beside either caller because the bound is a
+/// property of the group tree, not of what is being inherited along it.
+pub const MAX_GROUP_DEPTH: usize = 64;
 
 /// The kind of a group — drives the icon and is purely organizational (not a polling concept).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,9 +77,24 @@ pub struct GroupSummary {
     pub parent_id: Option<Uuid>,
     /// Manual order within the parent scope (the UI sorts siblings by this, then by name).
     pub sort_order: f64,
-    /// Optional geo coordinates for the dashboard map (both set ⇒ plotted as a pin).
+    /// The group's own geo coordinates, as stored (both set ⇒ drawn as a pin). A descendant
+    /// folder normally leaves these null and inherits — see the `effective_*` pair below.
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    /// Where this group sits on the map after inheritance: its own coordinates, else the nearest
+    /// ancestor's, else null. Computed on every read; never stored.
+    ///
+    /// **These do not add a pin.** A group is drawn on the map only when `geo_source` is `own`;
+    /// for every other group this says which pin its nodes are counted at (`geo_group`).
+    // Resolved by `resolve_group_geo`, which is also where the "why" lives.
+    pub effective_latitude: Option<f64>,
+    pub effective_longitude: Option<f64>,
+    /// Whether the effective position is the group's own, inherited from an ancestor, or absent.
+    pub geo_source: GeoSource,
+    /// The group that supplied the effective position: this group when `geo_source` is `own`, the
+    /// ancestor it inherited from when `inherited`, null when `unset`. This is the pin the group's
+    /// nodes belong to, so a client never has to walk the folder tree itself.
+    pub geo_group: Option<Uuid>,
     /// Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit
     /// from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
     /// wins — see [`crate::poolres`].
@@ -179,6 +203,144 @@ pub fn group_ancestors(edges: &[(Uuid, Option<Uuid>)], start: Uuid) -> Vec<Uuid>
     out
 }
 
+/// For every group, the nearest group at-or-above it that carries a value — the shared engine
+/// behind *both* inheritable folder attributes (poll pool, ADR-009/020; map coordinates).
+///
+/// `rows` are `(id, parent_id, own value)`; the result maps a group to the value it resolves to
+/// **and the group that supplied it** (itself, when it carries its own). A group whose whole chain
+/// is unset is absent from the map.
+///
+/// One upward walk per group with **path compression** — the answer is written back to every group
+/// on the chain — so a resolved chain is walked once, not once per descendant. (Chains that resolve
+/// to nothing aren't memoized, so an all-unset forest costs O(groups × depth); with hundreds of rows
+/// and [`MAX_GROUP_DEPTH`] that is still trivial, and it keeps the map's meaning simple.) A cycle or
+/// an over-deep chain resolves to "nothing inherited" and warns, rather than hanging.
+///
+/// **One walk, not one per attribute.** The cycle guard, the depth bound and the compression are
+/// the parts that are easy to get subtly wrong, and a second copy would be the one that drifts —
+/// so callers supply the payload and the fallback rule, never the traversal.
+pub fn resolve_nearest_ancestor<T: Clone>(
+    rows: impl IntoIterator<Item = (Uuid, Option<Uuid>, Option<T>)>,
+) -> HashMap<Uuid, (T, Uuid)> {
+    let own: HashMap<Uuid, (Option<Uuid>, Option<T>)> = rows
+        .into_iter()
+        .map(|(id, parent, value)| (id, (parent, value)))
+        .collect();
+
+    let mut resolved: HashMap<Uuid, (T, Uuid)> = HashMap::new();
+    for &start in own.keys() {
+        if resolved.contains_key(&start) {
+            continue; // already answered as part of an earlier group's chain
+        }
+        // Walk up to the first group with a value (or a memoized answer), recording the path.
+        let mut chain: Vec<Uuid> = Vec::new();
+        let mut cur = Some(start);
+        let mut answer: Option<(T, Uuid)> = None;
+        let mut depth = 0usize;
+        while let Some(id) = cur {
+            if let Some(found) = resolved.get(&id) {
+                answer = Some(found.clone());
+                break;
+            }
+            if chain.contains(&id) || depth > MAX_GROUP_DEPTH {
+                tracing::warn!(
+                    group = %id,
+                    "node group ancestry is cyclic or deeper than the supported bound — \
+                     treating it as having nothing to inherit"
+                );
+                break;
+            }
+            let Some((parent, value)) = own.get(&id) else {
+                break; // dangling parent_id: nothing more to inherit from
+            };
+            // Recorded before the value check so the supplying group is memoized too, not just
+            // the descendants that inherit from it.
+            chain.push(id);
+            if let Some(v) = value {
+                answer = Some((v.clone(), id));
+                break;
+            }
+            cur = *parent;
+            depth += 1;
+        }
+        // Path compression: every group we walked through shares the answer.
+        if let Some(found) = answer {
+            for id in chain {
+                resolved.insert(id, found.clone());
+            }
+        }
+    }
+    resolved
+}
+
+/// Where a group's effective map position came from.
+// The geo twin of `crate::poolres::PoolSource`, minus a node level (nodes have no coordinates)
+// and minus a default (there is no implicit place on Earth).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GeoSource {
+    /// The group carries its own coordinates and is drawn as a pin.
+    Own,
+    /// Inherited from the nearest ancestor that carries coordinates, named by `geo_group`. The
+    /// group is not drawn as its own pin; its nodes are counted at that ancestor's.
+    Inherited,
+    /// Neither this group nor any ancestor is placed — it is not on the map.
+    Unset,
+}
+
+/// Fill every row's effective coordinates from the nearest ancestor that carries them.
+///
+/// **This is the whole of "geo inheritance", and it deliberately does not create pins.** A pin is
+/// drawn for a group that carries its *own* coordinates; inheritance means a descendant resolves
+/// *to* that pin, so its nodes are counted there. Placing a pin per inheriting group would draw
+/// thirty exactly-overlapping pins for thirty racks in one building and hide the site behind them.
+///
+/// The map therefore has the same number of pins before and after this runs — what changes is what
+/// each pin counts, from "the folder's direct members" to "everything that resolves here". That is
+/// the substance: a site pin whose nodes all live in rack sub-folders showed nothing at all before.
+///
+/// Pure (the resolution rule is unit-tested without a database) and resolved on read rather than
+/// materialized, for the reason threshold and pool inheritance are (ADR-013): a stored copy goes
+/// stale the moment a parent is edited or a folder is moved.
+pub fn resolve_group_geo(groups: &mut [GroupSummary]) {
+    let resolved = resolve_nearest_ancestor(
+        groups
+            .iter()
+            .map(|g| (g.id, g.parent_id, coords_of(g.latitude, g.longitude))),
+    );
+    for g in groups.iter_mut() {
+        match resolved.get(&g.id) {
+            Some(((lat, lon), from)) => {
+                g.effective_latitude = Some(*lat);
+                g.effective_longitude = Some(*lon);
+                g.geo_group = Some(*from);
+                g.geo_source = if *from == g.id {
+                    GeoSource::Own
+                } else {
+                    GeoSource::Inherited
+                };
+            }
+            None => {
+                g.effective_latitude = None;
+                g.effective_longitude = None;
+                g.geo_group = None;
+                g.geo_source = GeoSource::Unset;
+            }
+        }
+    }
+}
+
+/// A placement is both coordinates or neither — a row with only one is unplaced, not half-placed.
+/// The write path (`PUT /node-groups/{id}/geo`) sets and clears them together, so a lone value is
+/// legacy or hand-edited data; treating it as placed would put a pin on the prime meridian.
+fn coords_of(lat: Option<f64>, lon: Option<f64>) -> Option<(f64, f64)> {
+    match (lat, lon) {
+        // NaN/±inf would project to nowhere and poison the fit-to-view bounds for every other pin.
+        (Some(la), Some(lo)) if la.is_finite() && lo.is_finite() => Some((la, lo)),
+        _ => None,
+    }
+}
+
 /// PostgreSQL-backed group store.
 pub struct GroupRepo {
     pool: PgPool,
@@ -192,6 +354,10 @@ impl GroupRepo {
 
     /// All groups (the UI builds the tree from the flat list). Ordered by the manual sort_order
     /// within each parent scope, then name — the same order the tree renders.
+    ///
+    /// Geo inheritance is resolved here rather than by the caller, so there is exactly one place
+    /// that answers "where is this folder on the map" — see [`resolve_group_geo`]. It needs the
+    /// whole table, which is precisely what this query already returns.
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
             "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool \
@@ -199,7 +365,8 @@ impl GroupRepo {
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
+        let mut groups: Vec<GroupSummary> = rows
+            .into_iter()
             .map(|row| {
                 Ok(GroupSummary {
                     id: row.try_get("id")?,
@@ -209,10 +376,18 @@ impl GroupRepo {
                     sort_order: row.try_get("sort_order")?,
                     latitude: row.try_get("latitude")?,
                     longitude: row.try_get("longitude")?,
+                    // Overwritten wholesale by `resolve_group_geo` below; the row carries no
+                    // stored answer for these.
+                    effective_latitude: None,
+                    effective_longitude: None,
+                    geo_source: GeoSource::Unset,
+                    geo_group: None,
                     pool: row.try_get("pool")?,
                 })
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        resolve_group_geo(&mut groups);
+        Ok(groups)
     }
 
     /// The `(id, sort_order)` of the groups directly under `parent` (NULL ⇒ top level), ordered.
@@ -421,6 +596,185 @@ mod tests {
             serde_json::to_string(&GroupType::DeviceType).unwrap(),
             "\"device_type\""
         );
+    }
+
+    /// A group row with only the fields geo resolution reads.
+    fn geo_row(id: u128, parent: Option<u128>, coords: Option<(f64, f64)>) -> GroupSummary {
+        GroupSummary {
+            id: Uuid::from_u128(id),
+            name: format!("g{id}"),
+            group_type: GroupType::Generic.key().to_owned(),
+            parent_id: parent.map(Uuid::from_u128),
+            sort_order: 0.0,
+            latitude: coords.map(|c| c.0),
+            longitude: coords.map(|c| c.1),
+            effective_latitude: None,
+            effective_longitude: None,
+            geo_source: GeoSource::Unset,
+            geo_group: None,
+            pool: None,
+        }
+    }
+
+    /// `(effective lat, effective lon, source, supplying group)` for one row, for terse asserts.
+    fn geo_of(
+        groups: &[GroupSummary],
+        id: u128,
+    ) -> (Option<f64>, Option<f64>, GeoSource, Option<u128>) {
+        let g = groups
+            .iter()
+            .find(|g| g.id == Uuid::from_u128(id))
+            .expect("row present");
+        (
+            g.effective_latitude,
+            g.effective_longitude,
+            g.geo_source,
+            g.geo_group.map(|id| id.as_u128()),
+        )
+    }
+
+    #[test]
+    fn a_subgroup_inherits_the_nearest_placed_ancestors_position() {
+        // tokyo(placed) → floor2(unplaced) → rack7(unplaced): the whole chain resolves to tokyo's
+        // pin. This is the bug the feature exists for — nodes live in racks, the operator places
+        // the site, and before inheritance the site pin counted nothing.
+        let mut groups = vec![
+            geo_row(1, None, Some((35.68, 139.76))),
+            geo_row(2, Some(1), None),
+            geo_row(3, Some(2), None),
+        ];
+        resolve_group_geo(&mut groups);
+        assert_eq!(
+            geo_of(&groups, 1),
+            (Some(35.68), Some(139.76), GeoSource::Own, Some(1)),
+            "a placed group supplies its own position and names itself as the pin"
+        );
+        for id in [2, 3] {
+            assert_eq!(
+                geo_of(&groups, id),
+                (Some(35.68), Some(139.76), GeoSource::Inherited, Some(1)),
+                "group {id} resolves to the site pin"
+            );
+        }
+    }
+
+    #[test]
+    fn the_nearest_placed_ancestor_wins_over_a_farther_one() {
+        // region(placed) → site(placed) → rack(unplaced): the rack belongs to the site's pin, not
+        // the region's. Nearest wins, exactly as pool and threshold inheritance do.
+        let mut groups = vec![
+            geo_row(1, None, Some((10.0, 10.0))),
+            geo_row(2, Some(1), Some((20.0, 20.0))),
+            geo_row(3, Some(2), None),
+        ];
+        resolve_group_geo(&mut groups);
+        assert_eq!(
+            geo_of(&groups, 3),
+            (Some(20.0), Some(20.0), GeoSource::Inherited, Some(2))
+        );
+    }
+
+    #[test]
+    fn inheritance_never_adds_a_pin() {
+        // The load-bearing property: however many groups inherit, the number of groups drawn is
+        // still the number carrying their own coordinates. Thirty racks under one building must
+        // not become thirty exactly-overlapping pins that hide the building.
+        let mut groups = vec![geo_row(1, None, Some((35.0, 139.0)))];
+        for i in 2..=31u128 {
+            groups.push(geo_row(i, Some(1), None));
+        }
+        resolve_group_geo(&mut groups);
+        assert_eq!(
+            groups
+                .iter()
+                .filter(|g| g.geo_source == GeoSource::Own)
+                .count(),
+            1,
+            "one placed group ⇒ one pin, regardless of how many descendants inherit"
+        );
+        assert_eq!(
+            groups
+                .iter()
+                .filter(|g| g.geo_group == Some(Uuid::from_u128(1)))
+                .count(),
+            31,
+            "every descendant is counted at that one pin"
+        );
+    }
+
+    #[test]
+    fn an_unplaced_chain_stays_off_the_map() {
+        // Nothing placed anywhere, and a dangling parent_id, must both read as "not on the map" —
+        // never as (0, 0), which is a real place in the Gulf of Guinea.
+        let mut groups = vec![
+            geo_row(1, None, None),
+            geo_row(2, Some(1), None),
+            geo_row(4, Some(9), None),
+        ];
+        resolve_group_geo(&mut groups);
+        for id in [1, 2, 4] {
+            assert_eq!(geo_of(&groups, id), (None, None, GeoSource::Unset, None));
+        }
+    }
+
+    #[test]
+    fn a_half_set_or_non_finite_coordinate_is_not_a_placement() {
+        // A lone latitude is legacy or hand-edited data (the write path sets both or clears both);
+        // treating it as placed would pin the group on the prime meridian. NaN/inf would project
+        // to nowhere *and* poison the fit-to-view bounds computed across every other pin.
+        let mut groups = vec![
+            geo_row(1, None, None),
+            geo_row(2, Some(1), None),
+            geo_row(3, Some(1), None),
+        ];
+        groups[0].latitude = Some(35.0); // longitude left null
+        groups[1].latitude = Some(f64::NAN);
+        groups[1].longitude = Some(139.0);
+        groups[2].latitude = Some(35.0);
+        groups[2].longitude = Some(f64::INFINITY);
+        resolve_group_geo(&mut groups);
+        for id in [1, 2, 3] {
+            assert_eq!(geo_of(&groups, id), (None, None, GeoSource::Unset, None));
+        }
+    }
+
+    #[test]
+    fn cyclic_ancestry_resolves_to_unplaced_without_hanging() {
+        // `would_create_cycle` guards the endpoints that set a parent, but `delete`'s re-parenting
+        // does not re-check and there is no DB constraint — so the resolver must survive one.
+        let mut groups = vec![geo_row(1, Some(1), None)];
+        resolve_group_geo(&mut groups);
+        assert_eq!(geo_of(&groups, 1).2, GeoSource::Unset);
+
+        let mut groups = vec![
+            geo_row(1, Some(2), None),
+            geo_row(2, Some(1), None),
+            geo_row(3, None, Some((1.0, 2.0))),
+        ];
+        resolve_group_geo(&mut groups);
+        assert_eq!(geo_of(&groups, 1).2, GeoSource::Unset);
+        assert_eq!(geo_of(&groups, 2).2, GeoSource::Unset);
+        assert_eq!(
+            geo_of(&groups, 3),
+            (Some(1.0), Some(2.0), GeoSource::Own, Some(3)),
+            "a cycle elsewhere in the forest does not affect a healthy branch"
+        );
+    }
+
+    #[test]
+    fn resolution_is_idempotent() {
+        // `list()` fills these on every read; running twice must not drift, and re-resolving rows
+        // that already carry an answer must not mistake an inherited value for an own one.
+        let mut groups = vec![
+            geo_row(1, None, Some((35.0, 139.0))),
+            geo_row(2, Some(1), None),
+        ];
+        resolve_group_geo(&mut groups);
+        let once: Vec<_> = groups.iter().map(|g| (g.geo_source, g.geo_group)).collect();
+        resolve_group_geo(&mut groups);
+        let twice: Vec<_> = groups.iter().map(|g| (g.geo_source, g.geo_group)).collect();
+        assert_eq!(once, twice);
+        assert_eq!(geo_of(&groups, 2).2, GeoSource::Inherited);
     }
 
     #[test]

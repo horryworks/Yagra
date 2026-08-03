@@ -20423,6 +20423,15 @@
           }
         }
       },
+      "GeoSource": {
+        "type": "string",
+        "description": "Where a group's effective map position came from.",
+        "enum": [
+          "own",
+          "inherited",
+          "unset"
+        ]
+      },
       "GroupBody": {
         "type": "object",
         "description": "Create/update body for a group. `group_type` is a validated [`GroupType`] key.",
@@ -20564,9 +20573,37 @@
           "id",
           "name",
           "group_type",
-          "sort_order"
+          "sort_order",
+          "geo_source"
         ],
         "properties": {
+          "effective_latitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Where this group sits on the map after inheritance: its own coordinates, else the nearest\nancestor's, else null. Computed on every read; never stored.\n\n**These do not add a pin.** A group is drawn on the map only when `geo_source` is `own`;\nfor every other group this says which pin its nodes are counted at (`geo_group`)."
+          },
+          "effective_longitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "geo_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The group that supplied the effective position: this group when `geo_source` is `own`, the\nancestor it inherited from when `inherited`, null when `unset`. This is the pin the group's\nnodes belong to, so a client never has to walk the folder tree itself."
+          },
+          "geo_source": {
+            "$ref": "#/components/schemas/GeoSource",
+            "description": "Whether the effective position is the group's own, inherited from an ancestor, or absent."
+          },
           "group_type": {
             "type": "string"
           },
@@ -20580,7 +20617,7 @@
               "null"
             ],
             "format": "double",
-            "description": "Optional geo coordinates for the dashboard map (both set ⇒ plotted as a pin)."
+            "description": "The group's own geo coordinates, as stored (both set ⇒ drawn as a pin). A descendant\nfolder normally leaves these null and inherits — see the `effective_*` pair below."
           },
           "longitude": {
             "type": [

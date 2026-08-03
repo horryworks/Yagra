@@ -16,6 +16,7 @@ import {
   downCount,
   flowTrendSeries,
   percentHealthy,
+  pinRollupFromCounts,
   type StateCounts,
   stateCounts,
   topLevelRollup,
@@ -38,14 +39,21 @@ const node = (id: string, state: NodeSummary['state'], group_id: string | null =
   source: 'device',
 });
 
-const group = (id: string, parent_id: string | null = null): NodeGroup => ({
+/** A folder. `pin` is the group it resolves to on the map — what the server puts in `geo_group`
+ *  (itself when it carries its own coordinates), so tests state the resolved answer rather than
+ *  re-deriving it. */
+const group = (id: string, parent_id: string | null = null, pin?: string): NodeGroup => ({
   id,
   name: id,
   group_type: 'site',
   parent_id,
   sort_order: 0,
-  latitude: null,
-  longitude: null,
+  latitude: pin === id ? 35 : null,
+  longitude: pin === id ? 139 : null,
+  effective_latitude: pin ? 35 : null,
+  effective_longitude: pin ? 139 : null,
+  geo_source: pin == null ? 'unset' : pin === id ? 'own' : 'inherited',
+  geo_group: pin ?? null,
   pool: null,
 });
 
@@ -189,6 +197,70 @@ describe('counts-driven roll-ups (server-side per-group summary, A-1)', () => {
     const groups = [group('tokyo')];
     const stats = topLevelRollupFromCounts({ ghost: counts({ critical: 5 }) }, groups);
     expect(stats).toEqual([]);
+  });
+});
+
+describe('pinRollupFromCounts', () => {
+  it('counts a placed site plus everything that inherits its position', () => {
+    // The bug this exists for: the operator pins the site, but the nodes live in rack folders, so
+    // the pin used to show the site folder's own (empty) membership.
+    const groups = [
+      group('tokyo', null, 'tokyo'),
+      group('floor2', 'tokyo', 'tokyo'),
+      group('rackA', 'floor2', 'tokyo'),
+    ];
+    const pins = pinRollupFromCounts(
+      {
+        tokyo: counts({ ok: 1 }),
+        floor2: counts({ warning: 2 }),
+        rackA: counts({ critical: 1, ok: 3 }),
+      },
+      groups,
+    );
+    expect(Object.keys(pins)).toEqual(['tokyo']);
+    expect(countsTotal(pins.tokyo)).toBe(7);
+    expect(pins.tokyo.critical).toBe(1);
+    expect(pins.tokyo.warning).toBe(2);
+    expect(pins.tokyo.ok).toBe(4);
+  });
+
+  it('keeps separate sites separate and attributes a rack to its nearest placed ancestor', () => {
+    const groups = [
+      group('tokyo', null, 'tokyo'),
+      group('rackA', 'tokyo', 'tokyo'),
+      group('osaka', null, 'osaka'),
+      group('rackB', 'osaka', 'osaka'),
+    ];
+    const pins = pinRollupFromCounts(
+      {
+        rackA: counts({ critical: 1 }),
+        rackB: counts({ ok: 2 }),
+      },
+      groups,
+    );
+    expect(countsTotal(pins.tokyo)).toBe(1);
+    expect(pins.tokyo.critical).toBe(1);
+    expect(countsTotal(pins.osaka)).toBe(2);
+    expect(pins.osaka.critical).toBe(0);
+  });
+
+  it('ignores groups that resolve to no pin, and counts with no group', () => {
+    // An unplaced folder (`geo_group: null`) contributes to nothing — it is not on the map, and
+    // silently attributing it to some ancestor would invent a location.
+    const groups = [group('tokyo', null, 'tokyo'), group('loose')];
+    const pins = pinRollupFromCounts(
+      { tokyo: counts({ ok: 1 }), loose: counts({ critical: 9 }), ghost: counts({ critical: 9 }) },
+      groups,
+    );
+    expect(Object.keys(pins)).toEqual(['tokyo']);
+    expect(countsTotal(pins.tokyo)).toBe(1);
+  });
+
+  it('gives a placed site with no members at all no entry rather than a zeroed one', () => {
+    // So the pin falls back to the same "ok / 0" rendering it had before inheritance, instead of
+    // an empty tally that would read as a deliberate all-clear.
+    const pins = pinRollupFromCounts({}, [group('tokyo', null, 'tokyo')]);
+    expect(pins.tokyo).toBeUndefined();
   });
 });
 

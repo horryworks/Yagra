@@ -77,6 +77,21 @@
   migrations since it was written, and until now the repository contained no `pg_dump` at all.
 
 ### Bug Fixes
+- **A site pin on the Geo map counted only the nodes filed directly in that folder.** Nodes
+  normally live in sub-folders — racks, floors, closets — so an operator who placed their Tokyo
+  site and filed the switches under *Tokyo ▸ Floor 2 ▸ Rack A* got a pin that was permanently
+  green and empty, showing nothing about a site that was on fire. **Group coordinates are now
+  inherited**: a folder with none of its own belongs to its nearest placed ancestor, and a pin
+  counts everything that resolves to it. Both the Geo map page and the dashboard widget change
+  together, so a site cannot read amber in one and green in the other.
+  - **Inheritance does not add pins.** Thirty racks under one building stay one pin — thirty
+    exactly-overlapping ones would only hide the building. The number of pins is still the number
+    of folders carrying their own coordinates; what changed is what each one counts.
+  - The group dialog now says when a folder is already on the map through its parent, so an empty
+    pair of coordinate boxes no longer reads as "this site is missing from the map".
+  - API: `GET /api/v1/node-groups` rows gain `effective_latitude`, `effective_longitude`,
+    `geo_source` (`own` / `inherited` / `unset`) and `geo_group` — the folder whose pin this one
+    belongs to. `latitude`/`longitude` still mean the folder's *own* coordinates and are unchanged.
 - **`YAGRA_FLOW_RETENTION_DAYS` did nothing on an existing deployment.** The ClickHouse TTL was only
   ever emitted inside `CREATE TABLE IF NOT EXISTS`, which is a no-op once the tables exist, so the
   retention an existing volume ran with was whatever it was created with — while `DEPLOYMENT.md`

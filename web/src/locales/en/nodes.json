@@ -91,7 +91,8 @@
     "poolHint": "Nodes in this group (and its subgroups) are polled by this pool unless they set their own. Leave blank to inherit.",
     "latitude": "Latitude (optional)",
     "longitude": "Longitude (optional)",
-    "geoHint": "Where this group sits on the dashboard Geo map widget. Set both or leave both blank to remove the pin."
+    "geoHint": "Where this group sits on the Geo map. Set both or leave both blank to remove the pin.",
+    "geoInherited": "Already on the map at {{name}}, inherited from the folder above — nodes in this group are counted at that pin. Set coordinates here only to give this group a pin of its own."
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",

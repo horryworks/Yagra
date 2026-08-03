@@ -30,6 +30,30 @@ export function geoChanged(draft: GeoDraft, group: NodeGroup | undefined): boole
   return before.latitude !== draft.latitude.trim() || before.longitude !== draft.longitude.trim();
 }
 
+/** The id of the ancestor whose pin this folder already sits on, or null if there is nothing
+ *  useful to say. Answers the question an operator has when they open a rack folder, see two empty
+ *  coordinate boxes, and cannot tell whether the rack is missing from the map or already covered
+ *  by its site.
+ *
+ *  It reports the **server's** answer (`geo_source`/`geo_group`), never a fresh walk — the whole
+ *  point of resolving inheritance in one place is that the client does not get to have a second
+ *  opinion about where a folder is. That is also why a pending parent change suppresses it: the
+ *  server answered for the stored parent, and a stale "inherited from Tokyo" while the operator is
+ *  mid-move to Osaka would be worse than saying nothing.
+ *
+ *  Suppressed too once the draft carries its own coordinates, since the folder is then its own pin.
+ */
+export function inheritedPin(
+  group: NodeGroup | undefined,
+  draft: GeoDraft,
+  pendingParent: string | null,
+): string | null {
+  if (!group || group.geo_source !== 'inherited' || !group.geo_group) return null;
+  if (draft.latitude.trim() !== '' || draft.longitude.trim() !== '') return null;
+  if (pendingParent !== (group.parent_id ?? null)) return null;
+  return group.geo_group;
+}
+
 /** The draft → the `PUT` body, or the first reason it cannot be sent.
  *
  *  Both fields or neither: half a coordinate pair is not a location. Clearing both is meaningful —

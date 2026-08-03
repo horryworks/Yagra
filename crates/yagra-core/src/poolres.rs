@@ -20,12 +20,6 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use yagra_common::Node;
 
-/// Longest ancestor chain the walk will follow before giving up. `node_groups.parent_id` is a
-/// self-FK with no cycle constraint — [`crate::groups::would_create_cycle`] guards the two move
-/// endpoints, but `GroupRepo::delete`'s re-parenting does not re-check — so the walk is bounded by
-/// this *and* a visited set. A real folder tree is nowhere near this deep.
-const MAX_GROUP_DEPTH: usize = 64;
-
 /// Where a node's effective pool came from, so the UI can say "inherited from the Tokyo folder"
 /// rather than just showing a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
@@ -77,64 +71,16 @@ impl PoolResolver {
     /// Build from the `(id, parent_id, pool)` rows of `node_groups` (see
     /// [`crate::groups::GroupRepo::pool_rows`]).
     ///
-    /// One upward walk per group with **path compression** — the answer is written back to every
-    /// group on the chain — so a resolved chain is walked once, not once per descendant. (Chains
-    /// that resolve to nothing aren't memoized, so an all-unset forest costs O(groups × depth);
-    /// with hundreds of rows and [`MAX_GROUP_DEPTH`] that is still trivial, and it keeps the map's
-    /// meaning simple.) A cycle or an over-deep chain resolves to "no inherited pool" and warns,
-    /// rather than hanging.
+    /// The traversal itself — path compression, the cycle guard, the depth bound — is
+    /// [`crate::groups::resolve_nearest_ancestor`], shared with map-coordinate inheritance. What
+    /// belongs here is only what is specific to pools: [`meaningful`] deciding that a blank value
+    /// means "unset" rather than a pool literally named `""`.
     #[must_use]
     pub fn build(rows: Vec<(Uuid, Option<Uuid>, Option<String>)>) -> Self {
-        let own: HashMap<Uuid, (Option<Uuid>, Option<String>)> = rows
-            .into_iter()
-            .map(|(id, parent, pool)| {
-                (id, (parent, meaningful(pool.as_deref()).map(str::to_owned)))
-            })
-            .collect();
-
-        let mut by_group: HashMap<Uuid, (String, Uuid)> = HashMap::new();
-        for &start in own.keys() {
-            if by_group.contains_key(&start) {
-                continue; // already answered as part of an earlier group's chain
-            }
-            // Walk up to the first group with a pool (or a memoized answer), recording the path.
-            let mut chain: Vec<Uuid> = Vec::new();
-            let mut cur = Some(start);
-            let mut answer: Option<(String, Uuid)> = None;
-            let mut depth = 0usize;
-            while let Some(id) = cur {
-                if let Some(found) = by_group.get(&id) {
-                    answer = Some(found.clone());
-                    break;
-                }
-                if chain.contains(&id) || depth > MAX_GROUP_DEPTH {
-                    tracing::warn!(
-                        group = %id,
-                        "node group ancestry is cyclic or deeper than the supported bound — \
-                         treating it as having no inherited pool"
-                    );
-                    break;
-                }
-                let Some((parent, pool)) = own.get(&id) else {
-                    break; // dangling parent_id: nothing more to inherit from
-                };
-                // Recorded before the pool check so the supplying group is memoized too, not just
-                // the descendants that inherit from it.
-                chain.push(id);
-                if let Some(p) = pool {
-                    answer = Some((p.clone(), id));
-                    break;
-                }
-                cur = *parent;
-                depth += 1;
-            }
-            // Path compression: every group we walked through shares the answer.
-            if let Some(found) = answer {
-                for id in chain {
-                    by_group.insert(id, found.clone());
-                }
-            }
-        }
+        let by_group =
+            crate::groups::resolve_nearest_ancestor(rows.into_iter().map(|(id, parent, pool)| {
+                (id, parent, meaningful(pool.as_deref()).map(str::to_owned))
+            }));
         Self { by_group }
     }
 
@@ -178,6 +124,7 @@ impl PoolResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::groups::MAX_GROUP_DEPTH;
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_common::GroupId;
 

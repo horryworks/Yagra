@@ -11,7 +11,7 @@ import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
 import { asGroupType, groupOptions, isSelfOrDescendant } from '../../lib/nodeTree';
 import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
-import { geoBodyFrom, geoChanged, geoDraftFrom } from './geoFields';
+import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select, RequiredMark } from '../ui/Field';
@@ -53,6 +53,11 @@ export function GroupModal({
   // What this folder would inherit if its own pool is cleared. Preview only — the authority on what
   // actually polls a node is the server (`getNodeAssignment`), never this walk.
   const inherited = inheritedGroupPool(groups, parent || null);
+  // Whether this folder is already on the map through an ancestor. Unlike the pool preview above
+  // there is no client-side walk here: the server resolved it, and a second answer is exactly what
+  // would let the dialog and the map disagree.
+  const pinnedAtId = inheritedPin(state.group, geo, parent || null);
+  const pinnedAt = pinnedAtId ? groups.find((g) => g.id === pinnedAtId) : undefined;
 
   // For an edit, a group cannot be parented under itself or any of its descendants.
   const parentChoices = groupOptions(groups).filter(
@@ -169,7 +174,11 @@ export function GroupModal({
             />
           </label>
         </div>
-        <span className="form-hint">{t('group.geoHint')}</span>
+        <span className="form-hint">
+          {/* Falls back to the plain hint when the supplying ancestor is outside the caller's
+              scope — naming a folder they cannot see would be worse than saying nothing. */}
+          {pinnedAt ? t('group.geoInherited', { name: pinnedAt.name }) : t('group.geoHint')}
+        </span>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>

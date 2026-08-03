@@ -202,6 +202,33 @@ export interface RegionStat {
   pct: number;
 }
 
+/** Roll per-group DIRECT-member counts up to the map pin each group resolves to.
+ *
+ *  This is what makes a site pin mean "everything at this site". Before geo inheritance a pin
+ *  showed its folder's *direct* members, so an operator who placed a site whose nodes all live in
+ *  rack sub-folders saw a pin with nothing in it.
+ *
+ *  Deliberately not a tree walk: the server already resolved "which pin does this folder belong
+ *  to" into `geo_group` (one place, `groups.rs::resolve_group_geo`), so this is a fold. Writing the
+ *  nearest-placed-ancestor walk again here is what would let the map and the server disagree about
+ *  where a folder is — the same failure the region rollup above still risks by walking `parent_id`
+ *  itself. Groups that resolve to no pin are skipped. */
+export function pinRollupFromCounts(
+  counts: Record<string, StateCounts>,
+  groups: NodeGroup[],
+): Record<string, StateCounts> {
+  const out: Record<string, StateCounts> = {};
+  for (const g of groups) {
+    const pin = g.geo_group;
+    if (!pin) continue;
+    const c = counts[g.id];
+    if (!c) continue;
+    const acc = (out[pin] ??= emptyStateCounts());
+    for (const s of SEVERITY_ORDER) acc[s] += c[s] ?? 0;
+  }
+  return out;
+}
+
 /** Roll nodes up to their top-level group (walking parent links), counting % healthy per
  *  region. Nodes in a sub-group attribute to its top-level ancestor; ungrouped nodes are
  *  ignored. Cycle-guarded. Returns only regions with at least one member. */

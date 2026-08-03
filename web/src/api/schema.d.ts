@@ -4951,6 +4951,11 @@ export interface components {
             /** @description False on an HA standby, whose dispatcher is not running (destination CRUD still works). */
             sending: boolean;
         };
+        /**
+         * @description Where a group's effective map position came from.
+         * @enum {string}
+         */
+        GeoSource: "own" | "inherited" | "unset";
         /** @description Create/update body for a group. `group_type` is a validated [`GroupType`] key. */
         GroupBody: {
             group_type: string;
@@ -5011,12 +5016,33 @@ export interface components {
         };
         /** @description One group row returned by the API. `group_type` is the snake_case key. */
         GroupSummary: {
+            /**
+             * Format: double
+             * @description Where this group sits on the map after inheritance: its own coordinates, else the nearest
+             *     ancestor's, else null. Computed on every read; never stored.
+             *
+             *     **These do not add a pin.** A group is drawn on the map only when `geo_source` is `own`;
+             *     for every other group this says which pin its nodes are counted at (`geo_group`).
+             */
+            effective_latitude?: number | null;
+            /** Format: double */
+            effective_longitude?: number | null;
+            /**
+             * Format: uuid
+             * @description The group that supplied the effective position: this group when `geo_source` is `own`, the
+             *     ancestor it inherited from when `inherited`, null when `unset`. This is the pin the group's
+             *     nodes belong to, so a client never has to walk the folder tree itself.
+             */
+            geo_group?: string | null;
+            /** @description Whether the effective position is the group's own, inherited from an ancestor, or absent. */
+            geo_source: components["schemas"]["GeoSource"];
             group_type: string;
             /** Format: uuid */
             id: string;
             /**
              * Format: double
-             * @description Optional geo coordinates for the dashboard map (both set ⇒ plotted as a pin).
+             * @description The group's own geo coordinates, as stored (both set ⇒ drawn as a pin). A descendant
+             *     folder normally leaves these null and inherits — see the `effective_*` pair below.
              */
             latitude?: number | null;
             /** Format: double */
