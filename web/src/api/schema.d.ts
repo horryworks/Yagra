@@ -554,6 +554,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["export_bundle"];
+        put?: never;
+        /**
+         * Apply a bundle. Existing rows with the same id are updated, new ones created; nothing is ever
+         *     deleted, and there is no replace mode.
+         */
+        post: operations["import_bundle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/credentials": {
         parameters: {
             query?: never;
@@ -3326,6 +3346,27 @@ export interface components {
             /** Format: int64 */
             window_secs: number;
         };
+        /** @description A recurring Troubleshoot analysis. */
+        AnalysisScheduleRow: {
+            /** Format: int32 */
+            at_hour: number;
+            /** Format: int32 */
+            at_minute: number;
+            /** Format: int32 */
+            day_of_month?: number | null;
+            /** Format: int32 */
+            day_of_week?: number | null;
+            enabled: boolean;
+            frequency: string;
+            /** Format: uuid */
+            id: string;
+            params: unknown;
+            /** Format: uuid */
+            scope_id?: string | null;
+            scope_kind: string;
+            scope_label: string;
+            tool: string;
+        };
         /**
          * @description Outcome of a schedule's most recent firing attempt.
          * @enum {string}
@@ -3386,6 +3427,15 @@ export interface components {
              */
             surfaces: components["schemas"]["TokenSurface"][];
         };
+        /**
+         * @description The deployment-wide settings the bundle carries. The retention windows are deliberately absent
+         *     (module docs).
+         */
+        AppSettingsRow: {
+            /** Format: int32 */
+            default_poll_interval_secs: number;
+            meraki_polling_enabled: boolean;
+        };
         /** @description One audit row (API shape; `at` is RFC 3339 text at the edge). */
         AuditRow: {
             action: string;
@@ -3435,6 +3485,20 @@ export interface components {
             threshold?: number | null;
             /** Format: double */
             value: number;
+        };
+        /** @description One note, with the table it concerns and how many rows it covers. */
+        BundleNote: {
+            /** @description What happened. */
+            code: components["schemas"]["NoteCode"];
+            /**
+             * Format: int32
+             * @description How many rows this note covers.
+             */
+            count: number;
+            /** @description The column involved, when the note is about one (e.g. `credential_id`). */
+            field?: string | null;
+            /** @description The table the note is about. */
+            table: string;
         };
         /**
          * @description How often a schedule fires.
@@ -3593,6 +3657,20 @@ export interface components {
             sysobjectid_prefix?: string | null;
             vendor?: string | null;
         };
+        /** @description A discovery classification rule. */
+        ClassificationRuleRow: {
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            model?: string | null;
+            /** Format: int32 */
+            priority: number;
+            /** Format: uuid */
+            profile_id: string;
+            sysdescr_regex?: string | null;
+            sysobjectid_prefix?: string | null;
+            vendor?: string | null;
+        };
         /** @description Client bootstrap config — no secrets. */
         ClientConfig: {
             /** @description Whether interactive login exists at all (false in skeleton mode). */
@@ -3638,6 +3716,25 @@ export interface components {
          * @enum {string}
          */
         CollectionKind: "scalar" | "table";
+        /** @description One metric inside a collection template. */
+        CollectionTemplateItemRow: {
+            collection: string;
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            metric_kind: string;
+            metric_name: string;
+            oid: string;
+            /** Format: uuid */
+            template_id: string;
+        };
+        /** @description A reusable collection template. */
+        CollectionTemplateRow: {
+            description?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         /**
          * @description One `field op value` test. `value` is always a string so the config has a single JSON shape;
          *     [`compile`] parses it according to the field's type.
@@ -3653,6 +3750,44 @@ export interface components {
         ConfigBody: {
             /** Format: int32 */
             default_poll_interval_secs: number;
+        };
+        /** @description A whole configuration bundle. */
+        ConfigBundle: {
+            analysis_schedules?: components["schemas"]["AnalysisScheduleRow"][];
+            app_settings?: null | components["schemas"]["AppSettingsRow"];
+            classification_rules?: components["schemas"]["ClassificationRuleRow"][];
+            collection_template_items?: components["schemas"]["CollectionTemplateItemRow"][];
+            collection_templates?: components["schemas"]["CollectionTemplateRow"][];
+            dns_checks?: components["schemas"]["DnsCheckRow"][];
+            event_rules?: components["schemas"]["EventRuleRow"][];
+            event_sources?: components["schemas"]["EventSourceRow"][];
+            /**
+             * Format: date-time
+             * @description When the export ran.
+             */
+            exported_at: string;
+            /** @description Always `yagra.config-bundle`. An importer refuses anything else rather than guessing. */
+            format: string;
+            forward_destinations?: components["schemas"]["ForwardDestinationRow"][];
+            node_groups?: components["schemas"]["NodeGroupRow"][];
+            nodes?: components["schemas"]["NodeRow"][];
+            /** @description What the export left out or changed. Informational; ignored on import. */
+            notes?: components["schemas"]["BundleNote"][];
+            profile_collection_templates?: components["schemas"]["ProfileTemplateLink"][];
+            profiles?: components["schemas"]["ProfileRow"][];
+            report_definitions?: components["schemas"]["ReportDefinitionRow"][];
+            report_schedules?: components["schemas"]["ReportScheduleRow"][];
+            /** @description How secrets are represented. Always `references` — a bundle never carries one. */
+            secrets?: components["schemas"]["SecretsMode"];
+            thresholds?: components["schemas"]["ThresholdRow"][];
+            url_checks?: components["schemas"]["UrlCheckRow"][];
+            /**
+             * Format: int32
+             * @description Bundle schema version.
+             */
+            version: number;
+            /** @description The Yagra version that produced it. */
+            yagra_version: string;
         };
         /** @description Request body to launch an analysis (launch drawer / report config bar). */
         CreateAnalysisJob: {
@@ -4105,6 +4240,20 @@ export interface components {
              */
             timeout_ms?: number;
         };
+        /** @description A DNS monitor's configuration (1:1 with its node). */
+        DnsCheckRow: {
+            /** Format: int32 */
+            max_depth: number;
+            name: string;
+            /** Format: uuid */
+            node_id: string;
+            record_type: string;
+            resolver_ip?: string | null;
+            /** Format: int32 */
+            resolver_port: number;
+            /** Format: int32 */
+            timeout_ms: number;
+        };
         /** @description Why a resolution did not reach a terminal record set. */
         DnsFailure: {
             /** @enum {string} */
@@ -4281,12 +4430,44 @@ export interface components {
             /** Format: int32 */
             window_secs?: number | null;
         };
+        /** @description A passive-event match rule. */
+        EventRuleRow: {
+            clear_pattern?: string | null;
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            match_kind: string;
+            /** Format: int32 */
+            min_count: number;
+            name: string;
+            /** Format: uuid */
+            node_id?: string | null;
+            pattern: string;
+            severity: string;
+            /** Format: uuid */
+            source_id?: string | null;
+            source_kind?: string | null;
+            /** Format: int32 */
+            ttl_secs: number;
+            /** Format: int32 */
+            window_secs: number;
+        };
         /** @description Body for the interactive rule tester. */
         EventRuleTest: {
             clear_pattern?: string | null;
             match_kind: string;
             pattern: string;
             sample: string;
+        };
+        /** @description A passive-event ingest source. */
+        EventSourceRow: {
+            enabled: boolean;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            name: string;
+            /** Format: uuid */
+            node_id?: string | null;
         };
         /** @description A webhook ingest source, as served by the API (never includes the token hash). */
         EventSourceView: {
@@ -4656,6 +4837,30 @@ export interface components {
             /** @description Relay the original bytes (default) rather than re-rendering from the parsed fields. */
             verbatim?: boolean;
         };
+        /**
+         * @description A forwarding destination. Its optional sealed secret is not carried; a destination that had one
+         *     arrives disabled.
+         */
+        ForwardDestinationRow: {
+            ca_cert?: string | null;
+            dest_kind: string;
+            enabled: boolean;
+            filter: unknown;
+            /**
+             * @description Whether the source deployment had a sealed secret on this destination. Carries no secret —
+             *     it is what tells the importer to arrive disabled and what tells the operator to re-enter it.
+             */
+            had_secret?: boolean;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            pool?: string | null;
+            /** Format: int32 */
+            rate_limit_per_sec?: number | null;
+            source_kind: string;
+            target: string;
+            verbatim: boolean;
+        };
         /** @description The `GET /api/v1/forwarding/status` body. */
         ForwardingStatus: {
             /** @description Runtime counters, one entry per running destination. */
@@ -4845,6 +5050,15 @@ export interface components {
             profile_id?: string | null;
             /** @description Maker/model pre-filled from discovery's sysDescr classification (editable before import). */
             vendor?: string | null;
+        };
+        /** @description The outcome of an import. */
+        ImportReport: {
+            /** @description True when nothing was committed: the whole import ran and was rolled back. */
+            dry_run: boolean;
+            /** @description What was skipped or changed, and why. */
+            notes: components["schemas"]["BundleNote"][];
+            /** @description Per-table counts, in dependency order. */
+            tables: components["schemas"]["TableResult"][];
         };
         /** @description How many nodes an import created. */
         ImportResult: {
@@ -5370,6 +5584,22 @@ export interface components {
             /** Format: uuid */
             group_id?: string | null;
         };
+        /** @description A folder in the inventory tree. */
+        NodeGroupRow: {
+            group_type: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: double */
+            latitude?: number | null;
+            /** Format: double */
+            longitude?: number | null;
+            name: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            pool?: string | null;
+            /** Format: double */
+            sort_order: number;
+        };
         /**
          * Format: uuid
          * @description Stable identifier for a monitored node.
@@ -5433,6 +5663,28 @@ export interface components {
             /** Format: uuid */
             group_id?: string | null;
         };
+        /** @description A monitored node. `credential_id` is a reference only — see the module docs. */
+        NodeRow: {
+            /** @description IPv4 or IPv6, as text. */
+            address: string;
+            /** Format: uuid */
+            credential_id?: string | null;
+            /** Format: uuid */
+            group_id?: string | null;
+            /** Format: uuid */
+            id: string;
+            model?: string | null;
+            name: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            pool?: string | null;
+            /** Format: uuid */
+            profile_id?: string | null;
+            /** Format: double */
+            sort_order: number;
+            tags: unknown;
+            vendor?: string | null;
+        };
         /**
          * @description One node-picker result: id + display name + address. Deliberately excludes credentials and
          *     bindings (security.md — the picker only needs to show and select a node).
@@ -5488,6 +5740,14 @@ export interface components {
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;
         };
+        /**
+         * @description Something the export or the import did that the operator would not otherwise see.
+         *
+         *     A silent drop is the failure mode that matters here: a bundle that quietly left out half the
+         *     rules imports without error and the operator finds out during an incident.
+         * @enum {string}
+         */
+        NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed";
         /** @description OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect. */
         OidcCallbackBody: {
             code: string;
@@ -5711,6 +5971,18 @@ export interface components {
          *     Profiles carry the polling templates and default thresholds a node inherits.
          */
         ProfileId: string;
+        /** @description A device profile. */
+        ProfileRow: {
+            category: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            /** Format: int32 */
+            poll_interval_secs?: number | null;
+            vendor?: string | null;
+        };
         /** @description A device-class/profile row for the API (id + name + role/vendor metadata). */
         ProfileSummary: {
             /** @description Functional role token (kebab-case `ProfileCategory`) — the UI's grouping key. */
@@ -5725,6 +5997,13 @@ export interface components {
             poll_interval_secs?: number | null;
             /** @description Vendor label, if known (descriptive metadata only — never a TSDB label). */
             vendor?: string | null;
+        };
+        /** @description A profile↔template attachment. */
+        ProfileTemplateLink: {
+            /** Format: uuid */
+            profile_id: string;
+            /** Format: uuid */
+            template_id: string;
         };
         /**
          * @description What the Settings form needs to render one provider choice.
@@ -5914,6 +6193,14 @@ export interface components {
             name: string;
             spec: unknown;
         };
+        /** @description A saved report template. */
+        ReportDefinitionRow: {
+            description?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            spec: unknown;
+        };
         /** @description A run row for the saved-reports list (without the heavy `result_*` payloads). */
         ReportRun: {
             created_by?: string | null;
@@ -5992,6 +6279,23 @@ export interface components {
             definition_id: string;
             enabled?: boolean | null;
             frequency: string;
+        };
+        /** @description A recurring report run. */
+        ReportScheduleRow: {
+            /** Format: int32 */
+            at_hour: number;
+            /** Format: int32 */
+            at_minute: number;
+            /** Format: int32 */
+            day_of_month?: number | null;
+            /** Format: int32 */
+            day_of_week?: number | null;
+            /** Format: uuid */
+            definition_id: string;
+            enabled: boolean;
+            frequency: string;
+            /** Format: uuid */
+            id: string;
         };
         /**
          * @description Outcome of a schedule's most recent firing.
@@ -6214,6 +6518,11 @@ export interface components {
          * @enum {string}
          */
         ScopeLevel: "profile" | "group" | "node";
+        /**
+         * @description How secrets appear in a bundle. See the module docs for why there is only one variant.
+         * @enum {string}
+         */
+        SecretsMode: "references";
         /** @description A report-section type the user can add to a report. */
         SectionDef: {
             blurb: string;
@@ -6382,6 +6691,16 @@ export interface components {
         SystemHostsResponse: {
             hosts: components["schemas"]["HostInfo"][];
         };
+        /** @description What the import did to one table. */
+        TableResult: {
+            /** Format: int32 */
+            created: number;
+            /** Format: int32 */
+            skipped: number;
+            table: string;
+            /** Format: int32 */
+            updated: number;
+        };
         /** @description One metric in a template, with its id, for the template editor. */
         TemplateItem: components["schemas"]["CollectionItem"] & {
             enabled: boolean;
@@ -6425,6 +6744,21 @@ export interface components {
             total: number;
             /** @description Whether `items` is a prefix of the ruleset rather than all of it. */
             truncated: boolean;
+        };
+        /** @description A threshold rule. */
+        ThresholdRow: {
+            /** Format: double */
+            critical?: number | null;
+            direction: string;
+            /** Format: int32 */
+            dwell_samples: number;
+            /** Format: uuid */
+            id: string;
+            metric: string;
+            scope_id: string;
+            scope_level: string;
+            /** Format: double */
+            warning?: number | null;
         };
         /** @description A threshold rule for a single metric. */
         ThresholdRule: {
@@ -6555,6 +6889,20 @@ export interface components {
             url: string;
             /** @description Verify the TLS certificate chain (default `true`; never silently disabled — security.md). */
             verify_tls?: boolean;
+        };
+        /** @description A URL / HTTP endpoint monitor's configuration (1:1 with its node). */
+        UrlCheckRow: {
+            /** Format: uuid */
+            credential_id?: string | null;
+            expected_status: unknown;
+            follow_redirects: boolean;
+            method: string;
+            /** Format: uuid */
+            node_id: string;
+            /** Format: int32 */
+            timeout_ms: number;
+            url: string;
+            verify_tls: boolean;
         };
         /**
          * @description How an account authenticates, which decides whether it can log in interactively at all.
@@ -8550,6 +8898,134 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has nowhere to persist the default */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    export_bundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deployment's monitoring configuration as a portable bundle. Carries no secrets — credentials, channel configs and ingest tokens stay in this deployment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigBundle"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A table holds more rows than one bundle carries; use a database dump for a deployment this size */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    import_bundle: {
+        parameters: {
+            query?: {
+                /** @description Run the whole import and roll it back, returning the report it would have produced. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigBundle"];
+            };
+        };
+        responses: {
+            /** @description Import report: per-table counts plus what was skipped or changed and why. With `dry_run` nothing was committed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReport"];
+                };
+            };
+            /** @description Not a Yagra configuration bundle, or a schema version this build cannot read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The uploaded bundle is larger than the accepted body size */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -27,6 +27,7 @@ import type {
   ClassificationRuleInput,
   CollectionKind,
   CollectionTemplate,
+  ConfigBundle,
   CredentialSummary,
   Direction,
   DiscoveryCandidate,
@@ -51,6 +52,7 @@ import type {
   FlowTalker,
   GroupNodesResult,
   GroupType,
+  ImportReport,
   InterfaceHeatmap,
   InterfaceRow,
   RankedInterfaces,
@@ -381,6 +383,18 @@ export const api = {
 
   /** Whether every stored credential can still be decrypted with the loaded KEK (ADR-040). */
   getCredentialHealth: (): Promise<CredentialHealth> => apiGet('/api/v1/credentials/health'),
+
+  /** This deployment's monitoring configuration as a portable bundle (ADR-040). Admin-only, and it
+   *  carries no secrets. */
+  exportConfigBundle: (): Promise<ConfigBundle> => apiGet('/api/v1/config/bundle'),
+
+  /** Apply a bundle. Upsert only — nothing is deleted. With `dryRun` the whole import runs inside a
+   *  transaction that is rolled back, so the report describes exactly what committing would do. */
+  importConfigBundle: (bundle: ConfigBundle, opts?: { dryRun?: boolean }): Promise<ImportReport> =>
+    apiPost('/api/v1/config/bundle', {
+      query: { dry_run: opts?.dryRun },
+      body: bundle,
+    }),
 
   /** Latest reading for one node metric. */
   getNodeMetric: (

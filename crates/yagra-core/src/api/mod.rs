@@ -37,6 +37,7 @@ mod audit;
 pub(crate) mod checks;
 mod classification;
 mod collection;
+mod config_bundle;
 mod credentials;
 mod dashboard;
 mod discovery;
@@ -180,6 +181,9 @@ pub struct AdminState {
     /// AI-assisted RCA provider configuration (ADR-029): backs Settings ▸ AI. The credential is
     /// envelope-encrypted and write-only, so this store never hands one back out.
     pub llm: Arc<crate::rca::store::RcaRepo>,
+    /// Configuration bundle export/import (ADR-040 decision 3): move a monitoring configuration
+    /// between deployments. Reads and writes many tables in one transaction and carries no secrets.
+    pub config_bundle: Arc<crate::config_bundle::ConfigBundleRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -337,6 +341,9 @@ pub fn router(state: ApiState) -> Router {
         .merge(health::routes())
         .merge(reports::routes())
         .merge(retention::routes())
+        // Configuration bundle export/import (ADR-040 decision 3): move a configuration between
+        // deployments. Admin-only in both directions, and it carries no secrets.
+        .merge(config_bundle::routes())
         .merge(meraki::routes())
         // Passive events: sources/rules CRUD + manual alert close, in `api/events.rs`.
         .merge(events::routes())

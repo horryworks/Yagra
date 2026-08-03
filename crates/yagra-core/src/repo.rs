@@ -1382,14 +1382,15 @@ impl NodeRepo {
     /// boot. Also removes the legacy profile-scope `collection_items` the built-in profiles
     /// used to carry (PR #12) — profiles are now templates-only, so those would be ignored.
     pub async fn seed_builtin_profiles(&self) -> anyhow::Result<()> {
-        // Stable bases so ids (and thus existing bindings/links) survive restarts.
-        const PROFILE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_0000;
-        const TEMPLATE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_7000;
+        // The stable bases live in `crate::seed_ids`, not here: the config-bundle exporter has to
+        // recognise a built-in row to leave it out of a bundle, and a filter that disagreed with
+        // this seeder would drop operator rows or carry re-keying ones. Same table, both sides.
+        use crate::seed_ids::SeedRange;
 
         // 1. Templates + their metrics; remember name → id for the profile links.
         let mut template_id_by_name: HashMap<&'static str, Uuid> = HashMap::new();
         for (i, template) in yagra_common::builtin_templates().into_iter().enumerate() {
-            let template_id = Uuid::from_u128(TEMPLATE_ID_BASE + i as u128);
+            let template_id = SeedRange::CollectionTemplates.id(i);
             template_id_by_name.insert(template.name, template_id);
             sqlx::query(
                 "INSERT INTO collection_templates (id, name, description) VALUES ($1, $2, $3) \
@@ -1429,7 +1430,7 @@ impl NodeRepo {
         // 2. Profiles + their template links; drop any legacy profile-scope collection items.
         let mut profile_id_by_name: HashMap<&'static str, Uuid> = HashMap::new();
         for (i, profile) in yagra_common::builtin_profiles().into_iter().enumerate() {
-            let profile_id = Uuid::from_u128(PROFILE_ID_BASE + i as u128);
+            let profile_id = SeedRange::Profiles.id(i);
             profile_id_by_name.insert(profile.name, profile_id);
             sqlx::query(
                 "INSERT INTO profiles (id, name, category, vendor) VALUES ($1, $2, $3, $4) \
@@ -1464,7 +1465,6 @@ impl NodeRepo {
         // 3. Built-in classification rules (discovery → suggested profile). Stable ids +
         //    ON CONFLICT DO NOTHING so operator edits survive restarts; references the profile
         //    ids seeded just above. Rules for an unknown profile name are skipped defensively.
-        const RULE_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_8000;
         for (i, rule) in yagra_common::builtin_classification_rules()
             .into_iter()
             .enumerate()
@@ -1476,7 +1476,7 @@ impl NodeRepo {
                 );
                 continue;
             };
-            let rule_id = Uuid::from_u128(RULE_ID_BASE + i as u128);
+            let rule_id = SeedRange::ClassificationRules.id(i);
             sqlx::query(
                 "INSERT INTO classification_rules \
                     (id, priority, sysobjectid_prefix, sysdescr_regex, profile_id, vendor, model) \
@@ -1501,14 +1501,13 @@ impl NodeRepo {
         //    (`value <= bound`, thresholds.rs). A bound of 1.0 would therefore fire on the healthy
         //    value 1 too — so the bound sits between the two states (0.5): only 0 (down/wrong-status)
         //    trips it. Migration 0030 corrects already-seeded rows that used the old 1.0 bound.
-        const URL_THRESHOLD_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_a000;
         if let Some(&url_profile_id) = profile_id_by_name.get("URL / HTTP endpoint") {
             let scope_id = url_profile_id.to_string();
             // (offset, metric, direction, warning, critical, dwell_samples)
             let defaults = [
-                (0u128, "http_up", "below", None::<f64>, Some(0.5), 2i32),
+                (0usize, "http_up", "below", None::<f64>, Some(0.5), 2i32),
                 (
-                    1u128,
+                    1usize,
                     "ssl_cert_days_to_expiry",
                     "below",
                     Some(30.0),
@@ -1522,7 +1521,7 @@ impl NodeRepo {
                         (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
                      VALUES ($1, 'profile', $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
                 )
-                .bind(Uuid::from_u128(URL_THRESHOLD_ID_BASE + offset))
+                .bind(SeedRange::UrlThresholds.id(offset))
                 .bind(&scope_id)
                 .bind(metric)
                 .bind(direction)
@@ -1547,20 +1546,19 @@ impl NodeRepo {
         //    `dns_resolve_ms` is emitted as a graphable gauge but deliberately gets NO seeded
         //    threshold: resolver latency varies far too much between environments for a default.
         //
-        //    Reserved stable-id ranges (see migration 0020's header for the others):
-        //      url thresholds 0x…5eeda000…, dns thresholds 0x…5eedb000…
-        const DNS_THRESHOLD_ID_BASE: u128 = 0x0000_0000_0000_0000_0000_0000_5eed_b000;
+        //    Reserved stable-id ranges: every one of them is declared in `crate::seed_ids`, which
+        //    is also what migration 0020's range-DELETEs are tested against.
         if let Some(&dns_profile_id) = profile_id_by_name.get("DNS name resolution") {
             let scope_id = dns_profile_id.to_string();
             // (offset, metric, direction, warning, critical, dwell_samples)
-            let defaults = [(0u128, "dns_up", "below", None::<f64>, Some(0.5), 2i32)];
+            let defaults = [(0usize, "dns_up", "below", None::<f64>, Some(0.5), 2i32)];
             for (offset, metric, direction, warning, critical, dwell) in defaults {
                 sqlx::query(
                     "INSERT INTO thresholds \
                         (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
                      VALUES ($1, 'profile', $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING",
                 )
-                .bind(Uuid::from_u128(DNS_THRESHOLD_ID_BASE + offset))
+                .bind(SeedRange::DnsThresholds.id(offset))
                 .bind(&scope_id)
                 .bind(metric)
                 .bind(direction)

@@ -2427,6 +2427,156 @@
         }
       }
     },
+    "/api/v1/config/bundle": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "operationId": "export_bundle",
+        "responses": {
+          "200": {
+            "description": "The deployment's monitoring configuration as a portable bundle. Carries no secrets — credentials, channel configs and ingest tokens stay in this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigBundle"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A table holds more rows than one bundle carries; use a database dump for a deployment this size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Apply a bundle. Existing rows with the same id are updated, new ones created; nothing is ever\ndeleted, and there is no replace mode.",
+        "operationId": "import_bundle",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "description": "Run the whole import and roll it back, returning the report it would have produced.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigBundle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Import report: per-table counts plus what was skipped or changed and why. With `dry_run` nothing was committed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Yagra configuration bundle, or a schema version this build cannot read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The uploaded bundle is larger than the accepted body size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/credentials": {
       "get": {
         "tags": [
@@ -16180,6 +16330,72 @@
           }
         }
       },
+      "AnalysisScheduleRow": {
+        "type": "object",
+        "description": "A recurring Troubleshoot analysis.",
+        "required": [
+          "id",
+          "tool",
+          "scope_kind",
+          "scope_label",
+          "params",
+          "frequency",
+          "at_hour",
+          "at_minute",
+          "enabled"
+        ],
+        "properties": {
+          "at_hour": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "at_minute": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "day_of_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "day_of_week": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "params": {},
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "scope_kind": {
+            "type": "string"
+          },
+          "scope_label": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        }
+      },
       "AnalysisScheduleStatus": {
         "type": "string",
         "description": "Outcome of a schedule's most recent firing attempt.",
@@ -16283,6 +16499,23 @@
               "$ref": "#/components/schemas/TokenSurface"
             },
             "description": "Which auth surfaces this token may be presented at. Never empty in practice — a token that\nnamed no surface could authenticate nowhere — but stored as a list so it can grow."
+          }
+        }
+      },
+      "AppSettingsRow": {
+        "type": "object",
+        "description": "The deployment-wide settings the bundle carries. The retention windows are deliberately absent\n(module docs).",
+        "required": [
+          "default_poll_interval_secs",
+          "meraki_polling_enabled"
+        ],
+        "properties": {
+          "default_poll_interval_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "meraki_polling_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -16396,6 +16629,38 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "BundleNote": {
+        "type": "object",
+        "description": "One note, with the table it concerns and how many rows it covers.",
+        "required": [
+          "table",
+          "code",
+          "count"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/NoteCode",
+            "description": "What happened."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many rows this note covers.",
+            "minimum": 0
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The column involved, when the note is about one (e.g. `credential_id`)."
+          },
+          "table": {
+            "type": "string",
+            "description": "The table the note is about."
           }
         }
       },
@@ -16795,6 +17060,57 @@
           }
         }
       },
+      "ClassificationRuleRow": {
+        "type": "object",
+        "description": "A discovery classification rule.",
+        "required": [
+          "id",
+          "priority",
+          "profile_id",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sysdescr_regex": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sysobjectid_prefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ClientConfig": {
         "type": "object",
         "description": "Client bootstrap config — no secrets.",
@@ -16869,6 +17185,67 @@
           "table"
         ]
       },
+      "CollectionTemplateItemRow": {
+        "type": "object",
+        "description": "One metric inside a collection template.",
+        "required": [
+          "id",
+          "template_id",
+          "metric_name",
+          "oid",
+          "collection",
+          "metric_kind",
+          "enabled"
+        ],
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metric_kind": {
+            "type": "string"
+          },
+          "metric_name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "CollectionTemplateRow": {
+        "type": "object",
+        "description": "A reusable collection template.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Condition": {
         "type": "object",
         "description": "One `field op value` test. `value` is always a string so the config has a single JSON shape;\n[`compile`] parses it according to the field's type.",
@@ -16901,6 +17278,154 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "ConfigBundle": {
+        "type": "object",
+        "description": "A whole configuration bundle.",
+        "required": [
+          "format",
+          "version",
+          "exported_at",
+          "yagra_version"
+        ],
+        "properties": {
+          "analysis_schedules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnalysisScheduleRow"
+            }
+          },
+          "app_settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AppSettingsRow"
+              }
+            ]
+          },
+          "classification_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassificationRuleRow"
+            }
+          },
+          "collection_template_items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionTemplateItemRow"
+            }
+          },
+          "collection_templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionTemplateRow"
+            }
+          },
+          "dns_checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DnsCheckRow"
+            }
+          },
+          "event_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventRuleRow"
+            }
+          },
+          "event_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventSourceRow"
+            }
+          },
+          "exported_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the export ran."
+          },
+          "format": {
+            "type": "string",
+            "description": "Always `yagra.config-bundle`. An importer refuses anything else rather than guessing."
+          },
+          "forward_destinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForwardDestinationRow"
+            }
+          },
+          "node_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeGroupRow"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeRow"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleNote"
+            },
+            "description": "What the export left out or changed. Informational; ignored on import."
+          },
+          "profile_collection_templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileTemplateLink"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileRow"
+            }
+          },
+          "report_definitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportDefinitionRow"
+            }
+          },
+          "report_schedules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportScheduleRow"
+            }
+          },
+          "secrets": {
+            "$ref": "#/components/schemas/SecretsMode",
+            "description": "How secrets are represented. Always `references` — a bundle never carries one."
+          },
+          "thresholds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThresholdRow"
+            }
+          },
+          "url_checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UrlCheckRow"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Bundle schema version.",
+            "minimum": 0
+          },
+          "yagra_version": {
+            "type": "string",
+            "description": "The Yagra version that produced it."
           }
         }
       },
@@ -18023,6 +18548,48 @@
           }
         }
       },
+      "DnsCheckRow": {
+        "type": "object",
+        "description": "A DNS monitor's configuration (1:1 with its node).",
+        "required": [
+          "node_id",
+          "name",
+          "record_type",
+          "resolver_port",
+          "max_depth",
+          "timeout_ms"
+        ],
+        "properties": {
+          "max_depth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "resolver_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolver_port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "DnsFailure": {
         "oneOf": [
           {
@@ -18549,6 +19116,80 @@
           }
         }
       },
+      "EventRuleRow": {
+        "type": "object",
+        "description": "A passive-event match rule.",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "match_kind",
+          "pattern",
+          "severity",
+          "ttl_secs",
+          "min_count",
+          "window_secs"
+        ],
+        "properties": {
+          "clear_pattern": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "match_kind": {
+            "type": "string"
+          },
+          "min_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "window_secs": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "EventRuleTest": {
         "type": "object",
         "description": "Body for the interactive rule tester.",
@@ -18572,6 +19213,38 @@
           },
           "sample": {
             "type": "string"
+          }
+        }
+      },
+      "EventSourceRow": {
+        "type": "object",
+        "description": "A passive-event ingest source.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -19340,6 +20013,68 @@
           }
         }
       },
+      "ForwardDestinationRow": {
+        "type": "object",
+        "description": "A forwarding destination. Its optional sealed secret is not carried; a destination that had one\narrives disabled.",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "source_kind",
+          "dest_kind",
+          "target",
+          "verbatim",
+          "filter"
+        ],
+        "properties": {
+          "ca_cert": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dest_kind": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter": {},
+          "had_secret": {
+            "type": "boolean",
+            "description": "Whether the source deployment had a sealed secret on this destination. Carries no secret —\nit is what tells the importer to arrive disabled and what tells the operator to re-enter it."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rate_limit_per_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "verbatim": {
+            "type": "boolean"
+          }
+        }
+      },
       "ForwardingStatus": {
         "type": "object",
         "description": "The `GET /api/v1/forwarding/status` body.",
@@ -19804,6 +20539,35 @@
               "null"
             ],
             "description": "Maker/model pre-filled from discovery's sysDescr classification (editable before import)."
+          }
+        }
+      },
+      "ImportReport": {
+        "type": "object",
+        "description": "The outcome of an import.",
+        "required": [
+          "dry_run",
+          "tables",
+          "notes"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "True when nothing was committed: the whole import ran and was rolled back."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleNote"
+            },
+            "description": "What was skipped or changed, and why."
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TableResult"
+            },
+            "description": "Per-table counts, in dependency order."
           }
         }
       },
@@ -21180,6 +21944,59 @@
           }
         }
       },
+      "NodeGroupRow": {
+        "type": "object",
+        "description": "A folder in the inventory tree.",
+        "required": [
+          "id",
+          "name",
+          "group_type",
+          "sort_order"
+        ],
+        "properties": {
+          "group_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "longitude": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sort_order": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "NodeId": {
         "type": "string",
         "format": "uuid",
@@ -21287,6 +22104,81 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "NodeRow": {
+        "type": "object",
+        "description": "A monitored node. `credential_id` is a reference only — see the module docs.",
+        "required": [
+          "id",
+          "name",
+          "address",
+          "sort_order",
+          "tags"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "IPv4 or IPv6, as text."
+          },
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "sort_order": {
+            "type": "number",
+            "format": "double"
+          },
+          "tags": {},
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -21408,6 +22300,18 @@
             "description": "Descriptive maker/model for the \"name (addr) (vendor) (model)\" display."
           }
         }
+      },
+      "NoteCode": {
+        "type": "string",
+        "description": "Something the export or the import did that the operator would not otherwise see.\n\nA silent drop is the failure mode that matters here: a bundle that quietly left out half the\nrules imports without error and the operator finds out during an incident.",
+        "enum": [
+          "skipped_builtin",
+          "skipped_missing_reference",
+          "reference_dropped",
+          "secret_dropped_imported_disabled",
+          "webhook_token_reset",
+          "schedule_next_run_recomputed"
+        ]
       },
       "OidcCallbackBody": {
         "type": "object",
@@ -21932,6 +22836,47 @@
         "format": "uuid",
         "description": "Stable identifier for a device profile / device-class (e.g. \"Cisco router\").\n\nProfiles carry the polling templates and default thresholds a node inherits."
       },
+      "ProfileRow": {
+        "type": "object",
+        "description": "A device profile.",
+        "required": [
+          "id",
+          "name",
+          "category"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "poll_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ProfileSummary": {
         "type": "object",
         "description": "A device-class/profile row for the API (id + name + role/vendor metadata).",
@@ -21966,6 +22911,24 @@
               "null"
             ],
             "description": "Vendor label, if known (descriptive metadata only — never a TSDB label)."
+          }
+        }
+      },
+      "ProfileTemplateLink": {
+        "type": "object",
+        "description": "A profile↔template attachment.",
+        "required": [
+          "profile_id",
+          "template_id"
+        ],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -22375,6 +23338,31 @@
           "spec": {}
         }
       },
+      "ReportDefinitionRow": {
+        "type": "object",
+        "description": "A saved report template.",
+        "required": [
+          "id",
+          "name",
+          "spec"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "spec": {}
+        }
+      },
       "ReportRun": {
         "type": "object",
         "description": "A run row for the saved-reports list (without the heavy `result_*` payloads).",
@@ -22622,6 +23610,56 @@
           },
           "frequency": {
             "type": "string"
+          }
+        }
+      },
+      "ReportScheduleRow": {
+        "type": "object",
+        "description": "A recurring report run.",
+        "required": [
+          "id",
+          "definition_id",
+          "frequency",
+          "at_hour",
+          "at_minute",
+          "enabled"
+        ],
+        "properties": {
+          "at_hour": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "at_minute": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "day_of_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "day_of_week": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "definition_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -23107,6 +24145,13 @@
           "profile",
           "group",
           "node"
+        ]
+      },
+      "SecretsMode": {
+        "type": "string",
+        "description": "How secrets appear in a bundle. See the module docs for why there is only one variant.",
+        "enum": [
+          "references"
         ]
       },
       "SectionDef": {
@@ -23613,6 +24658,36 @@
           }
         }
       },
+      "TableResult": {
+        "type": "object",
+        "description": "What the import did to one table.",
+        "required": [
+          "table",
+          "created",
+          "updated",
+          "skipped"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "table": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "TemplateItem": {
         "allOf": [
           {
@@ -23706,6 +24781,54 @@
           "truncated": {
             "type": "boolean",
             "description": "Whether `items` is a prefix of the ruleset rather than all of it."
+          }
+        }
+      },
+      "ThresholdRow": {
+        "type": "object",
+        "description": "A threshold rule.",
+        "required": [
+          "id",
+          "scope_level",
+          "scope_id",
+          "metric",
+          "direction",
+          "dwell_samples"
+        ],
+        "properties": {
+          "critical": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "dwell_samples": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "scope_level": {
+            "type": "string"
+          },
+          "warning": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -23988,6 +25111,49 @@
           "verify_tls": {
             "type": "boolean",
             "description": "Verify the TLS certificate chain (default `true`; never silently disabled — security.md)."
+          }
+        }
+      },
+      "UrlCheckRow": {
+        "type": "object",
+        "description": "A URL / HTTP endpoint monitor's configuration (1:1 with its node).",
+        "required": [
+          "node_id",
+          "url",
+          "method",
+          "expected_status",
+          "verify_tls",
+          "follow_redirects",
+          "timeout_ms"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "expected_status": {},
+          "follow_redirects": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "url": {
+            "type": "string"
+          },
+          "verify_tls": {
+            "type": "boolean"
           }
         }
       },

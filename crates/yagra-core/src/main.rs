@@ -23,6 +23,7 @@ mod cadence;
 mod classification;
 mod collection;
 mod config;
+mod config_bundle;
 mod config_gen;
 mod dashboard;
 mod discovery;
@@ -57,6 +58,7 @@ mod retention;
 mod ring;
 mod scheduler;
 mod secrets;
+mod seed_ids;
 mod sink;
 mod store;
 mod stored_enum;
@@ -652,6 +654,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         forward: forward_store,
         forward_handle,
         llm: llm_repo,
+        config_bundle: Arc::new(config_bundle::ConfigBundleRepo::new(repo.pool().clone())),
     }));
     // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
     // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any

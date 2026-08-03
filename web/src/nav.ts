@@ -261,6 +261,13 @@ export const NAV: NavSection[] = [
             mono: 'Ai',
           },
           { labelKey: 'settings.system', path: '/settings/system', implemented: true, mono: 'Sy' },
+          {
+            labelKey: 'settings.configBundle',
+            descKey: 'descriptions.settingsConfigBundle',
+            path: '/settings/config-bundle',
+            implemented: true,
+            mono: 'Cb',
+          },
         ],
       },
       {

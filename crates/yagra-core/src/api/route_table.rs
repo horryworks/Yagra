@@ -151,6 +151,8 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping)] = &[
     ("DELETE", "/api/v1/collection/:item_id", ADMIN_CFG),
     ("GET", "/api/v1/config", DEPLOY_WIDE),
     ("PUT", "/api/v1/config", ADMIN_CFG),
+    ("GET", "/api/v1/config/bundle", ADMIN_CFG),
+    ("POST", "/api/v1/config/bundle", ADMIN_CFG),
     ("GET", "/api/v1/credentials", ADMIN_CFG),
     ("POST", "/api/v1/credentials", ADMIN_CFG),
     ("GET", "/api/v1/credentials/health", ADMIN_CFG),

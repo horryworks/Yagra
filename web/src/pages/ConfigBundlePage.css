@@ -1,0 +1,80 @@
+/* Settings ▸ Configuration bundle. Two cards, each a short explanation plus one action and its
+   result. Nothing here grows with the fleet — the section list is bounded by the number of carried
+   tables — so it is plain markup rather than a DataTable. */
+
+.cb-help {
+  font-size: var(--font-sm);
+  margin: 0 0 8px;
+}
+
+.cb-panel {
+  margin-top: 12px;
+}
+
+.cb-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cb-file {
+  display: block;
+  margin-bottom: 12px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.cb-ok {
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+  margin: 12px 0 8px;
+}
+
+/* Used for the destructive-action caution and for a dry run — both mean "this is not the final
+   state yet", which is the same signal an operator needs to slow down for. */
+.cb-warn {
+  color: var(--status-warning);
+  font-size: var(--font-sm);
+  margin: 12px 0 8px;
+}
+
+.cb-sections,
+.cb-notes {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  font-size: var(--font-sm);
+}
+
+.cb-sections li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.cb-sections li + li {
+  border-top: 1px solid var(--border-color);
+}
+
+.cb-section-name {
+  color: var(--text-primary);
+}
+
+.cb-section-count {
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  white-space: nowrap;
+}
+
+.cb-notes li {
+  padding: 4px 0;
+  color: var(--text-secondary);
+}
+
+.cb-report {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}

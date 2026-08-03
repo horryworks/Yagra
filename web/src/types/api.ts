@@ -1018,3 +1018,33 @@ export type RetentionValues = components['schemas']['RetentionValues'];
 /** Whether every stored credential still decrypts under the loaded KEK — the assertion a database
  *  restore cannot make on its own, since rows can come back whole while the key did not. */
 export type CredentialHealth = components['schemas']['CredentialHealth'];
+
+/** A portable configuration bundle (ADR-040 decision 3): the monitoring configuration of one
+ *  deployment, for moving into another. Carries **no secrets** — credentials, notification-channel
+ *  configs and ingest tokens stay where they were sealed, and only ids cross. It is not a backup;
+ *  disaster recovery is a database dump (`scripts/yagra-backup.sh`). */
+export type ConfigBundle = components['schemas']['ConfigBundle'];
+
+/** What an import did: per-table counts plus what it skipped or changed and why. */
+export type ImportReport = components['schemas']['ImportReport'];
+
+/** One table's line of an import report. */
+export type BundleTableResult = components['schemas']['TableResult'];
+
+/** One thing the export or the import did that the operator would not otherwise see. */
+export type BundleNote = components['schemas']['BundleNote'];
+
+/** Why a row was skipped or changed. A silent drop is the failure that matters here — a bundle
+ *  that quietly left half the rules behind imports without error and is discovered mid-incident —
+ *  so every one of these gets its own sentence in both locales. */
+export const BUNDLE_NOTE_CODES = [
+  'skipped_builtin',
+  'skipped_missing_reference',
+  'reference_dropped',
+  'secret_dropped_imported_disabled',
+  'webhook_token_reset',
+  'schedule_next_run_recomputed',
+] as const;
+
+/** A bundle note code (snake_case). Pinned to `schemas.NoteCode`. */
+export type BundleNoteCode = (typeof BUNDLE_NOTE_CODES)[number];

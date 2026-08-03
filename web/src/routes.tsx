@@ -36,6 +36,7 @@ import { PollersPage } from './pages/PollersPage';
 import { IntegrationsCatalogPage } from './pages/integrations/IntegrationsCatalogPage';
 import { MerakiIntegrationPage } from './pages/integrations/MerakiIntegrationPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
+import { ConfigBundlePage } from './pages/ConfigBundlePage';
 import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
@@ -134,6 +135,7 @@ export function AppRoutes() {
         <Route path="settings/api-tokens" element={<ApiTokensPage />} />
         <Route path="settings/audit" element={<AuditPage />} />
         <Route path="settings/system" element={<SystemSettingsPage />} />
+        <Route path="settings/config-bundle" element={<ConfigBundlePage />} />
         <Route path="settings/preferences" element={<PreferencesPage />} />
         <Route path="settings/about" element={<AboutPage />} />
 

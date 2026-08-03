@@ -36,6 +36,20 @@
 - **`GET /api/v1/credentials/health`** (ManageCredentials) reports whether every stored credential
   still decrypts under the loaded key. This is the assertion a database restore cannot make on its
   own: rows can come back whole while the key-encryption key is a different one.
+- **Configuration bundles** (Settings ▸ Configuration bundle, `GET`/`POST /api/v1/config/bundle`,
+  ADR-040). Export a deployment's monitoring configuration — profiles, metric sets, classification
+  rules, groups, nodes, thresholds, URL/DNS monitors, forwarding destinations, event sources and
+  rules, report and analysis schedules — as one JSON file, and apply it to another deployment. This
+  is for **migration**, not backup: a bundle carries no credentials, no notification-channel
+  settings, no ingest tokens and no history. Import is **upsert only** — nothing is ever deleted and
+  there is no replace mode — runs in one transaction, and `?dry_run=true` performs the real import
+  and rolls it back, so its report is exactly what applying would do. The report names every row it
+  skipped or changed and why: a missing required reference skips the row rather than widening it, a
+  destination or webhook source that needs a secret arrives disabled, and schedules are recomputed
+  on the target's clock. Notification channels and routing rules are deliberately **not** carried —
+  a channel *is* its sealed config and no API can attach one to an existing channel id, so an
+  imported rule would notify nobody, silently. The export refuses rather than truncating when a
+  table exceeds 10,000 rows; use a database dump for a deployment that size.
 - **A backup procedure that ships as scripts, and a way to prove it works.**
   `scripts/yagra-backup.sh` takes the tier-1 set (KEK first, then a full `pg_dump`, then a
   VictoriaMetrics snapshot) with a manifest; `scripts/yagra-restore-verify.sh` restores it into a

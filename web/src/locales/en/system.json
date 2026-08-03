@@ -296,5 +296,66 @@
       "saveScope": "failed to save network scope",
       "saveCadence": "failed to save cadence"
     }
+  },
+  "bundle": {
+    "pageNote": "Move a monitoring configuration from one deployment to another. Admin only, in both directions.",
+    "notBackup": "This is not a backup. A bundle carries no credentials, no notification-channel settings, no ingest tokens and no history — for disaster recovery take a database dump (see DEPLOYMENT.md, \"Backup & restore\").",
+    "empty": "This bundle carries no configuration.",
+    "export": {
+      "title": "Export",
+      "help": "Download this deployment’s configuration as a single JSON file. Built-in profiles, metric sets and rules are left out — the target seeds its own.",
+      "action": "Download bundle",
+      "done": "Exported {{count}} rows to {{file}}.",
+      "err": "Could not export the configuration bundle."
+    },
+    "import": {
+      "title": "Import",
+      "help": "Apply a bundle exported from another deployment. Rows with the same id are updated and new ones created; nothing is ever deleted.",
+      "pickAria": "Choose a configuration bundle file",
+      "reading": "Reading the file…",
+      "picked": "Loaded {{file}} — {{count}} rows.",
+      "warning": "Applying this overwrites configuration that shares an id with a row in the bundle. Run the check first: it performs the real import and rolls it back, so the report is exactly what applying would do.",
+      "check": "Check (dry run)",
+      "apply": "Apply bundle",
+      "err": {
+        "invalid-json": "That file is not valid JSON.",
+        "not-a-bundle": "That file is not a Yagra configuration bundle.",
+        "version": "This bundle was written by a newer Yagra (bundle version {{version}}). Upgrade this deployment first.",
+        "read": "Could not read that file.",
+        "failed": "The import failed. Nothing was changed."
+      }
+    },
+    "report": {
+      "dryRun": "Dry run — nothing was saved. Applying would create {{created}}, update {{updated}} and skip {{skipped}}.",
+      "applied": "Applied: {{created}} created, {{updated}} updated, {{skipped}} skipped.",
+      "noop": "Nothing to do — this deployment already matches the bundle.",
+      "row": "{{created}} new / {{updated}} updated / {{skipped}} skipped"
+    },
+    "table": {
+      "profiles": "Device profiles",
+      "collection_templates": "Metric sets",
+      "collection_template_items": "Metric set entries",
+      "profile_collection_templates": "Profile → metric set links",
+      "classification_rules": "Classification rules",
+      "node_groups": "Node groups",
+      "nodes": "Nodes",
+      "thresholds": "Thresholds",
+      "url_checks": "URL monitors",
+      "dns_checks": "DNS monitors",
+      "forward_destinations": "Forwarding destinations",
+      "event_sources": "Event sources",
+      "event_rules": "Event rules",
+      "report_definitions": "Report templates",
+      "report_schedules": "Report schedules",
+      "analysis_schedules": "Analysis schedules"
+    },
+    "notes": {
+      "skipped_builtin": "Built-in rows were left out — the target seeds its own copies",
+      "skipped_missing_reference": "Skipped: something the row requires is not on this deployment",
+      "reference_dropped": "Imported, but a reference this deployment does not have was cleared",
+      "secret_dropped_imported_disabled": "A secret cannot be carried between deployments, so this arrives disabled unless one is already stored here — re-enter it, then enable",
+      "webhook_token_reset": "A webhook ingest token cannot be carried, so the source arrives disabled with an unusable token — rotate it to get a working one",
+      "schedule_next_run_recomputed": "The next run was recomputed from the cadence on this clock"
+    }
   }
 }

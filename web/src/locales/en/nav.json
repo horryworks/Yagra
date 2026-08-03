@@ -55,6 +55,7 @@
     "apiTokens": "API tokens",
     "audit": "Audit log",
     "system": "System settings",
+    "configBundle": "Configuration bundle",
     "preferences": "Preferences",
     "about": "About"
   },
@@ -87,7 +88,8 @@
     "settingsPollers": "Distributed poller fleet status",
     "settingsForwarding": "Relay received syslog and traps to external collectors",
     "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients",
-    "settingsAi": "The language model that writes incident explanations"
+    "settingsAi": "The language model that writes incident explanations",
+    "settingsConfigBundle": "Export or import the monitoring configuration as a portable file"
   },
   "shell": {
     "home": "Home",

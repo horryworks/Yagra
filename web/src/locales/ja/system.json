@@ -290,5 +290,66 @@
       "saveScope": "ネットワーク範囲の保存に失敗しました",
       "saveCadence": "取得間隔の保存に失敗しました"
     }
+  },
+  "bundle": {
+    "pageNote": "監視設定をデプロイ間で移動します。書き出し・取り込みとも管理者のみです。",
+    "notBackup": "これはバックアップではありません。バンドルには資格情報・通知チャネル設定・受信トークン・履歴のいずれも含まれません。災害復旧にはデータベースダンプを取得してください（DEPLOYMENT.md「Backup & restore」）。",
+    "empty": "このバンドルには設定が含まれていません。",
+    "export": {
+      "title": "書き出し",
+      "help": "このデプロイの設定を 1 つの JSON ファイルとしてダウンロードします。組み込みのプロファイル・メトリクスセット・ルールは含めません（取り込み先が自分で seed するため）。",
+      "action": "バンドルをダウンロード",
+      "done": "{{count}} 行を {{file}} に書き出しました。",
+      "err": "設定バンドルを書き出せませんでした。"
+    },
+    "import": {
+      "title": "取り込み",
+      "help": "別のデプロイで書き出したバンドルを適用します。同じ id の行は更新され、無い行は作成されます。削除は一切行いません。",
+      "pickAria": "設定バンドルのファイルを選択",
+      "reading": "ファイルを読み込んでいます…",
+      "picked": "{{file}} を読み込みました（{{count}} 行）。",
+      "warning": "適用すると、バンドルと同じ id を持つ設定は上書きされます。先に確認を実行してください。実際の取り込みを行ってロールバックするので、レポートは適用した場合とまったく同じ内容です。",
+      "check": "確認（ドライラン）",
+      "apply": "バンドルを適用",
+      "err": {
+        "invalid-json": "このファイルは正しい JSON ではありません。",
+        "not-a-bundle": "このファイルは Yagra の設定バンドルではありません。",
+        "version": "このバンドルは新しいバージョンの Yagra が書き出したものです（バンドルバージョン {{version}}）。先にこのデプロイを更新してください。",
+        "read": "このファイルを読み込めませんでした。",
+        "failed": "取り込みに失敗しました。変更は行われていません。"
+      }
+    },
+    "report": {
+      "dryRun": "ドライラン — 保存はしていません。適用すると 作成 {{created}} / 更新 {{updated}} / スキップ {{skipped}} になります。",
+      "applied": "適用しました: 作成 {{created}} / 更新 {{updated}} / スキップ {{skipped}}。",
+      "noop": "変更はありません。このデプロイは既にバンドルと同じ内容です。",
+      "row": "新規 {{created}} / 更新 {{updated}} / スキップ {{skipped}}"
+    },
+    "table": {
+      "profiles": "デバイスプロファイル",
+      "collection_templates": "メトリクスセット",
+      "collection_template_items": "メトリクスセットの項目",
+      "profile_collection_templates": "プロファイル → メトリクスセットの紐付け",
+      "classification_rules": "分類ルール",
+      "node_groups": "ノードグループ",
+      "nodes": "ノード",
+      "thresholds": "閾値",
+      "url_checks": "URL 監視",
+      "dns_checks": "DNS 監視",
+      "forward_destinations": "転送先",
+      "event_sources": "イベントソース",
+      "event_rules": "イベントルール",
+      "report_definitions": "レポートテンプレート",
+      "report_schedules": "レポートスケジュール",
+      "analysis_schedules": "分析スケジュール"
+    },
+    "notes": {
+      "skipped_builtin": "組み込み行は含めていません（取り込み先が自分で seed するため）",
+      "skipped_missing_reference": "スキップ: この行が必要とするものがこのデプロイに存在しません",
+      "reference_dropped": "取り込みましたが、このデプロイに存在しない参照は解除しました",
+      "secret_dropped_imported_disabled": "秘密はデプロイ間を渡れないため、ここに既に保存されている場合を除き無効状態で作成されます。再入力してから有効化してください",
+      "webhook_token_reset": "Webhook の受信トークンは渡せないため、使用不能なトークンで無効状態で作成されます。ローテートして使えるトークンを取得してください",
+      "schedule_next_run_recomputed": "次回実行時刻はこのデプロイの時計で再計算しました"
+    }
   }
 }

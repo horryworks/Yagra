@@ -517,6 +517,79 @@ letting it corrupt data quietly.
 
 ---
 
+## Configuration bundle (moving a configuration between deployments)<a id="config-bundle"></a>
+
+A backup restores *this* deployment. A **configuration bundle** is the other job: taking the
+monitoring configuration you built in one deployment and applying it to a different one — staging to
+production, or an old server to a new one. **Settings ▸ Configuration bundle**, or
+`GET`/`POST /api/v1/config/bundle`. Admin only, in both directions.
+
+```bash
+# Export from the source deployment
+curl -sS -H "Authorization: Bearer $TOKEN" \
+     http://source:3000/api/v1/config/bundle > bundle.json
+
+# Check what it would do on the target — the real import, rolled back
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     --data-binary @bundle.json \
+     'http://target:3000/api/v1/config/bundle?dry_run=true'
+
+# Apply it
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     --data-binary @bundle.json http://target:3000/api/v1/config/bundle
+```
+
+**A bundle is not a backup.** It carries no secrets, no metrics, no events and no history. Use it to
+replicate a configuration; use the scripts above to survive losing a server.
+
+### What it carries
+
+Device profiles, metric sets and their links, classification rules, node groups, nodes, thresholds,
+URL and DNS monitors, forwarding destinations, event sources and rules, report templates and
+schedules, analysis schedules, and the global polling default.
+
+### What it deliberately does not, and why
+
+| Not carried | Why |
+|---|---|
+| Credentials | Sealed with this deployment's KEK. A bundle carries the *id* only, and the importer keeps the reference only if the target already holds that id. |
+| Notification channels and routing rules | A channel **is** its sealed config, and the API has no way to attach a config to an existing channel id — so an imported channel could never be made to work, and a rule pointing at one would notify nobody, silently. Re-create channels on the target, then the rules. |
+| Users, API tokens, OIDC providers | Identity. An import is a write path; carrying accounts would make "restore a config" the shortest route to granting yourself a role. |
+| Dashboards | Widgets embed node/group references the importer cannot validate, so a carried layout would render broken with no error. |
+| Retention windows | A policy of the *target* — its disks, its compliance window — and lowering one deletes data. Not something an import should change under you. |
+| Meraki / LLM / poller / MIB config | Provider credentials, or properties of the target deployment rather than of the configuration being moved. |
+| Metrics, events, flows, alert history | The time-series and event tiers. Out of scope — those stores have their own migration tools and are sized in gigabytes. |
+
+Built-in profiles, metric sets, classification rules and trap rules are also left out: the target
+seeds its own, under the same reserved ids.
+
+### What the import does
+
+**Upsert only.** A row whose id already exists is updated; a new one is created. **Nothing is ever
+deleted, and there is no replace mode** — it would be one flag away, and that flag is what makes an
+import unrecoverable. Everything runs in one transaction, so a failure leaves nothing behind.
+
+The report names every row it skipped or changed:
+
+- a row whose required reference is missing on the target is **skipped**, never widened (an event
+  rule bound to a node that does not exist would otherwise silently match the whole fleet);
+- an optional reference the target lacks is **cleared**, and counted;
+- a forwarding destination or webhook source that needs a secret arrives **disabled** — re-enter the
+  secret (or rotate the token) on the target, then enable it. One that already has a working secret
+  on the target keeps it, and keeps its own enabled state;
+- schedules get their next run **recomputed** on the target's clock.
+
+`?dry_run=true` runs the whole import and rolls it back, so its report is exactly what applying
+would do. **Run it first.**
+
+### Size limit
+
+A bundle is one JSON document, so it cannot grow with the fleet: the export refuses — rather than
+truncating into a partial configuration that looks complete — when any table exceeds 10,000 rows. A
+deployment that large is a disaster-recovery case, which is `pg_dump`, above.
+
+---
+
 ## Data retention<a id="data-retention"></a>
 
 How long each store keeps what. Most of it is editable at **Settings ▸ System settings ▸ Data

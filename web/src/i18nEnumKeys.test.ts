@@ -32,6 +32,7 @@ import {
   RCA_CONFIDENCES,
   TOKEN_SURFACES,
   USER_KINDS,
+  BUNDLE_NOTE_CODES,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -44,6 +45,7 @@ import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES } from './troubleshoot/data';
 import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
+import { BUNDLE_TABLES } from './pages/configBundle';
 
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
@@ -71,6 +73,8 @@ import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import jaSettingsForwarding from './locales/ja/settings-forwarding.json';
 import enTroubleshoot from './locales/en/troubleshoot.json';
 import jaTroubleshoot from './locales/ja/troubleshoot.json';
+import enSystem from './locales/en/system.json';
+import jaSystem from './locales/ja/system.json';
 
 type Json = Record<string, unknown>;
 
@@ -295,6 +299,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // The users list badges each account by kind, and the add-user dialog offers the creatable
     // ones. A kind without strings shows an operator a raw key while they decide what an account is.
     expectKeys('user kind', { en: enAccess, ja: jaAccess }, 'users.kind.', USER_KINDS);
+  });
+
+  it('every config-bundle section and note has strings (system:bundle.*)', () => {
+    // Both are rendered from a value the server chose, and both would otherwise show the operator a
+    // raw database identifier at exactly the moment they are deciding whether to overwrite their
+    // configuration. The note codes matter most: each one is the only place the UI says what an
+    // import silently left out.
+    const locales = { en: enSystem, ja: jaSystem };
+    expectKeys('bundle table', locales, 'bundle.table.', BUNDLE_TABLES);
+    expectKeys('bundle note', locales, 'bundle.notes.', BUNDLE_NOTE_CODES);
   });
 
   it('every scope label state has strings (access:users.scope.* and settings-tokens:scope.*)', () => {
