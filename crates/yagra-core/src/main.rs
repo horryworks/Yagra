@@ -44,6 +44,8 @@ mod meraki;
 mod mib;
 mod neighbors;
 mod notifications;
+mod notify_facts;
+mod notify_render;
 mod oidc;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
@@ -485,6 +487,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
     // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
     alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await);
+
+    // Notification templates (ADR-039) interpolate node names, groups and profiles, none of which
+    // an `Alert` carries. Wired once, here, because it needs the write side; a skeleton-mode core
+    // never reaches this and renders ids instead. It is only consulted when a channel actually has
+    // a template, so a deployment with none issues no extra query.
+    notifier.set_facts_source(Arc::new(notify_facts::CachedNodeFacts::new(repo.clone())));
 
     // Notification routing + mutes priming: load the DB channels/rules into the notifier now (env
     // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).

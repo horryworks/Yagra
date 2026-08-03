@@ -39,6 +39,10 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
+# Notification-template rendering (ADR-039). Core-only on purpose: the *variable set* is the
+# contract and lives in `yagra-common`, but the engine stays here so it does not ride along into
+# the poller image, which sends no notifications.
+minijinja = { workspace = true }
 sha2 = { workspace = true }
 # Stateless signed session tokens for Core HA active/active (ADR-016 Increment 2a): HMAC-SHA256
 # signing + base64url claim encoding. Both already in the tree; named directly for `token.rs`.

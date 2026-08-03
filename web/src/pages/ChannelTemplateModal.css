@@ -1,0 +1,123 @@
+/* Notification-template editor (ADR-039), raised from a channel row on Alerts ▸ Notification
+   routing. Dialog chrome comes from `Modal`; this file is the editor's own layout only. */
+
+.tpl-intro {
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+  margin-bottom: 14px;
+}
+
+.tpl-hint {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  margin: 6px 0 0;
+}
+
+/* ── Variable palette ─────────────────────────────────────────────────────────────────────── */
+
+.tpl-vars {
+  margin-top: 18px;
+}
+
+.tpl-vars-title {
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  margin-bottom: 8px;
+}
+
+.tpl-vars-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tpl-var {
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.tpl-var:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+/* Marks a variable that is not on every alert, so a template using it wants a `default`. */
+.tpl-var-opt {
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+
+/* ── Preview ──────────────────────────────────────────────────────────────────────────────── */
+
+.tpl-preview {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+/* A preview the operator has since edited past. Dimmed rather than removed: it is still the last
+   thing that was actually rendered, and hiding it would look like the preview button failed. */
+.tpl-preview.is-stale {
+  opacity: 0.55;
+}
+
+.tpl-preview-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  margin-bottom: 10px;
+}
+
+.tpl-preview-out {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.tpl-preview-out dt {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.tpl-preview-out dd {
+  margin: 0;
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* A rendered body can be long; scroll it inside the dialog rather than growing the dialog. */
+.tpl-preview-body {
+  max-height: 180px;
+  overflow: auto;
+}
+
+.tpl-problems {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: var(--font-xs);
+}
+
+.tpl-problems-lead {
+  color: var(--status-warning);
+  margin: 0 0 6px;
+}
+
+.tpl-problems ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}

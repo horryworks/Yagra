@@ -2213,6 +2213,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-channels/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Render a template against a representative alert, without saving anything.
+         * @description A template is code that first runs during an outage, so being able to see its output while
+         *     writing it is part of the feature rather than a convenience. Takes no channel id, so a template
+         *     can be checked before the channel it belongs to exists.
+         *
+         *     Problems come back **in the 200 response**, not as a 400: they are notes about the text being
+         *     typed, and a failed request would render as "the preview is broken" instead.
+         */
+        post: operations["preview_notification_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-channels/template-variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every variable a notification template can reference.
+         * @description Served rather than documented so the editor's list and the renderer's context cannot disagree —
+         *     they are the same list.
+         */
+        get: operations["list_template_variables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-channels/{id}": {
         parameters: {
             query?: never;
@@ -2224,6 +2270,29 @@ export interface paths {
         put: operations["set_notification_channel_enabled"];
         post?: never;
         delete: operations["delete_notification_channel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-channels/{id}/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a channel's notification template.
+         * @description A template that does not compile is rejected here rather than at delivery time — the operator is
+         *     still looking at the field. The renderer additionally falls back to the built-in format if a
+         *     stored template fails while an alert is being sent, so a broken template can never swallow a
+         *     notification.
+         */
+        put: operations["set_notification_template"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3664,11 +3733,15 @@ export interface components {
         ChannelKind: "webhook" | "email" | "pagerduty" | "jsm";
         /** @description Channel metadata for the API — never the secret config. */
         ChannelSummary: {
+            /** @description Template for the notification body. Absent means Yagra's built-in format is used. */
+            body_template?: string | null;
             enabled: boolean;
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ChannelKind"];
             name: string;
+            /** @description Template for the notification subject. Absent means Yagra's built-in wording is used. */
+            subject_template?: string | null;
         };
         /**
          * Format: uuid
@@ -5973,6 +6046,14 @@ export interface components {
          * @enum {string}
          */
         NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed";
+        /**
+         * @description Which point in an alert's life produced this notification.
+         *
+         *     Templates branch on it — a resolve usually wants different wording from a fire — so it is a
+         *     variable rather than three separate template fields.
+         * @enum {string}
+         */
+        NotifyEvent: "fire" | "resolve" | "suppress";
         /** @description OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect. */
         OidcCallbackBody: {
             code: string;
@@ -6176,6 +6257,41 @@ export interface components {
             pool: string;
             /** @description `"nodes_without_live_poller"` when the pool has nodes but no live poller, else `null`. */
             warning?: string | null;
+        };
+        /** @description One field that could not be used. */
+        PreviewProblem: {
+            /** @description `subject` or `body`. */
+            field: string;
+            /** @description The engine's message, including the offending line where it knows it. */
+            message: string;
+            /** @description `compile`, `render`, `too_large`, or `not_json`. */
+            reason: string;
+        };
+        /** @description A template to render against a representative alert. */
+        PreviewRequest: {
+            body?: string | null;
+            /** @description Which point in an alert's life to render: `fire`, `resolve`, or `suppress`. */
+            event?: components["schemas"]["NotifyEvent"];
+            /** @description The channel kind the template is for. Decides whether the body has to be valid JSON. */
+            kind: components["schemas"]["ChannelKind"];
+            subject?: string | null;
+        };
+        /** @description What the template produces, or what stopped it. */
+        PreviewResult: {
+            /** @description The rendered body, under the same rule. */
+            body: string;
+            /**
+             * @description Whether the rendered body parses as JSON. `null` when this channel kind sends the body as
+             *     plain text, where the question does not apply.
+             */
+            json_valid?: boolean | null;
+            /** @description One entry per field that could not be rendered and fell back. Empty on success. */
+            problems: components["schemas"]["PreviewProblem"][];
+            /**
+             * @description The rendered subject. Yagra's built-in wording when the subject is not overridden, or when
+             *     rendering it failed — which is exactly what would be sent.
+             */
+            subject: string;
         };
         /** @description Create/update body. `category` is optional on create (defaults to generic SNMP). */
         ProfileBody: {
@@ -6926,6 +7042,14 @@ export interface components {
             /** Format: int32 */
             updated: number;
         };
+        /**
+         * @description A channel's notification-template override. Both fields are replaced together; `null` or blank
+         *     on a field restores Yagra's built-in wording for it.
+         */
+        TemplateBody: {
+            body?: string | null;
+            subject?: string | null;
+        };
         /** @description One metric in a template, with its id, for the template editor. */
         TemplateItem: components["schemas"]["CollectionItem"] & {
             enabled: boolean;
@@ -6939,6 +7063,18 @@ export interface components {
             id: string;
             /** Format: int64 */
             item_count: number;
+            name: string;
+        };
+        /** @description One name a notification template may reference. */
+        TemplateVariable: {
+            /**
+             * @description Whether every alert carries it. A variable that is not always present is *undefined* when
+             *     absent: it renders as empty text, and `{{ name | default("…") }}` supplies a fallback.
+             */
+            always_present: boolean;
+            /** @description What the value means. */
+            description: string;
+            /** @description The name to write between `{{ }}`. */
             name: string;
         };
         /**
@@ -16033,6 +16169,86 @@ export interface operations {
             };
         };
     };
+    preview_notification_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description What this template would send; a template that cannot be used is reported in-band alongside the built-in text that would go instead */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewResult"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_template_variables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template variables, with what each one means and whether every alert carries it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateVariable"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     set_notification_channel_enabled: {
         parameters: {
             query?: never;
@@ -16112,6 +16328,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role below Admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such channel */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_notification_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateBody"];
+            };
+        };
+        responses: {
+            /** @description Template saved (or cleared, restoring the built-in wording) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The template does not compile, or is longer than the accepted maximum */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
             };
             /** @description No valid bearer token */
             401: {

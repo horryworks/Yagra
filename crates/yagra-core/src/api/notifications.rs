@@ -15,16 +15,17 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig};
 use super::util::{CreatedId, EnabledBody};
 use super::ApiState;
-use crate::notifications::ChannelConfig;
+use crate::notifications::{ChannelConfig, ChannelKind};
+use crate::notify_render::ChannelTemplate;
 use axum::{
     extract::Path,
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{is_ssrf_blocked, Severity};
+use yagra_common::{is_ssrf_blocked, NotifyEvent, Severity};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -33,6 +34,9 @@ use yagra_common::{is_ssrf_blocked, Severity};
     create_notification_channel,
     set_notification_channel_enabled,
     delete_notification_channel,
+    set_notification_template,
+    preview_notification_template,
+    list_template_variables,
     list_routing_rules,
     create_routing_rule,
     set_routing_rule_enabled,
@@ -47,9 +51,25 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/notification-channels",
             get(list_notification_channels).post(create_notification_channel),
         )
+        // Both static siblings of `:id` below; the router prefers a literal segment, the same way
+        // `/meraki/orgs/discover` sits beside `/meraki/orgs/:id`.
+        .route(
+            "/api/v1/notification-channels/preview",
+            post(preview_notification_template),
+        )
+        .route(
+            "/api/v1/notification-channels/template-variables",
+            get(list_template_variables),
+        )
         .route(
             "/api/v1/notification-channels/:id",
             put(set_notification_channel_enabled).delete(delete_notification_channel),
+        )
+        // No matching GET: a channel's template comes back on the list, so the editor opens with
+        // no extra round trip and the ledger gains no read that MCP would then have to answer for.
+        .route(
+            "/api/v1/notification-channels/:id/template",
+            put(set_notification_template),
         )
         .route(
             "/api/v1/routing-rules",
@@ -298,6 +318,223 @@ async fn delete_notification_channel(
     }
 }
 
+/// A channel's notification-template override. Both fields are replaced together; `null` or blank
+/// on a field restores Yagra's built-in wording for it.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct TemplateBody {
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+impl TemplateBody {
+    // Blank collapses to "built-in". An empty string is a template that renders to nothing, which
+    // is a subject line an operator could set by clearing the field and then wonder where their
+    // notifications went; the database column keeps NULL as the only "no override" value.
+    fn into_template(self) -> ChannelTemplate {
+        fn meaningful(s: Option<String>) -> Option<String> {
+            s.filter(|s| !s.trim().is_empty())
+        }
+        ChannelTemplate {
+            subject: meaningful(self.subject),
+            body: meaningful(self.body),
+        }
+    }
+}
+
+/// Replace a channel's notification template.
+///
+/// A template that does not compile is rejected here rather than at delivery time — the operator is
+/// still looking at the field. The renderer additionally falls back to the built-in format if a
+/// stored template fails while an alert is being sent, so a broken template can never swallow a
+/// notification.
+#[utoipa::path(
+    put, path = "/api/v1/notification-channels/{id}/template", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Channel id")),
+    request_body = TemplateBody,
+    responses(
+        (status = 204, description = "Template saved (or cleared, restoring the built-in wording)"),
+        (status = 400, description = "The template does not compile, or is longer than the accepted maximum", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 404, description = "No such channel", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_notification_template(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<TemplateBody>,
+) -> ApiResult<StatusCode> {
+    let template = body.into_template();
+    check_template_size(&template)?;
+    crate::notify_render::validate(&template).map_err(|e| {
+        ApiError::bad_request(
+            "invalid_template",
+            format!("{} template: {}", e.field.as_str(), e.message),
+        )
+    })?;
+    match admin
+        .notifications
+        .set_channel_template(id, &template)
+        .await
+    {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::not_found(
+            "channel_not_found",
+            format!("no channel {id}"),
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "update notification template",
+            "failed to update notification template",
+        )),
+    }
+}
+
+/// Longest template *source* accepted, per field. Matches the table CHECKs in migration 0063, and
+/// is deliberately looser than the cap on rendered output — a template can reasonably be longer
+/// than what it produces.
+const MAX_SUBJECT_SOURCE: usize = 4000;
+const MAX_BODY_SOURCE: usize = 64_000;
+
+/// Reject an over-long template at the edge, so the table CHECK is never what the operator sees.
+fn check_template_size(template: &ChannelTemplate) -> Result<(), ApiError> {
+    for (label, source, cap) in [
+        ("subject", template.subject.as_deref(), MAX_SUBJECT_SOURCE),
+        ("body", template.body.as_deref(), MAX_BODY_SOURCE),
+    ] {
+        if source.is_some_and(|s| s.chars().count() > cap) {
+            return Err(ApiError::bad_request(
+                "invalid_template",
+                format!("{label} template is longer than the {cap}-character maximum"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A template to render against a representative alert.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct PreviewRequest {
+    /// The channel kind the template is for. Decides whether the body has to be valid JSON.
+    kind: ChannelKind,
+    /// Which point in an alert's life to render: `fire`, `resolve`, or `suppress`.
+    #[serde(default = "default_event")]
+    event: NotifyEvent,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+fn default_event() -> NotifyEvent {
+    NotifyEvent::Fire
+}
+
+/// What the template produces, or what stopped it.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct PreviewResult {
+    /// The rendered subject. Yagra's built-in wording when the subject is not overridden, or when
+    /// rendering it failed — which is exactly what would be sent.
+    subject: String,
+    /// The rendered body, under the same rule.
+    body: String,
+    /// One entry per field that could not be rendered and fell back. Empty on success.
+    problems: Vec<PreviewProblem>,
+    /// Whether the rendered body parses as JSON. `null` when this channel kind sends the body as
+    /// plain text, where the question does not apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json_valid: Option<bool>,
+}
+
+/// One field that could not be used.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct PreviewProblem {
+    /// `subject` or `body`.
+    field: String,
+    /// `compile`, `render`, `too_large`, or `not_json`.
+    reason: String,
+    /// The engine's message, including the offending line where it knows it.
+    message: String,
+}
+
+/// Render a template against a representative alert, without saving anything.
+///
+/// A template is code that first runs during an outage, so being able to see its output while
+/// writing it is part of the feature rather than a convenience. Takes no channel id, so a template
+/// can be checked before the channel it belongs to exists.
+///
+/// Problems come back **in the 200 response**, not as a 400: they are notes about the text being
+/// typed, and a failed request would render as "the preview is broken" instead.
+#[utoipa::path(
+    post, path = "/api/v1/notification-channels/preview", tag = "notifications",
+    request_body = PreviewRequest,
+    responses(
+        (status = 200, description = "What this template would send; a template that cannot be used is reported in-band alongside the built-in text that would go instead", body = PreviewResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_notification_template(
+    _guard: RequireManageConfig,
+    Json(req): Json<PreviewRequest>,
+) -> Json<PreviewResult> {
+    let needs_json = crate::notify_render::body_must_be_json(req.kind);
+    // The same sample alert, the same context builder and the same built-in wording the delivery
+    // path uses — a preview that agreed only with a second copy of the rules would be worthless.
+    let (alert, resolved) = crate::notify_facts::preview_sample();
+    let facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
+    let builtin = crate::alerts::builtin_notification(&alert, req.event);
+    let template = TemplateBody {
+        subject: req.subject,
+        body: req.body,
+    }
+    .into_template();
+    let rendered = crate::notify_render::render_with_fallback(
+        Some(&template),
+        &facts,
+        needs_json,
+        &builtin.summary,
+        &builtin.payload,
+    );
+    Json(PreviewResult {
+        json_valid: needs_json
+            .then(|| serde_json::from_str::<serde_json::Value>(&rendered.body).is_ok()),
+        problems: rendered
+            .failures
+            .iter()
+            .map(|f| PreviewProblem {
+                field: f.field.as_str().to_owned(),
+                reason: f.kind.as_str().to_owned(),
+                message: f.message.clone(),
+            })
+            .collect(),
+        subject: rendered.subject,
+        body: rendered.body,
+    })
+}
+
+/// Every variable a notification template can reference.
+///
+/// Served rather than documented so the editor's list and the renderer's context cannot disagree —
+/// they are the same list.
+#[utoipa::path(
+    get, path = "/api/v1/notification-channels/template-variables", tag = "notifications",
+    responses(
+        (status = 200, description = "The template variables, with what each one means and whether every alert carries it", body = Vec<yagra_common::TemplateVariable>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_template_variables(
+    _guard: RequireManageConfig,
+) -> Json<Vec<yagra_common::TemplateVariable>> {
+    Json(yagra_common::TEMPLATE_VARIABLES.to_vec())
+}
+
 #[utoipa::path(
     get, path = "/api/v1/routing-rules", tag = "notifications",
     responses(
@@ -452,6 +689,15 @@ mod tests {
             ("POST", "/api/v1/notification-channels".to_owned()),
             ("PUT", format!("/api/v1/notification-channels/{ID}")),
             ("DELETE", format!("/api/v1/notification-channels/{ID}")),
+            (
+                "PUT",
+                format!("/api/v1/notification-channels/{ID}/template"),
+            ),
+            ("POST", "/api/v1/notification-channels/preview".to_owned()),
+            (
+                "GET",
+                "/api/v1/notification-channels/template-variables".to_owned(),
+            ),
             ("GET", "/api/v1/routing-rules".to_owned()),
             ("POST", "/api/v1/routing-rules".to_owned()),
             ("PUT", format!("/api/v1/routing-rules/{ID}")),
@@ -502,6 +748,86 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The contract the editor branches on: a template that does not compile is a **typed 400**
+    /// with `invalid_template`, not a 500 out of migration 0063's CHECK and not a silent save that
+    /// only fails months later when an alert fires.
+    ///
+    /// Asserted on the mapping rather than through the router because the handler takes `Admin`
+    /// before its body, so a skeleton-mode request is answered 503 before validation is reached —
+    /// which is the guard ordering `api-conventions.md` requires, not a bug.
+    #[test]
+    fn a_template_that_does_not_compile_maps_to_a_typed_400() {
+        use axum::response::IntoResponse;
+        let bad = ChannelTemplate {
+            subject: None,
+            body: Some("{% if severity %}unclosed".to_owned()),
+        };
+        let err = crate::notify_render::validate(&bad).expect_err("must not compile");
+        assert_eq!(err.field.as_str(), "body");
+        let resp = ApiError::bad_request(
+            "invalid_template",
+            format!("{} template: {}", err.field.as_str(), err.message),
+        )
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // …and a template that compiles is accepted, including the empty pair (= built-in).
+        crate::notify_render::validate(&ChannelTemplate {
+            subject: Some("{{ severity }} {{ node_name }}".to_owned()),
+            body: Some("{% if event == 'resolve' %}ok{% endif %}".to_owned()),
+        })
+        .expect("valid template");
+        crate::notify_render::validate(&ChannelTemplate::default()).expect("empty is valid");
+    }
+
+    /// Blank is how an operator clears an override, and it has to mean "built-in" rather than
+    /// "send an empty subject" — the second is a silent way to lose every notification's headline.
+    #[test]
+    fn a_blank_field_clears_the_override_rather_than_emptying_it() {
+        let cleared = TemplateBody {
+            subject: Some("   ".to_owned()),
+            body: Some(String::new()),
+        }
+        .into_template();
+        assert!(cleared.is_builtin());
+
+        let kept = TemplateBody {
+            subject: Some("{{ node_name }}".to_owned()),
+            body: None,
+        }
+        .into_template();
+        assert_eq!(kept.subject.as_deref(), Some("{{ node_name }}"));
+        assert!(kept.body.is_none());
+    }
+
+    /// The edge rejects an over-long template so the operator sees a 400 naming the limit, not a
+    /// 500 from migration 0063's CHECK.
+    #[test]
+    fn an_over_long_template_is_rejected_before_the_database_sees_it() {
+        let too_long = ChannelTemplate {
+            subject: Some("x".repeat(MAX_SUBJECT_SOURCE + 1)),
+            body: None,
+        };
+        assert!(check_template_size(&too_long).is_err());
+        let ok = ChannelTemplate {
+            subject: Some("x".repeat(MAX_SUBJECT_SOURCE)),
+            body: Some("y".repeat(MAX_BODY_SOURCE)),
+        };
+        assert!(check_template_size(&ok).is_ok());
+    }
+
+    /// The preview is a read: it must not dirty the config generation, or an operator typing a
+    /// template would trigger a full-fleet rebuild on every keystroke-batch (S6).
+    #[test]
+    fn previewing_a_template_is_not_a_config_change() {
+        assert!(!crate::api::changes_monitoring_config(
+            "/api/v1/notification-channels/preview"
+        ));
+        // …but actually saving one is.
+        assert!(crate::api::changes_monitoring_config(&format!(
+            "/api/v1/notification-channels/{ID}/template"
+        )));
     }
 
     #[test]

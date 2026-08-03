@@ -24,6 +24,31 @@
   existing deployments keep the 30 days their tables are actually enforcing.
 
 ### New Features
+- **Notification templates** (Alerts ▸ Notification routing ▸ a channel ▸ Edit notification
+  template, ADR-039). Each channel can override the subject and body it sends, written as a Jinja2
+  template over a fixed set of alert variables. The immediate reason: the built-in subject named the
+  node by **UUID** — `node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 is critical` — so a template can now
+  say `{{ severity | upper }}: {{ node_name }} ({{ group }})` instead. Conditionals work, which is
+  the usual second request: `{% if event == 'resolve' %}Recovered{% endif %}`.
+  - **Existing channels are unchanged, byte for byte.** No template means the wording Yagra has
+    always sent; upgrading changes no notification.
+  - **A broken template never costs you a notification.** If it cannot be rendered when an alert
+    fires — a bad filter, output too large, or a body that stopped being valid JSON on a channel
+    that sends JSON — that field falls back to the built-in wording and the alert still goes out.
+    The fallback is per field, so a mistake in the body does not discard a subject that was right.
+    Each occurrence increments `yagra_notification_template_errors_total{reason}` and is logged.
+  - **Preview before you save.** A template's first real execution is during an outage, so the
+    editor renders it against a representative alert and shows exactly what would be sent,
+    including whether the body parses as JSON. A template that does not compile is refused at save
+    time rather than at 3am.
+  - Variables available: node name/id/address, group, profile, severity, state, metric, value,
+    threshold, direction, time, flapping, the root cause when an alert is rolled up, and the dedup
+    key Yagra sends to PagerDuty/JSM. Credentials are never in scope. Interpolating into a JSON
+    body wants the `tojson` filter, which the editor's error message tells you.
+  - Editing is Admin-only and audited, and takes effect within ~30 seconds without a restart.
+  - **Not covered**: a webhook or SMTP destination configured through `YAGRA_WEBHOOK_URL` /
+    `YAGRA_SMTP_*` keeps the built-in wording — it has no channel record to attach a template to.
+    Add it as a channel in the UI to template it.
 - **The MCP tool surface now answers the questions the WebUI answers** (ADR-042). It had drifted
   into a subset — 110 read endpoints against 17 tools — and the gaps were the ones a troubleshooting
   session hits first. Six new read-only tools, taking the surface to 23:

@@ -125,6 +125,25 @@ serde_json = "1"
 # Device-classification rules (sysDescr matching) — linear-time engine, no catastrophic
 # backtracking, so operator-supplied patterns can't ReDoS the classifier (security.md).
 regex = "1"
+# Notification templates (ADR-039): the operator's subject/body override, rendered per channel.
+# Jinja2-compatible, pure Rust, and sandboxed by construction — an `Environment` reaches nothing
+# but the values handed to it. Chosen over a `{{field}}` substitution of our own because operators
+# reliably want "this wording only when critical", and retrofitting conditionals means replacing
+# the substituter rather than extending it. Tera/Handlebars would also do; minijinja is the
+# lighter dependency.
+#
+# The feature list is the security boundary, so it is spelled out rather than defaulted:
+#   builtins        the standard filter/test set — without it a template can barely format anything
+#   serde + json    pass the context in as a struct; `tojson` is what makes a JSON body safe to
+#                   build by hand (a node name containing a quote must not break the payload)
+#   fuel            a hard cap on execution steps. Templates are operator-authored *executable
+#                   text*, and the render happens on a synchronous call inside the notify worker,
+#                   where a wall-clock timeout is not expressible. This is the loop bound.
+#   debug           the template line/context in the error — the preview endpoint's whole job
+# Deliberately OFF: `loader`/`multi_template` (no `{% include %}`/`{% extends %}` exists to reach
+# for, so a template cannot name another file), `macros`, `deserialization`, `speedups`
+# (pulls v_htmlescape), `stacker`.
+minijinja = { version = "2", default-features = false, features = ["builtins", "serde", "json", "fuel", "debug", "std_collections"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Errors

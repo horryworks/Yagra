@@ -339,6 +339,23 @@ pub struct NodeRepo {
     pool: PgPool,
 }
 
+/// What a notification says about a node beyond its id (ADR-039).
+///
+/// An `Alert` carries ids only, which is correct for the engine and useless in an email — the
+/// subject line read `node 6f1c9d2a-… is critical` until this existed. `group` and `profile` are
+/// optional because a node need have neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeFacts {
+    /// Display name.
+    pub name: String,
+    /// Monitored address, without any netmask.
+    pub address: String,
+    /// Inventory folder name.
+    pub group: Option<String>,
+    /// Monitoring profile name.
+    pub profile: Option<String>,
+}
+
 /// One pre-validated node to bulk-import (borrows from the request to avoid copies).
 pub struct NewNode<'a> {
     pub name: &'a str,
@@ -970,6 +987,45 @@ impl NodeRepo {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
+    }
+
+    /// The display facts a notification template renders against (ADR-039), for the given ids in
+    /// one query. `LEFT JOIN`ed so an ungrouped node or one with no profile still comes back —
+    /// the template just finds those variables undefined.
+    ///
+    // Unscoped, unlike `node_names`: the notifier is the deployment acting on its own behalf, not
+    // a principal reading the inventory, so there is no scope to apply. Same call
+    // `analysis.rs` makes for a background run. The result never reaches an API response — it
+    // renders into a notification whose destination the operator configured.
+    /// Ids with no row are simply absent from the map; the caller falls back to the raw id.
+    pub async fn node_facts(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, NodeFacts>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT n.id, n.name, host(n.address) AS address, g.name AS group_name, \
+                    p.name AS profile_name \
+               FROM nodes n \
+               LEFT JOIN node_groups g ON g.id = n.group_id \
+               LEFT JOIN profiles p ON p.id = n.profile_id \
+              WHERE n.id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("id")?,
+                    NodeFacts {
+                        name: row.try_get("name")?,
+                        address: row.try_get("address")?,
+                        group: row.try_get("group_name")?,
+                        profile: row.try_get("profile_name")?,
+                    },
+                ))
+            })
+            .collect()
     }
 
     /// Address → node-id map for correlating passive events (syslog/trap source IPs) to

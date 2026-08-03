@@ -29,8 +29,10 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { TrashIcon, PowerIcon } from '../components/ui/icons';
+import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
+import { ChannelTemplateModal } from './ChannelTemplateModal';
+import { hasTemplate } from './channelTemplate';
 import './RoutingPage.css';
 
 const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'neutral'> = {
@@ -138,6 +140,7 @@ function ChannelsSection({
   const { t } = useTranslation('alertsConfig');
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<NotificationChannel | null>(null);
+  const [templating, setTemplating] = useState<NotificationChannel | null>(null);
 
   const toggle = (c: NotificationChannel) =>
     api
@@ -184,6 +187,11 @@ function ChannelsSection({
               </div>
               <div className="ytable-cell">
                 <Badge tone="neutral">{c.kind}</Badge>
+                {hasTemplate(c) && (
+                  <Badge tone="neutral" title={t('routing.channels.templatedHint')}>
+                    {t('routing.channels.templated')}
+                  </Badge>
+                )}
               </div>
               <div className="ytable-cell">
                 <EnabledStatus enabled={c.enabled} />
@@ -193,6 +201,11 @@ function ChannelsSection({
                   <span className="ytable-actions">
                     <OverflowMenu
                       actions={[
+                        {
+                          label: t('routing.channels.template'),
+                          icon: <EditIcon />,
+                          onClick: () => setTemplating(c),
+                        },
                         {
                           label: c.enabled
                             ? t('routing.channels.disable')
@@ -221,6 +234,17 @@ function ChannelsSection({
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false);
+            onChange();
+          }}
+          onError={onError}
+        />
+      )}
+      {templating && (
+        <ChannelTemplateModal
+          channel={templating}
+          onClose={() => setTemplating(null)}
+          onDone={() => {
+            setTemplating(null);
             onChange();
           }}
           onError={onError}

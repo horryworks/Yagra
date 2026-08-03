@@ -27,6 +27,7 @@
 //!   only silences the page.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
@@ -44,7 +45,10 @@ use yagra_common::{
 use yagra_topology::Topology;
 
 use crate::notifications::{ChannelConfig, OpenChannel, RoutingRule};
+use crate::notify_facts::{context_for, node_ids_for, AlertFactsSource};
+use crate::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 use crate::thresholds::StoredThreshold;
+use yagra_common::{AlertFacts, NotifyEvent};
 
 /// Liveness check name (distinct from any metric name). `pub(crate)` so anything that has to
 /// recognise the sentinel — the RCA prompt renders it as "liveness" rather than showing an operator
@@ -880,7 +884,11 @@ impl NotifyChannel for WebhookChannel {
 /// The dedup identity string sent to lifecycle-aware vendors: PagerDuty `dedup_key` and
 /// JSM `alias`. Stable across restarts (check ids are UUIDv5), so a resolve always finds
 /// the incident its fire created.
-fn dedup_string(key: &yagra_alert::DedupKey) -> String {
+///
+/// `pub(crate)` because a notification template exposes it as `{{ dedup_key }}` (ADR-039): an
+/// operator correlating what Yagra sent with what the vendor shows needs the same string, and two
+/// spellings of it would drift.
+pub(crate) fn dedup_string(key: &yagra_alert::DedupKey) -> String {
     format!("yagra:{}:{}:{}", key.node, key.check, key.severity.as_str())
 }
 
@@ -1256,14 +1264,33 @@ fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
         .any(|m| m.node == alert.node && m.check.is_none_or(|c| c == alert.check))
 }
 
+/// A channel's notification-template override plus the one thing rendering needs to know about
+/// the channel itself (ADR-039).
+///
+/// Held next to the dispatchers rather than inside the built [`NotifyChannel`] so a template edit
+/// takes effect on the next routing refresh without rebuilding the channel — which would reset its
+/// dedup state and re-page every active alert.
+struct ChannelOverride {
+    template: ChannelTemplate,
+    /// Whether this channel carries the body as JSON (webhook/PagerDuty) — see
+    /// [`crate::notify_render::body_must_be_json`].
+    needs_json: bool,
+}
+
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
 /// (each with its own dedup+retry dispatcher), and the rules that select channels per alert.
 struct Routes {
     /// Env-configured channels (`YAGRA_WEBHOOK_URL`/`YAGRA_SMTP_*`) — fire for *every* alert,
     /// preserving the pre-routing behaviour. `None` if no env channel is set.
+    ///
+    /// **Always the built-in format.** It has no channel id and no database row, so there is
+    /// nothing for a per-channel override to hang off (ADR-039 decision 1); a deployment that
+    /// wants templated notifications configures a channel in the UI.
     default: Option<Dispatcher<MultiChannel>>,
     /// DB channels by id, each with its own dedup state (preserved across config refresh).
     channels: HashMap<Uuid, Dispatcher<Arc<dyn NotifyChannel>>>,
+    /// Per-channel template overrides, for the channels that have one. Absent = built-in format.
+    overrides: HashMap<Uuid, ChannelOverride>,
     /// Routing rules (severity → channel ids).
     rules: Vec<RoutingRule>,
     /// Unexpired mutes — matching alerts are not delivered (UI/history unaffected).
@@ -1275,6 +1302,15 @@ struct Routes {
 /// [`Self::set_routing`]); env channels remain an always-on default route.
 pub struct Notifier {
     routes: tokio::sync::Mutex<Routes>,
+    /// Resolves node names/group/profile for a template's context (ADR-039). `None` in skeleton
+    /// mode and before startup wiring, in which case a template sees ids instead of names.
+    facts: RwLock<Option<Arc<dyn AlertFactsSource>>>,
+    /// Whether *any* channel currently has a template.
+    ///
+    /// Read without the routing lock so that a deployment with no templates — which is every
+    /// deployment until someone writes one — does exactly what it did before this feature landed,
+    /// including issuing no extra query to resolve names nobody is going to interpolate.
+    any_templates: AtomicBool,
 }
 
 impl Notifier {
@@ -1302,34 +1338,86 @@ impl Notifier {
             routes: tokio::sync::Mutex::new(Routes {
                 default,
                 channels: HashMap::new(),
+                overrides: HashMap::new(),
                 rules: Vec::new(),
                 mutes: Vec::new(),
             }),
+            facts: RwLock::new(None),
+            any_templates: AtomicBool::new(false),
         }
+    }
+
+    /// Attach the source that resolves node names/group/profile for a template's context
+    /// (ADR-039). Called once at startup; a core with no write side never calls it and its
+    /// templates render ids instead of names.
+    pub fn set_facts_source(&self, source: Arc<dyn AlertFactsSource>) {
+        *self.facts.write().expect("notifier facts lock poisoned") = Some(source);
     }
 
     /// Replace the DB routing snapshot. Channels that still exist keep their dispatcher (so the
     /// periodic refresh doesn't reset dedup and re-page active alerts); new channels get a
-    /// fresh dispatcher; removed channels are dropped. Config for an existing channel is treated
-    /// as immutable (changing it means delete + recreate).
+    /// fresh dispatcher; removed channels are dropped.
+    ///
+    /// A channel's **connection config** is treated as immutable — changing it means delete +
+    /// recreate, because the live channel object is what holds it. Its **notification template**
+    /// is not: it lives beside the dispatcher rather than inside the channel, so it is replaced
+    /// wholesale here and an edit takes effect on the next refresh with no restart and without
+    /// resetting dedup (ADR-039).
     pub async fn set_routing(&self, channels: Vec<OpenChannel>, rules: Vec<RoutingRule>) {
         let mut routes = self.routes.lock().await;
         let mut old = std::mem::take(&mut routes.channels);
         let mut next = HashMap::new();
+        let mut overrides = HashMap::new();
         for ch in channels {
+            if !ch.template.is_builtin() {
+                overrides.insert(
+                    ch.id,
+                    ChannelOverride {
+                        needs_json: body_must_be_json(ch.config.kind()),
+                        template: ch.template,
+                    },
+                );
+            }
             if let Some(disp) = old.remove(&ch.id) {
                 next.insert(ch.id, disp); // preserve dedup
             } else if let Some(channel) = build_channel(&ch.config) {
                 next.insert(ch.id, Dispatcher::new(channel, RetryPolicy::default()));
             }
         }
+        // Only keep an override for a channel that actually has a live dispatcher, so the flag
+        // below cannot be set by a channel whose config failed to build.
+        overrides.retain(|id, _| next.contains_key(id));
+        self.any_templates
+            .store(!overrides.is_empty(), Ordering::Relaxed);
         routes.channels = next;
+        routes.overrides = overrides;
         routes.rules = rules;
     }
 
     /// Replace the unexpired-mute snapshot (refreshed alongside routing).
     pub async fn set_mutes(&self, mutes: Vec<ActiveMute>) {
         self.routes.lock().await.mutes = mutes;
+    }
+
+    /// Resolve the template context for an alert, or `None` when no channel has a template.
+    ///
+    /// Deliberately **before** the routing lock is taken: this is the one part of delivery that
+    /// touches the database, and holding the lock across it would add a query to the window that
+    /// already serializes every notification.
+    async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
+        if !self.any_templates.load(Ordering::Relaxed) {
+            return None;
+        }
+        let source = self
+            .facts
+            .read()
+            .expect("notifier facts lock poisoned")
+            .clone();
+        let resolved = match source {
+            Some(src) => src.facts(&node_ids_for(alert)).await,
+            None => HashMap::new(),
+        };
+        Some(context_for(alert, event, &resolved))
     }
 
     /// Apply one notify action (deliver a fire, or resolve/clear a recovered alert).
@@ -1341,6 +1429,14 @@ impl Notifier {
     /// an accepted tradeoff for keeping per-channel dedup state consistent; decoupling
     /// delivery from the routing snapshot is a future refactor.
     pub async fn handle(&self, action: NotifyAction) {
+        // Resolving names is I/O, so it happens outside the lock. A muted or rolled-up alert pays
+        // for a lookup it will not use, which the facts cache makes negligible and which is worth
+        // not restructuring the suppression checks around.
+        let facts = match &action {
+            NotifyAction::Fire(a) => self.context(a, NotifyEvent::Fire).await,
+            NotifyAction::Resolve(a) => self.context(a, NotifyEvent::Resolve).await,
+            NotifyAction::Suppress(a) => self.context(a, NotifyEvent::Suppress).await,
+        };
         let mut routes = self.routes.lock().await;
         match action {
             NotifyAction::Fire(alert) => {
@@ -1358,9 +1454,7 @@ impl Notifier {
                     tracing::debug!(node = %alert.node, "suppressing muted alert notification");
                     return;
                 }
-                let summary = format!("node {} is {}", alert.node, alert.state);
-                let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
-                let notification = Notification::for_alert(&alert, summary, payload);
+                let notification = builtin_notification(&alert, NotifyEvent::Fire);
 
                 // Channels selected by the routing rules (severity match; None = any).
                 let matched: BTreeSet<Uuid> = routes
@@ -1370,13 +1464,20 @@ impl Notifier {
                     .flat_map(|r| r.channel_ids.iter().copied())
                     .collect();
 
-                if let Some(d) = routes.default.as_mut() {
+                let Routes {
+                    default,
+                    channels,
+                    overrides,
+                    ..
+                } = &mut *routes;
+                if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch(notification.clone()).await;
                     tracing::info!(?outcome, node = %alert.node, route = "default", "alert notification dispatched");
                 }
                 for id in matched {
-                    if let Some(d) = routes.channels.get_mut(&id) {
-                        let outcome = d.dispatch(notification.clone()).await;
+                    if let Some(d) = channels.get_mut(&id) {
+                        let n = for_channel(id, overrides, facts.as_ref(), &notification);
+                        let outcome = d.dispatch(n).await;
                         tracing::info!(?outcome, node = %alert.node, channel = %id, "alert notification dispatched");
                     }
                 }
@@ -1399,9 +1500,7 @@ impl Notifier {
                 // incident; webhook/email keep their no-op default. Deliberately NOT
                 // mute-filtered: a mute placed after the fire must not leave a remote
                 // incident dangling open (vendor resolves are idempotent).
-                let summary = format!("resolved: node {} recovered", alert.node);
-                let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
-                let notification = Notification::for_alert(&alert, summary, payload);
+                let notification = builtin_notification(&alert, NotifyEvent::Resolve);
 
                 let matched: BTreeSet<Uuid> = routes
                     .rules
@@ -1410,15 +1509,22 @@ impl Notifier {
                     .flat_map(|r| r.channel_ids.iter().copied())
                     .collect();
 
-                if let Some(d) = routes.default.as_mut() {
+                let Routes {
+                    default,
+                    channels,
+                    overrides,
+                    ..
+                } = &mut *routes;
+                if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
                     tracing::info!(?outcome, node = %alert.node, route = "default", "alert resolve dispatched");
                 }
-                let ids: Vec<Uuid> = routes.channels.keys().copied().collect();
+                let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
-                    if let Some(d) = routes.channels.get_mut(&id) {
+                    if let Some(d) = channels.get_mut(&id) {
                         if matched.contains(&id) {
-                            let outcome = d.dispatch_resolve(notification.clone()).await;
+                            let n = for_channel(id, overrides, facts.as_ref(), &notification);
+                            let outcome = d.dispatch_resolve(n).await;
                             tracing::info!(?outcome, node = %alert.node, channel = %id, "alert resolve dispatched");
                         } else {
                             d.mark_resolved(&key);
@@ -1433,9 +1539,7 @@ impl Notifier {
                 // itself stays live in the UI grouped under the root cause. Vendor resolves are
                 // idempotent, so a repeat close is harmless.
                 let key = alert.dedup_key();
-                let summary = format!("rolled up: node {} suppressed under upstream", alert.node);
-                let payload = serde_json::to_string(&alert).unwrap_or_else(|_| "{}".to_owned());
-                let notification = Notification::for_alert(&alert, summary, payload);
+                let notification = builtin_notification(&alert, NotifyEvent::Suppress);
 
                 let matched: BTreeSet<Uuid> = routes
                     .rules
@@ -1444,15 +1548,22 @@ impl Notifier {
                     .flat_map(|r| r.channel_ids.iter().copied())
                     .collect();
 
-                if let Some(d) = routes.default.as_mut() {
+                let Routes {
+                    default,
+                    channels,
+                    overrides,
+                    ..
+                } = &mut *routes;
+                if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
                     tracing::info!(?outcome, node = %alert.node, route = "default", "downstream alert rolled up (incident closed)");
                 }
-                let ids: Vec<Uuid> = routes.channels.keys().copied().collect();
+                let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
-                    if let Some(d) = routes.channels.get_mut(&id) {
+                    if let Some(d) = channels.get_mut(&id) {
                         if matched.contains(&id) {
-                            let outcome = d.dispatch_resolve(notification.clone()).await;
+                            let n = for_channel(id, overrides, facts.as_ref(), &notification);
+                            let outcome = d.dispatch_resolve(n).await;
                             tracing::info!(?outcome, node = %alert.node, channel = %id, "downstream alert rolled up (incident closed)");
                         } else {
                             d.mark_resolved(&key);
@@ -1464,10 +1575,231 @@ impl Notifier {
     }
 }
 
+/// The notification Yagra sends when a channel has no template — and the fallback when its
+/// template cannot be used.
+///
+/// **Deliberately a `format!` and not a built-in template** (ADR-039 decision 3). This is what
+/// every failure path lands on, so it must not depend on the machinery that just failed. It is
+/// also the reason the wording lives in exactly one place: the three lifecycle points used to
+/// spell it out at three separate call sites inside `handle`, which is how two of them would
+/// eventually stop agreeing.
+pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notification {
+    let summary = match event {
+        NotifyEvent::Fire => format!("node {} is {}", alert.node, alert.state),
+        NotifyEvent::Resolve => format!("resolved: node {} recovered", alert.node),
+        NotifyEvent::Suppress => {
+            format!("rolled up: node {} suppressed under upstream", alert.node)
+        }
+    };
+    let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned());
+    Notification::for_alert(alert, summary, payload)
+}
+
+/// Counter for a template that could not be used and fell back to the built-in format (ADR-039).
+///
+/// The `reason` label is the point: `compile` means a template stored before it could be validated,
+/// `render` a runtime failure, `too_large` an output past the cap, and `not_json` a body a JSON
+/// channel would have mangled. They send an operator to four different places.
+const M_TEMPLATE_ERR: &str = "yagra_notification_template_errors_total";
+
+/// What one channel actually receives: its template's output, or — if it has no template, or the
+/// template could not be used — the built-in text unchanged.
+///
+/// **This function cannot fail.** A template is operator-authored text that runs for the first time
+/// during an outage; letting a mistake in it swallow the page would make the feature worse than not
+/// having it (ADR-039 decision 5). Fallback is per field, so a typo in the body does not also
+/// discard a subject that was written correctly.
+fn for_channel(
+    channel: Uuid,
+    overrides: &HashMap<Uuid, ChannelOverride>,
+    facts: Option<&AlertFacts>,
+    builtin: &Notification,
+) -> Notification {
+    let (Some(over), Some(facts)) = (overrides.get(&channel), facts) else {
+        return builtin.clone();
+    };
+    let rendered = render_with_fallback(
+        Some(&over.template),
+        facts,
+        over.needs_json,
+        &builtin.summary,
+        &builtin.payload,
+    );
+    for failure in &rendered.failures {
+        metrics::counter!(M_TEMPLATE_ERR, "reason" => failure.kind.as_str()).increment(1);
+        tracing::warn!(
+            channel = %channel,
+            field = failure.field.as_str(),
+            reason = failure.kind.as_str(),
+            detail = %failure.message,
+            "notification template unusable; sent the built-in format instead"
+        );
+    }
+    Notification {
+        summary: rendered.subject,
+        payload: rendered.body,
+        ..builtin.clone()
+    }
+}
+
 /// Match a routing rule's severity against an alert's (separate fn for unit testing).
 #[must_use]
 fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severity) -> bool {
     rule_severity.is_none_or(|s| s == alert_severity)
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+    use crate::notify_facts::tests::threshold_alert;
+    use crate::notify_render::FailureKind;
+    use yagra_common::{sample_facts, NodeId};
+
+    fn over(subject: Option<&str>, body: Option<&str>, needs_json: bool) -> ChannelOverride {
+        ChannelOverride {
+            template: ChannelTemplate {
+                subject: subject.map(str::to_owned),
+                body: body.map(str::to_owned),
+            },
+            needs_json,
+        }
+    }
+
+    /// The exact text every deployment receives today. **A change here is a change to every
+    /// operator's inbox**, so it is pinned rather than described: the whole N-1 story of ADR-039
+    /// is that a channel with no template sends what it sent before, byte for byte.
+    #[test]
+    fn the_built_in_wording_is_unchanged_for_every_lifecycle_point() {
+        let node = NodeId::new();
+        let alert = threshold_alert(node);
+        for (event, want) in [
+            (NotifyEvent::Fire, format!("node {node} is critical")),
+            (
+                NotifyEvent::Resolve,
+                format!("resolved: node {node} recovered"),
+            ),
+            (
+                NotifyEvent::Suppress,
+                format!("rolled up: node {node} suppressed under upstream"),
+            ),
+        ] {
+            let n = builtin_notification(&alert, event);
+            assert_eq!(n.summary, want);
+            // The payload has always been the whole alert as JSON.
+            assert_eq!(n.payload, serde_json::to_string(&alert).unwrap());
+            assert_eq!(n.dedup_key, alert.dedup_key());
+            assert_eq!(n.severity, alert.severity);
+        }
+    }
+
+    /// A channel with no override gets the built-in notification untouched — same object, not a
+    /// re-render that happens to agree.
+    #[test]
+    fn a_channel_without_a_template_receives_the_built_in_notification() {
+        let id = Uuid::new_v4();
+        let builtin = builtin_notification(&threshold_alert(NodeId::new()), NotifyEvent::Fire);
+        let facts = sample_facts(NotifyEvent::Fire);
+        assert_eq!(
+            for_channel(id, &HashMap::new(), Some(&facts), &builtin),
+            builtin
+        );
+    }
+
+    #[test]
+    fn a_template_replaces_the_subject_and_body_for_that_channel_only() {
+        let templated = Uuid::new_v4();
+        let plain = Uuid::new_v4();
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            templated,
+            over(Some("{{ severity }} on {{ node_name }}"), None, false),
+        );
+        let builtin = builtin_notification(&threshold_alert(NodeId::new()), NotifyEvent::Fire);
+        let facts = sample_facts(NotifyEvent::Fire);
+
+        let a = for_channel(templated, &overrides, Some(&facts), &builtin);
+        assert_eq!(a.summary, "critical on core-sw-01");
+        assert_eq!(a.payload, builtin.payload, "the body was not overridden");
+
+        let b = for_channel(plain, &overrides, Some(&facts), &builtin);
+        assert_eq!(b, builtin, "one channel's template must not reach another");
+    }
+
+    /// The property the whole module is built around: a template that fails at render time costs
+    /// the customisation, never the notification.
+    #[test]
+    fn a_failing_template_still_sends_the_built_in_text() {
+        let id = Uuid::new_v4();
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            id,
+            over(Some("{{ nope.attr }}"), Some("{{ also.bad }}"), false),
+        );
+        let builtin = builtin_notification(&threshold_alert(NodeId::new()), NotifyEvent::Fire);
+        let out = for_channel(
+            id,
+            &overrides,
+            Some(&sample_facts(NotifyEvent::Fire)),
+            &builtin,
+        );
+        assert_eq!(out, builtin);
+    }
+
+    /// A JSON channel is the case where a "successful" render is still wrong: PagerDuty parses the
+    /// body with `unwrap_or(Null)`, so an unescaped quote would page on-call with no detail.
+    #[test]
+    fn a_json_channel_rejects_a_body_that_is_not_json() {
+        let id = Uuid::new_v4();
+        let builtin = builtin_notification(&threshold_alert(NodeId::new()), NotifyEvent::Fire);
+        let facts = sample_facts(NotifyEvent::Fire);
+
+        let mut overrides = HashMap::new();
+        overrides.insert(id, over(None, Some("{{ node_name }} is down"), true));
+        assert_eq!(
+            for_channel(id, &overrides, Some(&facts), &builtin).payload,
+            builtin.payload
+        );
+
+        // The same template is fine where the body is plain text.
+        let mut overrides = HashMap::new();
+        overrides.insert(id, over(None, Some("{{ node_name }} is down"), false));
+        assert_eq!(
+            for_channel(id, &overrides, Some(&facts), &builtin).payload,
+            "core-sw-01 is down"
+        );
+    }
+
+    /// Without a facts source there is no context to render against, so the built-in text stands.
+    /// A half-rendered notification full of blanks would be worse than the plain one.
+    #[test]
+    fn no_resolved_context_means_no_rendering() {
+        let id = Uuid::new_v4();
+        let mut overrides = HashMap::new();
+        overrides.insert(id, over(Some("{{ node_name }}"), None, false));
+        let builtin = builtin_notification(&threshold_alert(NodeId::new()), NotifyEvent::Fire);
+        assert_eq!(for_channel(id, &overrides, None, &builtin), builtin);
+    }
+
+    /// Which channel kinds demand JSON is decided once, in `notify_render`, and read from there —
+    /// `set_routing` must not grow a second opinion.
+    #[test]
+    fn the_json_rule_comes_from_the_channel_kind() {
+        for (kind, want) in [
+            (crate::notifications::ChannelKind::Webhook, true),
+            (crate::notifications::ChannelKind::PagerDuty, true),
+            (crate::notifications::ChannelKind::Jsm, false),
+            (crate::notifications::ChannelKind::Email, false),
+        ] {
+            assert_eq!(body_must_be_json(kind), want);
+        }
+    }
+
+    #[test]
+    fn the_failure_reasons_are_the_metric_labels() {
+        // Guards the label set the dashboards and the ADR name.
+        assert_eq!(M_TEMPLATE_ERR, "yagra_notification_template_errors_total");
+        assert_eq!(FailureKind::NotJson.as_str(), "not_json");
+    }
 }
 
 #[cfg(test)]

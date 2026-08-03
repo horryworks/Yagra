@@ -440,7 +440,13 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 ///
 /// They stay **audited**; only the dirty signal is suppressed.
 fn changes_monitoring_config(path: &str) -> bool {
-    !(path.starts_with("/api/v1/analysis/") || path == "/api/v1/rca")
+    !(path.starts_with("/api/v1/analysis/")
+        || path == "/api/v1/rca"
+        // Renders a notification template against a fixed sample and returns the text (ADR-039).
+        // It reads nothing and writes nothing — and an operator iterating on a template will hit
+        // it on almost every keystroke-batch, which is the worst possible source of full-fleet
+        // rebuilds.
+        || path == "/api/v1/notification-channels/preview")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA

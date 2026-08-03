@@ -400,6 +400,18 @@ export type ChannelConfigInput = components['schemas']['ChannelConfig'];
  *  to `channel_ids`. */
 export type RoutingRule = components['schemas']['RoutingRule'];
 
+/** One name a notification template may reference (ADR-039). The catalogue is served rather than
+ *  transcribed, so the editor's palette and the renderer's context cannot disagree. */
+export type TemplateVariable = components['schemas']['TemplateVariable'];
+
+/** Which point in an alert's life a template renders for. */
+export type NotifyEvent = components['schemas']['NotifyEvent'];
+
+/** What a template would send (`POST /api/v1/notification-channels/preview`). A field that could
+ *  not be rendered comes back as the built-in text plus an entry in `problems` — the same
+ *  fallback delivery applies, so the preview shows what an alert would actually produce. */
+export type TemplatePreview = components['schemas']['PreviewResult'];
+
 // ── Collection (metrics to gather) ──────────────────────────────────────────────────────────────
 
 /** How a collection item is gathered. */

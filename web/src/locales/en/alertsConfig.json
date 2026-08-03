@@ -26,7 +26,10 @@
       "enable": "Enable channel",
       "disable": "Disable channel",
       "delete": "Delete channel",
-      "deleteBody": "Delete channel <strong>{{name}}</strong>? Rules that target it will no longer reach this destination."
+      "deleteBody": "Delete channel <strong>{{name}}</strong>? Rules that target it will no longer reach this destination.",
+      "template": "Edit notification template",
+      "templated": "Custom text",
+      "templatedHint": "This channel overrides Yagra's built-in subject or body."
     },
     "rules": {
       "title": "Routing rules",
@@ -80,7 +83,25 @@
       "update": "failed to update",
       "addChannel": "failed to add channel",
       "addRule": "failed to add rule",
-      "delete": "failed to delete"
+      "delete": "failed to delete",
+      "preview": "failed to render the preview",
+      "template": "failed to save the template"
+    },
+    "template": {
+      "title": "Notification template — {{name}}",
+      "intro": "Override the subject and body this channel sends. Leave a field blank to keep Yagra's built-in wording. If a template cannot be rendered when an alert fires, the built-in wording is sent instead — a notification is never dropped.",
+      "subject": "Subject",
+      "body": "Body",
+      "builtinPlaceholder": "Built-in wording",
+      "builtinHint": "Both fields are blank, so this channel sends Yagra's built-in wording.",
+      "blankHint": "Blank a field to go back to the built-in wording for it.",
+      "variables": "Variables",
+      "preview": "Preview",
+      "previewTitle": "What this channel would send",
+      "stale": "Edited since",
+      "notJson": "Not valid JSON",
+      "fellBack": "These fields could not be rendered, so the built-in wording is shown — that is what would actually be sent:",
+      "save": "Save template"
     }
   },
   "thresholds": {

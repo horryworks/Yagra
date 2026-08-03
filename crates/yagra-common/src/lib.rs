@@ -19,6 +19,7 @@ pub mod metric;
 pub mod neighbor;
 pub mod node;
 pub mod node_kind;
+pub mod notify_template;
 pub mod profile;
 pub mod rbac;
 pub mod severity;
@@ -59,6 +60,9 @@ pub use neighbor::{
 };
 pub use node::Node;
 pub use node_kind::{NodeKind, NodeRows};
+pub use notify_template::{
+    minimal_facts, sample_facts, AlertFacts, NotifyEvent, TemplateVariable, TEMPLATE_VARIABLES,
+};
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};
 pub use severity::Severity;

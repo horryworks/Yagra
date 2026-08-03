@@ -101,6 +101,10 @@ import type {
   Role,
   RoleMatrix,
   RoutingRule,
+  ChannelKind,
+  NotifyEvent,
+  TemplatePreview,
+  TemplateVariable,
   SavedFinding,
   SavedFindingsQuery,
   Scope,
@@ -1253,6 +1257,30 @@ export const api = {
   /** Delete a channel (and drop it from any rule). */
   deleteNotificationChannel: (id: string): Promise<void> =>
     apiDelete('/api/v1/notification-channels/{id}', { path: { id } }),
+
+  /** Replace a channel's notification template (ADR-039). Both fields go together; `null` on one
+   *  restores Yagra's built-in wording for it. A template that does not compile is rejected with
+   *  a typed 400 rather than being stored and failing during an outage. */
+  setNotificationTemplate: (
+    id: string,
+    body: { subject: string | null; body: string | null },
+  ): Promise<void> =>
+    apiPut('/api/v1/notification-channels/{id}/template', { path: { id }, body }),
+
+  /** Render a template against a representative alert without saving it. A template that cannot
+   *  be used comes back as `problems` alongside the built-in text that would be sent instead —
+   *  HTTP 200, because these are notes about the text being typed, not a failed request. */
+  previewNotificationTemplate: (body: {
+    kind: ChannelKind;
+    event?: NotifyEvent;
+    subject: string | null;
+    body: string | null;
+  }): Promise<TemplatePreview> =>
+    apiPost('/api/v1/notification-channels/preview', { body }),
+
+  /** Every variable a notification template may reference, with what each one means. */
+  listTemplateVariables: (): Promise<TemplateVariable[]> =>
+    apiGet('/api/v1/notification-channels/template-variables'),
 
   /** Routing rules (which alerts, by severity, fan out to which channels). */
   listRoutingRules: (): Promise<RoutingRule[]> => apiGet('/api/v1/routing-rules'),

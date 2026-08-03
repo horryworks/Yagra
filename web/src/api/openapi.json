@@ -11708,6 +11708,103 @@
         }
       }
     },
+    "/api/v1/notification-channels/preview": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Render a template against a representative alert, without saving anything.",
+        "description": "A template is code that first runs during an outage, so being able to see its output while\nwriting it is part of the feature rather than a convenience. Takes no channel id, so a template\ncan be checked before the channel it belongs to exists.\n\nProblems come back **in the 200 response**, not as a 400: they are notes about the text being\ntyped, and a failed request would render as \"the preview is broken\" instead.",
+        "operationId": "preview_notification_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What this template would send; a template that cannot be used is reported in-band alongside the built-in text that would go instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notification-channels/template-variables": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Every variable a notification template can reference.",
+        "description": "Served rather than documented so the editor's list and the renderer's context cannot disagree —\nthey are the same list.",
+        "operationId": "list_template_variables",
+        "responses": {
+          "200": {
+            "description": "The template variables, with what each one means and whether every alert carries it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateVariable"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notification-channels/{id}": {
       "put": {
         "tags": [
@@ -11802,6 +11899,93 @@
         "responses": {
           "204": {
             "description": "Channel deleted"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role below Admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notification-channels/{id}/template": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Replace a channel's notification template.",
+        "description": "A template that does not compile is rejected here rather than at delivery time — the operator is\nstill looking at the field. The renderer additionally falls back to the built-in format if a\nstored template fails while an alert is being sent, so a broken template can never swallow a\nnotification.",
+        "operationId": "set_notification_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Template saved (or cleared, restoring the built-in wording)"
+          },
+          "400": {
+            "description": "The template does not compile, or is longer than the accepted maximum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           },
           "401": {
             "description": "No valid bearer token",
@@ -17226,6 +17410,13 @@
           "enabled"
         ],
         "properties": {
+          "body_template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Template for the notification body. Absent means Yagra's built-in format is used."
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -17238,6 +17429,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "subject_template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Template for the notification subject. Absent means Yagra's built-in wording is used."
           }
         }
       },
@@ -22886,6 +23084,15 @@
           "schedule_next_run_recomputed"
         ]
       },
+      "NotifyEvent": {
+        "type": "string",
+        "description": "Which point in an alert's life produced this notification.\n\nTemplates branch on it — a resolve usually wants different wording from a fire — so it is a\nvariable rather than three separate template fields.",
+        "enum": [
+          "fire",
+          "resolve",
+          "suppress"
+        ]
+      },
       "OidcCallbackBody": {
         "type": "object",
         "description": "OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect.",
@@ -23368,6 +23575,91 @@
               "null"
             ],
             "description": "`\"nodes_without_live_poller\"` when the pool has nodes but no live poller, else `null`."
+          }
+        }
+      },
+      "PreviewProblem": {
+        "type": "object",
+        "description": "One field that could not be used.",
+        "required": [
+          "field",
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "`subject` or `body`."
+          },
+          "message": {
+            "type": "string",
+            "description": "The engine's message, including the offending line where it knows it."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`compile`, `render`, `too_large`, or `not_json`."
+          }
+        }
+      },
+      "PreviewRequest": {
+        "type": "object",
+        "description": "A template to render against a representative alert.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event": {
+            "$ref": "#/components/schemas/NotifyEvent",
+            "description": "Which point in an alert's life to render: `fire`, `resolve`, or `suppress`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind",
+            "description": "The channel kind the template is for. Decides whether the body has to be valid JSON."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PreviewResult": {
+        "type": "object",
+        "description": "What the template produces, or what stopped it.",
+        "required": [
+          "subject",
+          "body",
+          "problems"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The rendered body, under the same rule."
+          },
+          "json_valid": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the rendered body parses as JSON. `null` when this channel kind sends the body as\nplain text, where the question does not apply."
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewProblem"
+            },
+            "description": "One entry per field that could not be rendered and fell back. Empty on success."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The rendered subject. Yagra's built-in wording when the subject is not overridden, or when\nrendering it failed — which is exactly what would be sent."
           }
         }
       },
@@ -25261,6 +25553,24 @@
           }
         }
       },
+      "TemplateBody": {
+        "type": "object",
+        "description": "A channel's notification-template override. Both fields are replaced together; `null` or blank\non a field restores Yagra's built-in wording for it.",
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "TemplateItem": {
         "allOf": [
           {
@@ -25310,6 +25620,29 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "TemplateVariable": {
+        "type": "object",
+        "description": "One name a notification template may reference.",
+        "required": [
+          "name",
+          "description",
+          "always_present"
+        ],
+        "properties": {
+          "always_present": {
+            "type": "boolean",
+            "description": "Whether every alert carries it. A variable that is not always present is *undefined* when\nabsent: it renders as empty text, and `{{ name | default(\"…\") }}` supplies a fallback."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the value means."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name to write between `{{ }}`."
           }
         }
       },

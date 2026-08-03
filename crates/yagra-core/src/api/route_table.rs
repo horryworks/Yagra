@@ -1025,6 +1025,37 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "PUT",
+        "/api/v1/notification-channels/:id/template",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/notification-channels/preview",
+        ADMIN_CFG,
+        // A read wearing POST, and still no tool: it renders operator-supplied template text, and
+        // MCP has no way to save one — the write surface is frozen (ADR-042 decision 6). A preview
+        // of something you cannot then store is not a capability.
+        Exempt(
+            "renders a notification template the caller cannot save, since MCP has no write path \
+             for one; the alert data it renders against is the fixed preview sample, not live \
+             inventory",
+        ),
+    ),
+    (
+        "GET",
+        "/api/v1/notification-channels/template-variables",
+        ADMIN_CFG,
+        // Documentation, in the same family as `/openapi.json`: a static catalogue of the names a
+        // template may use. It names no node and no group, and it varies only with the Yagra
+        // version.
+        Exempt(
+            "a static catalogue of notification-template variable names, closer to the contract \
+             document than to monitoring data; it returns nothing about the fleet",
+        ),
+    ),
+    (
         "GET",
         "/api/v1/openapi.json",
         Global("the API contract document itself"),

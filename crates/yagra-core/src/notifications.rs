@@ -15,6 +15,7 @@ use uuid::Uuid;
 use yagra_common::Severity;
 use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
+use crate::notify_render::ChannelTemplate;
 use crate::secrets::Kek;
 
 /// A delivery channel kind.
@@ -107,6 +108,12 @@ pub struct ChannelSummary {
     pub name: String,
     pub kind: ChannelKind,
     pub enabled: bool,
+    /// Template for the notification subject. Absent means Yagra's built-in wording is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_template: Option<String>,
+    /// Template for the notification body. Absent means Yagra's built-in format is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_template: Option<String>,
 }
 
 /// A channel with its config decrypted — core-side only, for building live delivery channels.
@@ -115,6 +122,8 @@ pub struct ChannelSummary {
 pub struct OpenChannel {
     pub id: Uuid,
     pub config: ChannelConfig,
+    /// The operator's subject/body override (ADR-039). Empty = the built-in format.
+    pub template: ChannelTemplate,
 }
 
 /// A routing rule: enabled alerts of `severity` (None = any) fan out to `channel_ids`.
@@ -160,9 +169,14 @@ impl NotificationRepo {
     // ── Channels ──────────────────────────────────────────────────────────────────────
 
     /// Channel metadata (no secrets).
+    ///
+    /// Carries the notification template (ADR-039) because it is not a secret and the editor would
+    /// otherwise need a per-channel round trip — which would also mean a second read endpoint on
+    /// the ledger for something the list already had to fetch a row for.
     pub async fn list_channels(&self) -> anyhow::Result<Vec<ChannelSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, enabled FROM notification_channels ORDER BY created_at",
+            "SELECT id, name, kind, enabled, subject_template, body_template \
+             FROM notification_channels ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -174,6 +188,8 @@ impl NotificationRepo {
                     name: row.try_get("name")?,
                     kind: ChannelKind::parse(&kind).unwrap_or(ChannelKind::Webhook),
                     enabled: row.try_get("enabled")?,
+                    subject_template: row.try_get("subject_template")?,
+                    body_template: row.try_get("body_template")?,
                 })
             })
             .collect()
@@ -229,11 +245,34 @@ impl NotificationRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Replace a channel's template override. Returns whether a row changed.
+    ///
+    /// The pair is replaced wholesale, and `None` on a field restores the built-in format for it —
+    /// the dialog owns both fields, so a partial update would leave whichever one the operator
+    /// cleared silently in place.
+    pub async fn set_channel_template(
+        &self,
+        id: Uuid,
+        template: &ChannelTemplate,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE notification_channels SET subject_template = $2, body_template = $3 \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(template.subject.as_deref())
+        .bind(template.body.as_deref())
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// All enabled channels with their config decrypted — core-side, for building the live
     /// delivery snapshot. Channels whose config fails to decrypt are skipped (logged).
     pub async fn list_open_channels(&self) -> anyhow::Result<Vec<OpenChannel>> {
         let rows = sqlx::query(
-            "SELECT id, enabled, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \
+            "SELECT id, enabled, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
+                    subject_template, body_template \
              FROM notification_channels WHERE enabled = true",
         )
         .fetch_all(&self.pool)
@@ -242,6 +281,10 @@ impl NotificationRepo {
         for row in rows {
             let id: Uuid = row.try_get("id")?;
             let key_id: i64 = row.try_get("key_id")?;
+            let template = ChannelTemplate {
+                subject: row.try_get("subject_template")?,
+                body: row.try_get("body_template")?,
+            };
             let sealed = SealedSecret {
                 key_id: u32::try_from(key_id).unwrap_or(0),
                 wrapped_dek: row.try_get("wrapped_dek")?,
@@ -255,7 +298,11 @@ impl NotificationRepo {
                 .ok()
                 .and_then(|pt| serde_json::from_slice::<ChannelConfig>(&pt).ok())
             {
-                Some(config) => out.push(OpenChannel { id, config }),
+                Some(config) => out.push(OpenChannel {
+                    id,
+                    config,
+                    template,
+                }),
                 None => {
                     tracing::warn!(channel = %id, "notification channel config decrypt failed; skipping")
                 }
