@@ -373,19 +373,35 @@ async fn alert_top_nodes(
     State(st): State<ApiState>,
     Query(q): Query<AlertTopQuery>,
 ) -> ApiResult<Json<Ranked<AlertNodeCount>>> {
+    Ok(Json(
+        top_alerting_nodes(&st, &scope, q.window, q.limit).await?,
+    ))
+}
+
+/// Nodes ranked by alert fires over a trailing window, filtered to what `scope` may see.
+///
+/// The two clamps (`window` 60s–30d, `limit` 1–50) and the over-fetch live here rather than at the
+/// edge, so a second surface cannot ask for a ranking a thousand rows deep — the flow-limit bug
+/// ADR-042 I1 fixed was exactly one clamp that existed on one edge only.
+pub(crate) async fn top_alerting_nodes(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    window: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Ranked<AlertNodeCount>, ApiError> {
     let Some(history) = st.history.as_ref() else {
         // No history store is "there is nothing to rank", not "the ranking was cut short".
-        return Ok(Json(Ranked {
+        return Ok(Ranked {
             entries: Vec::new(),
             partial: false,
-        }));
+        });
     };
-    let window = q.window.unwrap_or(86_400).clamp(60, 30 * 86_400);
+    let window = window.unwrap_or(86_400).clamp(60, 30 * 86_400);
     let since_ms = (super::now_unix_s() - window) * 1000;
-    let limit = q.limit.unwrap_or(6).clamp(1, 50) as usize;
+    let limit = limit.unwrap_or(6).clamp(1, 50) as usize;
     // Ranked by fire count in SQL, filtered by scope afterwards — same shape and same trade-off as
     // the TSDB rankings in `api/metrics.rs`. Over-fetch so a scoped list is usually still full.
-    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
+    let fetched = super::scope::ranking_fetch_limit(scope, limit);
     let counts = history
         .top_nodes_by_fires(since_ms, fetched as i64)
         .await
@@ -398,12 +414,12 @@ async fn alert_top_nodes(
         })?;
     let counts: Vec<_> = counts
         .into_iter()
-        .filter(|(id, _)| scope.allows_node(&st, yagra_common::NodeId::from(*id)))
+        .filter(|(id, _)| scope.allows_node(st, yagra_common::NodeId::from(*id)))
         .collect();
     let counts = Ranked::new(counts, limit, fetched);
     let names =
-        super::nodes::resolve_node_names(&st, &scope, counts.entries.iter().map(|(n, _)| *n)).await;
-    Ok(Json(Ranked {
+        super::nodes::resolve_node_names(st, scope, counts.entries.iter().map(|(n, _)| *n)).await;
+    Ok(Ranked {
         entries: counts
             .entries
             .into_iter()
@@ -417,7 +433,7 @@ async fn alert_top_nodes(
             })
             .collect(),
         partial: counts.partial,
-    }))
+    })
 }
 
 /// Query for the alert calendar heatmap: `?days=<n>` (default 7) of history.
@@ -453,10 +469,19 @@ async fn alert_calendar(
     State(st): State<ApiState>,
     Query(q): Query<AlertCalendarQuery>,
 ) -> ApiResult<Json<Vec<CalendarBucket>>> {
+    Ok(Json(alert_calendar_buckets(&st, &scope, q.days).await?))
+}
+
+/// Alert fires bucketed weekday×hour over the last `days` (1–90, default 7).
+pub(crate) async fn alert_calendar_buckets(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    days: Option<i64>,
+) -> Result<Vec<CalendarBucket>, ApiError> {
     let Some(history) = st.history.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
-    let days = q.days.unwrap_or(7).clamp(1, 90);
+    let days = days.unwrap_or(7).clamp(1, 90);
     let since_ms = (super::now_unix_s() - days * 86_400) * 1000;
     // The counts come out of a `GROUP BY`, so there are no per-node rows left to drop afterwards —
     // the scope has to go into the query. This is the one of the four aggregate endpoints whose
@@ -471,12 +496,10 @@ async fn alert_calendar(
                 "failed to build the alert calendar",
             )
         })?;
-    Ok(Json(
-        buckets
-            .into_iter()
-            .map(|(dow, hour, count)| CalendarBucket { dow, hour, count })
-            .collect(),
-    ))
+    Ok(buckets
+        .into_iter()
+        .map(|(dow, hour, count)| CalendarBucket { dow, hour, count })
+        .collect())
 }
 
 /// One recent state-change row (a fire = into an alert state; a resolve = recovery to ok).
@@ -510,11 +533,26 @@ async fn alert_transitions(
     State(st): State<ApiState>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<AlertTransition>>> {
+    Ok(Json(recent_transitions(&st, &scope, q.limit).await?))
+}
+
+/// The latest fires and resolutions the caller may see, node names joined.
+///
+/// The rows carry a node id, so the scope filter runs after the query; the names come from the
+/// shared batch resolver rather than a second inventory read.
+///
+/// No clamp here on purpose — `AlertHistory::recent` bounds the limit to 1..=1000 in the store, so
+/// adding a second one would tighten REST's behaviour rather than protect anything.
+pub(crate) async fn recent_transitions(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    limit: Option<i64>,
+) -> Result<Vec<AlertTransition>, ApiError> {
     let Some(history) = st.history.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
     let rows = history
-        .recent(q.limit.unwrap_or(12), None)
+        .recent(limit.unwrap_or(12), None)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -525,24 +563,23 @@ async fn alert_transitions(
         })?;
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|r| scope.allows_node(&st, yagra_common::NodeId::from(r.node)))
+        .filter(|r| scope.allows_node(st, yagra_common::NodeId::from(r.node)))
         .collect();
-    let names = super::nodes::resolve_node_names(&st, &scope, rows.iter().map(|r| r.node)).await;
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| AlertTransition {
-                node_id: r.node,
-                name: names
-                    .get(&r.node)
-                    .cloned()
-                    .unwrap_or_else(|| r.node.to_string()),
-                state: r.state,
-                severity: r.severity,
-                resolved: r.resolved,
-                at_unix_ms: r.at_unix_ms,
-            })
-            .collect(),
-    ))
+    let names = super::nodes::resolve_node_names(st, scope, rows.iter().map(|r| r.node)).await;
+    Ok(rows
+        .into_iter()
+        .map(|r| AlertTransition {
+            node_id: r.node,
+            name: names
+                .get(&r.node)
+                .cloned()
+                .unwrap_or_else(|| r.node.to_string()),
+            state: r.state,
+            severity: r.severity,
+            resolved: r.resolved,
+            at_unix_ms: r.at_unix_ms,
+        })
+        .collect())
 }
 
 // ── Live streams ─────────────────────────────────────────────────────────────

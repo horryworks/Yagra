@@ -460,27 +460,30 @@ async fn analysis_findings(
 const FINDINGS_PAGE_MAX: i64 = 200;
 
 /// Query params for the cross-run findings search.
-#[derive(Deserialize, utoipa::IntoParams)]
+///
+/// Fields are `pub(crate)` so `mcp::tools` can build the same request the REST edge parses; the
+/// rules that turn it into a query live in [`search_saved_findings`], never in the caller.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
-pub(super) struct SavedFindingsQuery {
+pub(crate) struct SavedFindingsQuery {
     /// Page cursor: the `at` of the previous page's last row (RFC 3339).
-    before: Option<String>,
+    pub(crate) before: Option<String>,
     /// Page cursor tiebreak: that same row's `id`. Findings written by one run share a millisecond
     /// routinely, so a cursor without it would repeat or skip the rows sharing the boundary
     /// instant. Omitting it reads as "strictly before this instant".
-    before_id: Option<Uuid>,
+    pub(crate) before_id: Option<Uuid>,
     /// Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor.
-    since: Option<String>,
+    pub(crate) since: Option<String>,
     /// Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`).
-    tool: Option<String>,
+    pub(crate) tool: Option<String>,
     /// Restrict to `crit`, `warn` or `info`.
-    severity: Option<String>,
+    pub(crate) severity: Option<String>,
     /// Restrict to findings about one node.
-    node_id: Option<Uuid>,
+    pub(crate) node_id: Option<Uuid>,
     /// Restrict to findings about nodes in one folder group **and everything beneath it**.
-    group_id: Option<Uuid>,
+    pub(crate) group_id: Option<Uuid>,
     /// Page size, clamped to 200 (default 100).
-    limit: Option<i64>,
+    pub(crate) limit: Option<i64>,
 }
 
 /// Findings across every run — the Saved-findings screen.
@@ -509,6 +512,21 @@ async fn saved_findings(
     State(st): State<ApiState>,
     Query(q): Query<SavedFindingsQuery>,
 ) -> ApiResult<Json<Vec<crate::analysis::SavedFinding>>> {
+    Ok(Json(search_saved_findings(&st, &scope, q).await?))
+}
+
+/// Findings across every run, filtered to what `scope` may see.
+///
+/// Carries every rule the search has: the tool/severity vocabularies are validated against the
+/// lists the engine writes from, a named node or group is scope-checked (naming one is still
+/// naming one), the cursor and range bounds are rejected rather than dropped, and the page size is
+/// clamped. A second edge that re-derived any of these would answer a different question from the
+/// Saved-findings screen.
+pub(crate) async fn search_saved_findings(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    q: SavedFindingsQuery,
+) -> Result<Vec<crate::analysis::SavedFinding>, ApiError> {
     // Validate before consulting availability, unlike the plain reads. A malformed filter is the
     // caller's own request being wrong, and answering `200 []` for it would mean a client with a
     // typo in its cursor pages forever through an empty result and never learns why.
@@ -543,13 +561,13 @@ async fn saved_findings(
     // rest of the surface uses. Answering `200 []` instead would be a slower way of saying the same
     // thing for a group that exists, and a way of confirming one that does not.
     if let Some(n) = q.node_id {
-        super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(n))?;
+        super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(n))?;
     }
     let in_group = match q.group_id {
         None => None,
         Some(g) => {
-            super::scope::require_visible_group(&scope, g)?;
-            Some(super::scope::subtree_of(&st, g).await?)
+            super::scope::require_visible_group(scope, g)?;
+            Some(super::scope::subtree_of(st, g).await?)
         }
     };
     let before = bound(q.before.as_deref(), "before")?;
@@ -557,7 +575,7 @@ async fn saved_findings(
     // Skeleton mode has no job store, so there is nothing to search — and "nothing found" is a
     // truthful answer to a search, unlike the 503 an unconfigured subsystem owes a reader.
     let Some(admin) = st.admin.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
     let filter = crate::analysis::FindingSearch {
         before,
@@ -570,10 +588,9 @@ async fn saved_findings(
         in_group: in_group.as_deref(),
         limit: q.limit.unwrap_or(100).clamp(1, FINDINGS_PAGE_MAX),
     };
-    let found = admin.analysis.search_findings(&filter).await.map_err(|e| {
+    admin.analysis.search_findings(&filter).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "search findings", "failed to search findings")
-    })?;
-    Ok(Json(found))
+    })
 }
 
 /// Parse an optional RFC 3339 bound, rejecting rather than dropping an unparseable one.
@@ -792,8 +809,20 @@ async fn list_analysis_schedules(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<Vec<crate::analysis::AnalysisSchedule>>> {
+    Ok(Json(visible_schedules(&st, &scope).await?))
+}
+
+/// The analysis schedules `scope` may see, soonest first.
+///
+/// **Skeleton mode answers an empty list, not a 503** — the same call the handler made, and the
+/// same reasoning as [`search_saved_findings`]: a deployment with no runner has no schedules, which
+/// is a truthful answer rather than a missing subsystem.
+pub(crate) async fn visible_schedules(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+) -> Result<Vec<crate::analysis::AnalysisSchedule>, ApiError> {
     let Some(admin) = st.admin.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
     let list = admin.analysis.repo().list_schedules().await.map_err(|e| {
         ApiError::from_internal(
@@ -804,11 +833,10 @@ async fn list_analysis_schedules(
     })?;
     // Post-filtered on each schedule's own target, exactly as the runs list is: a schedule names a
     // node or a folder group, and a fleet-wide one is unbounded.
-    Ok(Json(
-        list.into_iter()
-            .filter(|s| scope.allows_target(&st, schedule_target(s)))
-            .collect(),
-    ))
+    Ok(list
+        .into_iter()
+        .filter(|s| scope.allows_target(st, schedule_target(s)))
+        .collect())
 }
 
 /// Create an analysis schedule (operator+).

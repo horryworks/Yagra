@@ -239,6 +239,19 @@ async fn list_maintenance_windows(
     State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::maintenance::StoredWindow>>> {
+    Ok(Json(visible_windows(&st, &scope, &admin).await?))
+}
+
+/// The maintenance windows `scope` may see.
+///
+/// A window names its own target, so this filters on the row rather than on a query predicate — and
+/// a profile/tag-scoped window is hidden from a scoped caller entirely, matching the rule
+/// [`create_maintenance_window`] enforces on the way in.
+pub(crate) async fn visible_windows(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+) -> Result<Vec<crate::maintenance::StoredWindow>, ApiError> {
     let windows = admin.maintenance.list_windows().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -246,15 +259,10 @@ async fn list_maintenance_windows(
             "failed to list maintenance windows",
         )
     })?;
-    // A window names its own target, so this filters on the row rather than on a query predicate —
-    // and a profile/tag-scoped window is hidden from a scoped caller entirely, matching the rule
-    // `create_maintenance_window` enforces on the way in.
-    Ok(Json(
-        windows
-            .into_iter()
-            .filter(|w| scope.allows_target(&st, window_target(w)))
-            .collect(),
-    ))
+    Ok(windows
+        .into_iter()
+        .filter(|w| scope.allows_target(st, window_target(w)))
+        .collect())
 }
 
 /// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
@@ -447,16 +455,23 @@ async fn list_mutes(
     State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::maintenance::StoredMute>>> {
+    Ok(Json(visible_mutes(&st, &scope, &admin).await?))
+}
+
+/// The mutes `scope` may see — the [`visible_windows`] rule over [`mute_target`].
+pub(crate) async fn visible_mutes(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+) -> Result<Vec<crate::maintenance::StoredMute>, ApiError> {
     let mutes =
         admin.maintenance.list_mutes().await.map_err(|e| {
             ApiError::from_internal(e.as_ref(), "list mutes", "failed to list mutes")
         })?;
-    Ok(Json(
-        mutes
-            .into_iter()
-            .filter(|m| scope.allows_target(&st, mute_target(m)))
-            .collect(),
-    ))
+    Ok(mutes
+        .into_iter()
+        .filter(|m| scope.allows_target(st, mute_target(m)))
+        .collect())
 }
 
 /// Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or

@@ -186,9 +186,18 @@ async fn fleet_group_summary(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<FleetGroupSummary>> {
-    // Filtering the node→group map is enough: the rollup is keyed by group, so a group with no
-    // visible members simply never appears rather than appearing with a zeroed tally. Note this
-    // scans only the rows the caller may see — it does not add a second pass.
+    Ok(Json(group_summary(&st, &scope).await?))
+}
+
+/// Per-group direct-member state tallies, keyed by group id, for what `scope` may see.
+///
+/// Filtering the node→group map is enough: the rollup is keyed by group, so a group with no visible
+/// members simply never appears rather than appearing with a zeroed tally. Note this scans only the
+/// rows the caller may see — it does not add a second pass.
+pub(crate) async fn group_summary(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+) -> Result<FleetGroupSummary, ApiError> {
     let node_groups = st
         .nodes
         .node_group_map(scope.group_filter())
@@ -201,9 +210,9 @@ async fn fleet_group_summary(
             )
         })?;
     let states = st.alerts.node_states();
-    Ok(Json(FleetGroupSummary {
+    Ok(FleetGroupSummary {
         groups: aggregate_group_counts(&node_groups, &states),
-    }))
+    })
 }
 
 // ── Data coverage (the blind-spot detector) ──────────────────────────────────
