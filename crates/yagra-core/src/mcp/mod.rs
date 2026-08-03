@@ -46,6 +46,10 @@ use yagra_common::{Permission, Principal, TokenSurface};
 use crate::api::ApiState;
 
 /// Instructions shown to the MCP client at `initialize` — sets expectations for the model.
+///
+/// ⚠️ **Published verbatim to every client**, so a tool named here that does not exist is a wrong
+/// specification shipped with confidence. `every_tool_named_in_the_instructions_exists` pins the
+/// names; nothing pins the prose around them, so keep the claims narrow.
 const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live node status, alerts, \
     metrics (per node and per interface), fleet rankings, topology, CDP/LLDP adjacency, traffic \
     flows, and passive events (syslog/traps/webhooks), and run on-demand Troubleshoot analyses \
@@ -56,9 +60,11 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
     query_metrics / search_events. To find what is worst across the fleet use top_metrics (nodes) or \
     top_interfaces (interfaces); for one link's history use get_interface_series; for what a node is \
-    cabled to use get_neighbors; for where things are filed use list_node_groups. Use run_analysis \
-    for deeper diagnosis (poll a long run with get_analysis_findings). Node ids are UUIDs; \
-    timestamps are RFC 3339 or Unix seconds per tool.";
+    cabled to use get_neighbors; for where things are filed use list_node_groups. Before concluding \
+    a fleet is healthy, check list_suppressions — a silenced fleet looks quiet. For how alerting has \
+    behaved over time use alert_trends, and to find what diagnostics have turned up across runs use \
+    search_analysis_findings. Use run_analysis for deeper diagnosis (poll a long run with \
+    get_analysis_findings). Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
 
 /// The MCP server handler: holds the shared read state and the macro-generated tool router. Cheap to
 /// clone (the state is all `Arc`s); a fresh instance is created per session by the transport factory.
@@ -215,6 +221,44 @@ fn forbidden(message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every tool [`INSTRUCTIONS`] names actually exists.**
+    ///
+    /// That string is handed to every client at `initialize` and read as the specification of this
+    /// surface, but it is prose: sixteen tool names were hard-coded in it with nothing pinning them
+    /// to `tools.rs`, so a rename or a removal would have shipped a wrong instruction to every AI
+    /// client with no test failing. A model told to "use get_neighbors" for a tool that no longer
+    /// exists does not fall back gracefully — it calls it, fails, and reasons from the failure.
+    ///
+    /// **One direction only.** The instructions are guidance, not a catalogue, so a tool that goes
+    /// unmentioned is fine; a mentioned tool that does not exist is not.
+    #[test]
+    fn every_tool_named_in_the_instructions_exists() {
+        // The same parser the route ledger uses, so there is one definition of "a declared tool".
+        let declared = crate::api::route_table::declared_mcp_tools();
+        assert!(
+            declared.len() >= 26,
+            "only found {} tool declarations; the parser drifted",
+            declared.len()
+        );
+        // Tool names are the only lowercase_with_underscore words in the prose, which makes them
+        // findable without a second list to keep in step.
+        let named: Vec<&str> = INSTRUCTIONS
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|w| w.contains('_') && w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .collect();
+        assert!(
+            named.len() >= 15,
+            "only found {} tool-shaped words in the instructions; the parser drifted",
+            named.len()
+        );
+        let missing: Vec<&&str> = named.iter().filter(|w| !declared.contains(**w)).collect();
+        assert!(
+            missing.is_empty(),
+            "the MCP instructions name tools that do not exist, and that text is published \
+             verbatim to every client: {missing:?}"
+        );
+    }
     use crate::auth::{LoginThrottle, SessionStore};
     use std::sync::Arc;
     use yagra_common::{Principal, Role, Scope};

@@ -629,32 +629,204 @@ impl YagraMcp {
         description = "The folder groups nodes are filed under: id, name, kind, parent (for \
                        rebuilding the tree), and map coordinates. Use this to find the group id \
                        run_analysis takes for scope=\"group\", or to turn a node's `group` field \
-                       into a place. Requires live mode."
+                       into a place. Set `include_state` to also get each folder's direct-member \
+                       health tally (ok/warning/critical/unknown/unreachable/maintenance) — that \
+                       is the per-site rollup, where get_fleet_summary tallies the whole fleet. \
+                       Requires live mode."
     )]
     async fn list_node_groups(
         &self,
+        Parameters(p): Parameters<ListNodeGroupsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match self.scope_of(&ctx).await {
-            Ok(scope) => self.list_node_groups_in(&scope).await,
+            Ok(scope) => self.list_node_groups_in(p, &scope).await,
             Err(e) => tool_api_error("list_node_groups", &e),
         }
     }
 
-    async fn list_node_groups_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+    async fn list_node_groups_in(
+        &self,
+        p: ListNodeGroupsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("list_node_groups", "node groups require live mode");
         };
         // `visible_groups` keeps the caller's subtree *and* the ancestors above it. This DTO carries
         // `parent_id`, so a filter that dropped the ancestors would leave every visible root
         // pointing at a group that is not in the list.
-        match crate::api::groups::visible_groups(admin, scope).await {
-            Ok(groups) => {
-                let out: Vec<crate::mcp::dto::NodeGroupDto> =
-                    groups.iter().map(NodeGroupDto::from_summary).collect();
-                ok_json("list_node_groups", &out)
+        let groups = match crate::api::groups::visible_groups(admin, scope).await {
+            Ok(g) => g,
+            Err(e) => return tool_api_error("list_node_groups", &e),
+        };
+        if !p.include_state.unwrap_or(false) {
+            let out: Vec<crate::mcp::dto::NodeGroupDto> =
+                groups.iter().map(NodeGroupDto::from_summary).collect();
+            return ok_json("list_node_groups", &out);
+        }
+        // The rollup the site-matrix widget reads, joined onto the tree rather than served as a
+        // second bare `group_id → counts` map: a model given the map alone has no names to attach
+        // the numbers to, and would have to call this tool again to get them.
+        let rollup = match crate::api::fleet::group_summary(&self.state, scope).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("list_node_groups", &e),
+        };
+        let out: Vec<crate::mcp::dto::NodeGroupDto> = groups
+            .iter()
+            .map(|g| NodeGroupDto::from_summary(g).with_state(rollup.groups.get(&g.id)))
+            .collect();
+        ok_json("list_node_groups", &out)
+    }
+
+    #[tool(
+        description = "What is currently suppressing alerts, in one answer: planned maintenance \
+                       windows (each with its scope, start/end, and whether it covers now) and \
+                       reactive mutes (node or folder, with an expiry). Check this before \
+                       concluding a fleet is healthy — a quiet fleet and a silenced one look the \
+                       same in get_active_alerts. Windows opened with open_maintenance appear \
+                       here. Requires live mode."
+    )]
+    async fn list_suppressions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.list_suppressions_in(&scope).await,
+            Err(e) => tool_api_error("list_suppressions", &e),
+        }
+    }
+
+    async fn list_suppressions_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("list_suppressions", "suppression state requires live mode");
+        };
+        // Both lists filter on the row's own target, and a window scoped to a profile or a tag is
+        // hidden from a scoped caller entirely — the shared seams carry that, so this surface
+        // cannot show a window the WebUI would not.
+        let windows =
+            match crate::api::maintenance::visible_windows(&self.state, scope, admin).await {
+                Ok(w) => w,
+                Err(e) => return tool_api_error("list_suppressions", &e),
+            };
+        let mutes = match crate::api::maintenance::visible_mutes(&self.state, scope, admin).await {
+            Ok(m) => m,
+            Err(e) => return tool_api_error("list_suppressions", &e),
+        };
+        ok_json(
+            "list_suppressions",
+            &crate::mcp::dto::SuppressionsDto {
+                maintenance_windows: windows,
+                mutes,
+            },
+        )
+    }
+
+    #[tool(
+        description = "How the fleet has been alerting over time — the three views the alert \
+                       dashboards draw. `kind` is top_nodes (which nodes alert most often over \
+                       `window_secs`, default 24h — chronic offenders, which get_active_alerts \
+                       cannot show because it reports only what is firing now), transitions (the \
+                       latest fires and recoveries, newest first), or calendar (fire counts \
+                       bucketed by weekday and hour over `days`, default 7, for spotting a \
+                       nightly pattern). `limit` applies to top_nodes (1–50, default 6) and \
+                       transitions (default 12)."
+    )]
+    async fn alert_trends(
+        &self,
+        Parameters(p): Parameters<AlertTrendsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.alert_trends_in(p, &scope).await,
+            Err(e) => tool_api_error("alert_trends", &e),
+        }
+    }
+
+    async fn alert_trends_in(
+        &self,
+        p: AlertTrendsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // Three endpoints behind one `kind`, following `top_flows`: the row type varies, but the
+        // parameters mean the same thing in every branch (a window and a count), so there is no
+        // argument whose meaning another argument changes — which is what made folding the metric
+        // rankings the wrong call in I1.
+        match p.kind.as_str() {
+            "top_nodes" => {
+                match crate::api::alerts::top_alerting_nodes(
+                    &self.state,
+                    scope,
+                    p.window_secs,
+                    p.limit,
+                )
+                .await
+                {
+                    Ok(ranked) => ok_json("alert_trends", &ranked),
+                    Err(e) => tool_api_error("alert_trends", &e),
+                }
             }
-            Err(e) => tool_api_error("list_node_groups", &e),
+            "transitions" => {
+                match crate::api::alerts::recent_transitions(&self.state, scope, p.limit).await {
+                    Ok(rows) => ok_json("alert_trends", &rows),
+                    Err(e) => tool_api_error("alert_trends", &e),
+                }
+            }
+            "calendar" => {
+                match crate::api::alerts::alert_calendar_buckets(&self.state, scope, p.days).await {
+                    Ok(rows) => ok_json("alert_trends", &rows),
+                    Err(e) => tool_api_error("alert_trends", &e),
+                }
+            }
+            other => tool_bad_params(
+                "alert_trends",
+                &format!("unknown kind {other:?}; must be top_nodes, transitions or calendar"),
+            ),
+        }
+    }
+
+    #[tool(
+        description = "Search Troubleshoot findings across every run — \"has anything been found \
+                       about this node / this site / this week\". Distinct from \
+                       get_analysis_findings, which reports one run you already know about. \
+                       Filters: `node_id`, `group_id` (a folder and everything beneath it), \
+                       `tool` (anomaly | correlation | capacity | flap), `severity` (crit | warn | \
+                       info), and `since` (RFC 3339). Page with `before` + `before_id` from the \
+                       last row; `limit` is 1–200 (default 100). Returns [] on a deployment with \
+                       no analysis runner."
+    )]
+    async fn search_analysis_findings(
+        &self,
+        Parameters(p): Parameters<SearchFindingsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.search_analysis_findings_in(p, &scope).await,
+            Err(e) => tool_api_error("search_analysis_findings", &e),
+        }
+    }
+
+    async fn search_analysis_findings_in(
+        &self,
+        p: SearchFindingsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // The seam validates the tool/severity vocabularies and the cursor, and scope-checks a
+        // named node or group, *before* it looks at availability — so a filter naming a node the
+        // caller cannot see reads as "no such node" rather than as an empty result set.
+        let q = crate::api::analysis::SavedFindingsQuery {
+            before: p.before,
+            before_id: p.before_id,
+            since: p.since,
+            tool: p.tool,
+            severity: p.severity,
+            node_id: p.node_id,
+            group_id: p.group_id,
+            limit: p.limit,
+        };
+        match crate::api::analysis::search_saved_findings(&self.state, scope, q).await {
+            Ok(rows) => ok_json("search_analysis_findings", &rows),
+            Err(e) => tool_api_error("search_analysis_findings", &e),
         }
     }
 
@@ -941,8 +1113,10 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "List recent Troubleshoot analysis jobs (the runs list), newest first, with \
-                       their tool, scope, state, and result summary. `limit` is 1–100 (default 20). \
+        description = "List Troubleshoot analyses. `kind` is runs (default: recent jobs, newest \
+                       first, with their tool, scope, state and result summary) or schedules (the \
+                       recurring analyses configured on this deployment, with their cadence, next \
+                       run and last status). `limit` applies to runs only, 1–100 (default 20). \
                        Requires live mode."
     )]
     async fn list_analyses(
@@ -950,10 +1124,35 @@ impl YagraMcp {
         Parameters(p): Parameters<ListAnalysesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("list_analyses", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.list_analyses_in(p, &scope).await,
+            Err(e) => tool_api_error("list_analyses", &e),
+        }
+    }
+
+    async fn list_analyses_in(
+        &self,
+        p: ListAnalysesParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // Folded onto the runs list rather than given its own tool: both answer "what analysis is
+        // there", both are post-filtered on the row's own target, and a schedule is what a run will
+        // be. The `limit` only applies to runs, which is why it is documented that way.
+        match p.kind.as_deref().unwrap_or("runs") {
+            "runs" => {}
+            "schedules" => {
+                return match crate::api::analysis::visible_schedules(&self.state, scope).await {
+                    Ok(rows) => ok_json("list_analyses", &rows),
+                    Err(e) => tool_api_error("list_analyses", &e),
+                };
+            }
+            other => {
+                return tool_bad_params(
+                    "list_analyses",
+                    &format!("unknown kind {other:?}; must be runs or schedules"),
+                );
+            }
+        }
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("list_analyses", "analysis requires live mode");
         };
@@ -1590,9 +1789,50 @@ struct AnalysisJobIdParams {
     job_id: Uuid,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct ListAnalysesParams {
-    /// Max jobs to return (1–100, default 20).
+    /// What to list: runs (default) | schedules.
+    kind: Option<String>,
+    /// Max jobs to return (1–100, default 20). Applies to `runs` only.
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct ListNodeGroupsParams {
+    /// Also return each folder's direct-member state tally (costs a second query).
+    include_state: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct AlertTrendsParams {
+    /// Which view: top_nodes | transitions | calendar.
+    kind: String,
+    /// Trailing window in seconds for top_nodes (60–2592000, default 86400).
+    window_secs: Option<i64>,
+    /// Days of history for calendar (1–90, default 7).
+    days: Option<i64>,
+    /// Row count: top_nodes 1–50 (default 6), transitions default 12.
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct SearchFindingsParams {
+    /// Page cursor: the `at` of the previous page's last row (RFC 3339).
+    before: Option<String>,
+    /// Page cursor tiebreak: that same row's `id`. Findings from one run share a millisecond
+    /// routinely, so paging without it repeats or skips the rows on the boundary.
+    before_id: Option<Uuid>,
+    /// Inclusive lower bound on finding time (RFC 3339) — the range filter, not the cursor.
+    since: Option<String>,
+    /// Restrict to one diagnostic: anomaly | correlation | capacity | flap.
+    tool: Option<String>,
+    /// Restrict to crit | warn | info.
+    severity: Option<String>,
+    /// Restrict to findings about one node.
+    node_id: Option<Uuid>,
+    /// Restrict to findings about nodes in one folder group and everything beneath it.
+    group_id: Option<Uuid>,
+    /// Page size, 1–200 (default 100).
     limit: Option<i64>,
 }
 
@@ -1936,7 +2176,7 @@ mod tests {
         // The load-bearing half: if the parse stops matching, "everything is fine" must not be the
         // answer. There were 17 tools when this was written and 23 after ADR-042 I1.
         assert!(
-            checked >= 23,
+            checked >= 26,
             "only matched {checked} tools; parser drifted"
         );
     }
@@ -2287,10 +2527,19 @@ mod tests {
         assert_eq!(json_of(&neighbors)["available"], serde_json::json!(false));
 
         let groups = m
-            .list_node_groups_in(&unrestricted())
+            .list_node_groups_in(ListNodeGroupsParams::default(), &unrestricted())
             .await
             .expect("ok result");
         assert_eq!(json_of(&groups)["available"], serde_json::json!(false));
+
+        let suppressions = m
+            .list_suppressions_in(&unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(
+            json_of(&suppressions)["available"],
+            serde_json::json!(false)
+        );
     }
 
     // ── ADR-042 I1 tools ────────────────────────────────────────────────────────────────────────
@@ -2509,6 +2758,126 @@ mod tests {
             json_of(&r)["reason"],
             "no node with that id",
             "the scope check runs before the live-mode check"
+        );
+    }
+
+    // ── ADR-042 I2 tools ────────────────────────────────────────────────────────────────────────
+
+    fn trend(kind: &str) -> AlertTrendsParams {
+        AlertTrendsParams {
+            kind: kind.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    /// Each `kind` reaches a different store call, and a junk one is a protocol error rather than
+    /// an empty list — a model that gets `[]` for a typo learns nothing and asks again.
+    #[tokio::test]
+    async fn alert_trends_takes_three_kinds_and_rejects_the_rest() {
+        let m = mcp();
+        for kind in ["top_nodes", "transitions", "calendar"] {
+            let r = m
+                .alert_trends_in(trend(kind), &unrestricted())
+                .await
+                .unwrap_or_else(|e| panic!("{kind} should answer, got {e:?}"));
+            let body = json_of(&r);
+            // Skeleton mode has no history store, so every branch answers its own empty shape:
+            // a `Ranked` object for the ranking, a bare array for the other two.
+            assert!(
+                body.is_array() || body.get("entries").is_some(),
+                "{kind} returned an unexpected shape: {body}"
+            );
+        }
+        assert!(
+            m.alert_trends_in(trend("cpu"), &unrestricted())
+                .await
+                .is_err(),
+            "an unknown kind is a protocol error, not an empty result"
+        );
+    }
+
+    /// The suppression view is one answer, not two calls: a model asking "is the fleet quiet"
+    /// needs both halves or it reports health where there is silencing.
+    #[tokio::test]
+    async fn suppressions_carry_both_halves_in_one_result() {
+        // Skeleton mode has no maintenance store, so this is the unavailable branch — what matters
+        // is that the tool reports it once rather than half-answering.
+        let r = mcp()
+            .list_suppressions_in(&unrestricted())
+            .await
+            .expect("ok result");
+        let body = json_of(&r);
+        assert_eq!(body["available"], serde_json::json!(false));
+        assert_eq!(body["reason"], "suppression state requires live mode");
+    }
+
+    /// A findings search naming a node the caller cannot see answers "no such node", not `[]`.
+    /// The seam checks scope before it reaches the store, so this holds on a skeleton state too.
+    #[tokio::test]
+    async fn a_findings_search_hides_a_node_the_caller_cannot_see() {
+        let r = mcp()
+            .search_analysis_findings_in(
+                SearchFindingsParams {
+                    node_id: Some(Uuid::nil()),
+                    ..Default::default()
+                },
+                &sees_nothing(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["available"], serde_json::json!(false));
+    }
+
+    /// A bad filter vocabulary is rejected rather than dropped — dropping `severity` would widen
+    /// the search silently, which is the edge-parsing rule in `security.md`.
+    #[tokio::test]
+    async fn a_findings_search_rejects_an_unknown_severity() {
+        assert!(
+            mcp()
+                .search_analysis_findings_in(
+                    SearchFindingsParams {
+                        severity: Some("fatal".to_owned()),
+                        ..Default::default()
+                    },
+                    &unrestricted(),
+                )
+                .await
+                .is_err(),
+            "an unknown severity is a protocol error"
+        );
+    }
+
+    /// `kind` picks the row type, and an unknown one is rejected rather than silently listing runs
+    /// — the failure that would otherwise look like "this deployment has no schedules".
+    #[tokio::test]
+    async fn listing_analyses_distinguishes_runs_from_schedules() {
+        let m = mcp();
+        // Skeleton mode has no runner, so schedules answer an empty list where runs report the
+        // subsystem as unavailable. Both are correct, and they differ: a search over nothing is
+        // legitimately empty, while the runs list is a view of a store that is not there.
+        let schedules = m
+            .list_analyses_in(
+                ListAnalysesParams {
+                    kind: Some("schedules".to_owned()),
+                    limit: None,
+                },
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&schedules), serde_json::json!([]));
+
+        assert!(
+            m.list_analyses_in(
+                ListAnalysesParams {
+                    kind: Some("everything".to_owned()),
+                    limit: None,
+                },
+                &unrestricted(),
+            )
+            .await
+            .is_err(),
+            "an unknown kind is a protocol error"
         );
     }
 }

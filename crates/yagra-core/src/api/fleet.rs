@@ -123,7 +123,7 @@ async fn fleet_summary(
 
 /// Per-group direct-member state tally. All six keys are always present (a missing state is `0`)
 /// and they sum to the group's direct-member count.
-#[derive(Serialize, Default, Debug, PartialEq, utoipa::ToSchema)]
+#[derive(Serialize, Default, Debug, Clone, PartialEq, utoipa::ToSchema)]
 pub(crate) struct GroupStateCounts {
     pub ok: i64,
     pub warning: i64,

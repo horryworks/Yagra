@@ -275,6 +275,11 @@ pub struct NodeGroupDto {
     pub geo_source: crate::groups::GeoSource,
     /// The folder that supplied the effective position: the map pin this folder's nodes count at.
     pub geo_group: Option<Uuid>,
+    /// Direct-member state tallies, when the caller asked for them (ADR-042 I2, the
+    /// `/fleet/group-summary` rollup). `None` means "not requested", never "no members" — the
+    /// counts cost a second query, so they are opt-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_counts: Option<crate::api::fleet::GroupStateCounts>,
 }
 
 impl NodeGroupDto {
@@ -293,8 +298,29 @@ impl NodeGroupDto {
             effective_longitude: g.effective_longitude,
             geo_source: g.geo_source,
             geo_group: g.geo_group,
+            state_counts: None,
         }
     }
+
+    /// The same projection, carrying this folder's direct-member state tally.
+    #[must_use]
+    pub fn with_state(mut self, counts: Option<&crate::api::fleet::GroupStateCounts>) -> Self {
+        // A folder with no direct members has no row in the rollup; a zeroed tally is the truthful
+        // answer there, and is what the site-matrix widget renders too.
+        self.state_counts = Some(counts.cloned().unwrap_or_default());
+        self
+    }
+}
+
+/// What is currently suppressing alerts: planned maintenance windows and reactive mutes.
+///
+/// Both arrays in one result rather than a `kind` parameter, because "is the fleet quiet or is it
+/// silenced" is one question — the same reasoning `get_neighbors` uses for current + history. The
+/// rows are the REST types; neither carries a secret, and the canary checks that by type.
+#[derive(Debug, Clone, Serialize)]
+pub struct SuppressionsDto {
+    pub maintenance_windows: Vec<crate::maintenance::StoredWindow>,
+    pub mutes: Vec<crate::maintenance::StoredMute>,
 }
 
 /// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
@@ -846,6 +872,105 @@ mod tests {
             poll_json["pool"], "tokyo",
             "the dispatch pool is part of the receipt, not leakage"
         );
+
+        // ── ADR-042 I2 tool results ─────────────────────────────────────────────────────────────
+
+        let suppressions = SuppressionsDto {
+            maintenance_windows: vec![crate::maintenance::StoredWindow {
+                id: uuid::Uuid::new_v4(),
+                name: "core upgrade".to_owned(),
+                level: crate::maintenance::WindowScope::Node,
+                scope_id: node.id.0.to_string(),
+                starts_at: "1970-01-01T00:00:00Z".to_owned(),
+                ends_at: "1970-01-01T01:00:00Z".to_owned(),
+                enabled: true,
+                active: false,
+            }],
+            mutes: vec![crate::maintenance::StoredMute {
+                id: uuid::Uuid::new_v4(),
+                scope_kind: crate::maintenance::MuteScope::Node,
+                node_id: Some(node.id.0),
+                group_id: None,
+                check_name: Some("icmp_rtt_ms".to_owned()),
+                until_at: "1970-01-01T02:00:00Z".to_owned(),
+                reason: Some("known noisy link".to_owned()),
+            }],
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&suppressions).unwrap(),
+            "Suppressions",
+        );
+
+        let alert_ranking = crate::api::util::Ranked {
+            entries: vec![crate::api::alerts::AlertNodeCount {
+                node_id: node.id.0,
+                name: "edge-router-1".to_owned(),
+                count: 9,
+            }],
+            partial: false,
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&alert_ranking).unwrap(),
+            "RankedAlertNodeCount",
+        );
+
+        let transitions = vec![crate::api::alerts::AlertTransition {
+            node_id: node.id.0,
+            name: "edge-router-1".to_owned(),
+            state: NodeState::Unreachable,
+            severity: yagra_common::Severity::Critical,
+            resolved: false,
+            at_unix_ms: 0,
+        }];
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&transitions).unwrap(),
+            "AlertTransition",
+        );
+
+        let calendar = vec![crate::api::alerts::CalendarBucket {
+            dow: 1,
+            hour: 3,
+            count: 4,
+        }];
+        assert_no_forbidden_keys(&serde_json::to_value(&calendar).unwrap(), "CalendarBucket");
+
+        let schedules = vec![crate::analysis::AnalysisSchedule {
+            id: uuid::Uuid::new_v4(),
+            tool: "anomaly".to_owned(),
+            scope_kind: "node".to_owned(),
+            scope_id: Some(node.id.0),
+            scope_label: "edge-router-1".to_owned(),
+            params: serde_json::json!({}),
+            frequency: crate::cadence::Cadence::Daily,
+            day_of_week: None,
+            day_of_month: None,
+            at_hour: 3,
+            at_minute: 0,
+            enabled: true,
+            next_run_ms: 0,
+            last_run_ms: None,
+            last_status: None,
+        }];
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&schedules).unwrap(),
+            "AnalysisSchedule",
+        );
+
+        let saved = vec![crate::analysis::SavedFinding {
+            id: uuid::Uuid::new_v4(),
+            job_id: uuid::Uuid::new_v4(),
+            tool: "anomaly".to_owned(),
+            score: 0.9,
+            severity: "crit".to_owned(),
+            node_id: Some(node.id.0),
+            node_name: "edge-router-1".to_owned(),
+            metric: "icmp_rtt_ms".to_owned(),
+            kind: "spike".to_owned(),
+            when_label: "last hour".to_owned(),
+            duration: "12m".to_owned(),
+            at: "1970-01-01T00:00:00Z".to_owned(),
+        }];
+        assert_no_forbidden_keys(&serde_json::to_value(&saved).unwrap(), "SavedFinding");
     }
 
     /// **Every DTO in this module is covered by the canary above.**
@@ -893,7 +1018,7 @@ mod tests {
             }
         }
         assert!(
-            checked >= 12,
+            checked >= 14,
             "only found {checked} DTO declarations — the parser drifted"
         );
         assert!(
@@ -915,6 +1040,9 @@ mod tests {
     /// One row per `ok_json` call site. Adding a tool that returns a type means adding a line here
     /// and an instance to the canary; that is the whole cost, and it is the cost of the line that
     /// was being skipped.
+    ///
+    /// A tool may hold **several** rows: `alert_trends` and `list_analyses` fold endpoints whose
+    /// row type differs by `kind`, so each shape it can return needs its own coverage.
     const TOOL_RESULT_TYPES: &[(&str, &str)] = &[
         ("get_fleet_summary", "FleetSummary"),
         ("list_nodes", "NodeSummary"),
@@ -931,8 +1059,14 @@ mod tests {
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("list_analyses", "AnalysisJob"),
+        ("list_analyses", "AnalysisSchedule"),
         ("search_events", "Event"),
         ("poll_now", "PollNowResult"),
+        ("list_suppressions", "Suppressions"),
+        ("alert_trends", "RankedAlertNodeCount"),
+        ("alert_trends", "AlertTransition"),
+        ("alert_trends", "CalendarBucket"),
+        ("search_analysis_findings", "SavedFinding"),
     ];
 
     /// Tools whose result is a `serde_json::json!` object built in the tool body. There is no
@@ -979,7 +1113,7 @@ mod tests {
             }
         }
         assert!(
-            sites.len() >= 17,
+            sites.len() >= 19,
             "only matched {} ok_json call sites; the parser drifted",
             sites.len()
         );
@@ -995,18 +1129,24 @@ mod tests {
             .unwrap_or(after);
 
         for tool in &sites {
-            let Some((_, label)) = TOOL_RESULT_TYPES.iter().find(|(t, _)| t == tool) else {
-                panic!(
-                    "MCP tool `{tool}` serializes a shared type with no row in TOOL_RESULT_TYPES; \
-                     add one naming the canary label that covers it (or move the tool to \
-                     TOOLS_WITH_INLINE_RESULTS if it builds its result inline)"
-                );
-            };
+            let labels: Vec<_> = TOOL_RESULT_TYPES
+                .iter()
+                .filter(|(t, _)| t == tool)
+                .map(|(_, l)| *l)
+                .collect();
             assert!(
-                body.contains(label),
-                "`{tool}` claims canary label {label:?}, but the forbidden-key canary never \
-                 instantiates it — add an instance so the type is actually checked"
+                !labels.is_empty(),
+                "MCP tool `{tool}` serializes a shared type with no row in TOOL_RESULT_TYPES; add \
+                 one naming the canary label that covers it (or move the tool to \
+                 TOOLS_WITH_INLINE_RESULTS if it builds its result inline)"
             );
+            for label in labels {
+                assert!(
+                    body.contains(label),
+                    "`{tool}` claims canary label {label:?}, but the forbidden-key canary never \
+                     instantiates it — add an instance so the type is actually checked"
+                );
+            }
         }
 
         // The inline list is accounted for too: a reason, and no overlap with the typed list.

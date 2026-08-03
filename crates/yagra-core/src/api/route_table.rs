@@ -214,10 +214,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/alerts/calendar",
         GroupFiltered,
-        Pending(
-            "ADR-042 I2: the fire/clear calendar heat-strip has no tool; get_alert_history carries \
-             the same rows unbucketed",
-        ),
+        Tool("alert_trends"),
     ),
     (
         "GET",
@@ -229,25 +226,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/alerts/top-nodes",
         PostFiltered,
-        Pending(
-            "ADR-042 I2: which nodes alert most is a ranking get_active_alerts cannot produce — it \
-             returns what is firing now, not what fires often",
-        ),
+        Tool("alert_trends"),
     ),
     (
         "GET",
         "/api/v1/alerts/transitions",
         PostFiltered,
-        Pending("ADR-042 I2: the state-change feed behind the transitions chart has no tool"),
+        Tool("alert_trends"),
     ),
     (
         "GET",
         "/api/v1/analysis/findings",
         GroupFiltered,
-        Pending(
-            "ADR-042 I2: what has Troubleshoot found lately is a different question from \
-             get_analysis_findings(job_id), which reports one run",
-        ),
+        Tool("search_analysis_findings"),
     ),
     (
         "GET",
@@ -285,7 +276,9 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/analysis/schedules",
         PostFiltered,
-        Pending("ADR-042 I2: the recurring-analysis schedule list has no tool"),
+        // `list_analyses(kind="schedules")` — folded onto the runs list because both answer "what
+        // analysis is there" and a schedule is what a run will be.
+        Tool("list_analyses"),
     ),
     (
         "POST",
@@ -534,7 +527,9 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/fleet/group-summary",
         PostFiltered,
-        Pending("ADR-042 I2: per-folder state rollup; get_fleet_summary tallies the whole fleet"),
+        // `list_node_groups(include_state=true)` — the tally is joined onto the folder it belongs
+        // to, because the bare `group_id → counts` map has no names for a model to reason with.
+        Tool("list_node_groups"),
     ),
     (
         "GET",
@@ -638,9 +633,9 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/maintenance-windows",
         PostFiltered,
-        // The headline asymmetry ADR-042 was written over: open_maintenance can create a window
-        // and nothing on this surface can read one back.
-        Pending("ADR-042 I2: open_maintenance creates windows that no tool can list"),
+        // The headline asymmetry ADR-042 was written over — open_maintenance could create a window
+        // and nothing on this surface could read one back. Closed by I2.
+        Tool("list_suppressions"),
     ),
     (
         "POST",
@@ -746,10 +741,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/mutes",
         PostFiltered,
-        Pending(
-            "ADR-042 I2: a model reasoning about a quiet fleet has to know what is muted, or it \
-             reports health where there is suppression",
-        ),
+        Tool("list_suppressions"),
     ),
     ("POST", "/api/v1/mutes", NodeScoped, NO_MCP_WRITE),
     ("DELETE", "/api/v1/mutes/:id", NodeScoped, NO_MCP_WRITE),
@@ -987,11 +979,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/by-group",
         GroupFiltered,
-        // Deliberately not `Tool("list_nodes")`: the tree-grouped projection is not what that tool
-        // returns, and claiming it would be the first dishonest line in this column.
-        Pending(
-            "ADR-042 I2: reassess once list_node_groups ships — a model may compose the tree from \
-             list_node_groups plus list_nodes rather than needing a third projection",
+        // Still deliberately not `Tool("list_nodes")` — the tree-grouped projection is not what
+        // that tool returns, and claiming it would be the first dishonest line in this column.
+        // Exempt instead, on the reassessment this line asked for: `list_node_groups` shipped in
+        // I1 and gained the state tally in I2, so the two tools now carry every field this
+        // projection has. Naming them makes the exemption falsifiable — delete either tool and
+        // this reason becomes checkably wrong.
+        Exempt(
+            "the folder-grouped node tree is the pre-joined rendering of two tools that both \
+             exist: list_node_groups gives the folders (with their tallies), list_nodes gives the \
+             members and takes a group filter",
         ),
     ),
     (
@@ -1345,9 +1342,56 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
 ];
 
+/// Every `#[tool]` name `mcp/tools.rs` declares.
+///
+/// Source-text, like `openapi.rs`'s body guard and `registered_handlers` below, and partial in the
+/// same deliberate way: an attribute shape this cannot parse is skipped rather than failed, and the
+/// callers assert a floor so "the parser stopped matching" cannot pass for "all clear".
+///
+/// Note the trick this does **not** need: `tools.rs::every_tool_takes_a_request_context` assembles
+/// its needles at runtime because it reads its own file, where a literal would match itself and pass
+/// forever. This reads a different file, so a literal is correct here — copying the workaround would
+/// be cargo-culting a fix for a problem this code does not have.
+///
+/// Outside `mod tests` (though still test-only, since this whole module is `#[cfg(test)]`) because
+/// `mcp/mod.rs` needs it too: the instructions string names tools, and one parser for "what tools
+/// exist" is the point of having a parser at all.
+pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools.rs");
+    let src = std::fs::read_to_string(path).expect("read src/mcp/tools.rs");
+    let mut out = std::collections::BTreeSet::new();
+    // `#[tool_router]` and `#[tool_handler(…)]` do not match this needle, so they cost nothing.
+    for chunk in src.split("#[tool(").skip(1) {
+        let Some((attr, after)) = chunk.split_once(")]") else {
+            continue;
+        };
+        // rmcp derives the tool name from the fn name unless the attribute overrides it.
+        // Nothing does today; parse it anyway rather than fail on a legitimate rmcp feature.
+        let name = match attr
+            .split_once("name = \"")
+            .and_then(|(_, r)| r.split_once('"'))
+        {
+            Some((n, _)) => n.to_owned(),
+            None => {
+                let Some((_, sig)) = after.split_once("async fn ") else {
+                    continue;
+                };
+                let Some(n) = sig.split('(').next() else {
+                    continue;
+                };
+                n.trim().to_owned()
+            }
+        };
+        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            out.insert(name);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Mcp, Scoping, NO_MCP_WRITE, ROUTES};
+    use super::{declared_mcp_tools, Mcp, Scoping, NO_MCP_WRITE, ROUTES};
     use crate::api::{router, tests_support::public_state};
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
@@ -1672,49 +1716,6 @@ mod tests {
 
     // ── The MCP column, checked against the tool source (ADR-042) ─────────────
 
-    /// Every `#[tool]` name `mcp/tools.rs` declares.
-    ///
-    /// Source-text, like `openapi.rs`'s body guard and `registered_handlers` above, and partial in
-    /// the same deliberate way: an attribute shape this cannot parse is skipped rather than failed,
-    /// and the callers assert a floor so "the parser stopped matching" cannot pass for "all clear".
-    ///
-    /// Note the trick this test does **not** need: `tools.rs::every_tool_takes_a_request_context`
-    /// assembles its needles at runtime because it reads its own file, where a literal would match
-    /// itself and pass forever. This reads a different file, so a literal is correct here — copying
-    /// the workaround would be cargo-culting a fix for a problem this test does not have.
-    fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools.rs");
-        let src = std::fs::read_to_string(path).expect("read src/mcp/tools.rs");
-        let mut out = std::collections::BTreeSet::new();
-        // `#[tool_router]` and `#[tool_handler(…)]` do not match this needle, so they cost nothing.
-        for chunk in src.split("#[tool(").skip(1) {
-            let Some((attr, after)) = chunk.split_once(")]") else {
-                continue;
-            };
-            // rmcp derives the tool name from the fn name unless the attribute overrides it.
-            // Nothing does today; parse it anyway rather than fail on a legitimate rmcp feature.
-            let name = match attr
-                .split_once("name = \"")
-                .and_then(|(_, r)| r.split_once('"'))
-            {
-                Some((n, _)) => n.to_owned(),
-                None => {
-                    let Some((_, sig)) = after.split_once("async fn ") else {
-                        continue;
-                    };
-                    let Some(n) = sig.split('(').next() else {
-                        continue;
-                    };
-                    n.trim().to_owned()
-                }
-            };
-            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                out.insert(name);
-            }
-        }
-        out
-    }
-
     /// Tools with no REST counterpart, and why.
     ///
     /// This lives here rather than in `tools.rs` on purpose: "which surface answers what" is this
@@ -1735,13 +1736,13 @@ mod tests {
     /// The number counts **routes**, where the v0.1.20 audit that prompted ADR-042 counted
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
-    const MCP_PENDING: usize = 61;
+    const MCP_PENDING: usize = 52;
 
     #[test]
     fn every_named_mcp_tool_exists() {
         let tools = declared_mcp_tools();
         assert!(
-            tools.len() >= 17,
+            tools.len() >= 26,
             "only parsed {} #[tool] declarations — the parser drifted",
             tools.len()
         );
@@ -1760,7 +1761,7 @@ mod tests {
         // grew — which is the exact regression the column exists to prevent. Raise it as increments
         // land; it is a floor, so shipping tools never trips it.
         assert!(
-            named >= 40,
+            named >= 48,
             "only {named} ledger lines name a tool — the column is being emptied"
         );
         assert!(

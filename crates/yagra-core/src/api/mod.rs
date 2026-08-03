@@ -65,7 +65,7 @@ mod rca;
 mod reports;
 mod retention;
 #[cfg(test)]
-mod route_table;
+pub(crate) mod route_table;
 pub(crate) mod scope;
 mod session;
 mod system;
