@@ -48,7 +48,7 @@ use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
 use crate::api::scope::NodeScope;
 use crate::api::{ApiError, ApiState};
-use crate::flowstore::{AsDir, FlowAsAgg, FlowConversation, FlowQuery};
+use crate::flowstore::{AsDir, FlowQuery};
 use crate::mcp::dto::{
     AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
     InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto,
@@ -439,47 +439,21 @@ impl YagraMcp {
         if let Some(deny) = deny_invisible_node(&self.state, scope, "top_flows", p.node_id) {
             return deny;
         }
-        let Some(flows) = self.state.flows.as_ref() else {
-            return tool_unavailable("top_flows", "flow tier not enabled on this core");
+        // The six-arm dispatch, the AS-name fill and the store's availability gate all live in
+        // `api::flow` now. This tool used to re-implement all three, and the copy had drifted twice:
+        // no limit clamp, and no `asn != 0` guard on the name fill.
+        let agg = match crate::api::flow::FlowAgg::parse(p.kind.as_deref().unwrap_or("talkers")) {
+            Ok(a) => a,
+            Err(e) => return tool_api_error("top_flows", &e),
         };
-        let q = flow_query_from(&p);
         let dir = if p.dir.as_deref() == Some("src") {
             AsDir::Src
         } else {
             AsDir::Dst
         };
-        let kind = p.kind.as_deref().unwrap_or("talkers");
-        let result: anyhow::Result<Value> = match kind {
-            "talkers" => flows
-                .top_talkers(&q)
-                .await
-                .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
-            "conversations" => flows.top_conversations(&q).await.and_then(|mut r| {
-                self.resolve_conversation_as_names(&mut r);
-                serde_json::to_value(r).map_err(Into::into)
-            }),
-            "ports" => flows
-                .top_ports(&q)
-                .await
-                .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
-            "protocols" => flows
-                .top_protocols(&q)
-                .await
-                .and_then(|r| serde_json::to_value(r).map_err(Into::into)),
-            "as" => flows.top_as(&q, dir).await.and_then(|mut r| {
-                self.resolve_as_names(&mut r);
-                serde_json::to_value(r).map_err(Into::into)
-            }),
-            _ => {
-                return tool_bad_params(
-                    "top_flows",
-                    "`kind` must be talkers, conversations, ports, protocols, or as",
-                )
-            }
-        };
-        match result {
-            Ok(value) => ok_json_value("top_flows", value),
-            Err(e) => tool_error("top_flows", "query flows", &e),
+        match crate::api::flow::flow_agg_rows(&self.state, &flow_query_from(&p), dir, agg).await {
+            Ok(rows) => ok_json("top_flows", &rows),
+            Err(e) => tool_api_error("top_flows", &e),
         }
     }
 
@@ -1134,28 +1108,11 @@ impl YagraMcp {
         })
     }
 
-    /// Fill `src_as_name`/`dst_as_name` on conversation rows from the hot-swappable IP→ASN table
-    /// (a no-op when the table is unloaded). Mirrors the REST flow handler so the MCP surface returns
-    /// the same enriched rows.
-    fn resolve_conversation_as_names(&self, rows: &mut [FlowConversation]) {
-        let Some(db) = self.state.ipasn.read().ok().and_then(|g| g.clone()) else {
-            return;
-        };
-        for r in rows.iter_mut() {
-            r.src_as_name = db.name_of(r.src_asn).map(str::to_owned);
-            r.dst_as_name = db.name_of(r.dst_asn).map(str::to_owned);
-        }
-    }
-
-    /// Fill `name` on top-AS rows from the IP→ASN table (no-op when unloaded).
-    fn resolve_as_names(&self, rows: &mut [FlowAsAgg]) {
-        let Some(db) = self.state.ipasn.read().ok().and_then(|g| g.clone()) else {
-            return;
-        };
-        for r in rows.iter_mut() {
-            r.name = db.name_of(r.asn).map(str::to_owned);
-        }
-    }
+    // The AS-name fills used to live here, as a copy of the REST ones that had already lost their
+    // `asn != 0` short-circuit. That divergence was harmless — `IpAsnDb::from_tsv` drops `asn = 0`
+    // rows, so `name_of(0)` is `None` regardless — but it is the copy drifting silently that
+    // matters, since nothing would have caught it if the loader's behaviour changed. Both surfaces
+    // now reach the fill through `api::flow::flow_agg_rows`.
 }
 
 // ── Tool parameter structs (schemas derived for `tools/list`) ─────────────────────────────────────
@@ -1429,18 +1386,24 @@ fn is_terminal(state: &str) -> bool {
     matches!(state, "done" | "failed" | "cancelled")
 }
 
-/// Build a [`FlowQuery`] from the shared flow-tool params: default trailing-hour window, typed
-/// drill-down filters (an unparseable `peer` is ignored, never interpolated). Shared by `top_flows`
-/// and `flow_fanout`.
+/// Build a [`FlowQuery`] from the shared flow-tool params: typed drill-down filters (an unparseable
+/// `peer` is ignored, never interpolated). Shared by `top_flows` and `flow_fanout`.
+///
+/// The window and the row limit come from [`crate::api::flow::flow_window`], which is the REST
+/// edge's rule. This used to be a hand copy with `limit.unwrap_or(100)` and **no clamp**, while the
+/// REST side clamped to `1..=1000` and its own test calls an unbounded top-N a DoS vector — the
+/// surface with no human in the loop was the one without the cap. The default of 100 is kept: a
+/// model orienting itself wants more rows than a dashboard table does, and that difference is a
+/// choice rather than a drift.
 fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
-    let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
-    let from_s = p.from.unwrap_or(to_s - DEFAULT_WINDOW_SECS);
+    let (from_unix_ms, to_unix_ms, limit) =
+        crate::api::flow::flow_window(p.from, p.to, p.limit, 100);
     let peer: Option<std::net::IpAddr> = p.peer.as_deref().and_then(|s| s.parse().ok());
     FlowQuery {
         node_id: Some(p.node_id),
-        from_unix_ms: from_s.saturating_mul(1000),
-        to_unix_ms: to_s.saturating_mul(1000),
-        limit: p.limit.unwrap_or(100),
+        from_unix_ms,
+        to_unix_ms,
+        limit,
         proto: p.proto,
         dst_port: p.port,
         peer,
@@ -1716,6 +1679,32 @@ mod tests {
 
         p.peer = Some("8.8.8.8".to_owned());
         assert_eq!(flow_query_from(&p).peer, Some("8.8.8.8".parse().unwrap()));
+    }
+
+    /// The row limit is clamped on **this** surface too.
+    ///
+    /// It was not: this tool had its own copy of the query builder reading `limit.unwrap_or(100)`
+    /// with no clamp, while the REST edge clamped to `1..=1000` and `api-conventions.md` calls an
+    /// unbounded top-N a DoS vector. The surface with no human in the loop was the one without the
+    /// cap, which is the usual direction for a duplicated bound. Both now go through
+    /// `api::flow::flow_window`.
+    #[test]
+    fn an_unbounded_row_limit_is_clamped_like_the_rest_edge_clamps_it() {
+        let mut p = flow_params(Uuid::new_v4());
+        p.limit = Some(100_000);
+        assert_eq!(
+            flow_query_from(&p).limit,
+            1000,
+            "clamped to the store's cap"
+        );
+
+        p.limit = Some(0);
+        assert_eq!(flow_query_from(&p).limit, 1, "and to at least one row");
+
+        // The default differs from REST's 20 on purpose — a model orienting itself wants more rows
+        // than a dashboard table does. That difference is a choice; the missing clamp was not.
+        p.limit = None;
+        assert_eq!(flow_query_from(&p).limit, 100);
     }
 
     // ── Result-shape helpers ────────────────────────────────────────────────────────────────────

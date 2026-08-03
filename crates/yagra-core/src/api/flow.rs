@@ -125,7 +125,7 @@ fn flow_unavailable() -> ApiError {
 ///
 /// So a scoped caller is refused the roll-up and keeps `/nodes/{node_id}/flow/*`, which is
 /// `NodeScoped` and is where flow analysis is actually done — you look at one exporter.
-fn fleet_flow_is_unattributed(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
+pub(crate) fn fleet_flow_is_unattributed(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
     super::scope::require_fleet_wide(
         scope,
         "fleet-wide flow aggregates are grouped by address, port, protocol or AS, so no exporter \
@@ -140,17 +140,40 @@ fn flow_query_failed(what: &str, e: &anyhow::Error) -> ApiError {
     ApiError::internal("flow query failed")
 }
 
+/// The window and row-limit rule **both** flow surfaces share: seconds → milliseconds, a default
+/// trailing window, and the `1..=1000` clamp.
+///
+/// Extracted because the MCP surface had its own copy that read `limit.unwrap_or(100)` with **no
+/// clamp at all**, while this file's own test calls an unbounded top-N a DoS vector. The surface
+/// with no human in the loop was the one without the cap — which is the usual direction for a
+/// duplicated bound (`extensibility.md` §3).
+///
+/// `default_limit` stays a parameter because the two edges legitimately differ: a dashboard table
+/// wants 20 rows, a model orienting itself wants more context. The *clamp* is what must be shared.
+pub(crate) fn flow_window(
+    from_s: Option<i64>,
+    to_s: Option<i64>,
+    limit: Option<u32>,
+    default_limit: u32,
+) -> (i64, i64, u32) {
+    let to = to_s.unwrap_or_else(super::now_unix_s);
+    let from = from_s.unwrap_or(to - DEFAULT_RANGE_SECS);
+    (
+        from.saturating_mul(1000),
+        to.saturating_mul(1000),
+        limit.unwrap_or(default_limit).clamp(1, 1000),
+    )
+}
+
 /// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
 /// path) for a per-node query or `None` for the fleet-wide (all-exporters) endpoints; the window is
 /// converted to ms and the limit clamped — no untrusted string ever reaches the store query.
 fn flow_query_params(node_id: Option<Uuid>, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
-    let to = q.to.unwrap_or_else(super::now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let limit = q.limit.unwrap_or(20).clamp(1, 1000);
+    let (from_unix_ms, to_unix_ms, limit) = flow_window(q.from, q.to, q.limit, 20);
     crate::flowstore::FlowQuery {
         node_id,
-        from_unix_ms: from.saturating_mul(1000),
-        to_unix_ms: to.saturating_mul(1000),
+        from_unix_ms,
+        to_unix_ms,
         limit,
         // Parse into strong types; anything unparseable is simply ignored (no raw string in SQL).
         proto: q.proto.as_deref().and_then(|s| s.trim().parse::<u8>().ok()),
@@ -174,7 +197,10 @@ fn flow_as_dir(q: &FlowRangeQuery) -> crate::flowstore::AsDir {
 /// Fill conversation `*_as_name` fields from the hot-swappable IP→ASN table (a reloader may swap it
 /// concurrently, so snapshot once). Names are resolved here, never stored (flowstore.rs leaves them
 /// `None`).
-fn resolve_conversation_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowConversation]) {
+pub(crate) fn resolve_conversation_as_names(
+    st: &ApiState,
+    rows: &mut [crate::flowstore::FlowConversation],
+) {
     let db = st.ipasn.read().unwrap().clone();
     if let Some(db) = &db {
         for r in rows.iter_mut() {
@@ -189,7 +215,7 @@ fn resolve_conversation_as_names(st: &ApiState, rows: &mut [crate::flowstore::Fl
 }
 
 /// Fill AS-aggregate `name` fields from the hot-swappable IP→ASN table.
-fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
+pub(crate) fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
     let db = st.ipasn.read().unwrap().clone();
     if let Some(db) = &db {
         for r in rows.iter_mut() {
@@ -201,15 +227,69 @@ fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
 }
 
 /// The six flow aggregations the API exposes. Adding a seventh is a variant here, an arm in
-/// [`run_flow_agg`], and the two route lines in [`routes`].
+/// [`flow_agg_rows`] and in [`FlowRows`], and the two route lines in [`routes`].
 #[derive(Clone, Copy)]
-enum FlowAgg {
+pub(crate) enum FlowAgg {
     Series,
     TopTalkers,
     Conversations,
     TopPorts,
     Protocols,
     TopAs,
+}
+
+impl FlowAgg {
+    /// Parse an aggregation name. Listed exhaustively rather than defaulted: this selects which
+    /// store query runs, so an unrecognised value must be a rejection.
+    pub(crate) fn parse(kind: &str) -> Result<Self, ApiError> {
+        match kind {
+            "series" => Ok(Self::Series),
+            "talkers" | "top-talkers" => Ok(Self::TopTalkers),
+            "conversations" => Ok(Self::Conversations),
+            "ports" | "top-ports" => Ok(Self::TopPorts),
+            "protocols" => Ok(Self::Protocols),
+            "as" | "top-as" => Ok(Self::TopAs),
+            other => Err(ApiError::bad_request(
+                "invalid_kind",
+                format!(
+                    "kind must be series|talkers|conversations|ports|protocols|as, got {other:?}"
+                ),
+            )),
+        }
+    }
+}
+
+/// One aggregation's rows.
+///
+/// `#[serde(untagged)]` so it serialises as the bare array both surfaces already return — the REST
+/// bytes are unchanged. This exists because [`flow_agg_rows`] must hand typed rows to a caller that
+/// is not an axum handler: routing everything through `serde_json::Value` instead would reorder
+/// REST's JSON keys, since `serde_json` here has no `preserve_order` and `Value::Object` is a
+/// `BTreeMap`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub(crate) enum FlowRows {
+    Series(Vec<crate::flowstore::FlowPoint>),
+    Talkers(Vec<crate::flowstore::FlowTalker>),
+    Conversations(Vec<crate::flowstore::FlowConversation>),
+    Ports(Vec<crate::flowstore::FlowPortAgg>),
+    Protocols(Vec<crate::flowstore::FlowProtoAgg>),
+    As(Vec<crate::flowstore::FlowAsAgg>),
+}
+
+impl FlowRows {
+    /// Render as the JSON array the REST endpoints return. Exhaustive on purpose — a `_ =>` arm
+    /// here is how a seventh aggregation would ship serialising as the wrong shape.
+    fn into_response(self) -> Response {
+        match self {
+            Self::Series(r) => Json(r).into_response(),
+            Self::Talkers(r) => Json(r).into_response(),
+            Self::Conversations(r) => Json(r).into_response(),
+            Self::Ports(r) => Json(r).into_response(),
+            Self::Protocols(r) => Json(r).into_response(),
+            Self::As(r) => Json(r).into_response(),
+        }
+    }
 }
 
 impl FlowAgg {
@@ -243,9 +323,28 @@ async fn run_flow_agg(
     q: &FlowRangeQuery,
     agg: FlowAgg,
 ) -> ApiResult<Response> {
-    let store = st.flows.clone().ok_or_else(flow_unavailable)?;
     let fq = flow_query_params(node_id, q);
-    let what = agg.label(node_id.is_none());
+    Ok(flow_agg_rows(st, &fq, flow_as_dir(q), agg)
+        .await?
+        .into_response())
+}
+
+/// Run one flow aggregation and return its typed rows.
+///
+/// The half of [`run_flow_agg`] that is not axum: the flow-disabled gate, the store call, AS-name
+/// resolution and error mapping. ADR-042's `top_flows` tool calls this rather than re-implementing
+/// the six-arm dispatch, which is what it did before — and that copy had already lost the `asn != 0`
+/// short-circuit in the name fill. Harmless today only because `IpAsnDb::from_tsv` drops `asn = 0`
+/// rows, so `name_of(0)` is `None` either way; it is the shape of the divergence that matters, not
+/// this instance of it.
+pub(crate) async fn flow_agg_rows(
+    st: &ApiState,
+    fq: &crate::flowstore::FlowQuery,
+    dir: crate::flowstore::AsDir,
+    agg: FlowAgg,
+) -> ApiResult<FlowRows> {
+    let store = st.flows.clone().ok_or_else(flow_unavailable)?;
+    let what = agg.label(fq.node_id.is_none());
     Ok(match agg {
         FlowAgg::Series => {
             let sq = crate::flowstore::FlowSeriesQuery {
@@ -254,48 +353,46 @@ async fn run_flow_agg(
                 to_unix_ms: fq.to_unix_ms,
                 proto: fq.proto,
             };
-            let points = store
-                .series(&sq)
-                .await
-                .map_err(|e| flow_query_failed(what, &e))?;
-            Json(points).into_response()
+            FlowRows::Series(
+                store
+                    .series(&sq)
+                    .await
+                    .map_err(|e| flow_query_failed(what, &e))?,
+            )
         }
-        FlowAgg::TopTalkers => {
-            let rows = store
-                .top_talkers(&fq)
+        FlowAgg::TopTalkers => FlowRows::Talkers(
+            store
+                .top_talkers(fq)
                 .await
-                .map_err(|e| flow_query_failed(what, &e))?;
-            Json(rows).into_response()
-        }
+                .map_err(|e| flow_query_failed(what, &e))?,
+        ),
         FlowAgg::Conversations => {
             let mut rows = store
-                .top_conversations(&fq)
+                .top_conversations(fq)
                 .await
                 .map_err(|e| flow_query_failed(what, &e))?;
             resolve_conversation_as_names(st, &mut rows);
-            Json(rows).into_response()
+            FlowRows::Conversations(rows)
         }
-        FlowAgg::TopPorts => {
-            let rows = store
-                .top_ports(&fq)
+        FlowAgg::TopPorts => FlowRows::Ports(
+            store
+                .top_ports(fq)
                 .await
-                .map_err(|e| flow_query_failed(what, &e))?;
-            Json(rows).into_response()
-        }
-        FlowAgg::Protocols => {
-            let rows = store
-                .top_protocols(&fq)
+                .map_err(|e| flow_query_failed(what, &e))?,
+        ),
+        FlowAgg::Protocols => FlowRows::Protocols(
+            store
+                .top_protocols(fq)
                 .await
-                .map_err(|e| flow_query_failed(what, &e))?;
-            Json(rows).into_response()
-        }
+                .map_err(|e| flow_query_failed(what, &e))?,
+        ),
         FlowAgg::TopAs => {
             let mut rows = store
-                .top_as(&fq, flow_as_dir(q))
+                .top_as(fq, dir)
                 .await
                 .map_err(|e| flow_query_failed(what, &e))?;
             resolve_as_names(st, &mut rows);
-            Json(rows).into_response()
+            FlowRows::As(rows)
         }
     })
 }

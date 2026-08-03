@@ -77,6 +77,12 @@
   migrations since it was written, and until now the repository contained no `pg_dump` at all.
 
 ### Bug Fixes
+- **The MCP `top_flows` and `flow_fanout` tools did not clamp their row limit.** The REST flow
+  endpoints cap a request at 1000 rows; the MCP tools had their own copy of that query builder and
+  it had lost the cap, so an AI client asking for 100000 rows got a ClickHouse query with no bound
+  on it. **Both surfaces now share one window-and-limit rule**, so the cap applies wherever the
+  query comes from. A tool call asking for more than 1000 rows now receives 1000. The default
+  (100 rows) is unchanged.
 - **A site pin on the Geo map counted only the nodes filed directly in that folder.** Nodes
   normally live in sub-folders — racks, floors, closets — so an operator who placed their Tokyo
   site and filed the switches under *Tokyo ▸ Floor 2 ▸ Rack A* got a pin that was permanently
