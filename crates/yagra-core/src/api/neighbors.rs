@@ -102,24 +102,33 @@ pub(super) struct HistoryQuery {
 
 impl HistoryQuery {
     /// The keyset cursor this query names, if any.
-    ///
-    /// Both halves or neither. A half-specified cursor is rejected rather than ignored: silently
-    /// dropping it restarts paging from the top, so a client walking the history would loop over
-    /// the first page forever while looking like it was making progress.
     fn cursor(&self) -> Result<Option<(chrono::DateTime<chrono::Utc>, i64)>, ApiError> {
-        match (self.before_at.as_deref(), self.before_id) {
-            (Some(at), Some(id)) => {
-                let ts = super::parse_rfc3339(at).ok_or_else(|| {
-                    ApiError::bad_request("invalid_cursor", "before_at must be RFC 3339")
-                })?;
-                Ok(Some((ts, id)))
-            }
-            (None, None) => Ok(None),
-            _ => Err(ApiError::bad_request(
-                "invalid_cursor",
-                "before_at and before_id must be given together",
-            )),
+        parse_history_cursor(self.before_at.as_deref(), self.before_id)
+    }
+}
+
+/// Parse a keyset cursor: both halves or neither.
+///
+/// A half-specified cursor is **rejected rather than ignored**, and that is the whole reason this is
+/// a named function rather than an inline `if let`: silently dropping it restarts paging from the
+/// top, so a client walking the history loops over the first page forever while looking like it is
+/// making progress. Any second surface that pages this history has to get the same answer.
+pub(crate) fn parse_history_cursor(
+    before_at: Option<&str>,
+    before_id: Option<i64>,
+) -> Result<Option<(chrono::DateTime<chrono::Utc>, i64)>, ApiError> {
+    match (before_at, before_id) {
+        (Some(at), Some(id)) => {
+            let ts = super::parse_rfc3339(at).ok_or_else(|| {
+                ApiError::bad_request("invalid_cursor", "before_at must be RFC 3339")
+            })?;
+            Ok(Some((ts, id)))
         }
+        (None, None) => Ok(None),
+        _ => Err(ApiError::bad_request(
+            "invalid_cursor",
+            "before_at and before_id must be given together",
+        )),
     }
 }
 
@@ -146,6 +155,20 @@ async fn get_neighbors(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<CurrentNeighbors>> {
+    Ok(Json(current_neighbors(&admin, node_id).await?))
+}
+
+/// One node's current adjacency, with the "nothing recorded" rule.
+///
+/// The `404` is the load-bearing part and the reason this is a function rather than three lines
+/// repeated: **no walk recorded is not an empty set**. A device that genuinely reports no neighbours
+/// has a recorded empty set, which is a real answer; a node that was never walked has nothing, and
+/// answering `[]` for it would tell an operator — or a model — that the device has no adjacency
+/// when what is true is that nobody has looked.
+pub(crate) async fn current_neighbors(
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> ApiResult<CurrentNeighbors> {
     let current = admin
         .neighbors
         .current(node_id)
@@ -159,11 +182,11 @@ async fn get_neighbors(
                 format!("no adjacency recorded for node {node_id}"),
             )
         })?;
-    Ok(Json(CurrentNeighbors {
+    Ok(CurrentNeighbors {
         neighbors: current.set,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),
-    }))
+    })
 }
 
 /// The node's adjacency change history, newest first.
@@ -189,11 +212,25 @@ async fn list_neighbor_history(
     Path(node_id): Path<Uuid>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<NeighborHistory>> {
-    let limit = q
-        .limit
+    Ok(Json(
+        neighbor_history(&admin, node_id, q.cursor()?, q.limit).await?,
+    ))
+}
+
+/// One page of a node's adjacency changes, newest first.
+///
+/// Carries the limit clamp and the cursor rule, both of which a second surface would otherwise have
+/// to reproduce: a cursor is returned **only when the page came back full**, because handing one
+/// back on a short page makes a client fetch an empty page to discover the history ended.
+pub(crate) async fn neighbor_history(
+    admin: &super::AdminState,
+    node_id: Uuid,
+    before: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+    limit: Option<i64>,
+) -> ApiResult<NeighborHistory> {
+    let limit = limit
         .unwrap_or(HISTORY_DEFAULT_LIMIT)
         .clamp(1, HISTORY_MAX_LIMIT);
-    let before = q.cursor()?;
     let rows = admin
         .neighbors
         .list_changes(node_id, before, limit)
@@ -214,7 +251,7 @@ async fn list_neighbor_history(
             at: r.at.to_rfc3339(),
             id: r.id,
         });
-    Ok(Json(NeighborHistory {
+    Ok(NeighborHistory {
         changes: rows
             .into_iter()
             .map(|r| NeighborChange {
@@ -225,7 +262,7 @@ async fn list_neighbor_history(
             })
             .collect(),
         next,
-    }))
+    })
 }
 
 // ── Deployment-wide settings ─────────────────────────────────────────────────
