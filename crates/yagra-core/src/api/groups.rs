@@ -70,19 +70,29 @@ async fn list_node_groups(
     Scoped(scope): Scoped,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::groups::GroupSummary>>> {
+    Ok(Json(visible_groups(&admin, &scope).await?))
+}
+
+/// The folder tree the caller may see: their subtree **and the ancestors above it**.
+///
+/// Dropping the ancestors is the tempting simplification and it breaks the tree: it is built from
+/// `parent_id`, so every visible root would point at a parent that is not in the response and
+/// render as an orphan. The ancestors are names only — `allows_group_row` admits them, while
+/// membership questions go through `allows_group`, which does not.
+///
+/// Extracted so that choice is made once. ADR-042's `list_node_groups` tool returns `parent_id`
+/// too, so a second filter written with `allows_group` would be subtly wrong in exactly this way.
+pub(crate) async fn visible_groups(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+) -> ApiResult<Vec<crate::groups::GroupSummary>> {
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
-    // Keeps the caller's subtree **and the ancestors above it**. Dropping the ancestors would be
-    // the tempting simplification and it breaks the UI: the inventory tree is built from
-    // `parent_id`, so every visible root would point at a parent that is not in the response and
-    // render as an orphan. The ancestors are names only — `allows_group_row` admits them, while
-    // membership questions go through `allows_group`, which does not.
-    let list = list
+    Ok(list
         .into_iter()
         .filter(|g| scope.allows_group_row(g.id))
-        .collect();
-    Ok(Json(list))
+        .collect())
 }
 
 /// Create/update body for a group. `group_type` is a validated [`GroupType`] key.

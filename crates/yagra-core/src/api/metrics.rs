@@ -251,16 +251,47 @@ async fn get_interface_series(
     Path((node_id, ifindex)): Path<(Uuid, u32)>,
     Query(q): Query<RangeQuery>,
 ) -> Json<InterfaceSeries> {
-    let node = NodeId::from(node_id);
-    let key = |metric: &str| SeriesKey::interface(node, IfIndex(ifindex), metric);
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    // Default to ~120 points across the window; the rate lookback spans a few steps so a
-    // single missed poll doesn't punch a hole in the line.
-    let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
-    let step = clamp_range_step(from, to, q.step.unwrap_or((span / 120).max(60)), 1);
-    let lookback = (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS);
+    Json(
+        interface_series(
+            &st,
+            NodeId::from(node_id),
+            IfIndex(ifindex),
+            from,
+            to,
+            q.step,
+        )
+        .await,
+    )
+}
 
+/// Sampling step and rate lookback for one interface's series.
+///
+/// Pure, and separated because it is the part that can be silently wrong: too coarse a step hides a
+/// spike, and too short a lookback turns one missed poll into a hole in the line. ~120 points across
+/// the window, with the lookback spanning a few steps.
+pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) -> (u64, u64) {
+    let span = u64::try_from((to - from).max(1)).unwrap_or(DEFAULT_RANGE_SECS as u64);
+    let step = clamp_range_step(from, to, requested.unwrap_or((span / 120).max(60)), 1);
+    (step, (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS))
+}
+
+/// One interface's four aligned series (ADR-042 I1's `get_interface_series` reads this too).
+///
+/// The four metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
+/// than in the handler because a second surface needs the same answer, and reproducing it there
+/// would mean a model (or a maintainer) having to know all three.
+pub(crate) async fn interface_series(
+    st: &ApiState,
+    node: NodeId,
+    ifindex: IfIndex,
+    from: i64,
+    to: i64,
+    step: Option<u64>,
+) -> InterfaceSeries {
+    let key = |metric: &str| SeriesKey::interface(node, ifindex, metric);
+    let (step, lookback) = interface_series_step(from, to, step);
     // The four series are independent range queries — fan them out concurrently (this endpoint
     // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
     // they outlive the joined futures.
@@ -276,7 +307,7 @@ async fn get_interface_series(
         st.store.rate_range(&k_ierr, from, to, step, lookback),
         st.store.rate_range(&k_oerr, from, to, step, lookback),
     );
-    Json(align_interface_series(&in_oct, &out_oct, &in_err, &out_err))
+    align_interface_series(&in_oct, &out_oct, &in_err, &out_err)
 }
 
 /// Align the four counter-derived series onto one shared axis.
@@ -404,22 +435,38 @@ async fn top_metrics(
     State(st): State<ApiState>,
     Query(q): Query<TopQuery>,
 ) -> ApiResult<Json<Ranked<TopEntry>>> {
-    let selector = top_selector(&q.metric)?;
-    let agg = parse_top_agg(q.agg.as_deref())?;
-    let limit = q.limit.unwrap_or(5).clamp(1, 50);
+    Ok(Json(
+        ranked_nodes(&st, &scope, &q.metric, q.agg.as_deref(), q.limit).await?,
+    ))
+}
+
+/// The fleet node ranking: validate, over-fetch, scope-filter, join names.
+///
+/// Every bound lives here — the `metric` validation that keeps request input out of the PromQL, the
+/// `1..=50` clamp, and the over-fetch — because ADR-042's `top_metrics` tool needs the same answer
+/// and a clamp that lives at one edge is a clamp the other edge does not have.
+pub(crate) async fn ranked_nodes(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    metric: &str,
+    agg: Option<&str>,
+    limit: Option<usize>,
+) -> ApiResult<Ranked<TopEntry>> {
+    let selector = top_selector(metric)?;
+    let agg = parse_top_agg(agg)?;
+    let limit = limit.unwrap_or(5).clamp(1, 50);
     // The TSDB ranks by value and knows nothing about groups, so scoping happens after the ranking
     // — over-fetch first so a scoped caller usually still gets a full list. See RANKING_OVERFETCH.
-    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
+    let fetched = super::scope::ranking_fetch_limit(scope, limit);
     let ranked = st.store.top_nodes(&selector, agg, fetched).await;
     let ranked: Vec<_> = ranked
         .into_iter()
-        .filter(|(id, _)| scope.allows_node(&st, yagra_common::NodeId::from(*id)))
+        .filter(|(id, _)| scope.allows_node(st, yagra_common::NodeId::from(*id)))
         .collect();
     let ranked = Ranked::new(ranked, limit, fetched);
     let names =
-        super::nodes::resolve_node_names(&st, &scope, ranked.entries.iter().map(|(id, _)| *id))
-            .await;
-    Ok(Json(Ranked {
+        super::nodes::resolve_node_names(st, scope, ranked.entries.iter().map(|(id, _)| *id)).await;
+    Ok(Ranked {
         entries: ranked
             .entries
             .into_iter()
@@ -430,7 +477,7 @@ async fn top_metrics(
             })
             .collect(),
         partial: ranked.partial,
-    }))
+    })
 }
 
 // ── Interface rankings ───────────────────────────────────────────────────────
@@ -494,13 +541,78 @@ async fn interface_top(
     State(st): State<ApiState>,
     Query(q): Query<InterfaceTopQuery>,
 ) -> ApiResult<Json<Ranked<InterfaceTopEntry>>> {
-    let metric = parse_interface_metric(&q.metric)?;
-    let agg = parse_top_agg(q.agg.as_deref())?;
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
-    let ranked = st.store.top_interfaces(metric, agg, fetched).await;
-    let entries = build_interface_entries(&st, &scope, ranked).await;
-    Ok(Json(Ranked::new(entries, limit, fetched)))
+    let rank = InterfaceRanking::Metric(
+        parse_interface_metric(&q.metric)?,
+        parse_top_agg(q.agg.as_deref())?,
+    );
+    Ok(Json(ranked_interfaces(&st, &scope, rank, q.limit).await))
+}
+
+/// How an interface ranking is ordered.
+///
+/// Each variant carries exactly its own parameters, so there is no "ignored for this kind" field —
+/// `agg` genuinely does not apply to a delta, and a window genuinely does not apply to a rate.
+/// ADR-042's `top_interfaces` tool folds both endpoints behind one `rank_by` vocabulary, and this
+/// is the type that vocabulary parses into.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum InterfaceRanking {
+    /// Rank by a query-time rate expression.
+    Metric(InterfaceTopMetric, TopAgg),
+    /// Rank by signed throughput change over a window in seconds. Build it with
+    /// [`InterfaceRanking::delta`] so the window is clamped.
+    Delta(DeltaDirection, u64),
+}
+
+impl InterfaceRanking {
+    /// A delta ranking with its comparison window clamped to `60..=3600`.
+    ///
+    /// A constructor rather than a bare variant because the clamp is the bound that keeps an
+    /// unbounded window out of the TSDB, and both edges must get it.
+    pub(crate) fn delta(direction: DeltaDirection, window_secs: Option<u64>) -> Self {
+        Self::Delta(direction, window_secs.unwrap_or(300).clamp(60, 3600))
+    }
+}
+
+/// Parse the interface-delta `direction` param.
+///
+/// Named for the same reason `parse_interface_metric` is: it selects which store query runs, so an
+/// unrecognised value must be a rejection and not a default. It was an inline `match` in the handler
+/// until a second surface needed the same vocabulary.
+pub(crate) fn parse_delta_direction(direction: &str) -> Result<DeltaDirection, ApiError> {
+    match direction {
+        "up" => Ok(DeltaDirection::Up),
+        "down" => Ok(DeltaDirection::Down),
+        other => Err(ApiError::bad_request(
+            "invalid_direction",
+            format!("direction must be 'up' or 'down', got {other:?}"),
+        )),
+    }
+}
+
+/// The fleet interface ranking, over-fetched and scope-filtered, with names joined.
+///
+/// Holds the `1..=50` limit clamp and the over-fetch so neither edge can forget them.
+pub(crate) async fn ranked_interfaces(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    rank: InterfaceRanking,
+    limit: Option<usize>,
+) -> Ranked<InterfaceTopEntry> {
+    let limit = limit.unwrap_or(6).clamp(1, 50);
+    let fetched = super::scope::ranking_fetch_limit(scope, limit);
+    let ranked = match rank {
+        InterfaceRanking::Metric(metric, agg) => {
+            st.store.top_interfaces(metric, agg, fetched).await
+        }
+        InterfaceRanking::Delta(direction, window) => {
+            st.store.interface_delta(direction, window, fetched).await
+        }
+    };
+    Ranked::new(
+        build_interface_entries(st, scope, ranked).await,
+        limit,
+        fetched,
+    )
 }
 
 /// Join a fleet interface ranking `(node, ifindex, value)` to node + interface names (and speed)
@@ -582,22 +694,8 @@ async fn interface_delta(
     State(st): State<ApiState>,
     Query(q): Query<InterfaceDeltaQuery>,
 ) -> ApiResult<Json<Ranked<InterfaceTopEntry>>> {
-    let direction = match q.direction.as_str() {
-        "up" => DeltaDirection::Up,
-        "down" => DeltaDirection::Down,
-        other => {
-            return Err(ApiError::bad_request(
-                "invalid_direction",
-                format!("direction must be 'up' or 'down', got {other:?}"),
-            ))
-        }
-    };
-    let window = q.window.unwrap_or(300).clamp(60, 3600);
-    let limit = q.limit.unwrap_or(6).clamp(1, 50);
-    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
-    let ranked = st.store.interface_delta(direction, window, fetched).await;
-    let entries = build_interface_entries(&st, &scope, ranked).await;
-    Ok(Json(Ranked::new(entries, limit, fetched)))
+    let rank = InterfaceRanking::delta(parse_delta_direction(&q.direction)?, q.window);
+    Ok(Json(ranked_interfaces(&st, &scope, rank, q.limit).await))
 }
 
 // ── Busiest-links heatmap ────────────────────────────────────────────────────
@@ -690,13 +788,8 @@ async fn interface_heatmap(
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 6 * 3600);
     let step = clamp_range_step(from, to, q.step.unwrap_or(600), 60);
-    let fetched = super::scope::ranking_fetch_limit(&scope, limit);
-    let top = st
-        .store
-        .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, fetched)
-        .await;
-    let entries = build_interface_entries(&st, &scope, top).await;
-    let Ranked { entries, partial } = Ranked::new(entries, limit, fetched);
+    let rank = InterfaceRanking::Metric(InterfaceTopMetric::Throughput, TopAgg::Now);
+    let Ranked { entries, partial } = ranked_interfaces(&st, &scope, rank, Some(limit)).await;
     // The per-link throughput queries are independent (bounded ≤ 20), so fan them out concurrently
     // rather than awaiting one link at a time — one round-trip of latency instead of N.
     let ranges = futures::future::join_all(entries.iter().map(|e| {
@@ -764,20 +857,37 @@ async fn throughput_range(
     State(st): State<ApiState>,
     Query(q): Query<ThroughputRangeQuery>,
 ) -> ApiResult<Json<ThroughputRange>> {
+    Ok(Json(
+        fleet_throughput(&st, &scope, q.from, q.to, q.step).await?,
+    ))
+}
+
+/// Total fleet throughput over a window, refusal included.
+///
+/// The refusal is **inside** rather than at the call site on purpose: this is the shape a second
+/// surface gets wrong by omission, and a fleet total handed to an account that sees seven nodes
+/// reads as a fact about those seven.
+pub(crate) async fn fleet_throughput(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
+) -> ApiResult<ThroughputRange> {
     // One summed series, aggregated inside VictoriaMetrics. Unlike the Top-N endpoints there is no
     // per-node breakdown to over-fetch and filter — the sum arrives already collapsed. Asking for
     // `sum by (node)` instead would return one series per node, which at the 50k-node target is the
     // cardinality blow-up CLAUDE.md names as the single biggest design risk. So it refuses.
     super::scope::require_fleet_wide(
-        &scope,
+        scope,
         "fleet throughput is summed inside the TSDB with no per-node breakdown to filter, so it \
          cannot be narrowed to a group-scoped account",
     )?;
-    let to = q.to.unwrap_or_else(super::now_unix_s);
-    let from = q.from.unwrap_or(to - 24 * 3600);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(300), 60);
+    let to = to.unwrap_or_else(super::now_unix_s);
+    let from = from.unwrap_or(to - 24 * 3600);
+    let step = clamp_range_step(from, to, step.unwrap_or(300), 60);
     let (in_pts, out_pts) = st.store.throughput_range(from, to, step).await;
-    Ok(Json(align_throughput(in_pts, out_pts)))
+    Ok(align_throughput(in_pts, out_pts))
 }
 
 #[cfg(test)]
@@ -859,7 +969,59 @@ mod tests {
                 .code(),
             "invalid_metric"
         );
+        assert!(parse_delta_direction("up").is_ok());
+        assert!(parse_delta_direction("down").is_ok());
+        assert_eq!(
+            parse_delta_direction("sideways")
+                .expect_err("unknown direction")
+                .code(),
+            "invalid_direction"
+        );
         assert_eq!(invalid_agg("mean").code(), "invalid_agg");
+    }
+
+    #[test]
+    fn the_interface_series_step_stays_sampleable_and_the_lookback_spans_it() {
+        // ~120 points across the window is the target, and the lookback must span several steps or
+        // one missed poll punches a hole in the line. Both are cheap to get subtly wrong and
+        // invisible in the response, which is why they are pulled out as a pure function.
+        let hour = (0, 3600);
+        let (step, lookback) = interface_series_step(hour.0, hour.1, None);
+        assert_eq!(step, 60, "an hour at ~120 points floors at the 60s minimum");
+        assert!(lookback >= step * 4, "the lookback spans several steps");
+
+        let day = (0, 86_400);
+        let (step, lookback) = interface_series_step(day.0, day.1, None);
+        assert_eq!(step, 720, "86400/120");
+        assert_eq!(lookback, step * 4);
+
+        // A caller asking for a one-second step over a wide window would otherwise turn one request
+        // into an unbounded TSDB response; `clamp_range_step` is what stops that, and it must stay
+        // inside this function rather than at the edge — ADR-042's tool has no edge to put it at.
+        let (clamped, _) = interface_series_step(0, 86_400, Some(1));
+        assert!(clamped > 1, "a one-second step over a day is clamped");
+    }
+
+    #[test]
+    fn a_delta_ranking_clamps_its_window_however_it_is_built() {
+        // The clamp lives in the constructor because both the REST edge and the MCP tool build one,
+        // and a bound that lives at one edge is a bound the other edge does not have.
+        let InterfaceRanking::Delta(_, w) = InterfaceRanking::delta(DeltaDirection::Up, Some(1))
+        else {
+            panic!("delta")
+        };
+        assert_eq!(w, 60);
+        let InterfaceRanking::Delta(_, w) =
+            InterfaceRanking::delta(DeltaDirection::Down, Some(999_999))
+        else {
+            panic!("delta")
+        };
+        assert_eq!(w, 3600);
+        let InterfaceRanking::Delta(_, w) = InterfaceRanking::delta(DeltaDirection::Up, None)
+        else {
+            panic!("delta")
+        };
+        assert_eq!(w, 300);
     }
 
     #[tokio::test]
