@@ -768,13 +768,11 @@ async fn throughput_range(
     // per-node breakdown to over-fetch and filter — the sum arrives already collapsed. Asking for
     // `sum by (node)` instead would return one series per node, which at the 50k-node target is the
     // cardinality blow-up CLAUDE.md names as the single biggest design risk. So it refuses.
-    if !scope.is_all() {
-        return Err(ApiError::forbidden_code(
-            "scope_unsupported",
-            "fleet throughput is summed inside the TSDB with no per-node breakdown to filter, so it \
-             cannot be narrowed to a group-scoped account",
-        ));
-    }
+    super::scope::require_fleet_wide(
+        &scope,
+        "fleet throughput is summed inside the TSDB with no per-node breakdown to filter, so it \
+         cannot be narrowed to a group-scoped account",
+    )?;
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 24 * 3600);
     let step = clamp_range_step(from, to, q.step.unwrap_or(300), 60);

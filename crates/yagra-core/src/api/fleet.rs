@@ -382,13 +382,11 @@ async fn fleet_state_history(
     // Serving them the fleet's numbers would be a leak, and serving zeroes would be a lie, so it
     // refuses. Making this scopable means snapshotting per group — a schema and writer change, i.e.
     // a feature rather than a filter.
-    if !scope.is_all() {
-        return Err(ApiError::forbidden_code(
-            "scope_unsupported",
-            "the fleet state timeline is stored pre-aggregated with no per-node attribution, so it \
-             cannot be narrowed to a group-scoped account",
-        ));
-    }
+    super::scope::require_fleet_wide(
+        &scope,
+        "the fleet state timeline is stored pre-aggregated with no per-node attribution, so it \
+         cannot be narrowed to a group-scoped account",
+    )?;
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 24 * 3600);
     if to < from || to - from > MAX_HISTORY_SECS {

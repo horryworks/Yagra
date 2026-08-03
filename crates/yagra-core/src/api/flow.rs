@@ -126,14 +126,11 @@ fn flow_unavailable() -> ApiError {
 /// So a scoped caller is refused the roll-up and keeps `/nodes/{node_id}/flow/*`, which is
 /// `NodeScoped` and is where flow analysis is actually done — you look at one exporter.
 fn fleet_flow_is_unattributed(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
-    if scope.is_all() {
-        return Ok(());
-    }
-    Err(ApiError::forbidden_code(
-        "scope_unsupported",
+    super::scope::require_fleet_wide(
+        scope,
         "fleet-wide flow aggregates are grouped by address, port, protocol or AS, so no exporter \
          attribution survives to filter on; query a specific node's flow instead",
-    ))
+    )
 }
 
 /// Map a flow-store error to a `500` without leaking the internal error to the client

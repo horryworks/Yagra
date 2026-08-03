@@ -393,14 +393,11 @@ async fn run_report_definition(
 /// shape `POST /api/v1/api-tokens` and `/mcp` already use. Making reports scopable means giving a
 /// *definition* a scope and resolving it at generation time; that is a feature, not a filter.
 fn reports_are_fleet_wide(scope: &NodeScope) -> Result<(), ApiError> {
-    if scope.is_all() {
-        return Ok(());
-    }
-    Err(ApiError::forbidden_code(
-        "scope_unsupported",
+    super::scope::require_fleet_wide(
+        scope,
         "reports are rendered fleet-wide and carry no per-node attribution, so they cannot be \
          narrowed to a group-scoped account",
-    ))
+    )
 }
 
 /// Saved runs, newest first. Empty in skeleton mode.

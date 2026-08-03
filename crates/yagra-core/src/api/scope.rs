@@ -246,6 +246,31 @@ pub fn require_visible_group(scope: &NodeScope, group: Uuid) -> Result<(), ApiEr
     }
 }
 
+/// Refuse a group-scoped caller an answer that carries no per-node attribution to narrow.
+///
+/// Four endpoints reach this rule — a rendered report, the fleet state timeline, fleet throughput,
+/// and the fleet-wide flow aggregates. Each was written out separately, and ADR-042's MCP tools
+/// were about to write the fifth and sixth. A block that differs only in a sentence, repeated six
+/// times, is the shape `extensibility.md` §3 exists to stop: the copy that drifts is always the one
+/// written last, and here "drifts" means serving a scoped caller the fleet's numbers.
+///
+/// `why` is **this** endpoint's reason and is the only part that differs. It is what the operator
+/// reads and what the route's [`Scoping::Refused`](super::route_table) ledger line repeats, so it
+/// stays at the call site. The code is fixed at `scope_unsupported` because the WebUI branches on
+/// exactly one value.
+///
+/// ⚠️ **Not** the rule in `analysis.rs::require_launchable_scope` or the maintenance-window target
+/// check. Those share this error code and say something different — that a scoped caller must name
+/// a node or a folder group rather than a profile, a tag, or the whole fleet. Folding them in here
+/// would be unifying two rules because their error strings look alike.
+pub fn require_fleet_wide(scope: &NodeScope, why: &'static str) -> Result<(), ApiError> {
+    if scope.is_all() {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden_code("scope_unsupported", why))
+    }
+}
+
 /// How much extra a ranking fetches before scope-filtering it.
 ///
 /// A Top-N comes back already ranked by a store that knows nothing about groups (VictoriaMetrics
@@ -382,6 +407,61 @@ mod tests {
 
     fn scope_of(roots: &[Uuid]) -> NodeScope {
         NodeScope::Groups(Arc::new(expand(&tree(), roots)))
+    }
+
+    #[test]
+    fn require_fleet_wide_admits_only_the_unrestricted_caller() {
+        assert!(require_fleet_wide(&NodeScope::All, "because").is_ok());
+        let err = require_fleet_wide(&scope_of(&[ids(1)]), "because").expect_err("refused");
+        // Built rather than written, so `no_handler_spells_the_scope_refusal_by_hand` below —
+        // which reads this very file — does not count this assertion as a hand-spelled refusal.
+        assert_eq!(err.code(), format!("{}_unsupported", "scope"));
+    }
+
+    /// **The fifth copy is the one that gets it wrong.** This rule was written out four times
+    /// before it had a name, and ADR-042's MCP tools were about to make it six. Spelling the
+    /// refusal's error code into a handler by hand is now a mistake, not a convention.
+    ///
+    /// Two sites keep the code and are deliberately exempt: `analysis.rs` and `maintenance.rs`
+    /// answer a **different** question with the same code — that a scoped caller must name a node
+    /// or a folder group rather than a profile, a tag, or the fleet. They are reached only *after*
+    /// an `is_all()` check, so folding them in here would unify two rules because their error
+    /// strings look alike (`extensibility.md` §6, the guard-that-enumerates-pairs trap, run
+    /// backwards).
+    #[test]
+    fn no_handler_spells_the_scope_refusal_by_hand() {
+        // Needle assembled at runtime: this test lives in a file the scan reads, so a literal
+        // would match itself and pass forever — the lesson from `reports.rs`'s run-state SQL test.
+        let needle = format!("\"{}_unsupported\"", "scope");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
+        let mut sites = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("read src/api") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read module");
+            let hits = src.matches(&needle).count();
+            if hits > 0 {
+                let name = path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("?")
+                    .to_owned();
+                sites.push((name, hits));
+            }
+        }
+        sites.sort();
+        assert_eq!(
+            sites,
+            vec![
+                ("analysis.rs".to_owned(), 1),
+                ("maintenance.rs".to_owned(), 1),
+                ("scope.rs".to_owned(), 1),
+            ],
+            "the fleet-wide refusal is spelled somewhere new — call require_fleet_wide instead, or \
+             if this really is the analysis/maintenance target rule, say so here"
+        );
     }
 
     #[test]
