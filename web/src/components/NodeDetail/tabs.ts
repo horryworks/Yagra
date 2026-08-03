@@ -21,7 +21,14 @@
 
 import type { InterfaceRow, NodeState } from '../../types/api';
 
-export const NODE_DETAIL_TABS = ['overview', 'interfaces', 'collection', 'events', 'flow'] as const;
+export const NODE_DETAIL_TABS = [
+  'overview',
+  'interfaces',
+  'neighbors',
+  'collection',
+  'events',
+  'flow',
+] as const;
 
 /** A valid node-detail sub-tab key. */
 export type NodeDetailTab = (typeof NODE_DETAIL_TABS)[number];
@@ -59,6 +66,9 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     badge: (s) => s.interfaces.length || null,
     warn: (s) => s.interfaces.some((r) => r.oper_status != null && r.oper_status !== 1),
   },
+  // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
+  // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
+  neighbors: { labelKey: 'tabs.neighbors' },
   collection: {
     labelKey: 'tabs.collection',
     badge: (s) => s.collCount,

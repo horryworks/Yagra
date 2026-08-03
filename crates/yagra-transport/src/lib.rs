@@ -87,6 +87,42 @@ pub struct SnmpTableString {
     pub value: String,
 }
 
+/// One SNMP value as the agent typed it, for the walk path that must **not** coerce.
+///
+/// The two existing table walkers each collapse information on purpose: the numeric one drops
+/// anything non-numeric, and the string one runs every value through lossy UTF-8. Both are right
+/// for metrics and interface names, and both destroy an LLDP chassis id — `lldpRemChassisId` with
+/// subtype `macAddress` is six raw bytes, and lossy decoding turns different MACs into the same
+/// run of replacement characters. So this variant keeps the bytes, and the *caller* decides how to
+/// read them (see `yagra_common::render_chassis_id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnmpValue {
+    /// Any integer-ish value (`INTEGER`, `Counter32/64`, `Unsigned32`, `TimeTicks`) — the subtype
+    /// columns that say how to read the octet strings arrive this way.
+    Int(i64),
+    /// An `OCTET STRING`, verbatim. Device-supplied: treat as untrusted, and do not assume UTF-8.
+    Bytes(Vec<u8>),
+    /// An `OBJECT IDENTIFIER`, dotted decimal.
+    Oid(String),
+}
+
+/// One row from a walk that preserves the **full instance index** and the raw value.
+///
+/// [`SnmpTableSample`] and [`SnmpTableString`] fold a multi-part instance into a synthetic
+/// `ifindex` via [`ifindex_from_tail`], which is fine when rows are only aggregated but fatal here:
+/// `lldpRemTable` is indexed by `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)` and the
+/// adjacency's whole meaning lives in those sub-identifiers. Folding them would leave rows that
+/// cannot be reassembled into which local port faces which peer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnmpInstanceRow {
+    /// The column base OID that was walked, e.g. `1.0.8802.1.1.2.1.4.1.1.5`.
+    pub oid_base: String,
+    /// Every sub-identifier past the column base, unfolded.
+    pub instance: Vec<u32>,
+    /// The value as the agent typed it.
+    pub value: SnmpValue,
+}
+
 /// What a URL/HTTP(S) probe needs from the job (the non-secret request shape). The poller maps
 /// a [`yagra_bus::HttpCheck`] into this; expected-status matching is applied poller-side, not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +339,28 @@ pub trait Transport: Send + Sync {
         timeout: Duration,
     ) -> Result<Vec<SnmpTableString>, TransportError>;
 
+    /// Walk table *column base* OIDs via SNMP v2c GETBULK, keeping each row's **full instance
+    /// index** and its **raw** value (ADR-038). The neighbour walk needs both: `lldpRemTable`'s
+    /// meaning is in its three-part index, and a chassis id is typed octets that lossy UTF-8 would
+    /// destroy. A per-column walk failure is logged and skipped, as in the other walkers.
+    async fn snmp_walk_instances(
+        &self,
+        target: IpAddr,
+        community: &str,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
+
+    /// The SNMP v3 (USM) analogue of [`Transport::snmp_walk_instances`]. Auth/priv come resolved
+    /// from core (ADR-018/020) and are never logged.
+    async fn snmp_v3_walk_instances(
+        &self,
+        target: IpAddr,
+        params: &SnmpV3Params,
+        column_oids: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
+
     /// Probe an HTTP/HTTPS URL endpoint: reachability + status code + response time, and (for
     /// HTTPS) the server certificate's days-to-expiry. A network failure is reported as
     /// `reachable = false` (an outage), not an `Err`; `Err` is for un-runnable configs only
@@ -353,6 +411,8 @@ pub struct FakeTransport {
     pub snmp_table: Vec<SnmpTableSample>,
     /// The string rows every SNMP string-table walk returns (v2c and v3 share this canned set).
     pub snmp_table_strings: Vec<SnmpTableString>,
+    /// The raw-instance rows every instance walk returns (v2c and v3 share this canned set).
+    pub snmp_instances: Vec<SnmpInstanceRow>,
     /// The string scalars every SNMP v3 string GET returns.
     pub snmp_v3_strings: Vec<SnmpStringSample>,
     /// The probe every HTTP call returns.
@@ -404,6 +464,7 @@ impl FakeTransport {
             snmp: Vec::new(),
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
+            snmp_instances: Vec::new(),
             snmp_v3_strings: Vec::new(),
             http: HttpProbe {
                 reachable: true,
@@ -428,6 +489,7 @@ impl FakeTransport {
             snmp: Vec::new(),
             snmp_table: Vec::new(),
             snmp_table_strings: Vec::new(),
+            snmp_instances: Vec::new(),
             snmp_v3_strings: Vec::new(),
             http: HttpProbe {
                 reachable: false,
@@ -458,6 +520,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_table_strings(mut self, rows: Vec<SnmpTableString>) -> Self {
         self.snmp_table_strings = rows;
+        self
+    }
+
+    /// Set the canned raw-instance walk rows this fake returns.
+    #[must_use]
+    pub fn with_snmp_instances(mut self, rows: Vec<SnmpInstanceRow>) -> Self {
+        self.snmp_instances = rows;
         self
     }
 
@@ -585,6 +654,37 @@ impl Transport for FakeTransport {
     ) -> Result<Vec<SnmpTableString>, TransportError> {
         Ok(self
             .snmp_table_strings
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
+    }
+
+    async fn snmp_walk_instances(
+        &self,
+        _target: IpAddr,
+        _community: &str,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+        Ok(self
+            .snmp_instances
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .cloned()
+            .collect())
+    }
+
+    async fn snmp_v3_walk_instances(
+        &self,
+        _target: IpAddr,
+        _params: &SnmpV3Params,
+        column_oids: &[String],
+        _timeout: Duration,
+    ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+        // Same canned rows as the v2c walk — the fake is protocol-agnostic.
+        Ok(self
+            .snmp_instances
             .iter()
             .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
             .cloned()

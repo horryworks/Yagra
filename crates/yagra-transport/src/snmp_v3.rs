@@ -9,7 +9,8 @@
 //! device + UDP); the parameter mapping is unit-tested.
 
 use crate::{
-    SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params, TransportError,
+    SnmpInstanceRow, SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params,
+    SnmpValue, TransportError,
 };
 use snmp2::{v3, AsyncSession, Oid, Value};
 use std::net::{IpAddr, SocketAddr};
@@ -129,7 +130,8 @@ pub async fn snmp_walk_v3(
             &mut session,
             base_str,
             timeout,
-            |ifindex, value| {
+            |tail, value| {
+                let ifindex = crate::ifindex_from_tail(tail)?;
                 numeric(value).map(|v| SnmpTableSample {
                     oid_base: base_str.clone(),
                     ifindex,
@@ -159,11 +161,43 @@ pub async fn snmp_walk_strings_v3(
             &mut session,
             base_str,
             timeout,
-            |ifindex, value| {
+            |tail, value| {
+                let ifindex = crate::ifindex_from_tail(tail)?;
                 string_value(value).map(|s| SnmpTableString {
                     oid_base: base_str.clone(),
                     ifindex,
                     value: s,
+                })
+            },
+            &mut rows,
+        )
+        .await;
+    }
+    Ok(rows)
+}
+
+/// Walk table columns keeping each row's **full instance index** and **raw** value via SNMP v3
+/// (USM) — the v3 analogue of `snmp::snmp_walk_instances_v2c` (ADR-038). Adjacency data cannot go
+/// through the numeric or string walkers: those fold the multi-part index and lossily decode the
+/// octets, and `lldpRemTable` needs both preserved.
+pub async fn snmp_walk_instances_v3(
+    target: IpAddr,
+    params: &SnmpV3Params,
+    column_oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+    let mut session = open_session(target, params, timeout).await?;
+    let mut rows = Vec::new();
+    for base_str in column_oids {
+        walk_column_v3(
+            &mut session,
+            base_str,
+            timeout,
+            |tail, value| {
+                raw_value(value).map(|v| SnmpInstanceRow {
+                    oid_base: base_str.clone(),
+                    instance: tail.to_vec(),
+                    value: v,
                 })
             },
             &mut rows,
@@ -178,11 +212,16 @@ pub async fn snmp_walk_strings_v3(
 /// agent signals end-of-MIB, a request fails/times out, the agent stops advancing, or the
 /// per-column request cap ([`MAX_WALK_REQUESTS`]) is hit. Errors are logged and end this column
 /// only (one bad column doesn't fail the whole poll).
+///
+/// `map` receives the instance's **whole** sub-identifier tail. The metric walkers immediately fold
+/// it with [`crate::ifindex_from_tail`] (so the v2c and v3 row keying can never diverge); the
+/// neighbour walker keeps it, because a folded `lldpRemTable` index cannot be reassembled into
+/// which local port faces which peer.
 async fn walk_column_v3<R>(
     session: &mut AsyncSession,
     base_str: &str,
     timeout: Duration,
-    map: impl Fn(u32, &Value) -> Option<R>,
+    map: impl Fn(&[u32], &Value) -> Option<R>,
     out: &mut Vec<R>,
 ) {
     if parse_oid(base_str).is_none() {
@@ -228,10 +267,8 @@ async fn walk_column_v3<R>(
                 stop = true; // walked past this column's subtree — done
                 break;
             };
-            if let Some(ifindex) = crate::ifindex_from_tail(&tail) {
-                if let Some(row) = map(ifindex, &value) {
-                    out.push(row);
-                }
+            if let Some(row) = map(&tail, &value) {
+                out.push(row);
             }
             last_in_subtree = Some(oid_str);
         }
@@ -331,6 +368,22 @@ fn numeric(value: &Value) -> Option<f64> {
         Value::Unsigned32(u) => Some(f64::from(*u)),
         Value::Timeticks(t) => Some(f64::from(*t)),
         Value::Counter64(c) => Some(*c as f64),
+        _ => None,
+    }
+}
+
+/// Map an SNMP value onto [`SnmpValue`] without coercing — the neighbour walk's mapper. `None` for
+/// types with no representation (null, end-of-MIB, the exception markers), skipped like any other
+/// unusable row. Mirrors `snmp::raw_value`; kept per-module because the two clients have separate
+/// value enums.
+fn raw_value(value: &Value) -> Option<SnmpValue> {
+    match value {
+        Value::Integer(i) => Some(SnmpValue::Int(*i)),
+        Value::Counter32(c) | Value::Unsigned32(c) => Some(SnmpValue::Int(i64::from(*c))),
+        Value::Timeticks(t) => Some(SnmpValue::Int(i64::from(*t))),
+        Value::Counter64(c) => Some(SnmpValue::Int(i64::try_from(*c).unwrap_or(i64::MAX))),
+        Value::OctetString(bytes) => Some(SnmpValue::Bytes((*bytes).to_vec())),
+        Value::ObjectIdentifier(oid) => Some(SnmpValue::Oid(oid.to_id_string())),
         _ => None,
     }
 }
@@ -436,6 +489,32 @@ mod tests {
         // A string prefix that is NOT an OID-boundary descendant must be rejected: `…1.6` must not
         // capture `…1.60.1` (the `.` boundary guards this).
         assert_eq!(tail_subids("1.3.6.1.2.1.31.1.1.1.60.1", base), None);
+    }
+
+    /// `walk_column_v3` hands the mapper the **whole** tail. The metric walkers fold it; the
+    /// neighbour walker must be able to keep it, or `lldpRemTable`'s three-part index is lost.
+    #[test]
+    fn the_walk_mapper_sees_the_unfolded_instance() {
+        let base = "1.0.8802.1.1.2.1.4.1.1.5";
+        let tail = tail_subids("1.0.8802.1.1.2.1.4.1.1.5.0.7.3", base).unwrap();
+        assert_eq!(tail, vec![0, 7, 3]);
+        // Folding it — what the metric mappers do — is a one-way trip.
+        assert!(crate::ifindex_from_tail(&tail).is_some());
+    }
+
+    #[test]
+    fn raw_value_keeps_octets_verbatim_where_string_value_would_mangle_them() {
+        let mac = b"\x00\x1bT\xff\x00\x9a";
+        assert_eq!(
+            raw_value(&Value::OctetString(mac)),
+            Some(SnmpValue::Bytes(mac.to_vec()))
+        );
+        assert_ne!(
+            string_value(&Value::OctetString(mac)).map(String::into_bytes),
+            Some(mac.to_vec())
+        );
+        assert_eq!(raw_value(&Value::Integer(4)), Some(SnmpValue::Int(4)));
+        assert_eq!(raw_value(&Value::NoSuchObject), None);
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub(crate) mod maintenance;
 mod meraki;
 pub(crate) mod metrics;
 mod mib;
+mod neighbors;
 pub(crate) mod nodes;
 mod notifications;
 mod oidc;
@@ -157,6 +158,8 @@ pub struct AdminState {
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
     /// Per-node DNS-monitor configs plus the observed resolution chains and their history.
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
+    /// Observed CDP/LLDP adjacency per node, and its append-on-change history (ADR-038).
+    pub neighbors: Arc<crate::neighbors::NeighborRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// Per-node Cisco Meraki device bindings.
@@ -340,6 +343,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(pollers::routes())
         .merge(health::routes())
         .merge(reports::routes())
+        .merge(neighbors::routes())
         .merge(retention::routes())
         // Configuration bundle export/import (ADR-040 decision 3): move a configuration between
         // deployments. Admin-only in both directions, and it carries no secrets.
@@ -591,6 +595,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: None,
             trace_context: Default::default(),
         });

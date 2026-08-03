@@ -697,6 +697,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         }

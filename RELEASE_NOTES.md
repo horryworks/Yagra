@@ -24,6 +24,25 @@
   existing deployments keep the 30 days their tables are actually enforcing.
 
 ### New Features
+- **CDP/LLDP neighbor discovery** (node detail ▸ Neighbors, ADR-038). Every SNMP node's LLDP and
+  CDP tables are walked on a slow cadence, and the result is recorded as *what changed, and when* —
+  the tab shows which local port faces which peer right now, plus a timeline of every time that
+  moved. **A history row is written only when the adjacency actually changes**: the agent's own
+  churn (LLDP's `TimeMark`, its remote-row renumbering, row ordering) is normalized away, so a rack
+  nobody is repatching writes nothing at all. Both protocols are normalized onto one model, so a
+  device running both shows one table and one capability legend.
+  - **On by default.** After upgrading, each SNMP node gets one extra walk per hour. A device that
+    speaks neither protocol answers in a single round trip and costs essentially nothing; a
+    48-port switch returns a few dozen rows. Switch it off, or change the cadence, in
+    **Settings ▸ System settings ▸ Neighbor discovery**. Turning it off keeps everything already
+    recorded.
+  - Read-only, like everything else Yagra does to a device — no configuration is written.
+    Neighbor data **raises no alerts** and is deliberately **not** wired into dependency
+    suppression: LLDP reports adjacency, which has no direction, and guessing the upstream wrong
+    would silence a real outage rather than surface it (ADR-015).
+  - New endpoints: **`GET /api/v1/nodes/{id}/neighbors`** and
+    **`GET /api/v1/nodes/{id}/neighbors/history`** (View, node-scoped), plus
+    **`GET`/`PUT /api/v1/settings/neighbors`** (View / ManageConfig).
 - **Data retention is configurable from the UI** (Settings ▸ System settings ▸ Data retention,
   ADR-040). Alert-linked data, unmatched events, report runs and traffic flows each get their own
   window; changes apply on the next sweep with no restart, and a flow change is applied to

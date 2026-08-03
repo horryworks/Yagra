@@ -24,6 +24,28 @@ export const RETENTION_FIELDS = [
 ] as const;
 export type RetentionField = (typeof RETENTION_FIELDS)[number];
 
+/** Every retained subject the backend can list (`retention::Subject::ALL`).
+ *
+ *  Hand-maintained rather than derived, because the card renders each row's name from
+ *  `t(`settings.retention.subject.${row.subject}`)` — a key built at runtime from a server value,
+ *  so nothing else can prove the strings exist. `i18nEnumKeys.test.ts` iterates this. A subject the
+ *  server sends that is missing here is not an error (the card falls back to the raw token); it is
+ *  a reminder that this list has to be extended in the same change. */
+export const RETENTION_SUBJECTS = [
+  'alert_history',
+  'node_state_snapshots',
+  'dns_chain_changes',
+  'neighbor_changes',
+  'events_matched',
+  'events_unmatched',
+  'report_runs',
+  'flow_records',
+  'event_log_store',
+  'metrics',
+  'audit_log',
+] as const;
+export type RetentionSubject = (typeof RETENTION_SUBJECTS)[number];
+
 /** The form's raw text state — one string per editable window. */
 export type RetentionForm = Record<RetentionField, string>;
 

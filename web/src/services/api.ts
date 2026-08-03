@@ -114,8 +114,11 @@ import type {
   TopologyNode,
   UrlCheckConfig,
   DnsCheckConfig,
+  CurrentNeighbors,
   DnsChainCurrent,
   DnsChainHistoryPage,
+  NeighborConfig,
+  NeighborHistoryPage,
   DnsRecordType,
   UserKind,
   UserSummary,
@@ -583,6 +586,44 @@ export const api = {
       },
     });
   },
+
+  // ── CDP/LLDP adjacency (ADR-038) ───────────────────────────────────────────────────
+  /** The node's current neighbours, or `null` if no walk has recorded anything yet.
+   *
+   *  `null` is not the same as an empty set: the empty set means the device was walked and reports
+   *  no neighbours, which is a real answer worth showing. */
+  getNeighbors: async (id: string): Promise<CurrentNeighbors | null> => {
+    try {
+      return await apiGet('/api/v1/nodes/{node_id}/neighbors', { path: { node_id: id } });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+
+  /** A keyset page of the node's adjacency-change history, newest first. */
+  listNeighborHistory: (
+    id: string,
+    opts: { limit?: number; beforeAt?: string; beforeId?: number } = {},
+  ): Promise<NeighborHistoryPage> => {
+    // Both cursor halves or neither — the server rejects a half-specified cursor.
+    const cursor = opts.beforeAt != null && opts.beforeId != null;
+    return apiGet('/api/v1/nodes/{node_id}/neighbors/history', {
+      path: { node_id: id },
+      query: {
+        limit: opts.limit,
+        before_at: cursor ? opts.beforeAt : undefined,
+        before_id: cursor ? opts.beforeId : undefined,
+      },
+    });
+  },
+
+  /** Whether this deployment collects adjacency, how often, and the accepted cadence range. */
+  getNeighborSettings: (): Promise<NeighborConfig> => apiGet('/api/v1/settings/neighbors'),
+
+  /** Change whether and how often adjacency is collected (applies from the next sweep). */
+  setNeighborSettings: (body: { enabled: boolean; interval_secs: number }): Promise<void> =>
+    apiPut('/api/v1/settings/neighbors', { body }),
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
   /** List the orgs an API key can access (nothing is persisted). Read-only. */

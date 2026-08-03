@@ -24,6 +24,7 @@ mod discovery;
 mod flow;
 mod limiter;
 mod listeners;
+mod neighbors;
 mod store_forward;
 mod worker;
 mod working_set;

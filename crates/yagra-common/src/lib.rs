@@ -16,6 +16,7 @@ pub mod host;
 pub mod ids;
 pub mod meraki;
 pub mod metric;
+pub mod neighbor;
 pub mod node;
 pub mod node_kind;
 pub mod profile;
@@ -50,6 +51,12 @@ pub use meraki::{
     METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB,
 };
 pub use metric::{is_valid_metric_name, MetricKind, SeriesKey};
+pub use neighbor::{
+    builtin_neighbor_columns, cdp_capabilities, lldp_capabilities, render_bare_address,
+    render_chassis_id, render_hex, render_mac, render_network_address, render_port_id, render_text,
+    Neighbor, NeighborCapability, NeighborColumn, NeighborProto, NeighborSet,
+    MAX_NEIGHBORS_PER_NODE, METRIC_SNMP_NEIGHBOR_COUNT,
+};
 pub use node::Node;
 pub use node_kind::{NodeKind, NodeRows};
 pub use profile::ProfileCategory;

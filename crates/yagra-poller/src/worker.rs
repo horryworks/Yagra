@@ -103,6 +103,23 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             let timeout = Duration::from_millis(u64::from(table.timeout_ms));
             execute_snmp_v3_table(job, transport, at_unix_ms, table, timeout).await
         }
+        CheckSpec::SnmpNeighbors(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_neighbors(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
+        }
+        CheckSpec::SnmpV3Neighbors(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_neighbors(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -276,6 +293,8 @@ pub async fn execute_meraki(
             interfaces,
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: None,
             trace_context: Default::default(),
         });
@@ -361,6 +380,28 @@ impl SnmpWalker {
             SnmpWalker::V3(params) => {
                 transport
                     .snmp_v3_walk(target, params, columns, timeout)
+                    .await
+            }
+        }
+    }
+
+    /// Walk table columns keeping raw instance indices and raw octets (the neighbour walk).
+    async fn walk_instances(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        columns: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+        match self {
+            SnmpWalker::V2c(community) => {
+                transport
+                    .snmp_walk_instances(target, community, columns, timeout)
+                    .await
+            }
+            SnmpWalker::V3(params) => {
+                transport
+                    .snmp_v3_walk_instances(target, params, columns, timeout)
                     .await
             }
         }
@@ -532,10 +573,64 @@ async fn execute_table_walk(
         interfaces,
         sys_descr: None,
         dns_chain: None,
+        neighbors: None,
+        observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
     }
+}
+
+/// Execute a CDP/LLDP neighbour walk (v2c or v3, selected by `walker`) — ADR-038.
+///
+/// Three properties distinguish this from every other arm:
+///
+/// * The result is **observational**: it says nothing about the node's reachability. `outcome` is
+///   fixed at `Reachable` and core ignores it, because either alternative is a real bug — reporting
+///   `Unreachable` on a failed hourly walk pages someone for a healthy device, and reporting
+///   `Reachable` unconditionally would cancel a genuine outage ICMP had detected.
+/// * `neighbors` is `Some` **only when the walk actually produced rows to interpret**. A transport
+///   failure sends `None`, so core writes nothing rather than recording "every link disappeared".
+/// * A device that simply has no neighbours sends `Some(empty)`, which *does* replace the stored
+///   set — that is a real observation, and it is how an unplugged switch stops showing stale peers.
+async fn execute_neighbors(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    columns: &[yagra_bus::SnmpNeighborColumn],
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let bases: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+    let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
+    r.observational = true;
+    match walker
+        .walk_instances(transport, job.target, &bases, timeout)
+        .await
+    {
+        Ok(rows) => {
+            let set = crate::neighbors::assemble(columns, &rows);
+            if set.truncated {
+                metrics::counter!("yagra_neighbor_rows_truncated_total").increment(1);
+                tracing::warn!(
+                    job_id = %job.job_id,
+                    kept = set.len(),
+                    "neighbour set exceeded the per-node cap; the excess was dropped"
+                );
+            }
+            r.samples.push(Sample::gauge(
+                yagra_common::METRIC_SNMP_NEIGHBOR_COUNT,
+                set.len() as f64,
+            ));
+            r.neighbors = Some(set);
+        }
+        Err(err) => {
+            // No set, no count sample: the poll observed nothing, and saying "0 neighbours" here
+            // would be a claim the walk never made.
+            tracing::debug!(job_id = %job.job_id, error = %err, "neighbour walk failed");
+        }
+    }
+    r
 }
 
 /// Execute an SNMP v2c table-walk check — a thin wrapper over [`execute_table_walk`].
@@ -721,6 +816,8 @@ fn result(
         interfaces: Vec::new(),
         sys_descr: None,
         dns_chain: None,
+        neighbors: None,
+        observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
@@ -871,6 +968,219 @@ mod tests {
             IcmpCheck::default(),
             30,
         )
+    }
+
+    /// A neighbour job's own columns, as core sends them.
+    fn neighbor_columns() -> Vec<yagra_bus::SnmpNeighborColumn> {
+        yagra_common::builtin_neighbor_columns()
+            .into_iter()
+            .map(|(field, oid)| yagra_bus::SnmpNeighborColumn {
+                field,
+                oid: oid.to_owned(),
+            })
+            .collect()
+    }
+
+    fn neighbor_job() -> PollJob {
+        PollJob::snmp_neighbors(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpNeighborCheck {
+                community: "public".into(),
+                columns: neighbor_columns(),
+                timeout_ms: 2000,
+            },
+            3600,
+        )
+    }
+
+    /// The safety property from ADR-038: a neighbour result must never reach the liveness state
+    /// machine. `outcome` feeds it on every result, so a device that speaks no LLDP/CDP — an
+    /// entirely normal state — would otherwise register as either an outage or a recovery.
+    #[tokio::test]
+    async fn a_neighbor_result_is_observational_and_states_nothing_about_liveness() {
+        let transport = FakeTransport::reachable(1.0);
+        let r = execute(&neighbor_job(), &transport, 0).await;
+        assert!(
+            r.observational,
+            "core keys its skip-the-alert-engine branch off this flag"
+        );
+        // A device with nothing to report still made a real observation: an empty set, which
+        // replaces whatever was stored (so an unplugged switch stops showing stale peers).
+        assert_eq!(
+            r.neighbors.as_ref().map(yagra_common::NeighborSet::len),
+            Some(0)
+        );
+        assert_eq!(
+            r.samples.len(),
+            1,
+            "one bounded node-level count sample, and no per-adjacency series"
+        );
+        assert_eq!(
+            r.samples[0].metric,
+            yagra_common::METRIC_SNMP_NEIGHBOR_COUNT
+        );
+    }
+
+    /// A failed walk must send **no** set. Sending `Some(empty)` would tell core the device has no
+    /// neighbours, wiping a correct stored adjacency because one SNMP request timed out.
+    #[tokio::test]
+    async fn a_failed_neighbor_walk_reports_no_set_rather_than_an_empty_one() {
+        /// A transport whose instance walk always fails; everything else delegates to the fake.
+        struct WalkFails(FakeTransport);
+        #[async_trait::async_trait]
+        impl Transport for WalkFails {
+            async fn snmp_walk_instances(
+                &self,
+                _t: IpAddr,
+                _c: &str,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+                Err(TransportError::Io("snmp connect refused".into()))
+            }
+            async fn snmp_v3_walk_instances(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+                Err(TransportError::Io("snmp connect refused".into()))
+            }
+            async fn probe_icmp(
+                &self,
+                t: IpAddr,
+                c: u8,
+                to: Duration,
+            ) -> Result<yagra_transport::IcmpProbe, TransportError> {
+                self.0.probe_icmp(t, c, to).await
+            }
+            async fn snmp_get(
+                &self,
+                t: IpAddr,
+                c: &str,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpSample>, TransportError> {
+                self.0.snmp_get(t, c, o, to).await
+            }
+            async fn snmp_v3_get(
+                &self,
+                t: IpAddr,
+                p: &SnmpV3Params,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpSample>, TransportError> {
+                self.0.snmp_v3_get(t, p, o, to).await
+            }
+            async fn snmp_v3_get_strings(
+                &self,
+                t: IpAddr,
+                p: &SnmpV3Params,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<yagra_transport::SnmpStringSample>, TransportError> {
+                self.0.snmp_v3_get_strings(t, p, o, to).await
+            }
+            async fn snmp_walk(
+                &self,
+                t: IpAddr,
+                c: &str,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+                self.0.snmp_walk(t, c, o, to).await
+            }
+            async fn snmp_walk_strings(
+                &self,
+                t: IpAddr,
+                c: &str,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpTableString>, TransportError> {
+                self.0.snmp_walk_strings(t, c, o, to).await
+            }
+            async fn snmp_v3_walk(
+                &self,
+                t: IpAddr,
+                p: &SnmpV3Params,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpTableSample>, TransportError> {
+                self.0.snmp_v3_walk(t, p, o, to).await
+            }
+            async fn snmp_v3_walk_strings(
+                &self,
+                t: IpAddr,
+                p: &SnmpV3Params,
+                o: &[String],
+                to: Duration,
+            ) -> Result<Vec<SnmpTableString>, TransportError> {
+                self.0.snmp_v3_walk_strings(t, p, o, to).await
+            }
+            async fn probe_http(
+                &self,
+                s: &HttpProbeSpec,
+                to: Duration,
+            ) -> Result<yagra_transport::HttpProbe, TransportError> {
+                self.0.probe_http(s, to).await
+            }
+            async fn resolve_dns(
+                &self,
+                s: &yagra_transport::DnsProbeSpec,
+                to: Duration,
+            ) -> Result<yagra_transport::DnsChain, TransportError> {
+                self.0.resolve_dns(s, to).await
+            }
+            async fn collect_meraki(
+                &self,
+                s: &yagra_transport::MerakiCollectSpec,
+                to: Duration,
+            ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+                self.0.collect_meraki(s, to).await
+            }
+        }
+
+        let r = execute(
+            &neighbor_job(),
+            &WalkFails(FakeTransport::reachable(1.0)),
+            0,
+        )
+        .await;
+        assert!(r.observational);
+        assert!(
+            r.neighbors.is_none(),
+            "a failed walk must not read as 'this device has no neighbours'"
+        );
+        assert!(
+            r.samples.is_empty(),
+            "no count sample either — the poll observed nothing to count"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_v3_neighbor_job_takes_the_same_path() {
+        let job = PollJob::snmp_v3_neighbors(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpV3NeighborCheck {
+                user: "monitor".into(),
+                security_level: "authpriv".into(),
+                auth_protocol: Some("sha256".into()),
+                auth_key: Some("auth-pass-12345".into()),
+                priv_protocol: Some("aes256".into()),
+                priv_key: Some("priv-pass-12345".into()),
+                columns: neighbor_columns(),
+                timeout_ms: 2000,
+            },
+            3600,
+        );
+        let r = execute(&job, &FakeTransport::reachable(1.0), 0).await;
+        assert!(r.observational);
+        assert!(r.neighbors.is_some());
     }
 
     #[tokio::test]

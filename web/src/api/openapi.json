@@ -10803,6 +10803,180 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/neighbors": {
+      "get": {
+        "tags": [
+          "neighbors"
+        ],
+        "summary": "The node's current CDP/LLDP neighbours.",
+        "description": "`404` means no walk has recorded anything for this node yet — the node may not be an SNMP\ndevice, may not speak either protocol, or may simply not have been walked since collection was\nenabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device\nreports no neighbours.",
+        "operationId": "get_neighbors",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node's current adjacency and how long it has held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentNeighbors"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No adjacency has been recorded for the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/neighbors/history": {
+      "get": {
+        "tags": [
+          "neighbors"
+        ],
+        "summary": "The node's adjacency change history, newest first.",
+        "description": "A row is written only when the adjacency actually changed, so a quiet rack produces none. The\ncontent key deliberately excludes the agent's own churn (LLDP's `TimeMark` and remote index), so\na row here means a port genuinely started or stopped facing something, or the peer on it changed.",
+        "operationId": "list_neighbor_history",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of adjacency changes, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeighborHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "before_at and before_id must be given together, and before_at must be RFC 3339",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/parent": {
       "put": {
         "tags": [
@@ -13737,6 +13911,120 @@
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/neighbors": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "The deployment's adjacency-collection settings, with the accepted cadence range.",
+        "operationId": "get_neighbor_settings",
+        "responses": {
+          "200": {
+            "description": "Whether adjacency is collected, how often, and the accepted range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeighborConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Change whether and how often adjacency is collected.",
+        "description": "Applies from the next scheduler sweep. Turning collection off stops issuing walks but keeps\neverything already recorded — the current set and the change history are unaffected.",
+        "operationId": "update_neighbor_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NeighborConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Settings updated; the change applies from the next scheduler sweep"
+          },
+          "400": {
+            "description": "The cadence is outside the allowed range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18159,6 +18447,29 @@
           }
         }
       },
+      "CurrentNeighbors": {
+        "type": "object",
+        "description": "A node's current adjacency and how long it has held.",
+        "required": [
+          "neighbors",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "first_seen": {
+            "type": "string",
+            "description": "When this exact set was first seen (RFC 3339)."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "When it was last confirmed unchanged (RFC 3339)."
+          },
+          "neighbors": {
+            "$ref": "#/components/schemas/NeighborSet",
+            "description": "The adjacencies the node last reported."
+          }
+        }
+      },
       "DashboardSaved": {
         "type": "object",
         "description": "A save's acknowledgement. The layout is not echoed back — the client already has it.",
@@ -21684,6 +21995,231 @@
           "node",
           "group"
         ]
+      },
+      "Neighbor": {
+        "type": "object",
+        "description": "One observed adjacency.\n\nThe first three string fields are the **identity**; everything below them is payload. Payload\nchanges still append a history row (a peer that was reimaged is a real change on that port), but\nthey never split one link into two records.",
+        "required": [
+          "proto",
+          "local_port",
+          "remote_chassis",
+          "remote_port"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeighborCapability"
+            },
+            "description": "What the peer says it is, normalized across both protocols."
+          },
+          "local_ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The local `ifIndex`, when the protocol genuinely supplies one. CDP indexes its cache by\n`ifIndex` so this is exact; LLDP's `lldpLocPortNum` is an arbitrary local index that only\n*often* equals `ifIndex`, so LLDP records leave this `None` rather than guess.",
+            "minimum": 0
+          },
+          "local_port": {
+            "type": "string",
+            "description": "The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP\nuses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has\nno row, so the record still has an identity rather than being dropped."
+          },
+          "proto": {
+            "$ref": "#/components/schemas/NeighborProto",
+            "description": "Which protocol reported this."
+          },
+          "remote_chassis": {
+            "type": "string",
+            "description": "The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`."
+          },
+          "remote_mgmt_addr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The peer's management address. Filled from `cdpCacheAddress` for CDP. LLDP keeps this in\n`lldpRemManAddrTable`, whose index *encodes* the address — a separate walk plus index\ndecoding — so LLDP records leave this `None` in this increment."
+          },
+          "remote_platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`cdpCachePlatform` — the peer's hardware/software platform string (CDP only)."
+          },
+          "remote_port": {
+            "type": "string",
+            "description": "The peer's port id, rendered by subtype: LLDP `lldpRemPortId`, CDP `cdpCacheDevicePort`."
+          },
+          "remote_port_desc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`lldpRemPortDesc` — the peer's own description of its port."
+          },
+          "remote_sys_desc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`lldpRemSysDesc`."
+          },
+          "remote_sys_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`lldpRemSysName`. CDP has no separate system name (its device id serves both)."
+          }
+        }
+      },
+      "NeighborCapability": {
+        "type": "string",
+        "description": "What the peer says it is, as one vocabulary shared by both protocols.\n\nLLDP reports this as a `BITS` value over `lldpRemSysCapEnabled` and CDP as a four-byte mask over\n`cdpCacheCapabilities`; the two bit layouts have nothing in common. Normalizing them here is\nwhat lets the UI render one column — the alternative is a per-protocol legend, which is the\n\"same fact in two shapes\" the extensibility rules exist to prevent.",
+        "enum": [
+          "router",
+          "bridge",
+          "switch",
+          "wlan_ap",
+          "phone",
+          "host",
+          "repeater",
+          "cable_device",
+          "igmp",
+          "other"
+        ]
+      },
+      "NeighborChange": {
+        "type": "object",
+        "description": "One append-on-change history row.",
+        "required": [
+          "id",
+          "at",
+          "neighbors"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When the change was recorded (RFC 3339)."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "neighbors": {
+            "$ref": "#/components/schemas/NeighborSet",
+            "description": "The adjacency as of this change."
+          },
+          "prev_neighbor_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The content key this replaced; `null` marks the first observation ever recorded for the node."
+          }
+        }
+      },
+      "NeighborConfig": {
+        "type": "object",
+        "description": "How this deployment collects adjacency.",
+        "required": [
+          "enabled",
+          "interval_secs"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether neighbour walks are issued at all."
+          },
+          "interval_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How often each SNMP node's neighbour tables are walked, in seconds.",
+            "minimum": 0
+          },
+          "max_interval_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest cadence this deployment accepts, in seconds.",
+            "minimum": 0
+          },
+          "min_interval_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Smallest cadence this deployment accepts, in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "NeighborHistory": {
+        "type": "object",
+        "description": "One page of adjacency changes, newest first.",
+        "required": [
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeighborChange"
+            }
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NeighborHistoryCursor",
+                "description": "Pass back as `before_at`+`before_id` for the next page; `null` ⇒ this was the last one."
+              }
+            ]
+          }
+        }
+      },
+      "NeighborHistoryCursor": {
+        "type": "object",
+        "description": "Keyset cursor for the next page (ADR-019 — never OFFSET).",
+        "required": [
+          "at",
+          "id"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "NeighborProto": {
+        "type": "string",
+        "description": "Which discovery protocol reported an adjacency.\n\nKept on every record rather than normalized away: a switch running both protocols reports the\nsame physical link twice with *different* identities (LLDP names the peer by chassis MAC, CDP by\nhostname), so collapsing them would mean guessing that two differently-identified rows are one\nlink. Showing both, labelled, is the honest answer.",
+        "enum": [
+          "lldp",
+          "cdp"
+        ]
+      },
+      "NeighborSet": {
+        "type": "object",
+        "description": "Every neighbour a node reports on one observation, as a set.\n\nThe unit of storage is the whole set per node, not one row per adjacency, because a partial walk\nmust never read as \"every neighbour disappeared\". The poller reports the set it could observe,\ncore replaces it atomically, and a failed walk sends no set at all — so nothing is written. A\nper-adjacency table would need an explicit \"this is complete\" flag to get the same guarantee.",
+        "properties": {
+          "neighbors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Neighbor"
+            },
+            "description": "The adjacencies, canonically ordered."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether [`MAX_NEIGHBORS_PER_NODE`] was hit and rows were dropped. Reported rather than\nsilently swallowed — a truncated view that looks complete is worse than no view."
+          }
+        }
       },
       "NodeAssignment": {
         "type": "object",

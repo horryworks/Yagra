@@ -20,6 +20,7 @@ use uuid::Uuid;
 use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
+use crate::neighbors::NeighborSettings;
 use crate::retention::RetentionSettings;
 
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
@@ -1271,6 +1272,51 @@ impl NodeRepo {
         .bind(i32::try_from(s.unmatched_event_hours).unwrap_or(i32::MAX))
         .bind(i32::try_from(s.report_run_days).unwrap_or(i32::MAX))
         .bind(i32::try_from(s.flow_days).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// How this deployment collects CDP/LLDP adjacency (ADR-038).
+    ///
+    /// Like `get_retention_settings`, returns a value rather than a `Result` and degrades to the
+    /// compiled defaults on any read failure: the scheduler calls this every sweep, and a database
+    /// blip must not silently stop collecting or change the cadence.
+    pub async fn get_neighbor_settings(&self) -> NeighborSettings {
+        let fallback = NeighborSettings::default();
+        let Ok(Some(row)) = sqlx::query(
+            "SELECT neighbor_discovery_enabled, neighbor_interval_secs \
+             FROM app_settings WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        else {
+            return fallback;
+        };
+        NeighborSettings {
+            enabled: row
+                .try_get::<bool, _>("neighbor_discovery_enabled")
+                .unwrap_or(fallback.enabled),
+            interval_secs: row
+                .try_get::<i32, _>("neighbor_interval_secs")
+                .ok()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(fallback.interval_secs),
+        }
+    }
+
+    /// Set the adjacency-collection settings, upserting the singleton row. The API edge validates
+    /// the cadence (`neighbors::interval_in_bounds`); the table CHECK is the backstop.
+    pub async fn set_neighbor_settings(&self, s: &NeighborSettings) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings \
+                 (id, neighbor_discovery_enabled, neighbor_interval_secs, updated_at) \
+             VALUES (TRUE, $1, $2, now()) \
+             ON CONFLICT (id) DO UPDATE SET neighbor_discovery_enabled = $1, \
+                 neighbor_interval_secs = $2, updated_at = now()",
+        )
+        .bind(s.enabled)
+        .bind(i32::try_from(s.interval_secs).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())

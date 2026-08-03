@@ -418,6 +418,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: None,
             trace_context: Default::default(),
         };
@@ -443,6 +445,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: None,
             trace_context: Default::default(),
         };

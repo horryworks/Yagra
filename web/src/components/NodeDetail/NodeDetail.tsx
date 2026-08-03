@@ -30,6 +30,7 @@ import { Select, TextInput } from '../ui/Field';
 import { BoxIcon } from '../ui/icons';
 import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
+import { NeighborsTab } from './NeighborsTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
 import { FlowTab } from './FlowTab';
@@ -222,6 +223,7 @@ export function NodeDetail({
     interfaces: (
       <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
     ),
+    neighbors: <NeighborsTab node={node} />,
     collection: <CollectionTab node={node} canEdit={canEdit} />,
     events: <EventsTab node={node} />,
     flow: <FlowTab node={node} />,

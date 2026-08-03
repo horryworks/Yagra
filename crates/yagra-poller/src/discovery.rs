@@ -461,6 +461,26 @@ mod tests {
             Ok(Vec::new())
         }
 
+        async fn snmp_walk_instances(
+            &self,
+            _target: IpAddr,
+            _community: &str,
+            _column_oids: &[String],
+            _timeout: Duration,
+        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            Ok(Vec::new())
+        }
+
+        async fn snmp_v3_walk_instances(
+            &self,
+            _target: IpAddr,
+            _params: &SnmpV3Params,
+            _column_oids: &[String],
+            _timeout: Duration,
+        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            Ok(Vec::new())
+        }
+
         async fn probe_http(
             &self,
             _spec: &HttpProbeSpec,
@@ -744,6 +764,24 @@ mod tests {
                 _o: &[String],
                 _to: Duration,
             ) -> Result<Vec<SnmpTableString>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_walk_instances(
+                &self,
+                _t: IpAddr,
+                _c: &str,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+                Ok(Vec::new())
+            }
+            async fn snmp_v3_walk_instances(
+                &self,
+                _t: IpAddr,
+                _p: &SnmpV3Params,
+                _o: &[String],
+                _to: Duration,
+            ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
                 Ok(Vec::new())
             }
             async fn probe_http(

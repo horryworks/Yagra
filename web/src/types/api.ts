@@ -492,6 +492,50 @@ export type DnsChainChange = components['schemas']['DnsChainChange'];
 /** A page of DNS chain history with its keyset cursor (`null` ⇒ no more rows). */
 export type DnsChainHistoryPage = components['schemas']['DnsChainHistory'];
 
+// ── CDP/LLDP adjacency (ADR-038) ────────────────────────────────────────────────────────────────
+
+/** One observed adjacency: which local port faces which remote chassis/port, plus payload. */
+export type Neighbor = components['schemas']['Neighbor'];
+
+/** Every adjacency a node reported on one observation. `truncated` means the per-node cap was hit
+ *  and rows were dropped — surfaced rather than swallowed, because a partial view that looks
+ *  complete is worse than none. */
+export type NeighborSet = components['schemas']['NeighborSet'];
+
+/** The current adjacency plus how long it has held (`GET /api/v1/nodes/:id/neighbors`). */
+export type CurrentNeighbors = components['schemas']['CurrentNeighbors'];
+
+/** One append-on-change adjacency history row. `prev_neighbor_key` is `null` on the first
+ *  observation ever recorded for this node. */
+export type NeighborChange = components['schemas']['NeighborChange'];
+
+/** A page of adjacency history with its keyset cursor (`null` ⇒ no more rows). */
+export type NeighborHistoryPage = components['schemas']['NeighborHistory'];
+
+/** Whether this deployment collects adjacency and how often (`GET /api/v1/settings/neighbors`). */
+export type NeighborConfig = components['schemas']['NeighborConfig'];
+
+/** Which protocol reported an adjacency. Hand-written as an `as const` because the UI iterates it
+ *  at runtime (a generated `type` union does not exist at runtime — extensibility §4). */
+export const NEIGHBOR_PROTOS = ['lldp', 'cdp'] as const;
+export type NeighborProto = (typeof NEIGHBOR_PROTOS)[number];
+
+/** What a peer says it is, normalized across LLDP's `BITS` and CDP's bitmask. Same reason as
+ *  above: the legend renders by iterating this. */
+export const NEIGHBOR_CAPABILITIES = [
+  'router',
+  'bridge',
+  'switch',
+  'wlan_ap',
+  'phone',
+  'host',
+  'repeater',
+  'cable_device',
+  'igmp',
+  'other',
+] as const;
+export type NeighborCapability = (typeof NEIGHBOR_CAPABILITIES)[number];
+
 // ── Node detail ─────────────────────────────────────────────────────────────────────────────────
 
 /** One node's configuration detail incl. bindings (`GET /api/v1/nodes/:id`).

@@ -19,7 +19,16 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/Field';
-import type { RetentionPolicy, RetentionRow } from '../types/api';
+import type { NeighborConfig, RetentionPolicy, RetentionRow } from '../types/api';
+import {
+  describeCadence,
+  isNeighborDirty,
+  neighborFormFrom,
+  parseNeighborForm,
+  MAX_NEIGHBOR_INTERVAL_SECS,
+  MIN_NEIGHBOR_INTERVAL_SECS,
+  type NeighborForm,
+} from './neighborSettings';
 import {
   bandFor,
   formFromValues,
@@ -114,8 +123,133 @@ export function SystemSettingsPage() {
         {error && <p className="form-error">{error}</p>}
         {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
       </Card>
+      <NeighborCard authed={authed} />
       <RetentionCard authed={authed} />
     </div>
+  );
+}
+
+/** Settings ▸ System settings ▸ Neighbor discovery (ADR-038).
+ *
+ *  Deployment-wide rather than per node or per profile: the OIDs are fixed standards (LLDP-MIB /
+ *  CISCO-CDP-MIB), so there is nothing to tune per device — only whether to walk and how often. */
+function NeighborCard({ authed }: { authed: boolean }) {
+  const { t } = useTranslation('system');
+  const [saved, setSavedCfg] = useState<NeighborConfig | null>(null);
+  const [form, setForm] = useState<NeighborForm | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  const load = useCallback(() => {
+    api
+      .getNeighborSettings()
+      .then((cfg) => {
+        setSavedCfg(cfg);
+        setForm(neighborFormFrom(cfg));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = () => {
+    if (!form) return;
+    const parsed = parseNeighborForm(form, {
+      min: saved?.min_interval_secs,
+      max: saved?.max_interval_secs,
+    });
+    if (!parsed.ok) {
+      setError(t('settings.neighbors.err.range', { min: parsed.min, max: parsed.max }));
+      setOk(false);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOk(false);
+    api
+      .setNeighborSettings(parsed.values)
+      .then(() => {
+        setOk(true);
+        load();
+      })
+      .catch((e: unknown) => setError(errMsg(e, t('settings.neighbors.err.save'))))
+      .finally(() => setBusy(false));
+  };
+
+  const dirty = saved && form ? isNeighborDirty(form, saved) : false;
+
+  return (
+    <Card title={t('settings.neighbors.title')}>
+      <p className="sys-setting-help muted">{t('settings.neighbors.note')}</p>
+      <div className="sys-setting">
+        <div className="sys-setting-label">
+          <div className="sys-setting-name">{t('settings.neighbors.enabledName')}</div>
+          <div className="sys-setting-help muted">{t('settings.neighbors.enabledHelp')}</div>
+        </div>
+        <div className="sys-setting-control">
+          <label className="sys-setting-toggle">
+            <input
+              type="checkbox"
+              checked={form?.enabled ?? false}
+              disabled={!authed || !form || busy}
+              onChange={(e) => {
+                setForm((f) => (f ? { ...f, enabled: e.target.checked } : f));
+                setOk(false);
+              }}
+            />
+            <span>
+              {form?.enabled
+                ? t('settings.neighbors.enabledOn')
+                : t('settings.neighbors.enabledOff')}
+            </span>
+          </label>
+        </div>
+      </div>
+      <div className="sys-setting">
+        <div className="sys-setting-label">
+          <div className="sys-setting-name">{t('settings.neighbors.intervalName')}</div>
+          <div className="sys-setting-help muted">
+            {t('settings.neighbors.intervalHelp', {
+              cadence: describeCadence(Number(form?.intervalSecs ?? 0), t),
+            })}
+          </div>
+        </div>
+        <div className="sys-setting-control">
+          <TextInput
+            className="sys-setting-input"
+            value={form?.intervalSecs ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              setForm((f) => (f ? { ...f, intervalSecs: v } : f));
+              setOk(false);
+            }}
+            inputMode="numeric"
+            disabled={!authed || !form || busy}
+            aria-label={t('settings.neighbors.intervalName')}
+          />
+          <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
+          <span className="sys-setting-band muted">
+            {t('settings.retention.band', {
+              min: saved?.min_interval_secs ?? MIN_NEIGHBOR_INTERVAL_SECS,
+              max: saved?.max_interval_secs ?? MAX_NEIGHBOR_INTERVAL_SECS,
+            })}
+          </span>
+        </div>
+      </div>
+      {authed && (
+        <div className="sys-setting-actions">
+          <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
+            {t('common:actions.save')}
+          </Button>
+        </div>
+      )}
+      {!authed && <p className="muted">{t('settings.signInHint')}</p>}
+      {error && <p className="form-error">{error}</p>}
+      {ok && <p className="sys-setting-saved">{t('settings.saved')}</p>}
+    </Card>
   );
 }
 

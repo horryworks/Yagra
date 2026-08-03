@@ -137,6 +137,7 @@
   "tabs": {
     "overview": "概要",
     "interfaces": "インターフェース",
+    "neighbors": "隣接",
     "collection": "収集",
     "events": "イベント",
     "flow": "フロー"
@@ -381,6 +382,48 @@
       "loop_detected": "CNAME ループ",
       "depth_exceeded": "チェーンが長すぎる",
       "malformed": "不正な応答"
+    }
+  },
+  "neighbors": {
+    "colLocalPort": "ローカルポート",
+    "colPeer": "対向機器",
+    "colRemotePort": "対向ポート",
+    "colCapabilities": "機能",
+    "colProto": "プロトコル",
+    "summary_other": "隣接 {{count}} 件",
+    "lastConfirmed": "最終確認 {{when}}",
+    "truncated": "隣接が多すぎるため一部を記録できませんでした。",
+    "historyTitle": "変更履歴",
+    "historyEmpty": "変更は記録されていません。隣接は実際に変わったときだけ書き込まれるので、配線を触っていないラックはここが空のままです。",
+    "empty": {
+      "disabled": "このデプロイでは隣接情報の収集が無効です。設定 ▸ システム設定 で有効にできます。",
+      "unrecorded": "まだ記録がありません。収集対象は SNMP 機器のみで、LLDP も CDP も話さない機器は何も返しません。",
+      "none": "この機器を走査しましたが、隣接は報告されませんでした。"
+    },
+    "proto": {
+      "lldp": "LLDP",
+      "cdp": "CDP"
+    },
+    "capability": {
+      "router": "ルータ",
+      "bridge": "ブリッジ",
+      "switch": "スイッチ",
+      "wlan_ap": "無線 AP",
+      "phone": "電話機",
+      "host": "ホスト",
+      "repeater": "リピータ",
+      "cable_device": "ケーブル機器",
+      "igmp": "IGMP",
+      "other": "その他"
+    },
+    "diff": {
+      "added": "接続",
+      "removed": "切断",
+      "changed": "変化",
+      "unchangedDetail": "このノードで最初に記録された観測です。"
+    },
+    "err": {
+      "load": "隣接情報を読み込めませんでした"
     }
   }
 }

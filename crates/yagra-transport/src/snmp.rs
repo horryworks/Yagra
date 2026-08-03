@@ -6,7 +6,9 @@
 //! at query time (ADR-012). Live-only (needs a device + UDP); the numeric mapping and
 //! ifIndex extraction are unit-tested.
 
-use crate::{SnmpSample, SnmpTableSample, SnmpTableString, TransportError};
+use crate::{
+    SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
+};
 use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -124,6 +126,69 @@ pub async fn snmp_walk_strings_v2c(
     Ok(rows)
 }
 
+/// Walk table columns keeping each row's **full instance index** and **raw** value (ADR-038).
+///
+/// The two walkers above each collapse something on purpose — non-numeric values, or the
+/// multi-part index — and both losses are fatal for adjacency data: `lldpRemTable` is indexed by
+/// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)` and a chassis id is typed octets. Same
+/// per-column skip-on-error behaviour as the others; a value type this build has no representation
+/// for is skipped rather than coerced.
+pub async fn snmp_walk_instances_v2c(
+    target: IpAddr,
+    community: &str,
+    column_oids: &[String],
+    timeout: Duration,
+) -> Result<Vec<SnmpInstanceRow>, TransportError> {
+    let client = connect(target, community, timeout).await?;
+    let mut rows = Vec::new();
+    for base_str in column_oids {
+        let Some(base) = parse_oid(base_str) else {
+            tracing::warn!(%base_str, "skipping malformed table column OID");
+            continue;
+        };
+        match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
+            Ok(entries) => {
+                for (oid, value) in entries {
+                    let Some(tail) = oid.relative_to(&base) else {
+                        continue;
+                    };
+                    let instance = tail.as_slice().to_vec();
+                    if instance.is_empty() {
+                        continue; // the column base itself: no instance
+                    }
+                    rows.push(SnmpInstanceRow {
+                        oid_base: base_str.clone(),
+                        instance,
+                        value: raw_value(&value),
+                    });
+                }
+            }
+            Err(e) => tracing::debug!(%base_str, error = %e, "snmp instance walk failed"),
+        }
+    }
+    Ok(rows)
+}
+
+/// Map an SNMP value onto [`SnmpValue`] without coercing.
+///
+/// Total, and matched variant-by-variant rather than with a wildcard: this is the walker that must
+/// not silently drop a column, so a value type gaining a representation should be a compile error
+/// here rather than a row that quietly disappears from an operator's neighbour table.
+fn raw_value(value: &ObjectValue) -> SnmpValue {
+    match value {
+        ObjectValue::Integer(i) => SnmpValue::Int(i64::from(*i)),
+        ObjectValue::Counter32(c) | ObjectValue::Unsigned32(c) | ObjectValue::TimeTicks(c) => {
+            SnmpValue::Int(i64::from(*c))
+        }
+        // Saturate rather than wrap: a negative value would be read as a different subtype.
+        ObjectValue::Counter64(c) => SnmpValue::Int(i64::try_from(*c).unwrap_or(i64::MAX)),
+        ObjectValue::String(bytes) | ObjectValue::Opaque(bytes) => SnmpValue::Bytes(bytes.clone()),
+        // Kept as octets so `render_bare_address` reads it the same way it reads a CDP address.
+        ObjectValue::IpAddress(ip) => SnmpValue::Bytes(ip.octets().to_vec()),
+        ObjectValue::ObjectId(oid) => SnmpValue::Oid(oid.to_string()),
+    }
+}
+
 /// Open an SNMP v2c client to `target`.
 async fn connect(
     target: IpAddr,
@@ -234,6 +299,46 @@ mod tests {
         assert_eq!(
             string_value(&ObjectValue::ObjectId(oid)),
             Some("1.3.6.1.4.1.9.1.516".to_owned())
+        );
+    }
+
+    /// The point of the instance walk: octets survive as octets. A chassis id that went through
+    /// `string_value` would come back as replacement characters and could no longer be told apart
+    /// from a different undecodable id.
+    #[test]
+    fn raw_value_keeps_octets_verbatim_where_string_value_would_mangle_them() {
+        let mac = vec![0x00, 0x1b, 0x54, 0xff, 0x00, 0x9a];
+        assert_eq!(
+            raw_value(&ObjectValue::String(mac.clone())),
+            SnmpValue::Bytes(mac.clone())
+        );
+        // The existing string walker's mapper loses those bytes.
+        assert_ne!(
+            string_value(&ObjectValue::String(mac.clone())).map(String::into_bytes),
+            Some(mac)
+        );
+    }
+
+    #[test]
+    fn raw_value_maps_every_value_type() {
+        assert_eq!(raw_value(&ObjectValue::Integer(-5)), SnmpValue::Int(-5));
+        assert_eq!(raw_value(&ObjectValue::Counter32(7)), SnmpValue::Int(7));
+        assert_eq!(
+            raw_value(&ObjectValue::Counter64(u64::MAX)),
+            SnmpValue::Int(i64::MAX),
+            "an out-of-range counter saturates rather than wrapping into a negative subtype"
+        );
+        let oid = parse_oid("1.3.6.1.4.1.9").unwrap();
+        assert_eq!(
+            raw_value(&ObjectValue::ObjectId(oid)),
+            SnmpValue::Oid("1.3.6.1.4.1.9".to_owned())
+        );
+        // An IpAddress arrives as its octets, so the same renderer reads it as a CDP address does.
+        assert_eq!(
+            raw_value(&ObjectValue::IpAddress(std::net::Ipv4Addr::new(
+                10, 0, 0, 1
+            ))),
+            SnmpValue::Bytes(vec![10, 0, 0, 1])
         );
     }
 }

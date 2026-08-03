@@ -33,6 +33,8 @@ import {
   TOKEN_SURFACES,
   USER_KINDS,
   BUNDLE_NOTE_CODES,
+  NEIGHBOR_CAPABILITIES,
+  NEIGHBOR_PROTOS,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -46,6 +48,7 @@ import { TERMINAL_JOB_STATES } from './troubleshoot/data';
 import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
+import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings';
 
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
@@ -309,6 +312,35 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSystem, ja: jaSystem };
     expectKeys('bundle table', locales, 'bundle.table.', BUNDLE_TABLES);
     expectKeys('bundle note', locales, 'bundle.notes.', BUNDLE_NOTE_CODES);
+  });
+
+  it('every neighbor protocol and capability has strings (nodes:neighbors.*)', () => {
+    // Both are rendered from a value the device supplied and the backend normalized. The
+    // capability vocabulary is the whole point of that normalization — it exists so one legend
+    // serves LLDP and CDP — so a missing string here would put a raw token like `wlan_ap` in the
+    // one column that is supposed to be human-readable.
+    const locales = { en: enNodes, ja: jaNodes };
+    expectKeys('neighbor proto', locales, 'neighbors.proto.', NEIGHBOR_PROTOS);
+    expectKeys('neighbor capability', locales, 'neighbors.capability.', NEIGHBOR_CAPABILITIES);
+    // The empty state and the diff kinds are also built at runtime, and each says something an
+    // operator would otherwise have to guess ("nothing recorded" vs "genuinely no neighbours").
+    expectKeys('neighbor empty reason', locales, 'neighbors.empty.', [
+      'disabled',
+      'unrecorded',
+      'none',
+    ]);
+    expectKeys('neighbor diff kind', locales, 'neighbors.diff.', ['added', 'removed', 'changed']);
+  });
+
+  it('every retention subject has strings (system:settings.retention.subject.*)', () => {
+    // Pre-existing gap, closed alongside the subject this ADR adds: the retention card builds
+    // `settings.retention.subject.${row.subject}` from whatever the server listed, with a
+    // `defaultValue` fallback that renders the raw token. A new retained table therefore reached
+    // both locales missing — parity passes, and the screen an operator opens to decide how long
+    // data is kept shows them `neighbor_changes`.
+    const locales = { en: enSystem, ja: jaSystem };
+    expectKeys('retention subject', locales, 'settings.retention.subject.', RETENTION_SUBJECTS);
+    expectKeys('retention field', locales, 'settings.retention.field.', RETENTION_FIELDS);
   });
 
   it('every scope label state has strings (access:users.scope.* and settings-tokens:scope.*)', () => {

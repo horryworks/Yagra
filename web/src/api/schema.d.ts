@@ -2046,6 +2046,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/neighbors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The node's current CDP/LLDP neighbours.
+         * @description `404` means no walk has recorded anything for this node yet — the node may not be an SNMP
+         *     device, may not speak either protocol, or may simply not have been walked since collection was
+         *     enabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device
+         *     reports no neighbours.
+         */
+        get: operations["get_neighbors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/neighbors/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The node's adjacency change history, newest first.
+         * @description A row is written only when the adjacency actually changed, so a quiet rack produces none. The
+         *     content key deliberately excludes the agent's own churn (LLDP's `TimeMark` and remote index), so
+         *     a row here means a port genuinely started or stopped facing something, or the peer on it changed.
+         */
+        get: operations["list_neighbor_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/parent": {
         parameters: {
             query?: never;
@@ -2585,6 +2630,28 @@ export interface paths {
         put: operations["set_routing_rule_enabled"];
         post?: never;
         delete: operations["delete_routing_rule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/neighbors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The deployment's adjacency-collection settings, with the accepted cadence range. */
+        get: operations["get_neighbor_settings"];
+        /**
+         * Change whether and how often adjacency is collected.
+         * @description Applies from the next scheduler sweep. Turning collection off stops issuing walks but keeps
+         *     everything already recorded — the current set and the change history are unaffected.
+         */
+        put: operations["update_neighbor_settings"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4053,6 +4120,15 @@ export interface components {
              */
             used_by: number;
         };
+        /** @description A node's current adjacency and how long it has held. */
+        CurrentNeighbors: {
+            /** @description When this exact set was first seen (RFC 3339). */
+            first_seen: string;
+            /** @description When it was last confirmed unchanged (RFC 3339). */
+            last_seen: string;
+            /** @description The adjacencies the node last reported. */
+            neighbors: components["schemas"]["NeighborSet"];
+        };
         /** @description A save's acknowledgement. The layout is not echoed back — the client already has it. */
         DashboardSaved: {
             ok: boolean;
@@ -5479,6 +5555,129 @@ export interface components {
          * @enum {string}
          */
         MuteScope: "node" | "group";
+        /**
+         * @description One observed adjacency.
+         *
+         *     The first three string fields are the **identity**; everything below them is payload. Payload
+         *     changes still append a history row (a peer that was reimaged is a real change on that port), but
+         *     they never split one link into two records.
+         */
+        Neighbor: {
+            /** @description What the peer says it is, normalized across both protocols. */
+            capabilities?: components["schemas"]["NeighborCapability"][];
+            /**
+             * Format: int32
+             * @description The local `ifIndex`, when the protocol genuinely supplies one. CDP indexes its cache by
+             *     `ifIndex` so this is exact; LLDP's `lldpLocPortNum` is an arbitrary local index that only
+             *     *often* equals `ifIndex`, so LLDP records leave this `None` rather than guess.
+             */
+            local_ifindex?: number | null;
+            /**
+             * @description The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP
+             *     uses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has
+             *     no row, so the record still has an identity rather than being dropped.
+             */
+            local_port: string;
+            /** @description Which protocol reported this. */
+            proto: components["schemas"]["NeighborProto"];
+            /** @description The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`. */
+            remote_chassis: string;
+            /**
+             * @description The peer's management address. Filled from `cdpCacheAddress` for CDP. LLDP keeps this in
+             *     `lldpRemManAddrTable`, whose index *encodes* the address — a separate walk plus index
+             *     decoding — so LLDP records leave this `None` in this increment.
+             */
+            remote_mgmt_addr?: string | null;
+            /** @description `cdpCachePlatform` — the peer's hardware/software platform string (CDP only). */
+            remote_platform?: string | null;
+            /** @description The peer's port id, rendered by subtype: LLDP `lldpRemPortId`, CDP `cdpCacheDevicePort`. */
+            remote_port: string;
+            /** @description `lldpRemPortDesc` — the peer's own description of its port. */
+            remote_port_desc?: string | null;
+            /** @description `lldpRemSysDesc`. */
+            remote_sys_desc?: string | null;
+            /** @description `lldpRemSysName`. CDP has no separate system name (its device id serves both). */
+            remote_sys_name?: string | null;
+        };
+        /**
+         * @description What the peer says it is, as one vocabulary shared by both protocols.
+         *
+         *     LLDP reports this as a `BITS` value over `lldpRemSysCapEnabled` and CDP as a four-byte mask over
+         *     `cdpCacheCapabilities`; the two bit layouts have nothing in common. Normalizing them here is
+         *     what lets the UI render one column — the alternative is a per-protocol legend, which is the
+         *     "same fact in two shapes" the extensibility rules exist to prevent.
+         * @enum {string}
+         */
+        NeighborCapability: "router" | "bridge" | "switch" | "wlan_ap" | "phone" | "host" | "repeater" | "cable_device" | "igmp" | "other";
+        /** @description One append-on-change history row. */
+        NeighborChange: {
+            /** @description When the change was recorded (RFC 3339). */
+            at: string;
+            /** Format: int64 */
+            id: number;
+            /** @description The adjacency as of this change. */
+            neighbors: components["schemas"]["NeighborSet"];
+            /** @description The content key this replaced; `null` marks the first observation ever recorded for the node. */
+            prev_neighbor_key?: string | null;
+        };
+        /** @description How this deployment collects adjacency. */
+        NeighborConfig: {
+            /** @description Whether neighbour walks are issued at all. */
+            enabled: boolean;
+            /**
+             * Format: int32
+             * @description How often each SNMP node's neighbour tables are walked, in seconds.
+             */
+            interval_secs: number;
+            /**
+             * Format: int32
+             * @description Largest cadence this deployment accepts, in seconds.
+             */
+            max_interval_secs?: number;
+            /**
+             * Format: int32
+             * @description Smallest cadence this deployment accepts, in seconds.
+             */
+            min_interval_secs?: number;
+        };
+        /** @description One page of adjacency changes, newest first. */
+        NeighborHistory: {
+            changes: components["schemas"]["NeighborChange"][];
+            next?: null | components["schemas"]["NeighborHistoryCursor"];
+        };
+        /** @description Keyset cursor for the next page (ADR-019 — never OFFSET). */
+        NeighborHistoryCursor: {
+            at: string;
+            /** Format: int64 */
+            id: number;
+        };
+        /**
+         * @description Which discovery protocol reported an adjacency.
+         *
+         *     Kept on every record rather than normalized away: a switch running both protocols reports the
+         *     same physical link twice with *different* identities (LLDP names the peer by chassis MAC, CDP by
+         *     hostname), so collapsing them would mean guessing that two differently-identified rows are one
+         *     link. Showing both, labelled, is the honest answer.
+         * @enum {string}
+         */
+        NeighborProto: "lldp" | "cdp";
+        /**
+         * @description Every neighbour a node reports on one observation, as a set.
+         *
+         *     The unit of storage is the whole set per node, not one row per adjacency, because a partial walk
+         *     must never read as "every neighbour disappeared". The poller reports the set it could observe,
+         *     core replaces it atomically, and a failed walk sends no set at all — so nothing is written. A
+         *     per-adjacency table would need an explicit "this is complete" flag to get the same guarantee.
+         */
+        NeighborSet: {
+            /** @description The adjacencies, canonically ordered. */
+            neighbors?: components["schemas"]["Neighbor"][];
+            /**
+             * @description Whether [`MAX_NEIGHBORS_PER_NODE`] was hit and rows were dropped. Reported rather than
+             *     silently swallowed — a truncated view that looks complete is worse than no view.
+             */
+            truncated?: boolean;
+        };
         /**
          * @description `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
          *     which poller currently holds it.
@@ -15074,6 +15273,128 @@ export interface operations {
             };
         };
     };
+    get_neighbors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The node's current adjacency and how long it has held */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentNeighbors"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No adjacency has been recorded for the node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_neighbor_history: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before_at?: string;
+                before_id?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of adjacency changes, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NeighborHistory"];
+                };
+            };
+            /** @description before_at and before_id must be given together, and before_at must be RFC 3339 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     set_node_parent: {
         parameters: {
             query?: never;
@@ -17547,6 +17868,111 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_neighbor_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether adjacency is collected, how often, and the accepted range */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NeighborConfig"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_neighbor_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NeighborConfig"];
+            };
+        };
+        responses: {
+            /** @description Settings updated; the change applies from the next scheduler sweep */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The cadence is outside the allowed range */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

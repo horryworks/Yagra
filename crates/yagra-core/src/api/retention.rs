@@ -223,6 +223,7 @@ fn store_configured(st: &ApiState, subject: Subject) -> bool {
         Subject::AlertHistory
         | Subject::NodeStateSnapshots
         | Subject::DnsChainChanges
+        | Subject::NeighborChanges
         | Subject::EventsMatched
         | Subject::EventsUnmatched
         | Subject::ReportRuns

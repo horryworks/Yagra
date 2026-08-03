@@ -137,6 +137,7 @@
   "tabs": {
     "overview": "Overview",
     "interfaces": "Interfaces",
+    "neighbors": "Neighbors",
     "collection": "Collection",
     "events": "Events",
     "flow": "Flow"
@@ -381,6 +382,49 @@
       "loop_detected": "CNAME loop",
       "depth_exceeded": "Chain too long",
       "malformed": "Malformed response"
+    }
+  },
+  "neighbors": {
+    "colLocalPort": "Local port",
+    "colPeer": "Neighbor",
+    "colRemotePort": "Remote port",
+    "colCapabilities": "Capabilities",
+    "colProto": "Via",
+    "summary_one": "{{count}} neighbor",
+    "summary_other": "{{count}} neighbors",
+    "lastConfirmed": "last confirmed {{when}}",
+    "truncated": "Too many neighbors to record them all — some were dropped.",
+    "historyTitle": "Changes",
+    "historyEmpty": "No changes recorded. Neighbors are only written down when they actually change, so a rack nobody is repatching stays empty here.",
+    "empty": {
+      "disabled": "Neighbor discovery is switched off for this deployment. Turn it on in Settings ▸ System settings.",
+      "unrecorded": "Nothing recorded yet. Only SNMP devices are walked, and a device that speaks neither LLDP nor CDP never reports any.",
+      "none": "This device was walked and reports no neighbors."
+    },
+    "proto": {
+      "lldp": "LLDP",
+      "cdp": "CDP"
+    },
+    "capability": {
+      "router": "Router",
+      "bridge": "Bridge",
+      "switch": "Switch",
+      "wlan_ap": "Wi-Fi AP",
+      "phone": "Phone",
+      "host": "Host",
+      "repeater": "Repeater",
+      "cable_device": "Cable device",
+      "igmp": "IGMP",
+      "other": "Other"
+    },
+    "diff": {
+      "added": "Connected",
+      "removed": "Disconnected",
+      "changed": "Changed",
+      "unchangedDetail": "First observation recorded for this node."
+    },
+    "err": {
+      "load": "failed to load neighbors"
     }
   }
 }

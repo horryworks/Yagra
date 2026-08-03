@@ -121,6 +121,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::pollers::Doc::openapi(),
         super::health::Doc::openapi(),
         super::reports::Doc::openapi(),
+        super::neighbors::Doc::openapi(),
         super::retention::Doc::openapi(),
         super::config_bundle::Doc::openapi(),
         super::meraki::Doc::openapi(),

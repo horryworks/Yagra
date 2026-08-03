@@ -154,6 +154,28 @@
       "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
       "save": "failed to save setting"
     },
+    "neighbors": {
+      "title": "Neighbor discovery",
+      "note": "Record which of this fleet's ports face which devices, using CDP and LLDP, and keep a history of when that changed. Read-only: Yagra never configures a device. Only SNMP devices are walked.",
+      "enabledName": "Collect neighbors",
+      "enabledHelp": "When on, every SNMP node's LLDP and CDP tables are walked on the cadence below. Turning this off stops the walks; everything already recorded is kept.",
+      "enabledOn": "On",
+      "enabledOff": "Off",
+      "intervalName": "Walk interval",
+      "intervalHelp": "How often each device is asked who its neighbors are — currently {{cadence}}. Adjacency changes when someone moves a cable, so this is deliberately slow.",
+      "cadence": {
+        "hours_one": "every hour",
+        "hours_other": "every {{n}} hours",
+        "minutes_one": "every minute",
+        "minutes_other": "every {{n}} minutes",
+        "seconds_one": "every second",
+        "seconds_other": "every {{n}} seconds"
+      },
+      "err": {
+        "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
+        "save": "failed to save neighbor discovery settings"
+      }
+    },
     "retention": {
       "title": "Data retention",
       "note": "How long each store keeps what. Lowering a window deletes data older than it on the next sweep. Two rows are set by a store's own start flag and cannot be changed from here.",
@@ -182,7 +204,8 @@
         "flow_records": "Traffic flows",
         "event_log_store": "Event log",
         "metrics": "Metrics",
-        "audit_log": "Audit log"
+        "audit_log": "Audit log",
+        "neighbor_changes": "Neighbor changes"
       },
       "err": {
         "range": "{{name}}: enter a whole number between {{min}} and {{max}}.",

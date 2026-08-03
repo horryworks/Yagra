@@ -30,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
     DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth, HttpMethod, IfIndex,
-    InterfaceField, MerakiTier, MetricKind, NodeId, SeriesKey,
+    InterfaceField, MerakiTier, MetricKind, NeighborColumn, NeighborSet, NodeId, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -243,6 +243,48 @@ impl PollJob {
             node_id,
             target,
             check: CheckSpec::Dns(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v2c CDP/LLDP neighbour-walk job (ADR-038).
+    #[must_use]
+    pub fn snmp_neighbors(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpNeighborCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpNeighbors(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) CDP/LLDP neighbour-walk job (ADR-038).
+    #[must_use]
+    pub fn snmp_v3_neighbors(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3NeighborCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Neighbors(check),
             interval_secs,
             credential_ref: None,
             probe_identity: false,
@@ -599,6 +641,17 @@ pub enum CheckSpec {
     /// [`NodeJobs::specs`] decodes per element, an unknown tag inside a working-set chunk costs
     /// only this spec rather than the whole chunk.
     Dns(DnsCheck),
+    /// SNMP v2c walk of the CDP/LLDP neighbour tables (ADR-038), on its own slow cadence.
+    ///
+    /// Kept out of [`CheckSpec::SnmpTable`] rather than folded into it: adjacency changes on the
+    /// order of months, so riding the interface-metric interval would walk `lldpRemTable` on a
+    /// 48-port switch every minute for nothing — device load and rate-limit budget spent on a
+    /// constant. The result is **observational** ([`PollResult::observational`]): it makes no
+    /// statement about the node's reachability.
+    SnmpNeighbors(SnmpNeighborCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpNeighbors`], following the
+    /// `SnmpTable`/`SnmpV3Table` pairing.
+    SnmpV3Neighbors(SnmpV3NeighborCheck),
 }
 
 /// ICMP echo parameters.
@@ -796,6 +849,64 @@ pub struct SnmpV3TableCheck {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c neighbour-walk parameters (ADR-038).
+///
+/// `columns` is the fixed LLDP-MIB / CISCO-CDP-MIB list from
+/// [`yagra_common::builtin_neighbor_columns`], sent explicitly rather than assumed by the poller so
+/// core stays the one place the OID set is decided (the same reason `meta_columns` is on the wire
+/// in [`SnmpTableCheck`]). A poller that receives a column it has no handling for simply ignores
+/// that column's rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpNeighborCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Neighbour table columns to walk, keeping raw instance indices and raw octets.
+    #[serde(default)]
+    pub columns: Vec<SnmpNeighborColumn>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) neighbour-walk parameters — the v3 analogue of [`SnmpNeighborCheck`]. Auth/priv
+/// keys are resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the
+/// secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3NeighborCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// Neighbour table columns to walk.
+    #[serde(default)]
+    pub columns: Vec<SnmpNeighborColumn>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One neighbour-table column to walk: which field it carries and the column base OID. The value
+/// is relational metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpMetaColumn`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpNeighborColumn {
+    /// Which neighbour attribute this column carries.
+    pub field: NeighborColumn,
+    /// Column base OID, e.g. `1.0.8802.1.1.2.1.4.1.1.5` (lldpRemChassisId).
+    pub oid: String,
+}
+
 /// One numeric table column to walk: its stable metric name, the column base OID, and
 /// whether the values are gauges or raw counters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -913,6 +1024,29 @@ pub struct PollResult {
     /// compatible; skipped when absent so every non-DNS result's wire form is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns_chain: Option<DnsChain>,
+    /// The CDP/LLDP neighbours observed on this poll (neighbour walks only, ADR-038). Same tier as
+    /// `dns_chain`: relational metadata core persists into PostgreSQL, **never** a TSDB label
+    /// (ADR-011). Defaulted so an older poller stays N-1 compatible; skipped when absent so every
+    /// other result's wire form is unchanged.
+    ///
+    /// `None` and `Some(empty set)` mean different things and core acts on the difference:
+    /// `None` = "the walk did not produce a set" (it failed, or this was not a neighbour job) and
+    /// nothing is written; `Some(empty)` = "this device reports no neighbours", which replaces the
+    /// stored set. Conflating them would let one failed walk read as "every link disappeared".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neighbors: Option<NeighborSet>,
+    /// This result carries **observations only** and makes no claim about the node's reachability.
+    ///
+    /// Core skips the alert engine entirely for such results. That is not a nicety: `outcome` feeds
+    /// the liveness state machine on *every* result, so an hourly neighbour walk that timed out
+    /// would push `Unreachable` into the dwell window ICMP owns and page someone for a healthy
+    /// device — while hard-coding `Reachable` instead would cancel a genuine outage. A check that
+    /// has nothing to say about liveness has to be able to say nothing.
+    ///
+    /// Defaulted (and omitted from the wire when false) so every existing result is byte-identical
+    /// and an N-1 poller's results keep driving alerts exactly as before (ADR-017).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observational: bool,
     /// Which poller produced this result (its sanitized id), when the poller stamps one
     /// (ADR-009). Descriptive provenance for the Pollers view / self-observability — never a
     /// TSDB label. Defaulted so an older poller that doesn't stamp it stays N-1 compatible
@@ -2031,6 +2165,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
         };
@@ -2038,6 +2174,82 @@ mod tests {
         let back: PollResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
         assert_eq!(back.poller_id.as_deref(), Some("edge-poller-1"));
+    }
+
+    /// ADR-038's two new result fields, both N-1 sensitive in the same way `dns_chain` was.
+    #[test]
+    fn poll_result_neighbor_fields_tolerate_missing_and_unknown_fields() {
+        // An N-1 poller sends neither field. `observational` must default to *false*, or every
+        // pre-upgrade result would stop driving alerts.
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.neighbors.is_none());
+        assert!(
+            !result.observational,
+            "an older poller's results must keep driving liveness"
+        );
+
+        // And an ordinary result's wire form is byte-identical to what it was before the fields
+        // existed: both are skipped when unset.
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("neighbors"), "{wire}");
+        assert!(!wire.contains("observational"), "{wire}");
+    }
+
+    /// `None` (no set observed) and `Some(empty)` (this device has no neighbours) must survive the
+    /// wire as different values — core writes nothing for the first and replaces the stored set for
+    /// the second, so collapsing them would make one failed walk erase a node's whole adjacency.
+    #[test]
+    fn an_empty_neighbor_set_is_distinct_from_no_set_on_the_wire() {
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable"}"#,
+        )
+        .unwrap();
+        result.neighbors = Some(yagra_common::NeighborSet::default());
+        result.observational = true;
+        let wire = serde_json::to_string(&result).unwrap();
+        let back: PollResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.neighbors, Some(yagra_common::NeighborSet::default()));
+        assert!(back.observational);
+    }
+
+    /// A neighbour check from an N-1 core (or one that gains a field later) still decodes.
+    #[test]
+    fn neighbor_checks_tolerate_missing_and_unknown_fields() {
+        let v2c: SnmpNeighborCheck =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert!(v2c.columns.is_empty());
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        let v3: SnmpV3NeighborCheck =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+    }
+
+    /// The working-set decoder drops a spec it cannot understand rather than failing the chunk —
+    /// which is what makes adding these variants safe in *either* upgrade order. Modelled on an
+    /// N+1 core sending a variant this build has never heard of.
+    #[test]
+    fn an_unknown_check_variant_costs_only_its_own_spec() {
+        let json = r#"{
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "specs": [
+              {"node_id":"00000000-0000-0000-0000-000000000000","target":"10.0.0.1",
+               "check":{"kind":"icmp","count":3,"timeout_ms":1000},"interval_secs":60},
+              {"node_id":"00000000-0000-0000-0000-000000000000","target":"10.0.0.1",
+               "check":{"kind":"telepathy","vibes":"good"},"interval_secs":3600}
+            ]
+        }"#;
+        let jobs: NodeJobs = serde_json::from_str(json).unwrap();
+        assert_eq!(jobs.specs.len(), 1);
+        assert!(matches!(jobs.specs[0].check, CheckSpec::Icmp(_)));
     }
 
     #[test]

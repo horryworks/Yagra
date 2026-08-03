@@ -42,6 +42,7 @@ mod maintenance;
 mod mcp;
 mod meraki;
 mod mib;
+mod neighbors;
 mod notifications;
 mod oidc;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
@@ -446,6 +447,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // becomes an HTTP-only poll) and the admin API (CRUD).
     let url_checks = Arc::new(url_check::UrlCheckRepo::new(repo.pool()));
     let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
+    let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
 
     // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
@@ -458,6 +460,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             url_checks: url_checks.clone(),
             dns_checks: dns_checks.clone(),
             meraki_devices: meraki_devices.clone(),
+            settings: repo.clone(),
             env_community: env_community.clone(),
             interval_secs: cfg.poll_interval_secs,
         },
@@ -601,6 +604,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         reports_repo: reports_repo.clone(),
         reports: reports.clone(),
         dns_checks: dns_checks.clone(),
+        neighbors: neighbor_repo.clone(),
         forward_handle: forward_handle.clone(),
         forward_runner: Some(forward_runner),
     };
@@ -642,6 +646,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         reports,
         url_checks,
         dns_checks,
+        neighbors: neighbor_repo.clone(),
         meraki_orgs,
         meraki_devices,
         events: events_repo,
@@ -839,6 +844,7 @@ struct LeaderTasks {
     reports_repo: Arc<reports::ReportsRepo>,
     reports: Arc<reports::ReportRunner>,
     dns_checks: Arc<dns_check::DnsCheckRepo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -916,6 +922,7 @@ impl LeaderTasks {
             self.repo.clone(),
             self.history.clone(),
             self.dns_checks.clone(),
+            self.neighbors.clone(),
             self.shutdown.clone(),
         ));
         {
@@ -1091,6 +1098,7 @@ impl LeaderTasks {
                 self.history.clone(),
                 self.events_repo.clone(),
                 self.dns_checks.clone(),
+                self.neighbors.clone(),
             ),
         );
         spawn_cancellable(
@@ -1152,6 +1160,8 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         interfaces: Vec::new(),
         sys_descr: None,
         dns_chain: None,
+        neighbors: None,
+        observational: false,
         poller_id: None,
         trace_context: Default::default(),
     });
@@ -1309,6 +1319,9 @@ struct MetaRecord {
     /// the fields above: poller-returned structured strings that belong in PostgreSQL, never in the
     /// TSDB.
     dns_chain: Option<yagra_common::DnsChain>,
+    /// The CDP/LLDP neighbour set observed on this poll (neighbour walks only, ADR-038). Same tier
+    /// again. `None` means no set was observed and nothing is written — never "no neighbours".
+    neighbors: Option<yagra_common::NeighborSet>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -1432,12 +1445,16 @@ fn persist_metrics_and_meta(
     // by a poll — the next observation re-reports the current chain — so the only thing genuinely
     // lost is a transient change that reverts before the next poll.
     let dns_chain = result.dns_chain.clone();
-    if !interfaces.is_empty() || identity.is_some() || dns_chain.is_some() {
+    // Neighbours ride the same shed-able tier for the same reason: dropping one only defers
+    // recording a change by a poll, since the next walk re-reports the current set.
+    let neighbors = result.neighbors.clone();
+    if !interfaces.is_empty() || identity.is_some() || dns_chain.is_some() || neighbors.is_some() {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
             interfaces,
             identity,
             dns_chain,
+            neighbors,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -1508,6 +1525,7 @@ async fn run_fleet_health_timeline(
     history: Arc<AlertHistoryStore>,
     events_repo: Arc<events::EventRepo>,
     dns_checks: Arc<dns_check::DnsCheckRepo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
 ) {
     const SNAPSHOT_SECS: u64 = 300;
     loop {
@@ -1547,6 +1565,11 @@ async fn run_fleet_health_timeline(
         // on the same window as alert history so the retention story stays consistent.
         if let Err(e) = dns_checks.prune_chain_changes(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune dns chain history failed");
+        }
+        // Adjacency history is append-on-change for the same reason and on the same window
+        // (`retention::Subject::NeighborChanges`): a rack nobody is repatching writes nothing.
+        if let Err(e) = neighbors.prune_changes(alert_linked_secs).await {
+            tracing::warn!(error = %e, "prune neighbour history failed");
         }
     }
 }
@@ -1611,6 +1634,17 @@ async fn ingest_result(
     // Metrics → VM writer + interface/identity metadata → PG writer. Shed-able/self-healing and
     // alert-independent, so it's shared with the backfill path (`consume_results_backfill`).
     persist_metrics_and_meta(&result, metrics_tx, meta_tx);
+
+    // An observational result (today: the CDP/LLDP neighbour walk, ADR-038) states nothing about
+    // the node's reachability, so it must not reach the alert engine at all. `observe` derives
+    // liveness from `outcome` on *every* result, and both ways of pretending otherwise are bugs:
+    // an hourly walk that timed out would push `Unreachable` into the dwell window ICMP owns and
+    // page someone for a healthy device, while a hard-coded `Reachable` would cancel a genuine
+    // outage. Same shape as `consume_results_backfill` — persist the observation, touch no alert
+    // state. The counters above still run: the result did arrive, from a real poller.
+    if result.observational {
+        return;
+    }
 
     // Alerts: evaluate synchronously in-memory (never shed — the loss-free matcher core), record each
     // lifecycle transition (batched via `history_tx`, inline fallback), and hand delivery to the
@@ -2013,6 +2047,7 @@ async fn run_pg_writer(
     repo: Arc<NodeRepo>,
     history: Arc<AlertHistoryStore>,
     dns: Arc<dns_check::DnsCheckRepo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
     shutdown: CancellationToken,
 ) {
     let mut meta_buf: Vec<MetaRecord> = Vec::with_capacity(RESULT_PERSIST_BATCH_MAX);
@@ -2024,7 +2059,7 @@ async fn run_pg_writer(
                 while let Ok(m) = meta_rx.try_recv() {
                     meta_buf.push(m);
                     if meta_buf.len() >= RESULT_PERSIST_BATCH_MAX {
-                        flush_meta(&repo, &dns, &mut meta_buf).await;
+                        flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
                     }
                 }
                 while let Ok(h) = history_rx.try_recv() {
@@ -2033,13 +2068,13 @@ async fn run_pg_writer(
                         flush_history(&history, &mut hist_buf).await;
                     }
                 }
-                flush_meta(&repo, &dns, &mut meta_buf).await;
+                flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
                 flush_history(&history, &mut hist_buf).await;
                 break;
             }
             m = meta_rx.recv() => {
                 let Some(m) = m else {
-                    flush_meta(&repo, &dns, &mut meta_buf).await;
+                    flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -2050,13 +2085,13 @@ async fn run_pg_writer(
                         Err(_) => break,
                     }
                 }
-                flush_meta(&repo, &dns, &mut meta_buf).await;
+                flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
                 metrics::gauge!("yagra_persist_queue_depth", "stream" => "meta")
                     .set(meta_rx.len() as f64);
             }
             h = history_rx.recv() => {
                 let Some(h) = h else {
-                    flush_meta(&repo, &dns, &mut meta_buf).await;
+                    flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -2080,6 +2115,7 @@ async fn run_pg_writer(
 async fn flush_meta(
     repo: &Arc<NodeRepo>,
     dns: &Arc<dns_check::DnsCheckRepo>,
+    neighbors: &Arc<neighbors::NeighborRepo>,
     buf: &mut Vec<MetaRecord>,
 ) {
     if buf.is_empty() {
@@ -2089,6 +2125,7 @@ async fn flush_meta(
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
+    let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     for rec in buf.drain(..) {
         for (ifindex, name, alias, speed) in rec.interfaces {
             iface_rows.push((rec.node_id, ifindex, name, alias, speed));
@@ -2098,6 +2135,9 @@ async fn flush_meta(
         }
         if let Some(chain) = rec.dns_chain {
             dns_rows.push((rec.node_id, chain));
+        }
+        if let Some(set) = rec.neighbors {
+            neighbor_rows.push((rec.node_id, set));
         }
     }
     if !iface_rows.is_empty() {
@@ -2121,6 +2161,18 @@ async fn flush_meta(
     }
     if !dns_rows.is_empty() {
         metrics::counter!("yagra_dns_chain_persisted_total").increment(dns_rows.len() as u64);
+    }
+    // Also one statement per observation and deliberately NOT coalesced per node, for the same
+    // reason as the DNS loop above: adjacency observations are a *sequence*, and collapsing two of
+    // them for one node would erase a real A→B→A transition. Bounded by the number of neighbour
+    // walks in the batch, which at an hourly cadence is a trickle even at fleet scale.
+    for (node_id, set) in &neighbor_rows {
+        if let Err(e) = neighbors.record_observation(*node_id, set).await {
+            tracing::warn!(node = %node_id, error = %e, "neighbour observation failed");
+        }
+    }
+    if !neighbor_rows.is_empty() {
+        metrics::counter!("yagra_neighbors_persisted_total").increment(neighbor_rows.len() as u64);
     }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
@@ -2225,6 +2277,10 @@ async fn run_scheduler(
     use std::collections::HashSet;
     use std::time::Instant;
     let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
+    // Legacy-mode cadence for jobs that run slower than their node's interval, keyed by
+    // (node, job kind). Only the neighbour walk is in here today; it is keyed by kind rather than
+    // special-cased so a second slow job needs no new bookkeeping.
+    let mut last_slow: HashMap<(Uuid, &'static str), Instant> = HashMap::new();
     let mut cache: Option<SweepCache> = None;
     // Last successfully-built folder-pool resolver. A transient DB error must NOT degrade to "no
     // inheritance": that would silently move every folder-assigned node to the default pool for one
@@ -2273,6 +2329,9 @@ async fn run_scheduler(
             .await
             .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
         let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
+        // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
+        // no per-node settings query enters the sweep. Degrades to the compiled default.
+        let neighbors: scheduler::NeighborPolicy = repo.get_neighbor_settings().await.into();
         // Folder-pool inheritance (ADR-009/020). One small query per rebuild — never on the cached
         // fast path above, which is already generation-keyed.
         match groups_repo.pool_rows().await {
@@ -2370,7 +2429,12 @@ async fn run_scheduler(
                                 let dns_nodes = dns_nodes.clone();
                                 async move {
                                     let specs = dispatcher
-                                        .build_node_specs(&node, secs, Some(dns_nodes.as_ref()))
+                                        .build_node_specs(
+                                            &node,
+                                            secs,
+                                            Some(dns_nodes.as_ref()),
+                                            neighbors,
+                                        )
                                         .await;
                                     (node.id, specs)
                                 }
@@ -2395,9 +2459,30 @@ async fn run_scheduler(
                             }
                             last_dispatched.insert(id, now);
                             for (job, kind) in dispatcher
-                                .build_scheduled_jobs_hinted(node, *secs, Some(dns_nodes.as_ref()))
+                                .build_scheduled_jobs_hinted(
+                                    node,
+                                    *secs,
+                                    Some(dns_nodes.as_ref()),
+                                    neighbors,
+                                )
                                 .await
                             {
+                                // A job whose own cadence is slower than the node's (today: the
+                                // neighbour walk) gets its own due-check. Working-set mode needs
+                                // nothing here — the poller schedules each spec by its own
+                                // `interval_secs` — but this path publishes on the *node's* tick,
+                                // so without the gate an hourly walk would go out every minute.
+                                // Existing jobs all carry `*secs`, so they never enter this branch.
+                                if job.interval_secs > *secs {
+                                    let key = (id, kind);
+                                    let elapsed =
+                                        last_slow.get(&key).map(|&t| now.duration_since(t));
+                                    let cadence = Duration::from_secs(u64::from(job.interval_secs));
+                                    if !scheduler::due(elapsed, cadence) {
+                                        continue;
+                                    }
+                                    last_slow.insert(key, now);
+                                }
                                 jobs_round += 1;
                                 let dispatcher = dispatcher.clone();
                                 let node_id = node.id;
@@ -2416,6 +2501,7 @@ async fn run_scheduler(
                 // Forget legacy nodes no longer present so the map can't grow unbounded (working-set
                 // nodes were already removed above).
                 last_dispatched.retain(|id, _| present.contains(id));
+                last_slow.retain(|(id, _), _| present.contains(id));
                 stats.record_sweep(jobs_round);
                 stats.set_pool_modes(working_set_pools, legacy_pools);
                 // Seed the fast-path cache only when the whole fleet was working-set — a legacy pool
@@ -3042,6 +3128,8 @@ mod tests {
             }],
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
         };
@@ -3053,6 +3141,126 @@ mod tests {
         assert!(
             meta_rx.try_recv().is_ok(),
             "backfilled interface metadata reaches the PG writer"
+        );
+    }
+
+    /// One result through `ingest_result`, returning everything the alert engine produced.
+    ///
+    /// Built with a real `AlertManager` rather than a fake because the property under test is a
+    /// property of the engine's own liveness machine — a stub would just assert the stub.
+    async fn drive_ingest(results: Vec<PollResult>) -> Vec<crate::alerts::NotifyAction> {
+        let alerts = Arc::new(AlertManager::new());
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(64);
+        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(64);
+        let (meta_tx, _meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(64);
+        let (history_tx, _history_rx) = tokio::sync::mpsc::channel::<HistoryRecord>(64);
+        // The history store is never touched: the channel is wide enough that `enqueue_history`
+        // never takes its inline-write fallback. `connect_lazy` gives a handle that connects to
+        // nothing (the same trick `events.rs`'s planner tests use).
+        let history = Arc::new(AlertHistoryStore::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/unused")
+                .expect("a lazy pool needs no server"),
+        ));
+        let stats = Arc::new(scheduler::SchedulerStats::default());
+        let inflight = Arc::new(meraki::MerakiInflight::default());
+        let coordinator = Arc::new(Coordinator::new(
+            Arc::new(yagra_bus::InMemoryBus::new(64)),
+            Arc::new(crate::volatile::VolatileStore::disabled()),
+            None,
+            stats.clone(),
+            None,
+        ));
+        for r in results {
+            ingest_result(
+                Arc::new(r),
+                &alerts,
+                &notify_tx,
+                &metrics_tx,
+                &meta_tx,
+                &history_tx,
+                &history,
+                &stats,
+                &inflight,
+                &coordinator,
+            )
+            .await;
+        }
+        drop(notify_tx);
+        let mut out = Vec::new();
+        while let Ok(a) = notify_rx.try_recv() {
+            out.push(a);
+        }
+        out
+    }
+
+    fn observational_result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
+        PollResult {
+            job_id: uuid::Uuid::new_v4(),
+            node_id: node,
+            at_unix_ms: at,
+            outcome,
+            samples: Vec::new(),
+            interfaces: Vec::new(),
+            sys_descr: None,
+            dns_chain: None,
+            neighbors: Some(yagra_common::NeighborSet::default()),
+            observational: true,
+            poller_id: None,
+            trace_context: Default::default(),
+        }
+    }
+
+    fn liveness_result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
+        PollResult {
+            observational: false,
+            neighbors: None,
+            ..observational_result(node, outcome, at)
+        }
+    }
+
+    /// ADR-038's safety property, direction 1: a failed hourly neighbour walk must not page anyone.
+    /// `observe` derives liveness from `outcome` on every result, so without the branch these three
+    /// `Error` results would satisfy the dwell window and fire an alert for a device nothing else
+    /// says is down.
+    #[tokio::test]
+    async fn an_observational_result_never_drives_the_node_down() {
+        let node = NodeId::new();
+        let failures: Vec<PollResult> = (0..6)
+            .map(|i| observational_result(node, CheckOutcome::Error, 1_000 + i))
+            .collect();
+        assert!(
+            drive_ingest(failures).await.is_empty(),
+            "a neighbour walk that failed is not an outage"
+        );
+    }
+
+    /// Direction 2, the one that would be missed by only testing direction 1: hard-coding
+    /// `Reachable` on the neighbour result instead of skipping the engine would *cancel* a real
+    /// outage, because a healthy-looking sample lands in the same dwell window ICMP is filling.
+    #[tokio::test]
+    async fn an_observational_result_cannot_cancel_a_real_outage() {
+        let node = NodeId::new();
+        // Real ICMP failures, interleaved with successful neighbour walks.
+        let mut stream = Vec::new();
+        for i in 0..6 {
+            stream.push(liveness_result(
+                node,
+                CheckOutcome::Unreachable,
+                1_000 + i * 2,
+            ));
+            stream.push(observational_result(
+                node,
+                CheckOutcome::Reachable,
+                1_001 + i * 2,
+            ));
+        }
+        let actions = drive_ingest(stream).await;
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, crate::alerts::NotifyAction::Fire(_))),
+            "the genuine outage must still fire despite the interleaved observational results"
         );
     }
 
@@ -3157,6 +3365,8 @@ mod tests {
             interfaces: Vec::new(),
             sys_descr: None,
             dns_chain: None,
+            neighbors: None,
+            observational: false,
             poller_id: None,
             trace_context: Default::default(),
         })

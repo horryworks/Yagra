@@ -19,6 +19,7 @@ describe('node-detail tabs', () => {
     expect([...NODE_DETAIL_TABS]).toEqual([
       'overview',
       'interfaces',
+      'neighbors',
       'collection',
       'events',
       'flow',
