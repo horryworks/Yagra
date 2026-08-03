@@ -758,6 +758,79 @@ mod tests {
             "the enum keeps its serde tag"
         );
         assert_no_forbidden_keys(&group_json, "NodeGroup");
+
+        let history = AlertHistoryDto::from_row(
+            &AlertHistoryRow {
+                node: node.id.0,
+                check: uuid::Uuid::new_v4(),
+                severity: yagra_common::Severity::Critical,
+                state: NodeState::Unreachable,
+                metric: Some("icmp_rtt_ms".to_owned()),
+                resolved: false,
+                at_unix_ms: 0,
+                observed_value: Some(1.0),
+                threshold_value: Some(2.0),
+                direction: None,
+                recorded_at: "1970-01-01T00:00:00Z".to_owned(),
+            },
+            Some("edge-router-1".to_owned()),
+        );
+        assert_no_forbidden_keys(&serde_json::to_value(&history).unwrap(), "AlertHistory");
+    }
+
+    /// **Every DTO in this module is covered by the canary above.**
+    ///
+    /// That canary is a hand-written body listing one instance per type, and a hand-maintained list
+    /// that mirrors another list drifts — this one already had: `AlertHistoryDto` shipped uncovered,
+    /// so the forbidden-key check had a hole in it for as long as that type existed, and nothing
+    /// said so. `testing.md` names exactly this shape ("a hand-maintained list that mirrors a
+    /// directory or another list: pin it to its source"), so the list is now pinned to the module's
+    /// own declarations.
+    ///
+    /// This turns "someone forgets a DTO" from *will happen again* into *cannot*, at the cost of
+    /// one line per new type — which is the line that was being forgotten anyway.
+    #[test]
+    fn the_canary_covers_every_dto_in_this_module() {
+        let src = include_str!("dto.rs");
+        // Needles assembled at runtime: this test reads its own file, so a literal would match
+        // itself and the assertion would pass forever without checking anything.
+        let decl = format!("pub {} ", "struct");
+        let canary_fn = format!("fn {}_dto_is_free_of_forbidden_keys", "every");
+        let after = src
+            .split(&canary_fn)
+            .nth(1)
+            .expect("the canary test must exist for this guard to mean anything");
+        // Bounded to the canary's own body. Without this the window runs to the end of the file and
+        // a type merely *mentioned* by some later test would count as covered — the guard would
+        // still pass while the canary skipped it.
+        let body = after
+            .split(&format!("#[{}]", "test"))
+            .next()
+            .unwrap_or(after);
+        let mut checked = 0usize;
+        let mut missing = Vec::new();
+        for chunk in src.split(&decl).skip(1) {
+            let name: String = chunk
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            checked += 1;
+            if !body.contains(&name) {
+                missing.push(name);
+            }
+        }
+        assert!(
+            checked >= 12,
+            "only found {checked} DTO declarations — the parser drifted"
+        );
+        assert!(
+            missing.is_empty(),
+            "these DTOs are declared here but never reach the forbidden-key canary — add an \
+             instance of each to it: {missing:?}"
+        );
     }
 
     #[test]
