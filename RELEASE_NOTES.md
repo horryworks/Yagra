@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.1.21 — Notification templates, and MCP can see what silenced the fleet
+
 ### Breaking changes
 - **Core no longer starts when `YAGRA_KEK_FILE` points at a file it cannot read.** It used to log an
   error and boot on a freshly generated random key — which meant the deployment looked healthy while
