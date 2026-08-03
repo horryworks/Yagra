@@ -24,6 +24,20 @@
   existing deployments keep the 30 days their tables are actually enforcing.
 
 ### New Features
+- **Three new MCP tools, and the biggest gap in that surface is closed** (ADR-042 increment 2).
+  `/mcp` could open a maintenance window but could not list one back, so an AI client could silence
+  a node and then report the fleet healthy — having caused the silence itself.
+  - **`list_suppressions`** — every maintenance window and mute the caller may see, in one answer.
+    Check it before concluding a fleet is quiet; a silenced fleet looks the same as a healthy one.
+  - **`alert_trends`** — how alerting has behaved over time: `top_nodes` (which nodes alert most
+    often — chronic offenders, which the active-alert list cannot show), `transitions` (the latest
+    fires and recoveries), and `calendar` (fires bucketed by weekday and hour, for spotting a
+    nightly pattern).
+  - **`search_analysis_findings`** — Troubleshoot findings across every run, filtered by node,
+    folder, diagnostic, severity or time. Distinct from reading one run you already know about.
+  - **`list_analyses` takes `kind=schedules`** to list recurring analyses, and **`list_node_groups`
+    takes `include_state`** to return each folder's health tally alongside its name.
+  - MCP remains **read-only**: no tool was added that changes anything.
 - **Notification templates** (Alerts ▸ Notification routing ▸ a channel ▸ Edit notification
   template, ADR-039). Each channel can override the subject and body it sends, written as a Jinja2
   template over a fixed set of alert variables. The immediate reason: the built-in subject named the
