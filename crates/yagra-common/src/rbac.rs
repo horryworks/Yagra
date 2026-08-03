@@ -119,13 +119,22 @@ pub enum UserKind {
     /// Provisioned from an external IdP (ADR-010); the password column holds a sentinel that can
     /// never verify.
     Oidc,
+    /// Provisioned from an LDAP/AD directory (ADR-041). Same shape as [`UserKind::Oidc`] — the
+    /// password column holds a sentinel and the directory is authoritative about the identity —
+    /// but the credential is checked by binding to the directory rather than by a browser redirect.
+    Ldap,
     /// A machine account that owns credentials and cannot sign in.
     Service,
 }
 
 impl UserKind {
     /// Every kind, in display order.
-    pub const ALL: [UserKind; 3] = [UserKind::Local, UserKind::Oidc, UserKind::Service];
+    pub const ALL: [UserKind; 4] = [
+        UserKind::Local,
+        UserKind::Oidc,
+        UserKind::Ldap,
+        UserKind::Service,
+    ];
 
     /// Stable snake_case key — the `users.auth_source` value and the serde representation.
     #[must_use]
@@ -133,6 +142,7 @@ impl UserKind {
         match self {
             UserKind::Local => "local",
             UserKind::Oidc => "oidc",
+            UserKind::Ldap => "ldap",
             UserKind::Service => "service",
         }
     }
@@ -155,8 +165,28 @@ impl UserKind {
     #[must_use]
     pub const fn can_log_in(self) -> bool {
         match self {
-            UserKind::Local | UserKind::Oidc => true,
+            UserKind::Local | UserKind::Oidc | UserKind::Ldap => true,
             UserKind::Service => false,
+        }
+    }
+
+    /// Whether an outside directory — not Yagra — is authoritative about whether this account still
+    /// exists.
+    ///
+    /// Load-bearing for API tokens. Yagra is never *told* that an IdP or a domain controller has
+    /// disabled someone: `upsert_external_user` runs on **successful** login only, so a disabled
+    /// account's row simply freezes with `enabled = true`. Sessions survive that harmlessly because
+    /// they expire within a day; a no-expiry token would not. The only signal available is that the
+    /// owner stopped signing in, which is why `ApiTokenStore::verify` treats an idle external owner
+    /// as gone. Local and service accounts are exempt — nothing outside Yagra can disagree about
+    /// them.
+    ///
+    /// This is a `match`, not `!= Local && != Service`, so a future kind has to answer the question.
+    #[must_use]
+    pub const fn is_external(self) -> bool {
+        match self {
+            UserKind::Oidc | UserKind::Ldap => true,
+            UserKind::Local | UserKind::Service => false,
         }
     }
 }
@@ -173,6 +203,31 @@ impl Role {
             Role::Operator => "operator",
             Role::Admin => "admin",
         }
+    }
+
+    /// Parse a role token, derived from [`Role::ALL`] so the accepted list lives in one place.
+    ///
+    /// Fallible on purpose. Callers want two different things from an unrecognised token and both
+    /// are legitimate: a **stored** value must fall back to the least-privileged role (a row this
+    /// binary cannot read must not become an admin), while an **operator-supplied** one must be
+    /// rejected so the mistake is visible at the edge instead of silently demoting someone. One
+    /// list, two policies, each written where it applies.
+    #[must_use]
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.key() == key)
+    }
+
+    /// Parse a role name an **operator typed**, tolerating surrounding space and any casing.
+    ///
+    /// Separate from [`Role::parse`] because the inputs are different in kind, not in strictness.
+    /// `parse` reads values Yagra itself wrote (a `users.role` column, an API field the edge already
+    /// validated) and a mismatch there means corruption. This one reads a group→role mapping typed
+    /// into a settings form, where `Admin` is the same answer as `admin` and refusing it produces a
+    /// login denial the operator cannot diagnose from the generic 401. Both derive from
+    /// [`Role::ALL`], so the accepted set is still declared once.
+    #[must_use]
+    pub fn parse_lenient(s: &str) -> Option<Self> {
+        Self::parse(&s.trim().to_ascii_lowercase())
     }
 
     /// Short human label.
@@ -507,9 +562,14 @@ mod tests {
 
     // The `auth_source` column predates this enum and defaults to 'local', so an unknown value has
     // to read as a local account rather than panic or invent a kind.
+    //
+    // The needle used to be "ldap", which stopped being unknown when ADR-041 landed. "saml" is the
+    // deliberate replacement: ADR-041 decided *not* to implement SAML (an external SAML→OIDC bridge
+    // is the recommended configuration), so it is the one authentication token this schema is not
+    // expected to grow.
     #[test]
     fn an_unknown_auth_source_reads_as_a_local_account() {
-        assert_eq!(UserKind::parse("ldap"), UserKind::Local);
+        assert_eq!(UserKind::parse("saml"), UserKind::Local);
         assert_eq!(UserKind::parse(""), UserKind::Local);
     }
 
@@ -518,8 +578,31 @@ mod tests {
     // would leave the WebUI unreachable with no way back in.
     #[test]
     fn only_a_service_account_cannot_log_in() {
-        assert!(UserKind::Local.can_log_in());
-        assert!(UserKind::Oidc.can_log_in());
-        assert!(!UserKind::Service.can_log_in());
+        for k in UserKind::ALL {
+            assert_eq!(k.can_log_in(), k != UserKind::Service, "{}", k.key());
+        }
+    }
+
+    // Which kinds an outside directory can disable behind Yagra's back. This is what decides whether
+    // an owner's idleness kills their API tokens (`ApiTokenStore::verify`), and the rule was
+    // hardcoded to OIDC before LDAP existed — so an AD-disabled account's tokens would have lived
+    // forever, with nothing failing to compile. Pinned as an exact set, not a spot check.
+    #[test]
+    fn an_external_kind_is_exactly_the_directory_backed_ones() {
+        let external: Vec<&str> = UserKind::ALL
+            .into_iter()
+            .filter(|k| k.is_external())
+            .map(UserKind::key)
+            .collect();
+        assert_eq!(external, vec!["oidc", "ldap"]);
+    }
+
+    #[test]
+    fn every_role_round_trips_through_its_key() {
+        for r in Role::ALL {
+            assert_eq!(Role::parse(r.key()), Some(r));
+        }
+        assert_eq!(Role::parse("superuser"), None);
+        assert_eq!(Role::parse(""), None);
     }
 }

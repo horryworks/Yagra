@@ -1327,41 +1327,9 @@ fn split_target(target: &str) -> Result<(String, u16), String> {
 /// exists to send credential-bearing log bodies to another system; an unauthenticated peer is
 /// precisely the failure TLS is here to prevent, so a private CA is configured rather than skipped.
 fn tls_connector(ca_cert: Option<&str>) -> Result<tokio_rustls::TlsConnector, String> {
-    let mut roots = rustls::RootCertStore::empty();
-    let native = rustls_native_certs::load_native_certs();
-    for cert in native.certs {
-        // Individual malformed anchors in a system bundle are skipped by `add`; that is not fatal.
-        let _ = roots.add(cert);
-    }
-    let mut added = 0usize;
-    if let Some(pem) = ca_cert.map(str::trim).filter(|p| !p.is_empty()) {
-        use rustls::pki_types::{pem::PemObject, CertificateDer};
-        for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
-            let cert = cert.map_err(|e| format!("CA certificate is not valid PEM: {e}"))?;
-            roots
-                .add(cert)
-                .map_err(|e| format!("CA certificate rejected: {e}"))?;
-            added += 1;
-        }
-        if added == 0 {
-            return Err("CA certificate contained no CERTIFICATE block".to_owned());
-        }
-    }
-    if roots.is_empty() {
-        return Err(
-            "no trust anchors available (no system CA bundle and no CA certificate set)".to_owned(),
-        );
-    }
-    // `ring` is named explicitly: both crypto providers end up enabled in this dependency graph, and
-    // with both on rustls installs no process default — `ClientConfig::builder()` would panic.
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|e| format!("TLS configuration: {e}"))?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
+    Ok(tokio_rustls::TlsConnector::from(crate::tls::client_config(
+        ca_cert,
+    )?))
 }
 
 async fn with_timeout<T, F>(fut: F) -> Result<T, String>

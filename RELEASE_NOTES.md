@@ -10,6 +10,38 @@
 
 ## Unreleased
 
+### New Features
+- **Sign in with an LDAP or Active Directory account.** Configure your directory at
+  **Settings ▸ Auth ▸ Directory (LDAP/AD)** and people log in with their corporate credentials at the
+  ordinary login form — there is no second button and no separate URL. Yagra searches for the person
+  with a service account and then re-binds as the entry it found, so no DN pattern has to be guessed;
+  group membership maps to a Yagra role through the same mapping the SSO provider uses, matching a
+  group by its full DN or just its name. An account is created on first successful sign-in.
+  **Local accounts are always tried first**, so a directory that is unreachable can never lock an
+  administrator out — keep one local admin and a rollback stays survivable. LDAPS and StartTLS only,
+  with a field for your private CA; there is deliberately no way to skip certificate verification.
+  A **Test** button reports each stage separately and, given a username, shows the DN, the groups and
+  **the role that person would receive** — including when the answer is "denied", which the login
+  form otherwise reports as an ordinary wrong password. Nothing changes for a deployment that does
+  not configure a directory.
+- **SAML is answered with a documented bridge rather than an implementation.** `DEPLOYMENT.md` now
+  describes putting Keycloak or Dex in front as a SAML→OIDC bridge, and says why Yagra does not
+  verify XML signatures itself.
+
+### Improvements
+- **An API token owned by an LDAP account now expires with its owner's silence**, the same way an
+  SSO-owned one already did. A directory disabling somebody is not something Yagra is told about, so
+  the owner going quiet is the only signal there is — previously that rule was written for OIDC
+  alone, and a token owned by a disabled directory account would have kept working indefinitely.
+  `YAGRA_PAT_OIDC_IDLE_DAYS` keeps its name and now governs both.
+
+### Bug Fixes
+- **Signing in as a disabled SSO account now answers 401 instead of 500.** The refusal was correct;
+  the status code said Yagra had broken.
+- **Resetting the password of an SSO or directory account is now refused** with a message saying so.
+  It used to answer 200 and write a hash that can never be used, telling an administrator they had
+  set a password when they had not.
+
 ## v0.1.21 — Notification templates, and MCP can see what silenced the fleet
 
 ### Breaking changes

@@ -34,7 +34,10 @@
 //!   imported channel could never be made to work, and a routing rule pointing at one would notify
 //!   nobody, silently — the worst possible outcome for an alerting system. Re-create channels on
 //!   the target, then re-create the rules.
-//! * **`llm_config` / `meraki_*`** — provider credentials, same reason as `credentials`.
+//! * **`llm_config` / `ldap_config` / `meraki_*`** — provider credentials, same reason as
+//!   `credentials`. `ldap_config` additionally sits with `oidc_providers` above: it decides who may
+//!   sign in and as what, so carrying it would make importing a bundle a way to hand yourself a
+//!   role from a directory the target deployment does not otherwise trust.
 //! * **`pollers` / `mib_catalog`** — infrastructure inventory and a boot-time seeded catalog; both
 //!   are properties of the target deployment, not of the configuration being moved.
 //! * **`user_dashboards` / `shared_dashboard`** — widget layouts embed references (node ids, group

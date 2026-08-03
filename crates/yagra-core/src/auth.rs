@@ -598,13 +598,54 @@ pub const OIDC_PASSWORD_SENTINEL: &str = "!oidc-no-local-login";
 /// column stays NOT NULL so an N-1 binary reads a `String` it simply cannot match.
 pub const SERVICE_PASSWORD_SENTINEL: &str = "!service-account-no-login";
 
+/// Placeholder stored in `users.password_hash` for **LDAP/AD accounts** (ADR-041). Same
+/// construction and same reasoning as [`OIDC_PASSWORD_SENTINEL`]: not a valid Argon2 PHC string, so
+/// `verify_password` cannot succeed even if the `auth_source` guard were bypassed, and the column
+/// stays NOT NULL so an N-1 binary reads a `String` it simply cannot match.
+///
+/// That last part is what makes rolling back safe rather than merely tidy. An older binary parses
+/// `auth_source = 'ldap'` as `Local` (unknown values read as local), so it does *not* short-circuit
+/// in [`UserStore::verify`] and goes on to check this value as a password hash — which fails to
+/// parse and therefore fails closed. A NULL or empty column would have been the opposite.
+pub const LDAP_PASSWORD_SENTINEL: &str = "!ldap-no-local-login";
+
+/// The non-verifiable placeholder for a kind that has no local password.
+///
+/// An exhaustive match rather than a default, so a future kind has to state which it is instead of
+/// silently inheriting one that might be verifiable.
+fn password_sentinel(kind: UserKind) -> anyhow::Result<&'static str> {
+    match kind {
+        UserKind::Oidc => Ok(OIDC_PASSWORD_SENTINEL),
+        UserKind::Ldap => Ok(LDAP_PASSWORD_SENTINEL),
+        UserKind::Service => Ok(SERVICE_PASSWORD_SENTINEL),
+        UserKind::Local => {
+            anyhow::bail!("a local account has a real password hash, not a sentinel")
+        }
+    }
+}
+
+/// Which authentication path a submitted username routes to.
+///
+/// Returned by one indexed point lookup so the login handler can branch without a second query and
+/// without [`UserStore::verify`] having to leak the account's source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginRoute {
+    /// A local account with a password — hand it to [`UserStore::verify`].
+    Local,
+    /// An externally-backed account of this kind.
+    External(UserKind),
+    /// No such account, or one that cannot sign in at all. **Not** the same as "wrong password":
+    /// the caller may still offer the name to a configured directory, which is how a first-time
+    /// sign-in provisions an account.
+    Unknown,
+    /// The account exists and is deliberately unable to sign in (disabled, or a service account).
+    Refused,
+}
+
 /// Parse a stored role string via [`Role::key`] (defaults to the least-privileged role on
 /// garbage). Derived from [`Role::ALL`] so the token list lives in one place.
 fn parse_role(s: &str) -> Role {
-    Role::ALL
-        .into_iter()
-        .find(|r| r.key() == s)
-        .unwrap_or(Role::Viewer)
+    Role::parse(s).unwrap_or(Role::Viewer)
 }
 
 /// Parse the stored `users.scope` JSONB into a [`Scope`], failing **closed**.
@@ -639,11 +680,30 @@ pub struct UserSummary {
     /// Account status: a disabled account is retained for the audit trail but cannot
     /// authenticate (defaults to `true` for accounts created before this column existed).
     pub enabled: bool,
-    /// How the account authenticates: `"local"` (password) or `"oidc"` (external IdP).
+    // The text below is published verbatim to API clients (ADR-035), so it stays in their terms —
+    // no Rust type links, no internal rationale. `UserKind` is the enum behind it.
+    /// How the account authenticates: `"local"` (password), `"oidc"` (external identity provider),
+    /// `"ldap"` (directory bind), or `"service"` (a machine account that cannot sign in).
     pub auth_source: String,
     /// Which slice of the inventory this account may see: `"All"`, or the node groups it is
     /// limited to. An Admin account is always `"All"` — administration is fleet-wide.
     pub scope: Scope,
+}
+
+/// Outcome of resolving an externally-authenticated identity to a local account.
+///
+/// Every variant is an ordinary answer the caller turns into a status code. None of them is an
+/// internal error, which is the point: the disabled case used to be an `anyhow::bail!` and reached
+/// API clients as a 500.
+pub enum ExternalUpsert {
+    /// The account is ready to be issued a session.
+    Ok(Uuid, Principal),
+    /// The account exists and an admin has switched it off. A directory sign-in must not resurrect
+    /// it — revoking its sessions and then letting the next login mint a fresh one would make the
+    /// control a no-op for exactly the accounts an operator is least able to disable at the source.
+    Disabled,
+    /// A different account already owns that username. Refused rather than suffixed or taken over.
+    UsernameTaken(String),
 }
 
 /// Outcome of creating a user — a duplicate username is a normal 409, not a 500.
@@ -665,6 +725,9 @@ pub enum UserMutation {
     /// Refused: the target is an Admin, and an Admin is unscoped by construction
     /// (see `ADMIN_IS_UNSCOPED`). Only [`UserStore::set_scope`] can return this.
     AdminIsUnscoped,
+    /// Refused: the account does not authenticate locally, so it has no password to set. Only
+    /// [`UserStore::set_password`] can return this.
+    NotLocal,
 }
 
 /// PostgreSQL-backed user accounts for local auth.
@@ -700,6 +763,33 @@ impl UserStore {
             .execute(&self.pool)
             .await?;
         Ok(true)
+    }
+
+    /// Which authentication path this username takes, in one indexed lookup.
+    ///
+    /// A disabled account is [`LoginRoute::Refused`], not [`LoginRoute::Unknown`] — the distinction
+    /// is invisible to the client (both end in the same 401) but it decides whether the directory
+    /// is consulted at all, and consulting one on behalf of an account an admin has switched off
+    /// would let a directory sign-in resurrect it.
+    pub async fn login_route(&self, username: &str) -> anyhow::Result<LoginRoute> {
+        let row = sqlx::query("SELECT enabled, auth_source FROM users WHERE username = $1")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(LoginRoute::Unknown);
+        };
+        if !row.try_get::<bool, _>("enabled")? {
+            return Ok(LoginRoute::Refused);
+        }
+        let kind = UserKind::parse(&row.try_get::<String, _>("auth_source")?);
+        Ok(match kind {
+            UserKind::Local => LoginRoute::Local,
+            UserKind::Oidc | UserKind::Ldap => LoginRoute::External(kind),
+            // A service account owns tokens and cannot sign in; offering its name to a directory
+            // would let a matching directory entry take it over.
+            UserKind::Service => LoginRoute::Refused,
+        })
     }
 
     /// Verify a username/password and return the account id + principal on success. The id lets
@@ -840,18 +930,30 @@ impl UserStore {
         }
     }
 
-    /// Look up (or JIT-provision) the local account for a validated OIDC identity, returning its
-    /// `(id, principal)`. Keyed on `(provider, subject)` so a renamed user keeps one account; the
-    /// role is refreshed from the IdP on every login (the IdP is authoritative). A new account stores
-    /// the non-verifiable [`OIDC_PASSWORD_SENTINEL`] and `auth_source = 'oidc'`; a colliding username
-    /// is disambiguated with a short subject suffix rather than hijacking an existing account.
-    pub async fn upsert_oidc_user(
+    /// Look up (or JIT-provision) the local account for a validated **external** identity (OIDC or
+    /// LDAP), returning its `(id, principal)`.
+    ///
+    /// Keyed on `(provider, subject)` so a renamed user keeps one account. `users.oidc_provider_id`
+    /// and `users.oidc_subject` are the generic external-identity pair — the `oidc_` prefix is
+    /// historical (mig 0064) — and `kind` is what says which provider family they refer to. The role
+    /// is refreshed from the directory on every login, because the directory is authoritative about
+    /// who someone is.
+    ///
+    /// `kind` is a [`UserKind`], not a string, so the `auth_source` literal and the password
+    /// sentinel are both chosen from it by exhaustive match instead of being spelled at the call
+    /// site.
+    pub async fn upsert_external_user(
         &self,
+        kind: UserKind,
         provider_id: Uuid,
         subject: &str,
         username: &str,
         role: Role,
-    ) -> anyhow::Result<(Uuid, Principal)> {
+    ) -> anyhow::Result<ExternalUpsert> {
+        let sentinel = password_sentinel(kind)?;
+        if !kind.is_external() {
+            anyhow::bail!("{} accounts are not externally provisioned", kind.key());
+        }
         let role_str = role.key();
         // Existing identity → refresh role + last_login.
         let existing: Option<(Uuid, bool)> = sqlx::query_as(
@@ -868,8 +970,13 @@ impl UserStore {
             // are" to issuing a session. Disabling an SSO account therefore revoked its sessions and
             // then let the next SSO login mint a fresh one, which made the control a no-op for
             // exactly the accounts an operator is least able to switch off at the source.
+            //
+            // A variant rather than an error: the caller has to turn this into the 401 it is, and
+            // when it was an `anyhow::bail!` the OIDC callback ran it through `from_internal` and
+            // answered **500 "failed to provision the SSO account"** for a perfectly ordinary
+            // disabled account.
             if !enabled {
-                anyhow::bail!("account is disabled");
+                return Ok(ExternalUpsert::Disabled);
             }
             // The **stored** scope wins, not one derived from the IdP. The role is refreshed from
             // the directory on every login because the directory is authoritative about who someone
@@ -887,39 +994,74 @@ impl UserStore {
             .bind(role_str)
             .fetch_one(&self.pool)
             .await?;
-            return Ok((id, Principal::new(role, parse_scope(scope, id))));
+            // Refresh the stored username from the directory, as a **separate** statement.
+            //
+            // Two reasons it is not folded into the UPDATE above. For LDAP the stored name is what
+            // the person types at the login form, so a directory-side rename has to be followed or
+            // they can never sign in again. And a `WHERE NOT EXISTS (…)` subquery inside that
+            // statement would put a `WHERE` before the real one, which is exactly what
+            // `every_statement_that_sets_a_role_also_clears_an_admins_scope` slices on — the test
+            // would fail for a reason nobody could find.
+            //
+            // Best-effort: losing the rename costs a stale display name, while failing the login
+            // over it costs the person their access.
+            if let Err(e) = sqlx::query(
+                "UPDATE users SET username = $2 WHERE id = $1 AND username <> $2 \
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE username = $2 AND id <> $1)",
+            )
+            .bind(id)
+            .bind(username)
+            .execute(&self.pool)
+            .await
+            {
+                tracing::warn!(error = %e, "failed to refresh an external account's username");
+            }
+            return Ok(ExternalUpsert::Ok(
+                id,
+                Principal::new(role, parse_scope(scope, id)),
+            ));
         }
-        // New identity → JIT-provision. Disambiguate a colliding username.
+        // New identity → JIT-provision, but never onto a username somebody already owns.
+        //
+        // OIDC used to disambiguate with a subject suffix (`alice (a1b2c3d4)`), which is harmless
+        // there because the browser flow never asks for a name — the subject is the key. For LDAP
+        // the username **is** the credential typed at the form, so a suffixed row is one nobody can
+        // ever log into, created silently, with an audit trail naming somebody who does not exist.
+        // Binding to the existing row instead would be worse: anyone able to create a directory
+        // account called `admin` would inherit Yagra's.
         let taken: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)")
                 .bind(username)
                 .fetch_one(&self.pool)
                 .await?;
-        let uname = if taken {
-            let suffix: String = subject.chars().take(8).collect();
-            format!("{username} ({suffix})")
-        } else {
-            username.to_owned()
-        };
+        if taken {
+            return Ok(ExternalUpsert::UsernameTaken(username.to_owned()));
+        }
         let id = Uuid::new_v4();
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO users \
              (id, username, password_hash, role, auth_source, oidc_subject, oidc_provider_id, last_login_at) \
-             VALUES ($1, $2, $3, $4, 'oidc', $5, $6, now())",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now()) ON CONFLICT (username) DO NOTHING",
         )
         .bind(id)
-        .bind(&uname)
-        .bind(OIDC_PASSWORD_SENTINEL)
+        .bind(username)
+        .bind(sentinel)
         .bind(role_str)
+        .bind(kind.key())
         .bind(subject)
         .bind(provider_id)
         .execute(&self.pool)
         .await?;
+        if inserted.rows_affected() == 0 {
+            // Another request created the same name between the check and the insert. Same answer
+            // as the check itself, rather than a 500 from the unique violation.
+            return Ok(ExternalUpsert::UsernameTaken(username.to_owned()));
+        }
         // A just-provisioned account is unrestricted (the column default) — matching what every
         // account got before scopes could be issued. Narrowing it is an explicit admin action on
         // the account that now exists, which is also the only order that works: nobody can be given
         // a scope before their first sign-in reveals which account they are.
-        Ok((id, Principal::new(role, Scope::All)))
+        Ok(ExternalUpsert::Ok(id, Principal::new(role, Scope::All)))
     }
 
     /// Delete an account, refusing to remove the **last** admin (which would lock everyone out
@@ -1048,16 +1190,36 @@ impl UserStore {
         Ok(UserMutation::Done)
     }
 
-    /// Reset an account's password (Argon2id-hashed; the plaintext is never stored or logged).
-    /// Returns whether the account exists.
-    pub async fn set_password(&self, id: Uuid, password: &str) -> anyhow::Result<bool> {
+    /// Reset a **local** account's password (Argon2id-hashed; the plaintext is never stored or
+    /// logged).
+    ///
+    /// Refuses any other kind. Not exploitable before — `verify` rejects a non-local account before
+    /// it looks at the hash — but it wrote a real hash over the sentinel and answered 200, so an
+    /// admin was told they had set a password that can never be used. That is the first thing
+    /// somebody tries when a directory user cannot sign in, which is exactly when a false
+    /// confirmation costs the most.
+    pub async fn set_password(&self, id: Uuid, password: &str) -> anyhow::Result<UserMutation> {
+        let Some(row) = sqlx::query("SELECT auth_source FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(UserMutation::NotFound);
+        };
+        if UserKind::parse(&row.try_get::<String, _>("auth_source")?) != UserKind::Local {
+            return Ok(UserMutation::NotLocal);
+        }
         let hash = hash_password(password).map_err(|e| anyhow::anyhow!("hash password: {e}"))?;
         let res = sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
             .bind(id)
             .bind(hash)
             .execute(&self.pool)
             .await?;
-        Ok(res.rows_affected() > 0)
+        Ok(if res.rows_affected() > 0 {
+            UserMutation::Done
+        } else {
+            UserMutation::NotFound
+        })
     }
 }
 
@@ -1163,6 +1325,27 @@ mod tests {
                 "a statement setting `role` does not clear an admin's scope: {statement}"
             );
         }
+    }
+
+    // `CAN_LOG_IN` is a SQL mirror of `UserKind::can_log_in` with nothing making the two agree. It
+    // is what the two lock-out guards count, so a kind that gains the ability to sign in without
+    // being added here would let the last admin be deleted on the enum's word while the SQL still
+    // says nobody is left — or the reverse. Rebuilt from the enum rather than compared to a literal.
+    #[test]
+    fn the_can_log_in_sql_agrees_with_the_enum() {
+        let excluded: Vec<String> = UserKind::ALL
+            .into_iter()
+            .filter(|k| !k.can_log_in())
+            .map(|k| format!("'{}'", k.key()))
+            .collect();
+        assert_eq!(
+            excluded.len(),
+            1,
+            "CAN_LOG_IN is written as a single `<>` comparison; {} kinds now cannot sign in, so it \
+             needs to become a NOT IN (…) built from the same list",
+            excluded.len()
+        );
+        assert_eq!(CAN_LOG_IN, format!("auth_source <> {}", excluded[0]));
     }
 
     #[test]

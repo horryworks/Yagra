@@ -1208,6 +1208,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("PUT", "/api/v1/routing-rules/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",
+        "/api/v1/settings/ldap",
+        ADMIN_CFG,
+        PENDING_CONFIG_READ,
+    ),
+    ("PUT", "/api/v1/settings/ldap", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/settings/ldap/test",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/settings/neighbors",
         Global("deployment-wide adjacency-collection policy; it names no node and no group"),
         PENDING_CONFIG_READ,
@@ -1736,7 +1749,7 @@ mod tests {
     /// The number counts **routes**, where the v0.1.20 audit that prompted ADR-042 counted
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
-    const MCP_PENDING: usize = 52;
+    const MCP_PENDING: usize = 53;
 
     #[test]
     fn every_named_mcp_tool_exists() {

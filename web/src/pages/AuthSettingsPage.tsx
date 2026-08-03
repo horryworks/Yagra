@@ -7,7 +7,26 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import { ROLES, type OidcProviderSummary, type OidcProviderInput, type Role } from '../types/api';
+import {
+  ROLES,
+  type LdapConfigView,
+  type LdapSecurity,
+  type LdapTestResult,
+  type OidcProviderSummary,
+  type OidcProviderInput,
+  type Role,
+} from '../types/api';
+import {
+  connectionUrl,
+  defaultPortFor,
+  emptyLdapForm,
+  passwordIsEditable,
+  toLdapForm,
+  toLdapInput,
+  validateLdapForm,
+  type LdapFormState,
+} from './ldapConfigForm';
+import { addRoleMapRow, toRoleMapRows, type RoleMapRow } from './roleMapForm';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -284,6 +303,360 @@ function DeleteProviderModal({
   );
 }
 
+/** Settings ▸ Auth ▸ Directory (LDAP/AD) — ADR-041.
+ *
+ *  One saved configuration, so this is a form rather than a list. The Test button exercises what is
+ *  **stored**, which is why it is disabled until the first save: validating a directory before
+ *  switching it on is the whole point of it, but there is nothing to validate until something has
+ *  been written. The result is rendered stage by stage rather than as a tick, because the check
+ *  deliberately never binds as the user — an `ok` alone would be read as "login works". */
+function DirectoryCard({ authed }: { authed: boolean }) {
+  const { t } = useTranslation('settings-auth');
+  const [stored, setStored] = useState<LdapConfigView | null>(null);
+  const [form, setForm] = useState<LdapFormState>(emptyLdapForm());
+  const [rows, setRows] = useState<RoleMapRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [probeUser, setProbeUser] = useState('');
+  const [result, setResult] = useState<LdapTestResult | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .getLdapConfig()
+      .then((res) => {
+        setStored(res.config ?? null);
+        if (res.config) {
+          setForm(toLdapForm(res.config));
+          setRows(toRoleMapRows(res.config.role_map));
+        }
+      })
+      .catch(() => {
+        /* The page's own unavailable notice already covers 401/403. */
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Any edit invalidates a stale success banner and a stale probe result — the latter matters,
+  // because the probe describes the *saved* configuration and would otherwise appear to describe
+  // whatever is on screen now.
+  const dirty = () => {
+    setSaved(false);
+    setResult(null);
+  };
+  const set = (patch: Partial<LdapFormState>) => {
+    setForm((f) => ({ ...f, ...patch }));
+    dirty();
+  };
+  const setRow = (i: number, patch: Partial<RoleMapRow>) => {
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    dirty();
+  };
+
+  const save = async () => {
+    const problem = validateLdapForm(form, rows, stored);
+    if (problem) {
+      setError(t(`ldap.err.${problem}`));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.saveLdapConfig(toLdapInput(form, rows, stored));
+      setSaved(true);
+      // Reload rather than trusting the local state: this clears the password field and the replace
+      // checkbox, which is what makes the next edit ask for the credential correctly.
+      load();
+    } catch (e: unknown) {
+      setError(errMsg(e, t('ldap.err.save')));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      setResult(await api.testLdapConfig(probeUser.trim() || undefined));
+    } catch (e: unknown) {
+      setError(errMsg(e, t('ldap.err.test')));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <Card title={t('ldap.title')}>
+      <p className="modal-hint">{t('ldap.note')}</p>
+
+      <div className="auth-grid">
+        <label className="modal-field-label">{t('ldap.field.host')}</label>
+        <TextInput
+          className="mono"
+          value={form.host}
+          onChange={(e) => set({ host: e.target.value })}
+          placeholder="dc1.corp.example.com"
+        />
+
+        <label className="modal-field-label">{t('ldap.field.security')}</label>
+        <Select
+          value={form.security}
+          onChange={(e) => {
+            const security = e.target.value as LdapSecurity;
+            // Follow the conventional port unless the operator has moved off it, so switching mode
+            // does not silently leave 636 on a StartTLS connection.
+            const wasDefault = form.port.trim() === String(defaultPortFor(form.security));
+            set({
+              security,
+              ...(wasDefault ? { port: String(defaultPortFor(security)) } : {}),
+            });
+          }}
+        >
+          <option value="ldaps">{t('ldap.security.ldaps')}</option>
+          <option value="starttls">{t('ldap.security.starttls')}</option>
+        </Select>
+
+        <label className="modal-field-label">{t('ldap.field.port')}</label>
+        <TextInput
+          className="mono"
+          value={form.port}
+          onChange={(e) => set({ port: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.url')}</label>
+        <span className="mono muted">{connectionUrl(form)}</span>
+
+        <label className="modal-field-label">{t('ldap.field.caCert')}</label>
+        <textarea
+          className="mono"
+          rows={4}
+          value={form.caCert}
+          onChange={(e) => set({ caCert: e.target.value })}
+          placeholder="-----BEGIN CERTIFICATE-----"
+        />
+
+        <label className="modal-field-label">{t('ldap.field.bindDn')}</label>
+        <TextInput
+          className="mono"
+          value={form.bindDn}
+          onChange={(e) => set({ bindDn: e.target.value })}
+        />
+
+        {stored?.has_bind_password && (
+          <>
+            <label className="modal-field-label">{t('ldap.field.replacePassword')}</label>
+            <label className="modal-check">
+              <input
+                type="checkbox"
+                checked={form.replacePassword}
+                onChange={(e) => set({ replacePassword: e.target.checked, bindPassword: '' })}
+              />
+              <span className="modal-hint">{t('ldap.field.replacePasswordHint')}</span>
+            </label>
+          </>
+        )}
+
+        {passwordIsEditable(stored, form) && (
+          <>
+            <label className="modal-field-label">{t('ldap.field.bindPassword')}</label>
+            <TextInput
+              type="password"
+              autoComplete="new-password"
+              value={form.bindPassword}
+              onChange={(e) => set({ bindPassword: e.target.value })}
+            />
+          </>
+        )}
+
+        <label className="modal-field-label">{t('ldap.field.userBaseDn')}</label>
+        <TextInput
+          className="mono"
+          value={form.userBaseDn}
+          onChange={(e) => set({ userBaseDn: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.userFilter')}</label>
+        <TextInput
+          className="mono"
+          value={form.userFilter}
+          onChange={(e) => set({ userFilter: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.usernameAttribute')}</label>
+        <TextInput
+          className="mono"
+          value={form.usernameAttribute}
+          onChange={(e) => set({ usernameAttribute: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.uidAttribute')}</label>
+        <TextInput
+          className="mono"
+          value={form.uidAttribute}
+          onChange={(e) => set({ uidAttribute: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.memberOfAttribute')}</label>
+        <TextInput
+          className="mono"
+          value={form.memberOfAttribute}
+          onChange={(e) => set({ memberOfAttribute: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.groupBaseDn')}</label>
+        <TextInput
+          className="mono"
+          value={form.groupBaseDn}
+          onChange={(e) => set({ groupBaseDn: e.target.value })}
+        />
+
+        <label className="modal-field-label">{t('ldap.field.groupFilter')}</label>
+        <TextInput
+          className="mono"
+          value={form.groupFilter}
+          onChange={(e) => set({ groupFilter: e.target.value })}
+        />
+      </div>
+      <span className="modal-hint">{t('ldap.field.groupSearchHint')}</span>
+
+      <label className="modal-field-label">{t('field.roleMap')}</label>
+      <span className="modal-hint">{t('ldap.field.roleMapHint')}</span>
+      {rows.map((row, i) => (
+        <div className="auth-rolemap-row" key={row.key}>
+          <TextInput
+            className="mono"
+            value={row.group}
+            placeholder="CN=NetOps,OU=Groups,DC=corp,DC=example,DC=com"
+            onChange={(e) => setRow(i, { group: e.target.value })}
+          />
+          <Select
+            value={row.role}
+            onChange={(e) => setRow(i, { role: e.target.value as Role })}
+          >
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {t(`common:role.${r}`)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setRows((rs) => rs.filter((_, j) => j !== i));
+              dirty();
+            }}
+          >
+            {t('common:actions.remove')}
+          </Button>
+        </div>
+      ))}
+      <Button
+        variant="outline"
+        onClick={() => {
+          setRows(addRoleMapRow(rows));
+          dirty();
+        }}
+      >
+        + {t('field.addMapping')}
+      </Button>
+
+      <div className="auth-grid">
+        <label className="modal-field-label">{t('field.defaultRole')}</label>
+        <Select
+          value={form.defaultRole}
+          onChange={(e) => set({ defaultRole: e.target.value as Role | '' })}
+        >
+          <option value="">{t('field.defaultRoleNone')}</option>
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {t(`common:role.${r}`)}
+            </option>
+          ))}
+        </Select>
+
+        <label className="modal-field-label">{t('field.enabled')}</label>
+        <label className="modal-check">
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(e) => set({ enabled: e.target.checked })}
+          />
+          <span className="modal-hint">{t('ldap.field.enabledHint')}</span>
+        </label>
+      </div>
+
+      {error && <p className="form-error">{error}</p>}
+      {saved && <p className="auth-saved">{t('ldap.saved')}</p>}
+
+      <div className="auth-toolbar">
+        <Button variant="primary" onClick={() => void save()} disabled={!authed || busy}>
+          {t('common:actions.save')}
+        </Button>
+        <TextInput
+          className="mono"
+          value={probeUser}
+          placeholder={t('ldap.test.usernamePlaceholder')}
+          onChange={(e) => setProbeUser(e.target.value)}
+        />
+        <Button
+          variant="outline"
+          onClick={() => void test()}
+          disabled={stored == null || testing || busy}
+        >
+          {t('ldap.test.run')}
+        </Button>
+      </div>
+      {stored == null && <span className="modal-hint">{t('ldap.test.saveFirst')}</span>}
+
+      {result && (
+        <div className="auth-test">
+          <ul className="auth-stages">
+            {result.stages.map((s) => (
+              <li key={s.name} className={s.ok ? 'ok' : 'bad'}>
+                {t(`ldap.stage.${s.name}`, s.name)}
+                {s.detail && <span className="mono muted"> — {s.detail}</span>}
+              </li>
+            ))}
+          </ul>
+          {result.user_dn && (
+            <p className="mono muted">
+              {t('ldap.test.dn')}: {result.user_dn}
+            </p>
+          )}
+          {result.username_resolved && (
+            <p className="mono muted">
+              {t('ldap.test.username')}: {result.username_resolved}
+            </p>
+          )}
+          {result.groups.length > 0 && (
+            <p className="mono muted">
+              {t('ldap.test.groups')}: {result.groups.join(', ')}
+              {result.groups_truncated ? ' …' : ''}
+            </p>
+          )}
+          {/* The loudest thing on the panel: "connected fine, and this person would be refused" is
+              the commonest misconfiguration, and the login form reports it as a wrong password. */}
+          <p className={result.role ? 'auth-saved' : 'form-error'}>
+            {result.role
+              ? t('ldap.test.role', { role: t(`common:role.${result.role}`) })
+              : t('ldap.test.denied')}
+          </p>
+          <p className="modal-hint">{result.note}</p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function AuthSettingsPage() {
   const { t } = useTranslation('settings-auth');
   const authed = useAuthStore((s) => s.authed);
@@ -376,6 +749,11 @@ export function AuthSettingsPage() {
               ))}
             </div>
           )}
+
+          {/* The directory lives on this page rather than one of its own (ADR-041). "Who may sign
+              in" is one subject with two sources, and a separate *Directory* nav item would be the
+              second settings screen for one concept that decision 2 exists to prevent. */}
+          <DirectoryCard authed={authed} />
         </>
       )}
 

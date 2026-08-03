@@ -14106,6 +14106,190 @@
         }
       }
     },
+    "/api/v1/settings/ldap": {
+      "get": {
+        "tags": [
+          "ldap"
+        ],
+        "summary": "The stored directory configuration — never the bind password.",
+        "operationId": "get_ldap_config",
+        "responses": {
+          "200": {
+            "description": "The directory configuration, or null when none is saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LdapConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the user-administration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no directory store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ldap"
+        ],
+        "summary": "Save the directory configuration.",
+        "operationId": "put_ldap_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LdapConfigInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "The configuration is not usable; the message names the field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the user-administration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no directory store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/ldap/test": {
+      "post": {
+        "tags": [
+          "ldap"
+        ],
+        "summary": "Exercise the **saved** configuration against the directory.",
+        "operationId": "test_ldap_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LdapTestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How far the check got; a failed stage is reported here, not as an error status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LdapTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No directory configuration has been saved yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the user-administration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no directory store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/neighbors": {
       "get": {
         "tags": [
@@ -21469,6 +21653,314 @@
           "ja"
         ]
       },
+      "LdapConfigInput": {
+        "type": "object",
+        "description": "The save payload from the Settings page.",
+        "required": [
+          "host",
+          "bind_dn",
+          "user_base_dn"
+        ],
+        "properties": {
+          "bind_dn": {
+            "type": "string"
+          },
+          "bind_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Write-only credential. Two-valued, **not** three: `None` keeps what is stored, a non-blank\nvalue replaces it. An empty string is a validation error rather than \"clear\", because a bind\nwith a DN and no password is an unauthenticated bind that a permissive directory answers\n`success` — so \"no password\" is not a configuration, it is a silent downgrade to anonymous."
+          },
+          "ca_cert": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_base_dn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group_filter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group_name_attribute": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "member_of_attribute": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "role_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "security": {
+            "$ref": "#/components/schemas/LdapSecurity"
+          },
+          "uid_attribute": {
+            "type": "string"
+          },
+          "user_base_dn": {
+            "type": "string"
+          },
+          "user_filter": {
+            "type": "string"
+          },
+          "username_attribute": {
+            "type": "string"
+          }
+        }
+      },
+      "LdapConfigResponse": {
+        "type": "object",
+        "description": "The directory configuration, or `null` when none has been saved.",
+        "properties": {
+          "config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LdapConfigView",
+                "description": "`null` rather than a 404: \"not configured\" is the normal state of a fresh installation, and\nthe settings form wants to render its empty self rather than an error."
+              }
+            ]
+          }
+        }
+      },
+      "LdapConfigView": {
+        "type": "object",
+        "description": "The configuration as the Settings page shows it — **never** the bind password.",
+        "required": [
+          "host",
+          "port",
+          "security",
+          "bind_dn",
+          "has_bind_password",
+          "user_base_dn",
+          "user_filter",
+          "username_attribute",
+          "uid_attribute",
+          "member_of_attribute",
+          "group_name_attribute",
+          "role_map",
+          "enabled",
+          "updated_at"
+        ],
+        "properties": {
+          "bind_dn": {
+            "type": "string"
+          },
+          "ca_cert": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator-supplied CA certificate, in PEM. A certificate is public, so unlike the bind\npassword it round-trips through the form rather than being write-only."
+          },
+          "default_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_base_dn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group_filter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group_name_attribute": {
+            "type": "string"
+          },
+          "has_bind_password": {
+            "type": "boolean",
+            "description": "True once a bind password has been stored, so the form can say \"set\" without revealing it."
+          },
+          "host": {
+            "type": "string"
+          },
+          "member_of_attribute": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "role_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "security": {
+            "$ref": "#/components/schemas/LdapSecurity"
+          },
+          "uid_attribute": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "user_base_dn": {
+            "type": "string"
+          },
+          "user_filter": {
+            "type": "string"
+          },
+          "username_attribute": {
+            "type": "string"
+          }
+        }
+      },
+      "LdapSecurity": {
+        "type": "string",
+        "description": "How the connection is protected. **Two variants, both TLS** — there is deliberately no plaintext\noption, so `ldap://` cannot be configured into existence and the bind password cannot cross the\nwire in the clear. Adding one later would be a certificate-verification-disable flag by another\nname and needs the same argument (ADR-041 decision 2).",
+        "enum": [
+          "ldaps",
+          "starttls"
+        ]
+      },
+      "LdapTestBody": {
+        "type": "object",
+        "description": "Which account, if any, the test should look up.",
+        "properties": {
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A username to resolve. Optional: with none, the check still proves the connection, the TLS\ntrust and the service account's bind. With one, it also reports the DN, the groups and the\nrole that user would receive — **without** binding as them, so it can neither be used as a\ncredential-testing proxy into the directory nor push anybody towards their domain's lockout\nthreshold."
+          }
+        }
+      },
+      "LdapTestResult": {
+        "type": "object",
+        "description": "The Test button's result.\n\nStaged rather than a single boolean on purpose. This probe cannot prove that *logging in* works,\nbecause it deliberately never binds as the user (see [`probe`]) — so an `ok: true` alone would\nbe read as \"login works\" when the directory may still refuse simple binds, or the account may be\ndisabled. Naming the stages says exactly how far it got.",
+        "required": [
+          "ok",
+          "stages",
+          "groups",
+          "groups_truncated",
+          "note"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "groups_truncated": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "What this probe did not test, so a green result is not over-read."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Every stage passed."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role this user would receive. **`None` means they would be denied** — the commonest\nmisconfiguration, and one the login form reports as an indistinguishable wrong password."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LdapTestStage"
+            }
+          },
+          "subject_present": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the entry carried the configured id attribute — the flag, not the value. Its absence\nis the failure this field exists to surface, and the value itself is of no use here."
+          },
+          "user_dn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username_resolved": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LdapTestStage": {
+        "type": "object",
+        "description": "One step of the Test button's report.",
+        "required": [
+          "name",
+          "ok"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, or what it found. Truncated — this is remote-influenced text."
+          },
+          "name": {
+            "type": "string",
+            "description": "`connect` | `bind_service` | `search_user` | `resolve_groups`."
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "LlmConfigInput": {
         "type": "object",
         "description": "The `PUT /api/v1/llm/config` body.",
@@ -26069,6 +26561,7 @@
         "enum": [
           "local",
           "oidc",
+          "ldap",
           "service"
         ]
       },
@@ -26087,7 +26580,7 @@
         "properties": {
           "auth_source": {
             "type": "string",
-            "description": "How the account authenticates: `\"local\"` (password) or `\"oidc\"` (external IdP)."
+            "description": "How the account authenticates: `\"local\"` (password), `\"oidc\"` (external identity provider),\n`\"ldap\"` (directory bind), or `\"service\"` (a machine account that cannot sign in)."
           },
           "created_at": {
             "type": "string",

@@ -85,9 +85,18 @@ async fn login(
     admin: Admin,
     Json(body): Json<LoginBody>,
 ) -> ApiResult<Json<LoginOk>> {
-    // Brute-force guard, checked *before* Argon2 runs: verifying a password is deliberately
-    // expensive, so an unthrottled login endpoint is a CPU amplifier as well as a guessing oracle.
+    // NOTE: this handler must **not** take the `Ldap` extractor, however much it looks like it
+    // should. That extractor answers 503 when no directory store exists, which is every deployment
+    // that does not use one — putting it in this signature would make them all unable to log in.
+    // Absence of a directory is an ordinary branch here, so `st.ldap` is read directly.
+    //
+    // Brute-force guard, checked *before* Argon2 or any directory bind runs: verifying a password is
+    // deliberately expensive, so an unthrottled login endpoint is a CPU amplifier as well as a
+    // guessing oracle — and against a directory it is worse, because repeated binds drive a real
+    // domain account towards its lockout threshold.
     if let Err(reject) = st.login_throttle.check(&body.username) {
+        // Recorded as plain `auth.login`: this fires before the account is looked up, so it cannot
+        // know which source the name belongs to. The asymmetry with the rows below is deliberate.
         audit_record(&admin.audit, &body.username, "auth.login", 429).await;
         return Err(ApiError::too_many_requests(
             "too_many_attempts",
@@ -98,26 +107,183 @@ async fn login(
         )
         .retry_after(reject.retry_after_secs));
     }
+
+    // One indexed lookup decides the path. Local accounts are resolved without touching the
+    // directory at all — not even reading its configuration — so a directory that is unreachable,
+    // or a KEK that cannot be read, can never delay or block a break-glass local admin.
+    let route = admin
+        .users
+        .login_route(&body.username)
+        .await
+        .map_err(|e| ApiError::from_internal(e.as_ref(), "login", "login failed"))?;
+    match route {
+        crate::auth::LoginRoute::Local => local_login(&st, &admin, &body).await,
+        crate::auth::LoginRoute::External(yagra_common::UserKind::Ldap) => {
+            directory_login(&st, &admin, &body).await
+        }
+        // An SSO account signs in through its provider; a disabled or service account cannot sign in
+        // at all. Both answer exactly as they did before this path existed.
+        crate::auth::LoginRoute::External(_) | crate::auth::LoginRoute::Refused => {
+            invalid_credentials(&st, &admin, &body.username, "auth.login").await
+        }
+        // No such account. If a directory is configured, this is how a first-time sign-in provisions
+        // one; otherwise it is an ordinary unknown user.
+        crate::auth::LoginRoute::Unknown => {
+            if st.ldap.is_some() {
+                directory_login(&st, &admin, &body).await
+            } else {
+                invalid_credentials(&st, &admin, &body.username, "auth.login").await
+            }
+        }
+    }
+}
+
+/// The 401 every failed login ends in. One message for "no such user", "wrong password" and "the
+/// directory said no" — telling them apart is an account-enumeration oracle.
+async fn invalid_credentials(
+    st: &ApiState,
+    admin: &Admin,
+    username: &str,
+    action: &str,
+) -> ApiResult<Json<LoginOk>> {
+    st.login_throttle.record_failure(username);
+    audit_record(&admin.audit, username, action, 401).await;
+    Err(ApiError::unauthorized_with(
+        "invalid_credentials",
+        "incorrect username or password",
+    ))
+}
+
+/// Password check against the local `users` table — unchanged behaviour.
+async fn local_login(st: &ApiState, admin: &Admin, body: &LoginBody) -> ApiResult<Json<LoginOk>> {
     let verified = admin
         .users
         .verify(&body.username, &body.password)
         .await
         .map_err(|e| ApiError::from_internal(e.as_ref(), "login", "login failed"))?;
     let Some((user_id, principal)) = verified else {
-        st.login_throttle.record_failure(&body.username);
-        audit_record(&admin.audit, &body.username, "auth.login", 401).await;
-        // One message for both "no such user" and "wrong password" — telling them apart is an
-        // account-enumeration oracle.
-        return Err(ApiError::unauthorized_with(
-            "invalid_credentials",
-            "incorrect username or password",
-        ));
+        return invalid_credentials(st, admin, &body.username, "auth.login").await;
     };
     st.login_throttle.record_success(&body.username);
     let role = principal.role;
     let token = st.sessions.issue(user_id, principal, &body.username);
     audit_record(&admin.audit, &body.username, "auth.login", 200).await;
     Ok(Json(LoginOk { token, role }))
+}
+
+/// Two-stage bind against the configured LDAP/AD directory (ADR-041).
+///
+/// The audit action is `auth.login.ldap` rather than `auth.login`, and an unreachable directory gets
+/// `auth.login.ldap_unavailable`. The client cannot tell any of these apart — every one is the same
+/// 401 — but an auditor investigating a lockout must be able to separate a local password-guessing
+/// run from one that is driving a real domain account towards `badPwdCount`. All three keep the
+/// `auth.login` prefix, so an existing `LIKE 'auth.login%'` query still finds everything.
+async fn directory_login(
+    st: &ApiState,
+    admin: &Admin,
+    body: &LoginBody,
+) -> ApiResult<Json<LoginOk>> {
+    let Some(repo) = st.ldap.as_ref() else {
+        return invalid_credentials(st, admin, &body.username, "auth.login").await;
+    };
+    let cfg = match repo.enabled_config().await {
+        Ok(Some(cfg)) => cfg,
+        // Not configured, switched off, or unreadable (a KEK problem). None of these is the
+        // person's fault, so none of them records a throttle failure.
+        Ok(None) => return invalid_credentials(st, admin, &body.username, "auth.login").await,
+        Err(e) => {
+            tracing::error!(error = %e, "could not load the directory configuration");
+            audit_record(
+                &admin.audit,
+                &body.username,
+                "auth.login.ldap_unavailable",
+                401,
+            )
+            .await;
+            return Err(ApiError::unauthorized_with(
+                "invalid_credentials",
+                "incorrect username or password",
+            ));
+        }
+    };
+
+    match crate::ldap::authenticate(&cfg, &body.username, &body.password).await {
+        crate::ldap::LdapAuth::Unavailable(why) => {
+            // **No throttle failure.** If a domain-controller outage armed the per-account
+            // exponential lockout, five attempts each would leave every user locked out of Yagra
+            // even after the DC came back — an outage that outlives its own cause.
+            tracing::warn!(reason = %why, "the directory could not be consulted");
+            audit_record(
+                &admin.audit,
+                &body.username,
+                "auth.login.ldap_unavailable",
+                401,
+            )
+            .await;
+            Err(ApiError::unauthorized_with(
+                "invalid_credentials",
+                "incorrect username or password",
+            ))
+        }
+        crate::ldap::LdapAuth::Denied(why) => {
+            tracing::debug!(reason = %why, "the directory refused a login");
+            invalid_credentials(st, admin, &body.username, "auth.login.ldap").await
+        }
+        crate::ldap::LdapAuth::Ok(identity, role) => {
+            let upsert = admin
+                .users
+                .upsert_external_user(
+                    yagra_common::UserKind::Ldap,
+                    *crate::ldap::LDAP_PROVIDER_ID,
+                    &identity.subject,
+                    &identity.username,
+                    role,
+                )
+                .await
+                .map_err(|e| ApiError::from_internal(e.as_ref(), "login", "login failed"))?;
+            match upsert {
+                crate::auth::ExternalUpsert::Ok(user_id, principal) => {
+                    st.login_throttle.record_success(&body.username);
+                    let role = principal.role;
+                    // The session and the audit row carry the **directory's** name, not what was
+                    // typed: AD matches `sAMAccountName` case-insensitively while `users.username`
+                    // does not, so the canonical spelling is the only one that stays stable.
+                    let token = st.sessions.issue(user_id, principal, &identity.username);
+                    audit_record(&admin.audit, &identity.username, "auth.login.ldap", 200).await;
+                    Ok(Json(LoginOk { token, role }))
+                }
+                crate::auth::ExternalUpsert::Disabled => {
+                    // An admin switched this account off. Not a credential failure, so it does not
+                    // arm the lockout — but it must not sign in either.
+                    audit_record(&admin.audit, &identity.username, "auth.login.ldap", 401).await;
+                    Err(ApiError::unauthorized_with(
+                        "invalid_credentials",
+                        "incorrect username or password",
+                    ))
+                }
+                crate::auth::ExternalUpsert::UsernameTaken(existing) => {
+                    // Otherwise undiagnosable: the right password, a generic 401, forever.
+                    tracing::warn!(
+                        directory_user = %identity.username,
+                        directory_dn = %identity.dn,
+                        existing = %existing,
+                        "directory login refused: another account already holds that username"
+                    );
+                    audit_record(
+                        &admin.audit,
+                        &identity.username,
+                        "auth.login.ldap_conflict",
+                        401,
+                    )
+                    .await;
+                    Err(ApiError::unauthorized_with(
+                        "invalid_credentials",
+                        "incorrect username or password",
+                    ))
+                }
+            }
+        }
+    }
 }
 
 /// Revoke the caller's bearer token so it cannot be reused.

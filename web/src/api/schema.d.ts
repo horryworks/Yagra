@@ -2704,6 +2704,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/ldap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The stored directory configuration — never the bind password. */
+        get: operations["get_ldap_config"];
+        /** Save the directory configuration. */
+        put: operations["put_ldap_config"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ldap/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exercise the **saved** configuration against the directory. */
+        post: operations["test_ldap_config"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/neighbors": {
         parameters: {
             query?: never;
@@ -5382,6 +5417,124 @@ export interface components {
          * @enum {string}
          */
         Language: "en" | "ja";
+        /** @description The save payload from the Settings page. */
+        LdapConfigInput: {
+            bind_dn: string;
+            /**
+             * @description Write-only credential. Two-valued, **not** three: `None` keeps what is stored, a non-blank
+             *     value replaces it. An empty string is a validation error rather than "clear", because a bind
+             *     with a DN and no password is an unauthenticated bind that a permissive directory answers
+             *     `success` — so "no password" is not a configuration, it is a silent downgrade to anonymous.
+             */
+            bind_password?: string | null;
+            ca_cert?: string | null;
+            default_role?: string | null;
+            enabled?: boolean;
+            group_base_dn?: string | null;
+            group_filter?: string | null;
+            group_name_attribute?: string;
+            host: string;
+            member_of_attribute?: string;
+            /** Format: int32 */
+            port?: number;
+            role_map?: {
+                [key: string]: string;
+            };
+            security?: components["schemas"]["LdapSecurity"];
+            uid_attribute?: string;
+            user_base_dn: string;
+            user_filter?: string;
+            username_attribute?: string;
+        };
+        /** @description The directory configuration, or `null` when none has been saved. */
+        LdapConfigResponse: {
+            config?: null | components["schemas"]["LdapConfigView"];
+        };
+        /** @description The configuration as the Settings page shows it — **never** the bind password. */
+        LdapConfigView: {
+            bind_dn: string;
+            /**
+             * @description The operator-supplied CA certificate, in PEM. A certificate is public, so unlike the bind
+             *     password it round-trips through the form rather than being write-only.
+             */
+            ca_cert?: string | null;
+            default_role?: string | null;
+            enabled: boolean;
+            group_base_dn?: string | null;
+            group_filter?: string | null;
+            group_name_attribute: string;
+            /** @description True once a bind password has been stored, so the form can say "set" without revealing it. */
+            has_bind_password: boolean;
+            host: string;
+            member_of_attribute: string;
+            /** Format: int32 */
+            port: number;
+            role_map: {
+                [key: string]: string;
+            };
+            security: components["schemas"]["LdapSecurity"];
+            uid_attribute: string;
+            updated_at: string;
+            user_base_dn: string;
+            user_filter: string;
+            username_attribute: string;
+        };
+        /**
+         * @description How the connection is protected. **Two variants, both TLS** — there is deliberately no plaintext
+         *     option, so `ldap://` cannot be configured into existence and the bind password cannot cross the
+         *     wire in the clear. Adding one later would be a certificate-verification-disable flag by another
+         *     name and needs the same argument (ADR-041 decision 2).
+         * @enum {string}
+         */
+        LdapSecurity: "ldaps" | "starttls";
+        /** @description Which account, if any, the test should look up. */
+        LdapTestBody: {
+            /**
+             * @description A username to resolve. Optional: with none, the check still proves the connection, the TLS
+             *     trust and the service account's bind. With one, it also reports the DN, the groups and the
+             *     role that user would receive — **without** binding as them, so it can neither be used as a
+             *     credential-testing proxy into the directory nor push anybody towards their domain's lockout
+             *     threshold.
+             */
+            username?: string | null;
+        };
+        /**
+         * @description The Test button's result.
+         *
+         *     Staged rather than a single boolean on purpose. This probe cannot prove that *logging in* works,
+         *     because it deliberately never binds as the user (see [`probe`]) — so an `ok: true` alone would
+         *     be read as "login works" when the directory may still refuse simple binds, or the account may be
+         *     disabled. Naming the stages says exactly how far it got.
+         */
+        LdapTestResult: {
+            groups: string[];
+            groups_truncated: boolean;
+            /** @description What this probe did not test, so a green result is not over-read. */
+            note: string;
+            /** @description Every stage passed. */
+            ok: boolean;
+            /**
+             * @description The role this user would receive. **`None` means they would be denied** — the commonest
+             *     misconfiguration, and one the login form reports as an indistinguishable wrong password.
+             */
+            role?: string | null;
+            stages: components["schemas"]["LdapTestStage"][];
+            /**
+             * @description Whether the entry carried the configured id attribute — the flag, not the value. Its absence
+             *     is the failure this field exists to surface, and the value itself is of no use here.
+             */
+            subject_present?: boolean | null;
+            user_dn?: string | null;
+            username_resolved?: string | null;
+        };
+        /** @description One step of the Test button's report. */
+        LdapTestStage: {
+            /** @description Why it failed, or what it found. Truncated — this is remote-influenced text. */
+            detail?: string | null;
+            /** @description `connect` | `bind_service` | `search_user` | `resolve_groups`. */
+            name: string;
+            ok: boolean;
+        };
         /** @description The `PUT /api/v1/llm/config` body. */
         LlmConfigInput: {
             /**
@@ -7274,10 +7427,13 @@ export interface components {
          *     IdP subject, and therefore no way to sign in. It exists to own tokens.
          * @enum {string}
          */
-        UserKind: "local" | "oidc" | "service";
+        UserKind: "local" | "oidc" | "ldap" | "service";
         /** @description User-account metadata for the API — never includes the password hash. */
         UserSummary: {
-            /** @description How the account authenticates: `"local"` (password) or `"oidc"` (external IdP). */
+            /**
+             * @description How the account authenticates: `"local"` (password), `"oidc"` (external identity provider),
+             *     `"ldap"` (directory bind), or `"service"` (a machine account that cannot sign in).
+             */
             auth_source: string;
             /** @description Account creation time (RFC 3339 text; no chrono types cross the API edge). */
             created_at: string;
@@ -18180,6 +18336,171 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_ldap_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory configuration, or null when none is saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LdapConfigResponse"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the user-administration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no directory store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_ldap_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LdapConfigInput"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configuration is not usable; the message names the field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the user-administration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no directory store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    test_ldap_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LdapTestBody"];
+            };
+        };
+        responses: {
+            /** @description How far the check got; a failed stage is reported here, not as an error status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LdapTestResult"];
+                };
+            };
+            /** @description No directory configuration has been saved yet */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the user-administration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no directory store */
             503: {
                 headers: {
                     [name: string]: unknown;

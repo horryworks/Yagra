@@ -175,18 +175,15 @@ pub struct OidcLogin {
 
 // ── Role mapping ────────────────────────────────────────────────────────────────────────────────
 
-/// Parse a role name (case-insensitive) into a [`Role`]; `None` on an unknown value.
-pub fn role_from_str(s: &str) -> Option<Role> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "viewer" => Some(Role::Viewer),
-        "operator" => Some(Role::Operator),
-        "admin" => Some(Role::Admin),
-        _ => None,
-    }
-}
-
-/// Resolve the effective role for a set of IdP groups: the **highest** (most privileged) role among
-/// the mapped groups, falling back to `default_role`. `None` ⇒ the user has no Yagra role → deny.
+/// Resolve the effective role for a set of directory groups: the **highest** (most privileged) role
+/// among the mapped groups, falling back to `default_role`. `None` ⇒ the user has no Yagra role →
+/// deny.
+///
+/// Shared with the LDAP path (ADR-041 decision 2: one group→role mechanism, not two). The lookup is
+/// an exact `HashMap::get`, so **whatever normalisation a caller needs is the caller's job** — the
+/// OIDC path hands over claim values verbatim, while the LDAP path expands each group DN into its
+/// candidate keys and lowercases both sides before it gets here. Doing the folding inside this
+/// function would silently change how existing OIDC deployments match their claims.
 pub fn resolve_role(
     groups: &[String],
     role_map: &HashMap<String, Role>,
@@ -425,12 +422,12 @@ impl OidcRepo {
         RedirectUrl::new(input.redirect_uri.clone())
             .map_err(|e| anyhow::anyhow!("invalid redirect_uri: {e}"))?;
         for (g, r) in &input.role_map {
-            if role_from_str(r).is_none() {
+            if Role::parse_lenient(r).is_none() {
                 anyhow::bail!("role_map[{g}] has unknown role '{r}'");
             }
         }
         if let Some(r) = &input.default_role {
-            if role_from_str(r).is_none() {
+            if Role::parse_lenient(r).is_none() {
                 anyhow::bail!("unknown default_role '{r}'");
             }
         }
@@ -574,7 +571,7 @@ impl OidcRepo {
             serde_json::from_value(role_map_json).unwrap_or_default();
         let mut role_map = HashMap::new();
         for (group, role) in role_map_raw {
-            match role_from_str(&role) {
+            match Role::parse_lenient(&role) {
                 Some(r) => {
                     role_map.insert(group, r);
                 }
@@ -585,7 +582,7 @@ impl OidcRepo {
         }
         let default_role = row
             .try_get::<Option<String>, _>("default_role")?
-            .and_then(|s| role_from_str(&s));
+            .and_then(|s| Role::parse_lenient(&s));
 
         Ok(Some(OidcProviderConfig {
             id: row.try_get("id")?,
@@ -634,12 +631,31 @@ mod tests {
         assert_eq!(resolve_role(&groups, &m, None), None);
     }
 
+    // The role *name* an operator types into `role_map` is still matched case-insensitively — that
+    // behaviour used to live in a hand-written `role_from_str` here and now comes from
+    // `Role::parse_lenient`, which must not have tightened it on the way.
     #[test]
-    fn role_from_str_parses_known_roles_case_insensitively() {
-        assert_eq!(role_from_str("viewer"), Some(Role::Viewer));
-        assert_eq!(role_from_str("operator"), Some(Role::Operator));
-        assert_eq!(role_from_str("ADMIN"), Some(Role::Admin));
-        assert_eq!(role_from_str("root"), None);
+    fn a_typed_role_name_is_still_parsed_case_insensitively() {
+        assert_eq!(Role::parse_lenient("viewer"), Some(Role::Viewer));
+        assert_eq!(Role::parse_lenient("operator"), Some(Role::Operator));
+        assert_eq!(Role::parse_lenient("ADMIN"), Some(Role::Admin));
+        assert_eq!(Role::parse_lenient("root"), None);
+    }
+
+    // ADR-041 adds case-insensitive, DN-or-CN group matching **for LDAP only**, by normalising the
+    // candidate keys before they reach `resolve_role`. The OIDC side hands over claim values
+    // verbatim, so its matching must stay exact: an existing deployment whose IdP emits `NetOps`
+    // and whose map says `netops` is currently *not* matching, and silently starting to match would
+    // hand out a role nobody granted.
+    #[test]
+    fn oidc_group_matching_is_still_exact_and_case_sensitive() {
+        let m = map(&[("NetOps", Role::Admin)]);
+        assert_eq!(resolve_role(&["netops".to_owned()], &m, None), None);
+        assert_eq!(resolve_role(&["NetOps ".to_owned()], &m, None), None);
+        assert_eq!(
+            resolve_role(&["NetOps".to_owned()], &m, None),
+            Some(Role::Admin)
+        );
     }
 
     #[test]

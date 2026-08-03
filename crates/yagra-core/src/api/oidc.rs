@@ -154,9 +154,15 @@ async fn oidc_callback(
                 ));
             }
         };
-    let (user_id, principal) = admin
+    let upsert = admin
         .users
-        .upsert_oidc_user(config.id, &login.subject, &login.username, login.role)
+        .upsert_external_user(
+            yagra_common::UserKind::Oidc,
+            config.id,
+            &login.subject,
+            &login.username,
+            login.role,
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -165,6 +171,32 @@ async fn oidc_callback(
                 "failed to provision the SSO account",
             )
         })?;
+    let (user_id, principal) = match upsert {
+        crate::auth::ExternalUpsert::Ok(id, principal) => (id, principal),
+        // Both of these used to reach the client as a 500 through `from_internal`. They are
+        // ordinary refusals: an account an admin switched off, and a name somebody else owns.
+        // Which one it was stays server-side, like every other branch of this handler.
+        outcome => {
+            match &outcome {
+                crate::auth::ExternalUpsert::Disabled => {
+                    tracing::warn!(user = %login.username, "SSO login refused: account is disabled");
+                }
+                crate::auth::ExternalUpsert::UsernameTaken(existing) => {
+                    tracing::warn!(
+                        subject = %login.subject,
+                        existing = %existing,
+                        "SSO login refused: the username is already held by another account"
+                    );
+                }
+                crate::auth::ExternalUpsert::Ok(..) => unreachable!("matched above"),
+            }
+            audit_record(&admin.audit, &login.username, "auth.oidc", 401).await;
+            return Err(ApiError::unauthorized_with(
+                "oidc_denied",
+                "SSO login could not be completed",
+            ));
+        }
+    };
     let role = principal.role;
     let token = st.sessions.issue(user_id, principal, &login.username);
     audit_record(&admin.audit, &login.username, "auth.oidc", 200).await;

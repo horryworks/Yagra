@@ -366,7 +366,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_ENABLE_HA` | `false` | Opt-in active/passive leader election via a PostgreSQL advisory lock |
 | `YAGRA_CORE_ID` | unset | Human-readable id of this core instance in HA logs |
 | `YAGRA_SESSION_KEY_FILE` | unset ⇒ per-process tokens | Path to the mounted HMAC session-signing key (sessions valid on any core and across restarts); set but unreadable/invalid ⇒ startup fails |
-| `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | Days an API token owned by an **SSO-provisioned** account survives its owner not signing in — an identity provider disabling an account is not something Yagra is told about, so the owner going quiet is the only signal. Local/service-account-owned tokens are unaffected. Clamped 1–365 |
+| `YAGRA_PAT_OIDC_IDLE_DAYS` | `30` | Days an API token owned by an **externally-authenticated** account — SSO **or** LDAP directory — survives its owner not signing in. An identity provider or a domain controller disabling an account is not something Yagra is told about, so the owner going quiet is the only signal. Local/service-account-owned tokens are unaffected. The variable keeps its `OIDC` name so running deployments do not break; the rule covers every external kind. Clamped 1–365 |
 | **MCP (AI clients)** | | |
 | `YAGRA_ENABLE_MCP` | `false` | Mount the MCP tool surface at `/mcp` on the API port (auth always required) |
 | `YAGRA_MCP_ALLOWED_HOSTS` | unset ⇒ any `Host` accepted | Comma-separated `Host`-header allowlist for `/mcp` (DNS-rebinding hardening) |
@@ -632,6 +632,63 @@ and the store is running its own built-in default; Yagra shows that rather than 
 `YAGRA_FLOW_RETENTION_DAYS` seeds the flow window on a **brand-new** deployment only. After first
 boot the Settings value is authoritative, and the change is applied to ClickHouse immediately
 (`ALTER TABLE … MODIFY TTL`) — including on an existing volume, where it previously had no effect.
+
+---
+
+## Directory sign-in (LDAP / Active Directory)
+
+Configured at **Settings ▸ Auth ▸ Directory (LDAP/AD)** (ADR-041). No environment variable turns it
+on — an empty configuration is the off state, and nothing is dialled until one is saved.
+
+**How a sign-in works.** The ordinary login form is the whole UI. Yagra looks the submitted name up
+in its own `users` table first: a local account is answered locally and never touches the directory.
+Otherwise a service account searches the directory for the person, and a **second, independent
+connection** binds as the DN that search returned. A DN is never built from the typed name — that
+breaks on any OU layout the pattern did not anticipate.
+
+**Always keep one local administrator.** This is the rule to take away from this section. Local
+accounts are tried first, so a directory that is down cannot lock you out — but that protection
+exists only while a Yagra binary that knows about directories is running. If every administrator is
+a directory account and the release is rolled back, nobody can sign in.
+
+| Setting | What it is |
+|---|---|
+| Transport | **LDAPS** (implicit TLS, usually 636) or **StartTLS** (usually 389). There is no plaintext option, deliberately — it would put the bind password on the wire in the clear with no warning. |
+| CA certificate | PEM for a private/enterprise CA. Almost always needed: an internal AD presents a certificate the container's bundle does not trust. **There is no way to skip certificate verification, and there will not be one** — configuring the CA is the supported answer. |
+| Service account DN + password | Used for the search leg only. Envelope-encrypted at rest (ADR-018) and never returned by the API. It cannot be blank: a bind with a DN and an empty password is an *unauthenticated* bind, which many directories answer with success. |
+| User filter | Must contain `{username}`. Without it the filter matches every entry under the base DN. AD default: `(&(objectClass=user)(sAMAccountName={username}))` |
+| Username attribute | The canonical name, stored as the Yagra username. AD: `sAMAccountName`. Taken from the directory rather than from what was typed, because AD matches it case-insensitively while Yagra's own username column does not. |
+| Identity attribute | The immutable per-entry id — `objectGUID` on AD, `entryUUID` on OpenLDAP. This is what lets somebody be renamed without becoming a second account. An entry that does not return it is refused rather than stored under an empty id. |
+| Group membership attribute | Read from the user's own entry. AD populates `memberOf` natively; OpenLDAP needs the `memberof` overlay. |
+| Group base DN + filter | Optional second lookup, for directories without that overlay — **and the only way to resolve nested groups on AD**, where `memberOf` is not transitive. Use the matching-rule OID: `(member:1.2.840.113556.1.4.1941:={user_dn})` |
+| Group → role | The same mechanism the SSO provider uses. A group matches by full DN *or* by its name, case-insensitively, and the highest matching role wins. With no mapping and no default role **every login is denied**, so saving that combination while enabled is refused. |
+
+**Use the Test button.** It exercises the *saved* configuration and reports each stage separately,
+because it deliberately never binds as the user — so a green result proves the connection, the TLS
+trust, the service account and the role mapping, not that a password would be accepted. Given a
+username it also shows the DN, the groups, and **the role that person would receive**; a denial
+there is the commonest misconfiguration and the one the login form cannot distinguish from a wrong
+password.
+
+**Account lockout.** Yagra locks an account out after 5 failed attempts, and a common AD
+`lockoutThreshold` is 5–10 — so repeated typos at Yagra's login form can lock somebody out of the
+domain, not merely out of Yagra. Watch `yagra_ldap_bind_total` if that is a concern.
+
+Turning the directory off revokes the sessions of every account it provisioned. Their rows remain,
+so switching it back on restores them.
+
+## SAML
+
+**Yagra does not implement SAML, and that is a decision rather than a gap** (ADR-041). XML signature
+verification — canonicalization, XXE, signature wrapping — is a well-known source of authentication
+bypasses, and the Rust service-provider implementations are not mature enough to bet an
+authentication path on.
+
+For a SAML-only identity provider, put a **SAML→OIDC bridge in front**: run
+[Keycloak](https://www.keycloak.org/) or [Dex](https://dexidp.io/) as an OIDC provider that federates
+to your SAML IdP, and point Settings ▸ Auth at the bridge. The operator requirement is met, the
+bridge is maintained by people who specialise in exactly this, and Yagra's authentication surface
+stays one protocol smaller.
 
 ---
 

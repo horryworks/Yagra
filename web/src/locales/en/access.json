@@ -113,7 +113,6 @@
       "viewer": "Viewers"
     },
     "you": "You",
-    "ssoAccount": "Provisioned via SSO (external IdP)",
     "status": {
       "active": "Active",
       "disabled": "Disabled"
@@ -161,7 +160,14 @@
     "kind": {
       "local": "Local",
       "oidc": "SSO",
+      "ldap": "Directory",
       "service": "Service account"
+    },
+    "kindHint": {
+      "local": "A local account: the password is held by Yagra.",
+      "oidc": "Provisioned by signing in through the identity provider. It has no local password, and the provider decides its role.",
+      "ldap": "Provisioned by signing in against the LDAP/AD directory. It has no local password, and the directory's groups decide its role.",
+      "service": "A service account has no password and cannot sign in. It exists to own API tokens, so an integration keeps working when the person who set it up moves on."
     },
     "changePw": {
       "title": "Change password — {{name}}",

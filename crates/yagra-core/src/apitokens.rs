@@ -116,16 +116,20 @@ pub struct ApiTokenStore {
     pool: PgPool,
     /// How long an **externally-authenticated** owner may go without signing in before their tokens
     /// stop working. See [`ApiTokenStore::verify`] for why this exists at all.
-    oidc_idle: chrono::Duration,
+    ///
+    /// Applies to every [`UserKind::is_external`] kind — OIDC and LDAP alike. The environment
+    /// variable that sets it is still `YAGRA_PAT_OIDC_IDLE_DAYS`: renaming it would break running
+    /// deployments for no gain, so the name is historical in the same way `users.oidc_subject` is.
+    external_idle: chrono::Duration,
 }
 
 impl ApiTokenStore {
     /// New store over the shared metadata pool.
     #[must_use]
-    pub fn new(pool: PgPool, oidc_idle_days: i64) -> Self {
+    pub fn new(pool: PgPool, external_idle_days: i64) -> Self {
         Self {
             pool,
-            oidc_idle: chrono::Duration::days(oidc_idle_days.max(1)),
+            external_idle: chrono::Duration::days(external_idle_days.max(1)),
         }
     }
 
@@ -236,12 +240,14 @@ impl ApiTokenStore {
     /// - **Role cap.** The effective role is `min(token role, owner's current role)`, so demoting an
     ///   account narrows its tokens at once. Storing the role on the token and reading it back would
     ///   leave a demoted admin holding an admin credential.
-    /// - **Idle external owner.** Yagra cannot observe an IdP disabling an account: `upsert_oidc_user`
-    ///   runs on *successful* login only, so a disabled SSO user's row simply freezes with
-    ///   `enabled = true` and its last-known role. Sessions survive that because they expire within a
-    ///   day; a no-expiry token would not. The only signal available is that the owner stops signing
-    ///   in — so for an OIDC-owned token, a `last_login_at` older than `oidc_idle` is treated as the
-    ///   account being gone. Local and service accounts are exempt: they have no IdP to disagree with.
+    /// - **Idle external owner.** Yagra cannot observe an IdP or a domain controller disabling an
+    ///   account: `upsert_external_user` runs on *successful* login only, so a disabled external
+    ///   user's row simply freezes with `enabled = true` and its last-known role. Sessions survive
+    ///   that because they expire within a day; a no-expiry token would not. The only signal
+    ///   available is that the owner stops signing in — so for a token owned by any
+    ///   [`UserKind::is_external`] account (OIDC **or** LDAP), a `last_login_at` older than
+    ///   `external_idle` is treated as the account being gone. Local and service accounts are
+    ///   exempt: nothing outside Yagra can disagree about them.
     ///
     /// On a hit, `last_used_at` is refreshed (throttled to ~1/min) as a best-effort side effect — a
     /// write failure there never fails the auth. The raw token is never read back; the lookup is by
@@ -276,11 +282,11 @@ impl ApiTokenStore {
         }
 
         let owner_kind = UserKind::parse(&row.try_get::<String, _>("auth_source").ok()?);
-        if owner_kind == UserKind::Oidc {
+        if owner_kind.is_external() {
             let last_login: Option<DateTime<Utc>> = row.try_get("last_login_at").ok()?;
-            // No recorded login at all is treated as idle: the column is written on every SSO login,
-            // so an OIDC account that has never had one cannot be vouched for either.
-            if last_login.is_none_or(|t| Utc::now() - t > self.oidc_idle) {
+            // No recorded login at all is treated as idle: the column is written on every external
+            // login, so an account that has never had one cannot be vouched for either.
+            if last_login.is_none_or(|t| Utc::now() - t > self.external_idle) {
                 return None;
             }
         }
@@ -388,7 +394,7 @@ fn row_to_info(row: sqlx::postgres::PgRow) -> anyhow::Result<ApiTokenInfo> {
         // Only meaningful for an externally-authenticated owner, which is the only kind whose
         // idleness ends its tokens. Showing it for a service account would invite reading a blank
         // as a problem when it is the normal state.
-        owner_last_login_at: if owner_kind == Some(UserKind::Oidc) {
+        owner_last_login_at: if owner_kind.is_some_and(UserKind::is_external) {
             row.try_get("last_login_at")?
         } else {
             None
@@ -403,10 +409,7 @@ fn row_to_info(row: sqlx::postgres::PgRow) -> anyhow::Result<ApiTokenInfo> {
 /// Parse the stored snake_case role key back into a [`Role`] (the mirror of [`Role::key`]).
 /// Derived from [`Role::ALL`] so the token list lives in one place.
 fn parse_role(key: &str) -> anyhow::Result<Role> {
-    Role::ALL
-        .into_iter()
-        .find(|r| r.key() == key)
-        .ok_or_else(|| anyhow::anyhow!("unknown role key {key:?}"))
+    Role::parse(key).ok_or_else(|| anyhow::anyhow!("unknown role key {key:?}"))
 }
 
 #[cfg(test)]

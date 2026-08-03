@@ -61,7 +61,7 @@ pub(super) fn routes() -> Router<ApiState> {
 /// Validate a role string against `yagra_common::Role` (snake_case), returning the `400` a bad one
 /// deserves. Kept as a parse rather than a bare predicate so no unchecked string reaches the store.
 fn checked_role(role: &str) -> ApiResult<&str> {
-    if Role::ALL.iter().any(|r| r.key() == role) {
+    if Role::parse(role).is_some() {
         Ok(role)
     } else {
         let allowed = Role::ALL.map(Role::key).join(", ");
@@ -101,6 +101,11 @@ fn mutation_result(outcome: UserMutation, id: Uuid) -> ApiResult<StatusCode> {
             "admin_is_unscoped",
             "an admin account cannot be limited to groups — its permissions are fleet-wide; \
              change the role first",
+        )),
+        UserMutation::NotLocal => Err(ApiError::bad_request(
+            "not_a_local_account",
+            "this account signs in through an identity provider or a directory, so it has no \
+             password here — an administrator has to change it at the source",
         )),
     }
 }
@@ -196,10 +201,13 @@ async fn create_user(
             }
             admin.users.create_service(username, role).await
         }
-        UserKind::Oidc => {
+        // Every externally-backed kind is provisioned by signing in, never by hand: the account has
+        // to carry the directory's own identifier for it, and only a successful login reveals that.
+        // Creating a shell here would produce a row that can never be matched to the person.
+        UserKind::Oidc | UserKind::Ldap => {
             return Err(ApiError::bad_request(
                 "kind_not_creatable",
-                "SSO accounts are provisioned by signing in through the identity provider",
+                "an SSO or directory account is provisioned by signing in through it",
             ))
         }
     };
@@ -484,7 +492,7 @@ async fn set_user_password(
     Json(body): Json<SetPassword>,
 ) -> ApiResult<StatusCode> {
     check_password(&body.password)?;
-    let changed = admin
+    let outcome = admin
         .users
         .set_password(id, &body.password)
         .await
@@ -495,12 +503,7 @@ async fn set_user_password(
                 "failed to reset password",
             )
         })?;
-    if !changed {
-        return Err(ApiError::not_found(
-            "user_not_found",
-            format!("no user {id}"),
-        ));
-    }
+    mutation_result(outcome, id)?;
     // A password reset (e.g. after a compromise) must invalidate existing sessions, or the
     // attacker's stolen token survives the reset.
     st.sessions.revoke_user(id);

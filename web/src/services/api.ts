@@ -126,6 +126,9 @@ import type {
   DnsRecordType,
   UserKind,
   UserSummary,
+  LdapConfigInput,
+  LdapConfigView,
+  LdapTestResult,
   OidcProviderSummary,
   OidcProviderInput,
   ApiTokenSummary,
@@ -1651,6 +1654,22 @@ export const api = {
   /** Delete an OIDC provider. */
   deleteOidcProvider: (id: string): Promise<void> =>
     apiDelete('/api/v1/settings/oidc/{id}', { path: { id } }),
+
+  // ── LDAP/AD directory (Settings ▸ Auth, ManageUsers) — ADR-041 ──────────────────────────────
+  /** The configured directory, or `{ config: null }` when none is saved. Never the bind password. */
+  getLdapConfig: (): Promise<{ config?: LdapConfigView | null }> =>
+    apiGet('/api/v1/settings/ldap'),
+
+  /** Save the directory. **Omit** `bind_password` to keep the stored one — sending an empty string
+   *  is rejected, because a blank bind password is an anonymous search rather than an absent one. */
+  saveLdapConfig: (body: LdapConfigInput): Promise<void> =>
+    apiPut('/api/v1/settings/ldap', { body }),
+
+  /** Exercise the **saved** directory configuration. With a username it also reports that user's DN,
+   *  groups and resolved role — without binding as them, so it is not a credential-testing proxy and
+   *  cannot push anyone towards their domain's lockout threshold. */
+  testLdapConfig: (username?: string): Promise<LdapTestResult> =>
+    apiPost('/api/v1/settings/ldap/test', { body: { username: username ?? null } }),
 
   // ── API tokens (Settings ▸ API tokens, ManageUsers) — the MCP/API client credential (ADR-028) ──
   /** List API tokens (metadata only — never the raw token). */

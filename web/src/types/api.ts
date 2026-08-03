@@ -229,8 +229,9 @@ export type UserSummary = components['schemas']['UserSummary'];
 
 /** How an account authenticates. `service` is a machine account: no password, no IdP subject, and
  *  therefore no way to sign in — it exists to own API tokens so an unattended integration outlives
- *  the person who set it up. `oidc` accounts are provisioned by signing in, never created by hand. */
-export const USER_KINDS = ['local', 'oidc', 'service'] as const;
+ *  the person who set it up. `oidc` and `ldap` accounts are provisioned by signing in, never created
+ *  by hand: the row has to carry the directory's own identifier, which only a login reveals. */
+export const USER_KINDS = ['local', 'oidc', 'ldap', 'service'] as const;
 
 /** How an account authenticates (snake_case). Pinned to `schemas.UserKind`. */
 export type UserKind = (typeof USER_KINDS)[number];
@@ -247,6 +248,25 @@ export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];
 /** Create/update payload for an OIDC provider. `client_secret` is write-only: omit (or empty) on
  *  update to keep the stored secret. */
 export type OidcProviderInput = components['schemas']['OidcProviderInput'];
+
+/** The configured LDAP/AD directory (`GET /api/v1/settings/ldap`). The bind password is write-only
+ *  and never returned; `has_bind_password` signals one is stored. `ca_cert` is a certificate, not a
+ *  secret, so it does round-trip. */
+export type LdapConfigView = components['schemas']['LdapConfigView'];
+
+/** Save payload for the directory. `bind_password` is write-only: **omit** it to keep the stored
+ *  one. Unlike the LLM credential there is no "clear" value — a blank bind password is an anonymous
+ *  bind, so the server rejects it. */
+export type LdapConfigInput = components['schemas']['LdapConfigInput'];
+
+/** How the directory connection is protected. Both values are TLS; there is deliberately no
+ *  plaintext option. */
+export type LdapSecurity = components['schemas']['LdapSecurity'];
+
+/** The staged result of `POST /api/v1/settings/ldap/test`. `role: null` means the user tested would
+ *  be **denied** — the commonest misconfiguration, and one the login form cannot distinguish from a
+ *  wrong password. */
+export type LdapTestResult = components['schemas']['LdapTestResult'];
 
 /** An API token (`GET /api/v1/api-tokens`) — a long-lived credential for unattended clients
  *  (ADR-028). The raw token is write-only: shown once on create, never returned again; only

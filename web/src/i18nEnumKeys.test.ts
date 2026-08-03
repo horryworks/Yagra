@@ -304,6 +304,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('user kind', { en: enAccess, ja: jaAccess }, 'users.kind.', USER_KINDS);
   });
 
+  it('every account kind has a hint (access:users.kindHint.*)', () => {
+    // The badge's tooltip is what tells an admin why an account has no password and who decides its
+    // role — the question a `Directory` or `SSO` pill immediately raises. Same runtime-key exposure
+    // as the label above, so it needs the same guard rather than relying on EN/JA parity.
+    expectKeys('user kind hint', { en: enAccess, ja: jaAccess }, 'users.kindHint.', USER_KINDS);
+  });
+
   it('every config-bundle section and note has strings (system:bundle.*)', () => {
     // Both are rendered from a value the server chose, and both would otherwise show the operator a
     // raw database identifier at exactly the moment they are deciding whether to overwrite their

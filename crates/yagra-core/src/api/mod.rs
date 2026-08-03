@@ -50,6 +50,7 @@ pub(crate) mod flow;
 mod forwarding;
 pub(crate) mod groups;
 mod health;
+mod ldap;
 pub(crate) mod maintenance;
 mod meraki;
 pub(crate) mod metrics;
@@ -260,6 +261,8 @@ pub struct ApiState {
     pub is_leader: Arc<std::sync::atomic::AtomicBool>,
     /// External-IdP (OIDC) provider store (ADR-010 Phase 3); `None` in skeleton mode. Drives the
     /// SSO login endpoints and Settings ▸ Auth CRUD.
+    /// The LDAP/AD directory store (ADR-041). `None` in skeleton mode.
+    pub ldap: Option<Arc<crate::ldap::LdapRepo>>,
     pub oidc: Option<Arc<crate::oidc::OidcRepo>>,
     /// In-flight OIDC authorizations (CSRF state → nonce/PKCE), one per pending SSO login.
     pub oidc_flight: Arc<crate::oidc::OidcFlight>,
@@ -327,6 +330,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(mib::routes())
         .merge(api_tokens::routes())
         .merge(session::routes())
+        .merge(ldap::routes())
         .merge(oidc::routes())
         .merge(system::routes())
         .merge(collection::routes())
@@ -520,6 +524,7 @@ mod tests {
             events: None,
             public_dashboard: true,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            ldap: None,
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
@@ -552,6 +557,7 @@ mod tests {
             events: None,
             public_dashboard: false,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            ldap: None,
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
@@ -582,6 +588,7 @@ mod tests {
             events: None,
             public_dashboard: false,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            ldap: None,
             oidc: None,
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,

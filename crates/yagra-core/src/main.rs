@@ -36,6 +36,7 @@ mod gcp;
 mod groups;
 mod history;
 mod ipasn;
+mod ldap;
 mod leader;
 mod logstore;
 mod maintenance;
@@ -66,6 +67,7 @@ mod sink;
 mod store;
 mod stored_enum;
 mod thresholds;
+mod tls;
 mod token;
 mod url_check;
 mod volatile;
@@ -735,6 +737,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // in-memory in-flight authorization map.
     let oidc = Some(Arc::new(oidc::OidcRepo::new(repo.pool(), kek.clone())));
     let oidc_flight = Arc::new(oidc::OidcFlight::new());
+    // Directory login (LDAP/AD, ADR-041): the single configuration row, with the service account's
+    // bind password sealed by the same KEK. No in-flight map — there is no redirect leg.
+    let ldap = Some(Arc::new(ldap::LdapRepo::new(repo.pool(), kek.clone())));
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
@@ -753,6 +758,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         events: Some(event_engine),
         public_dashboard: cfg.public_dashboard,
         is_leader: is_leader.clone(),
+        ldap,
         oidc,
         oidc_flight,
         enable_mcp: cfg.enable_mcp,
@@ -1190,6 +1196,9 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
         public_dashboard: true,
+        // Skeleton has no directory store either; `login` treats that as "no directory configured"
+        // rather than an error, so the local path is unaffected.
+        ldap: None,
         // Skeleton has no leader election — always "ready".
         is_leader: Arc::new(AtomicBool::new(true)),
         // Skeleton has no metadata store, so no OIDC provider config.

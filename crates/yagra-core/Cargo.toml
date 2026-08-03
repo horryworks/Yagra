@@ -64,6 +64,8 @@ tokio-stream = { workspace = true }
 async-nats = { workspace = true }
 lettre = { workspace = true }
 openidconnect = { workspace = true }
+# LDAP/AD login (ADR-041): `mod ldap`. Core-only — a poller never authenticates a person.
+ldap3 = { workspace = true }
 # MCP server (ADR-028 Phase 4): the inward-facing AI tool surface (`mod mcp`). Mounts a
 # StreamableHttpService into the existing axum `serve()`; tools wrap the read seams on `ApiState`.
 # The tool param schemas derive `JsonSchema` via rmcp's re-exported `schemars`; the direct `schemars`

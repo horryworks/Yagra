@@ -8,8 +8,12 @@
     "enabled": "Enabled",
     "disabled": "Disabled"
   },
-  "add": { "title": "Add provider" },
-  "edit": { "title": "Edit provider" },
+  "add": {
+    "title": "Add provider"
+  },
+  "edit": {
+    "title": "Edit provider"
+  },
   "delete": {
     "title": "Delete provider",
     "confirm": "Delete the SSO provider \"{{name}}\"? Users who sign in via SSO will no longer be able to."
@@ -39,5 +43,64 @@
   "err": {
     "save": "Failed to save the provider",
     "delete": "Failed to delete the provider"
+  },
+  "ldap": {
+    "title": "Directory (LDAP/AD)",
+    "note": "Sign in with a corporate LDAP or Active Directory account. Yagra searches for the person with a service account, then re-binds as the entry it found — it never builds a DN from the typed name. Local accounts are always tried first, so a directory that is unreachable can never lock out an administrator.",
+    "saved": "Directory settings saved.",
+    "security": {
+      "ldaps": "LDAPS (implicit TLS)",
+      "starttls": "StartTLS (upgrade on connect)"
+    },
+    "field": {
+      "host": "Host",
+      "security": "Transport",
+      "port": "Port",
+      "url": "Connects to",
+      "caCert": "CA certificate (PEM)",
+      "bindDn": "Service account DN",
+      "bindPassword": "Service account password",
+      "replacePassword": "Replace password",
+      "replacePasswordHint": "A password is stored. Tick to enter a new one; leave it alone to keep the stored one.",
+      "userBaseDn": "User base DN",
+      "userFilter": "User filter",
+      "usernameAttribute": "Username attribute",
+      "uidAttribute": "Identity attribute",
+      "memberOfAttribute": "Group membership attribute",
+      "groupBaseDn": "Group base DN (optional)",
+      "groupFilter": "Group filter (optional)",
+      "groupSearchHint": "Leave the group fields empty to read membership from the user entry alone. Fill both to also search for groups — on Active Directory that is the only way to see nested groups, using (member:1.2.840.113556.1.4.1941:={user_dn}).",
+      "roleMapHint": "Match a group by its full DN or just its name; case is ignored. The highest matching role wins.",
+      "enabledHint": "While this is off, directory accounts cannot sign in and their existing sessions are revoked."
+    },
+    "test": {
+      "run": "Test",
+      "saveFirst": "Save the directory before testing it — the check exercises what is stored.",
+      "usernamePlaceholder": "username to look up (optional)",
+      "dn": "Entry",
+      "username": "Resolved username",
+      "groups": "Groups",
+      "role": "This account would sign in as {{role}}.",
+      "denied": "This account would be DENIED — no group maps to a role and there is no default role."
+    },
+    "stage": {
+      "connect": "Connect and negotiate TLS",
+      "bind_service": "Bind as the service account",
+      "search_user": "Search for the user",
+      "resolve_groups": "Resolve groups"
+    },
+    "err": {
+      "host": "A host is required.",
+      "port": "The port must be a number between 1 and 65535.",
+      "bindDn": "The service account's DN is required.",
+      "bindPassword": "A service account password is required. It cannot be blank — an empty password would make the search anonymous.",
+      "userBaseDn": "A user base DN is required.",
+      "userFilter": "The user filter must contain {username}, or it matches every entry under the base DN.",
+      "groupPair": "A group search needs both a group base DN and a group filter, or neither.",
+      "groupFilter": "The group filter must contain {user_dn} (or {username}) so it matches one person.",
+      "noMapping": "Enabling the directory needs at least one group mapping or a default role — otherwise every login is denied.",
+      "save": "Could not save the directory settings.",
+      "test": "Could not test the directory."
+    }
   }
 }

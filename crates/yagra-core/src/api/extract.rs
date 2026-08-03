@@ -326,6 +326,34 @@ impl std::ops::Deref for Oidc {
     }
 }
 
+/// The LDAP/AD directory store — present only when this deployment persists directory
+/// configuration (ADR-041).
+///
+/// The twin of [`Oidc`], and used only by the three Settings handlers. **`POST /auth/login`
+/// deliberately does not take it**: this rejects with a 503 when absent, so putting it in that
+/// signature would make every deployment without a directory unable to log in at all. That handler
+/// reads `st.ldap` directly, because absence there is a normal branch rather than an error.
+pub struct Ldap(pub Arc<crate::ldap::LdapRepo>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Ldap {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.ldap
+            .as_ref()
+            .map(|l| Self(l.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for Ldap {
+    type Target = crate::ldap::LdapRepo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The passive-event engine — present only when event ingestion is configured.
 ///
 /// Its own extractor for the same reason as [`Admin`]: four handlers opened with the identical

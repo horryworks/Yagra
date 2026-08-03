@@ -31,6 +31,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         events: None,
         public_dashboard,
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        ldap: None,
         oidc: None,
         oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
         enable_mcp: false,

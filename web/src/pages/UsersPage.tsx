@@ -181,14 +181,14 @@ export function UsersPage() {
                       <div className="il-line1">
                         <span className="il-name">{u.username}</span>
                         {me === u.username && <span className="you-pill">{t('users.you')}</span>}
-                        {u.auth_source === 'oidc' && (
-                          <span className="you-pill" title={t('users.ssoAccount')}>
-                            SSO
-                          </span>
-                        )}
-                        {u.auth_source === 'service' && (
-                          <span className="you-pill" title={t('users.field.kindHint')}>
-                            {t('users.kind.service')}
+                        {/* One badge driven by the kind, not a branch per kind: LDAP was the third
+                            member and would have been the third `===` comparison. Both strings are
+                            runtime keys, so `i18nEnumKeys.test.ts` demands EN and JA for any kind
+                            added later — which EN/JA parity alone would not (a new kind is missing
+                            from both locales, so parity passes and the badge shows a raw key). */}
+                        {u.auth_source !== 'local' && (
+                          <span className="you-pill" title={t(`users.kindHint.${u.auth_source}`)}>
+                            {t(`users.kind.${u.auth_source}`)}
                           </span>
                         )}
                         <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>

@@ -184,6 +184,15 @@ data-encoding = "2"
 # code exchange, and ID-token signature/claim validation per spec. TLS rides the in-tree reqwest
 # (rustls) — `default-features = false` + explicit `rustls-tls` keeps native-tls/openssl/NASM out.
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+# LDAP/AD login (two-stage bind: service search, then re-bind as the found DN — ADR-041). Pure Rust,
+# async, no NASM. `tls-rustls-ring` is the load-bearing choice: ldap3's `tls`/`tls-native` default is
+# native-tls (OpenSSL), and its rustls path *requires* a crypto provider be named — picking `ring`
+# matches the provider this workspace already pins everywhere else, so no second provider enters the
+# graph and `ClientConfig::builder()` keeps working. `sync` is off: the blocking wrapper spins its own
+# runtime and nothing here needs it. There is no plaintext transport in our config, and
+# `LdapConnSettings::set_no_tls_verify` is never called (ADR-041 decision 2, the ADR-034 discipline) —
+# a source-reading test pins that.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 # MCP server (ADR-028 Phase 4, inward-facing AI tool surface). Official Rust SDK: the `server` +
 # `macros` features give the `#[tool]`/`#[tool_router]`/`#[tool_handler]` declarative tool layer, and
 # `transport-streamable-http-server` gives a `StreamableHttpService` that mounts into the existing
