@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Data retention policy (ADR-040) — the one place that answers "how long does Yagra keep X".
 //!
 //! Before this module the answer was spread over eight sites and the number `90 * 86_400` was
