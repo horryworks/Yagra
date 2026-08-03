@@ -233,6 +233,60 @@ pub struct FleetSummaryDto {
     pub log_tier_enabled: bool,
 }
 
+/// One folder group in the inventory tree, sanitized for AI consumption.
+///
+/// **Not `crate::groups::GroupSummary` served directly**, unlike the `get_topology` move above: that
+/// type carries `pool`, the poll-pool assignment, which is a forbidden key here — see this module's
+/// canary. The precedent for reusing a REST type applies only when the REST type is already clean.
+///
+/// Everything else is kept, geo included: "which site is this, and where" is a question an operator
+/// asks during an incident, and parity is about which questions can be answered.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeGroupDto {
+    pub id: Uuid,
+    pub name: String,
+    /// The folder's kind (`site`, `rack`, …) as a stable key.
+    pub group_type: String,
+    /// Parent folder; `None` for a root. The tree is rebuilt from this.
+    pub parent_id: Option<Uuid>,
+    /// Manual order within the parent (siblings sort by this, then by name).
+    pub sort_order: f64,
+    /// The folder's own coordinates, as stored; `None` when it inherits.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    /// Where it sits on the map after inheritance: its own, else the nearest placed ancestor's.
+    pub effective_latitude: Option<f64>,
+    pub effective_longitude: Option<f64>,
+    /// `own` | `inherited` | `unset` — whether the effective position is this folder's own.
+    ///
+    /// The enum itself rather than a string: it has no `as_str()`, only `#[serde(rename_all)]`, so
+    /// spelling the tokens out here would create a second spelling with nothing making the two
+    /// agree (`testing.md`, "an enum's token and its serde tag").
+    pub geo_source: crate::groups::GeoSource,
+    /// The folder that supplied the effective position: the map pin this folder's nodes count at.
+    pub geo_group: Option<Uuid>,
+}
+
+impl NodeGroupDto {
+    /// Project a repo row, dropping the poll-pool assignment.
+    #[must_use]
+    pub fn from_summary(g: &crate::groups::GroupSummary) -> Self {
+        Self {
+            id: g.id,
+            name: g.name.clone(),
+            group_type: g.group_type.clone(),
+            parent_id: g.parent_id,
+            sort_order: g.sort_order,
+            latitude: g.latitude,
+            longitude: g.longitude,
+            effective_latitude: g.effective_latitude,
+            effective_longitude: g.effective_longitude,
+            geo_source: g.geo_source,
+            geo_group: g.geo_group,
+        }
+    }
+}
+
 /// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
 /// lifecycle state. Timestamps are RFC 3339 UTC. Carries no credential-bearing field (a job is a
 /// record of a **read** over the TSDB; ADR-028 Increment 2 treats analyses as read-only).
@@ -626,6 +680,84 @@ mod tests {
             "pool dropped from EventDto"
         );
         assert_no_forbidden_keys(&event_json, "Event");
+
+        // ADR-042 I1. The three metric shapes are the REST types served directly (the
+        // `TopologyPage` move) — they are already clean, so a parallel DTO would only add drift.
+        let iface_series = crate::api::metrics::InterfaceSeries {
+            timestamps: vec![0],
+            in_bps: vec![Some(1.0)],
+            out_bps: vec![Some(2.0)],
+            in_errors: vec![None],
+            out_errors: vec![None],
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&iface_series).unwrap(),
+            "InterfaceSeries",
+        );
+
+        let throughput = crate::api::metrics::ThroughputRange {
+            timestamps: vec![0],
+            in_bps: vec![Some(1.0)],
+            out_bps: vec![Some(2.0)],
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&throughput).unwrap(),
+            "ThroughputRange",
+        );
+
+        let top_nodes = crate::api::util::Ranked {
+            entries: vec![crate::api::metrics::TopEntry {
+                node_id: node.id.0,
+                name: "edge-router-1".to_owned(),
+                value: 42.0,
+            }],
+            partial: false,
+        };
+        assert_no_forbidden_keys(&serde_json::to_value(&top_nodes).unwrap(), "RankedTopEntry");
+
+        let top_ifaces = crate::api::util::Ranked {
+            entries: vec![crate::api::metrics::InterfaceTopEntry {
+                node_id: node.id.0,
+                node_name: "edge-router-1".to_owned(),
+                ifindex: 1,
+                if_name: Some("Gi0/1".to_owned()),
+                if_alias: Some("uplink".to_owned()),
+                if_speed_bps: Some(1_000_000_000),
+                value: 42.0,
+            }],
+            partial: false,
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&top_ifaces).unwrap(),
+            "RankedInterfaceTopEntry",
+        );
+
+        // `GroupSummary` is the one that is *not* clean — it carries `pool` — which is why this DTO
+        // exists rather than the row being served directly.
+        let group = crate::groups::GroupSummary {
+            id: uuid::Uuid::new_v4(),
+            name: "Tokyo".to_owned(),
+            group_type: "site".to_owned(),
+            parent_id: None,
+            sort_order: 1.0,
+            latitude: Some(35.6),
+            longitude: Some(139.7),
+            effective_latitude: Some(35.6),
+            effective_longitude: Some(139.7),
+            geo_source: crate::groups::GeoSource::Own,
+            geo_group: None,
+            pool: Some("tokyo".to_owned()),
+        };
+        let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
+        assert!(
+            group_json.get("pool").is_none(),
+            "the poll-pool assignment is dropped from NodeGroupDto"
+        );
+        assert_eq!(
+            group_json["geo_source"], "own",
+            "the enum keeps its serde tag"
+        );
+        assert_no_forbidden_keys(&group_json, "NodeGroup");
     }
 
     #[test]

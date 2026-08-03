@@ -47,14 +47,18 @@ use crate::api::ApiState;
 
 /// Instructions shown to the MCP client at `initialize` — sets expectations for the model.
 const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live node status, alerts, \
-    metrics, topology, traffic flows, and passive events (syslog/traps/webhooks), and run on-demand \
-    Troubleshoot analyses (anomaly/correlation/capacity/flap). A few write tools act on the \
-    monitoring system — acknowledge an alert (ack_alert), open a maintenance window \
-    (open_maintenance), or trigger an immediate poll (poll_now); each needs an authorized token and \
-    is audited. There are still no tools that configure or change network devices. Start with \
+    metrics (per node and per interface), fleet rankings, topology, CDP/LLDP adjacency, traffic \
+    flows, and passive events (syslog/traps/webhooks), and run on-demand Troubleshoot analyses \
+    (anomaly/correlation/capacity/flap). A few write tools act on the monitoring system — \
+    acknowledge an alert (ack_alert), open a maintenance window (open_maintenance), or trigger an \
+    immediate poll (poll_now); each needs an authorized token and is audited. There are still no \
+    tools that configure or change network devices, or change Yagra's own configuration. Start with \
     get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
-    query_metrics / search_events; use run_analysis for deeper diagnosis (poll a long run with \
-    get_analysis_findings). Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
+    query_metrics / search_events. To find what is worst across the fleet use top_metrics (nodes) or \
+    top_interfaces (interfaces); for one link's history use get_interface_series; for what a node is \
+    cabled to use get_neighbors; for where things are filed use list_node_groups. Use run_analysis \
+    for deeper diagnosis (poll a long run with get_analysis_findings). Node ids are UUIDs; \
+    timestamps are RFC 3339 or Unix seconds per tool.";
 
 /// The MCP server handler: holds the shared read state and the macro-generated tool router. Cheap to
 /// clone (the state is all `Arc`s); a fresh instance is created per session by the transport factory.

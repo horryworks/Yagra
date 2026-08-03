@@ -551,43 +551,43 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         PostFiltered,
         Tool("get_fleet_summary"),
     ),
-    // The six fleet-wide flow aggregations. `top_flows` answers the per-node twins today and gains
-    // an optional `node_id` in ADR-042 I1; until then this is the gap, not an exemption.
+    // The six fleet-wide flow aggregations. `top_flows` takes an optional `node_id` and mirrors the
+    // REST refusal for a group-scoped caller when it is omitted (ADR-042 I1).
     (
         "GET",
         "/api/v1/flow/conversations",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
         "/api/v1/flow/protocols",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
         "/api/v1/flow/series",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
         "/api/v1/flow/top-as",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
         "/api/v1/flow/top-ports",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
         "/api/v1/flow/top-talkers",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: top_flows is node-scoped only; fleet-wide needs node_id optional"),
+        Tool("top_flows"),
     ),
     (
         "GET",
@@ -711,35 +711,33 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/metrics/interface-delta",
         PostFiltered,
-        Pending("ADR-042 I1: folded into top_interfaces as rank_by = delta_up | delta_down"),
+        // Folded: `rank_by = delta_up | delta_down`.
+        Tool("top_interfaces"),
     ),
     (
         "GET",
         "/api/v1/metrics/interface-heatmap",
         PostFiltered,
-        Pending(
-            "ADR-042 I1: becomes Exempt once top_interfaces and get_interface_series ship — the \
-             grid is their pre-joined rendering, and until both exist that claim is not true",
+        Exempt(
+            "a links × time grid is the pre-joined rendering of two tools that both exist: \
+             top_interfaces picks the links and returns (node_id, ifindex), get_interface_series \
+             gives each one its history. A matrix shaped for cell-shading is a visualisation, not \
+             an answer a model reads better than the two calls that compose it",
         ),
     ),
     (
         "GET",
         "/api/v1/metrics/interface-top",
         PostFiltered,
-        Pending("ADR-042 I1: folded into top_interfaces"),
+        Tool("top_interfaces"),
     ),
     (
         "GET",
         "/api/v1/metrics/throughput-range",
         PRE_AGGREGATED,
-        Pending("ADR-042 I1: fleet_throughput, mirroring the REST refusal for a scoped caller"),
+        Tool("fleet_throughput"),
     ),
-    (
-        "GET",
-        "/api/v1/metrics/top",
-        PostFiltered,
-        Pending("ADR-042 I1: top_metrics — which nodes are worst by a metric right now"),
-    ),
+    ("GET", "/api/v1/metrics/top", PostFiltered, Tool("top_metrics")),
     ("GET", "/api/v1/mib-catalog", ADMIN_CFG, PENDING_CONFIG_READ),
     ("POST", "/api/v1/mib-catalog", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/mib-catalog/:id", ADMIN_CFG, NO_MCP_WRITE),
@@ -759,10 +757,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/node-groups",
         GroupFiltered,
-        Pending(
-            "ADR-042 I1: list_node_groups. Without it a caller cannot discover the group id \
-             run_analysis(scope=\"group\") asks for",
-        ),
+        Tool("list_node_groups"),
     ),
     ("POST", "/api/v1/node-groups", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/node-groups/:id", ADMIN_CFG, NO_MCP_WRITE),
@@ -909,10 +904,10 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
         NodeScoped,
-        Pending(
-            "ADR-042 I1: get_interface_series. query_metrics is node-level only \
-             (SeriesKey::node), so per-interface history is unreachable today",
-        ),
+        // `query_metrics` stays node-level (`SeriesKey::node`); this is its per-interface twin,
+        // deliberately a second tool rather than an `ifindex` param, because the aligned four-series
+        // answer is not what an extra parameter on `query_metrics` would produce.
+        Tool("get_interface_series"),
     ),
     (
         "GET",
@@ -930,13 +925,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/neighbors",
         NodeScoped,
-        Pending("ADR-042 I1: get_neighbors — the CDP/LLDP adjacency of ADR-038"),
+        Tool("get_neighbors"),
     ),
     (
         "GET",
         "/api/v1/nodes/:node_id/neighbors/history",
         NodeScoped,
-        Pending("ADR-042 I1: folded into get_neighbors, which returns current plus recent changes"),
+        // Folded: `get_neighbors` returns the current adjacency and recent changes together, since
+        // that is one troubleshooting question rather than two.
+        Tool("get_neighbors"),
     ),
     (
         "PUT",
@@ -1707,7 +1704,7 @@ mod tests {
     /// The number counts **routes**, where the v0.1.20 audit that prompted ADR-042 counted
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
-    const MCP_PENDING: usize = 76;
+    const MCP_PENDING: usize = 61;
 
     #[test]
     fn every_named_mcp_tool_exists() {
@@ -1732,7 +1729,7 @@ mod tests {
         // grew — which is the exact regression the column exists to prevent. Raise it as increments
         // land; it is a floor, so shipping tools never trips it.
         assert!(
-            named >= 26,
+            named >= 40,
             "only {named} ledger lines name a tool — the column is being emptied"
         );
         assert!(

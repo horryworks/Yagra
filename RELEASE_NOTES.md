@@ -24,6 +24,25 @@
   existing deployments keep the 30 days their tables are actually enforcing.
 
 ### New Features
+- **The MCP tool surface now answers the questions the WebUI answers** (ADR-042). It had drifted
+  into a subset — 110 read endpoints against 17 tools — and the gaps were the ones a troubleshooting
+  session hits first. Six new read-only tools, taking the surface to 23:
+  - **`get_interface_series`** — one interface's in/out throughput and error rates over time.
+    `query_metrics` is node-level only, so per-interface history had no tool at all.
+  - **`top_metrics`** / **`top_interfaces`** — fleet-wide rankings. "Which nodes are worst on CPU
+    right now", and "which links are busiest, most erroring, or moved the most". Previously an AI
+    client could only read one node's metric at a time.
+  - **`get_neighbors`** — a node's CDP/LLDP adjacency and its recent changes (ADR-038).
+  - **`list_node_groups`** — the folder tree, which is also how a caller finds the group id
+    `run_analysis(scope="group")` asks for.
+  - **`fleet_throughput`** — total in/out bits per second across every exporter.
+  - **`top_flows` now takes an optional `node_id`**: omit it for the fleet-wide aggregations that
+    previously had no tool. Like the REST endpoints, the fleet-wide form is refused for a token
+    limited to a group, since the rows keep no exporter attribution to narrow.
+  - **MCP stays read-only.** The write surface is unchanged — acknowledging an alert, opening a
+    maintenance window, and triggering a poll — and this release adds none. Reading Yagra's own
+    configuration over MCP still requires the same permission the UI does; read-only does not mean
+    readable by anyone.
 - **CDP/LLDP neighbor discovery** (node detail ▸ Neighbors, ADR-038). Every SNMP node's LLDP and
   CDP tables are walked on a slow cadence, and the result is recorded as *what changed, and when* —
   the tab shows which local port faces which peer right now, plus a timeline of every time that

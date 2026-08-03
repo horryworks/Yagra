@@ -394,7 +394,7 @@ fn logical_metric_selector(alias: &str) -> Option<String> {
 }
 
 /// Parse the shared `agg` query param (`now` default | `max_1h`) into a [`TopAgg`].
-fn parse_top_agg(agg: Option<&str>) -> Result<TopAgg, ApiError> {
+pub(crate) fn parse_top_agg(agg: Option<&str>) -> Result<TopAgg, ApiError> {
     match agg {
         None | Some("now") => Ok(TopAgg::Now),
         Some("max_1h") => Ok(TopAgg::Max1h),
@@ -509,7 +509,7 @@ pub(crate) struct InterfaceTopEntry {
 /// Parse the interface Top-N `metric` param. Listed exhaustively rather than matched loosely: this
 /// selects which query-time rate expression runs, so an unrecognised value must be a rejection and
 /// not a default.
-fn parse_interface_metric(metric: &str) -> Result<InterfaceTopMetric, ApiError> {
+pub(crate) fn parse_interface_metric(metric: &str) -> Result<InterfaceTopMetric, ApiError> {
     match metric {
         "throughput" => Ok(InterfaceTopMetric::Throughput),
         "in_bps" => Ok(InterfaceTopMetric::InBps),

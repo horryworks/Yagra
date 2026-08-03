@@ -51,7 +51,7 @@ use crate::api::{ApiError, ApiState};
 use crate::flowstore::{AsDir, FlowQuery};
 use crate::mcp::dto::{
     AlertDto, AlertHistoryDto, AnalysisFindingDto, AnalysisJobDto, EventDto, FleetSummaryDto,
-    InterfaceDto, MetricPointDto, MetricSeriesDto, NodeStatusDto, NodeSummaryDto,
+    InterfaceDto, MetricPointDto, MetricSeriesDto, NodeGroupDto, NodeStatusDto, NodeSummaryDto,
 };
 use axum::http::StatusCode;
 
@@ -383,6 +383,282 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "One interface's traffic history: in/out throughput in bits/sec and in/out \
+                       error rates, all on one shared timestamp axis (nulls mark gaps). Give \
+                       `node_id` and `ifindex` (from get_node_status's interfaces). `from`/`to` are \
+                       Unix seconds (default: last hour) and `step` is the sample interval in \
+                       seconds (clamped; defaults to ~120 points across the window). This is the \
+                       per-interface counterpart to query_metrics, which is node-level only."
+    )]
+    async fn get_interface_series(
+        &self,
+        Parameters(p): Parameters<InterfaceSeriesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.interface_series_in(p, &scope).await,
+            Err(e) => tool_api_error("get_interface_series", &e),
+        }
+    }
+
+    async fn interface_series_in(
+        &self,
+        p: InterfaceSeriesParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(deny) =
+            deny_invisible_node(&self.state, scope, "get_interface_series", p.node_id)
+        {
+            return deny;
+        }
+        let to = p.to.unwrap_or_else(|| Utc::now().timestamp());
+        let from = p.from.unwrap_or(to - DEFAULT_WINDOW_SECS);
+        if from >= to {
+            return tool_bad_params("get_interface_series", "`from` must be earlier than `to`");
+        }
+        // The four metric names, the step/lookback rule and the ×8 bytes→bits scaling all live in
+        // `api::metrics` — reproducing them here would mean this surface silently answering a
+        // different question from the one the node-detail chart answers.
+        let series = crate::api::metrics::interface_series(
+            &self.state,
+            NodeId::from(p.node_id),
+            yagra_common::IfIndex(p.ifindex),
+            from,
+            to,
+            p.step,
+        )
+        .await;
+        ok_json("get_interface_series", &series)
+    }
+
+    #[tool(
+        description = "Rank NODES by a metric across the fleet — which nodes are worst right now. \
+                       `metric` is a metric name (icmp_rtt_ms, …) or a logical alias: cpu, memory. \
+                       `agg` is now (default) or max_1h (trailing-hour peak). `limit` is 1–50 \
+                       (default 5). `partial` in the result means a group scope may have shortened \
+                       the list. For interfaces rather than nodes, use top_interfaces."
+    )]
+    async fn top_metrics(
+        &self,
+        Parameters(p): Parameters<TopMetricsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.top_metrics_in(p, &scope).await,
+            Err(e) => tool_api_error("top_metrics", &e),
+        }
+    }
+
+    async fn top_metrics_in(
+        &self,
+        p: TopMetricsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // `ranked_nodes` validates the metric before it reaches the PromQL selector. That check is
+        // the reason this is not inlined: it is the same injection boundary the REST edge has, now
+        // reachable from a second surface.
+        match crate::api::metrics::ranked_nodes(
+            &self.state,
+            scope,
+            &p.metric,
+            p.agg.as_deref(),
+            p.limit,
+        )
+        .await
+        {
+            Ok(ranked) => ok_json("top_metrics", &ranked),
+            Err(e) => tool_api_error("top_metrics", &e),
+        }
+    }
+
+    #[tool(
+        description = "Rank INTERFACES across the fleet, with node and interface names joined. \
+                       `rank_by` is throughput | in_bps | out_bps | errors | discards (current \
+                       rate), or delta_up | delta_down (biggest traffic spikes or drops vs a while \
+                       ago). `agg` is now (default) or max_1h and applies to the rate kinds only; \
+                       `window_secs` (60–3600, default 300) is the comparison window and applies to \
+                       the delta kinds only. `limit` is 1–50 (default 6)."
+    )]
+    async fn top_interfaces(
+        &self,
+        Parameters(p): Parameters<TopInterfacesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.top_interfaces_in(p, &scope).await,
+            Err(e) => tool_api_error("top_interfaces", &e),
+        }
+    }
+
+    async fn top_interfaces_in(
+        &self,
+        p: TopInterfacesParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::api::metrics::InterfaceRanking;
+        // Two REST endpoints folded behind one vocabulary, because a row is the same thing in both
+        // cases: an interface. Splitting on `kind` instead would have made `metric` mean two
+        // disjoint things depending on another parameter, which is how a model sends
+        // {kind: "interface", metric: "cpu"} and gets an error it cannot learn from.
+        let rank = match p.rank_by.as_str() {
+            "delta_up" | "delta_down" => {
+                let direction = match crate::api::metrics::parse_delta_direction(
+                    &p.rank_by["delta_".len()..],
+                ) {
+                    Ok(d) => d,
+                    Err(e) => return tool_api_error("top_interfaces", &e),
+                };
+                InterfaceRanking::delta(direction, p.window_secs)
+            }
+            metric => {
+                let m = match crate::api::metrics::parse_interface_metric(metric) {
+                    Ok(m) => m,
+                    Err(e) => return tool_api_error("top_interfaces", &e),
+                };
+                let agg = match crate::api::metrics::parse_top_agg(p.agg.as_deref()) {
+                    Ok(a) => a,
+                    Err(e) => return tool_api_error("top_interfaces", &e),
+                };
+                InterfaceRanking::Metric(m, agg)
+            }
+        };
+        let ranked =
+            crate::api::metrics::ranked_interfaces(&self.state, scope, rank, p.limit).await;
+        ok_json("top_interfaces", &ranked)
+    }
+
+    #[tool(
+        description = "Total fleet throughput over time (in/out bits per second), summed across \
+                       every exporter. `from`/`to` are Unix seconds (default: last 24h), `step` is \
+                       the sample interval in seconds. Refused for a token limited to a group: the \
+                       total is summed inside the TSDB with no per-node breakdown left to narrow."
+    )]
+    async fn fleet_throughput(
+        &self,
+        Parameters(p): Parameters<FleetThroughputParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.fleet_throughput_in(p, &scope).await,
+            Err(e) => tool_api_error("fleet_throughput", &e),
+        }
+    }
+
+    async fn fleet_throughput_in(
+        &self,
+        p: FleetThroughputParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // The refusal lives inside `fleet_throughput`, so this tool cannot serve the fleet's numbers
+        // to a scoped caller by forgetting to ask.
+        match crate::api::metrics::fleet_throughput(&self.state, scope, p.from, p.to, p.step).await
+        {
+            Ok(range) => ok_json("fleet_throughput", &range),
+            Err(e) => tool_api_error("fleet_throughput", &e),
+        }
+    }
+
+    #[tool(
+        description = "A node's CDP/LLDP neighbours: which local port faces which peer right now, \
+                       plus the most recent adjacency changes. A change row is written only when \
+                       the adjacency actually moved, so a stable rack has none. `history_limit` is \
+                       1–200 (default 10); page further back with `before_at` (RFC 3339) and \
+                       `before_id` taken from `next` — both together or neither. Returns an \
+                       availability note when no walk has recorded anything for the node, which is \
+                       different from a device that reports no neighbours."
+    )]
+    async fn get_neighbors(
+        &self,
+        Parameters(p): Parameters<NeighborsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.neighbors_in(p, &scope).await,
+            Err(e) => tool_api_error("get_neighbors", &e),
+        }
+    }
+
+    async fn neighbors_in(
+        &self,
+        p: NeighborsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // Scope first, availability second — the same order the REST guards run in. Reversed, a
+        // scoped caller learns from the error which nodes exist.
+        if let Some(deny) = deny_invisible_node(&self.state, scope, "get_neighbors", p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("get_neighbors", "neighbours require live mode");
+        };
+        let cursor = match crate::api::neighbors::parse_history_cursor(
+            p.before_at.as_deref(),
+            p.before_id,
+        ) {
+            Ok(c) => c,
+            Err(e) => return tool_api_error("get_neighbors", &e),
+        };
+        // Current and history are one question, so this returns both rather than branching on a
+        // mode param — a result whose shape depends on an argument is harder for a model than two
+        // tools would be, and buys nothing.
+        let current = match crate::api::neighbors::current_neighbors(admin, p.node_id).await {
+            Ok(c) => c,
+            // 404 here means "never walked", which `tool_api_error` renders as an availability note
+            // rather than an error. Inventing an empty set instead would assert the device has no
+            // neighbours, which is a different and false claim.
+            Err(e) => return tool_api_error("get_neighbors", &e),
+        };
+        let history = match crate::api::neighbors::neighbor_history(
+            admin,
+            p.node_id,
+            cursor,
+            p.history_limit,
+        )
+        .await
+        {
+            Ok(h) => h,
+            Err(e) => return tool_api_error("get_neighbors", &e),
+        };
+        ok_json_value(
+            "get_neighbors",
+            serde_json::json!({ "current": current, "history": history }),
+        )
+    }
+
+    #[tool(
+        description = "The folder groups nodes are filed under: id, name, kind, parent (for \
+                       rebuilding the tree), and map coordinates. Use this to find the group id \
+                       run_analysis takes for scope=\"group\", or to turn a node's `group` field \
+                       into a place. Requires live mode."
+    )]
+    async fn list_node_groups(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.list_node_groups_in(&scope).await,
+            Err(e) => tool_api_error("list_node_groups", &e),
+        }
+    }
+
+    async fn list_node_groups_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("list_node_groups", "node groups require live mode");
+        };
+        // `visible_groups` keeps the caller's subtree *and* the ancestors above it. This DTO carries
+        // `parent_id`, so a filter that dropped the ancestors would leave every visible root
+        // pointing at a group that is not in the list.
+        match crate::api::groups::visible_groups(admin, scope).await {
+            Ok(groups) => {
+                let out: Vec<crate::mcp::dto::NodeGroupDto> =
+                    groups.iter().map(NodeGroupDto::from_summary).collect();
+                ok_json("list_node_groups", &out)
+            }
+            Err(e) => tool_api_error("list_node_groups", &e),
+        }
+    }
+
+    #[tool(
         description = "The dependency graph in keyset pages: each node with its upstream parent, \
                        current state, and the upstream node blamed for its alert (root_cause), plus \
                        a `next_cursor` for the following page. `after` is a cursor UUID (return \
@@ -411,20 +687,21 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Top traffic flows for a node from the flow tier. `kind` is \
-                       talkers|conversations|ports|protocols|as (default talkers). `from`/`to` are \
-                       Unix seconds (default: last hour); `limit` is clamped by the store. Optional \
-                       drill-down filters: `proto`, `port`, `peer` (an IP), `asn`; for kind=as, `dir` \
-                       is src|dst (default dst). Conversations/as rows carry resolved AS names when the \
-                       IP→ASN table is loaded. Returns an availability note when the flow tier is off."
+        description = "Top traffic flows from the flow tier. Omit `node_id` for the whole fleet, or \
+                       give one to look at a single exporter — which is where flow analysis is \
+                       usually done. `kind` is talkers|conversations|ports|protocols|series|as \
+                       (default talkers). `from`/`to` are Unix seconds (default: last hour); `limit` \
+                       is 1–1000 (default 100). Optional drill-down filters: `proto`, `port`, `peer` \
+                       (an IP), `asn`; for kind=as, `dir` is src|dst (default dst). Conversations/as \
+                       rows carry resolved AS names when the IP→ASN table is loaded. The fleet-wide \
+                       form is refused for a token limited to a group: the rows are grouped by \
+                       address, port, protocol or AS, so no exporter attribution survives to narrow."
     )]
     async fn top_flows(
         &self,
         Parameters(p): Parameters<TopFlowsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        // Both flow tools name a node, so they are node-scoped rather than the fleet-wide `/flow/*`
-        // endpoints REST refuses a scoped caller outright — the rows here are already one node's.
         match self.scope_of(&ctx).await {
             Ok(scope) => self.top_flows_in(p, &scope).await,
             Err(e) => tool_api_error("top_flows", &e),
@@ -436,12 +713,27 @@ impl YagraMcp {
         p: TopFlowsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(deny) = deny_invisible_node(&self.state, scope, "top_flows", p.node_id) {
-            return deny;
+        match p.node_id {
+            Some(node_id) => {
+                if let Some(deny) = deny_invisible_node(&self.state, scope, "top_flows", node_id) {
+                    return deny;
+                }
+            }
+            // Fleet-wide: the same refusal `GET /api/v1/flow/*` gives, through the same helper.
+            //
+            // **Before the tier check, and that ordering is a disclosure property.** REST refuses
+            // the scope first and only then consults the store, so a scoped caller learns it is
+            // refused without learning whether this deployment runs a flow tier at all. Reversed,
+            // the availability note becomes an oracle for the deployment's configuration.
+            None => {
+                if let Err(e) = crate::api::flow::fleet_flow_is_unattributed(scope) {
+                    return tool_api_error("top_flows", &e);
+                }
+            }
         }
         // The six-arm dispatch, the AS-name fill and the store's availability gate all live in
-        // `api::flow` now. This tool used to re-implement all three, and the copy had drifted twice:
-        // no limit clamp, and no `asn != 0` guard on the name fill.
+        // `api::flow` now. This tool used to re-implement all three, and that copy had lost the
+        // limit clamp.
         let agg = match crate::api::flow::FlowAgg::parse(p.kind.as_deref().unwrap_or("talkers")) {
             Ok(a) => a,
             Err(e) => return tool_api_error("top_flows", &e),
@@ -458,10 +750,13 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Per-source flow fan-out for a node: how many distinct destinations and \
+        description = "Per-source flow fan-out for ONE node: how many distinct destinations and \
                        destination ports each source contacted, highest fan-out first (scan / worm \
-                       triage). Same window/filters as top_flows (`from`/`to`/`limit`/`proto`/`port`/\
-                       `peer`/`asn`). Returns an availability note when the flow tier is off."
+                       triage). `node_id` is required — unlike top_flows this has no fleet-wide \
+                       form, because the count is grouped by source and a flow seen by two exporters \
+                       would be counted twice. Same window/filters as top_flows \
+                       (`from`/`to`/`limit`/`proto`/`port`/`peer`/`asn`). Returns an availability \
+                       note when the flow tier is off."
     )]
     async fn flow_fanout(
         &self,
@@ -479,7 +774,19 @@ impl YagraMcp {
         p: TopFlowsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(deny) = deny_invisible_node(&self.state, scope, "flow_fanout", p.node_id) {
+        // Node-scoped only, deliberately. `FlowQuery.node_id` makes a fleet-wide form structurally
+        // possible, but `fanout_by_src` groups by source, so across exporters a flow seen twice is
+        // counted twice and "distinct destinations contacted" inflates by an amount nobody can
+        // bound. There is no REST counterpart to compare a fleet answer against either, so it would
+        // be an MCP-only capability with a known correctness caveat.
+        let Some(node_id) = p.node_id else {
+            return tool_bad_params(
+                "flow_fanout",
+                "`node_id` is required: fan-out is counted per source, so a fleet-wide form would \
+                 double-count any flow two exporters both saw. Query one exporter at a time.",
+            );
+        };
+        if let Some(deny) = deny_invisible_node(&self.state, scope, "flow_fanout", node_id) {
             return deny;
         }
         let Some(flows) = self.state.flows.as_ref() else {
@@ -1166,6 +1473,64 @@ struct QueryMetricsParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct InterfaceSeriesParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// SNMP ifIndex of the interface (from get_node_status's `interfaces`).
+    ifindex: u32,
+    /// Window start, Unix seconds (default: one hour ago).
+    from: Option<i64>,
+    /// Window end, Unix seconds (default: now).
+    to: Option<i64>,
+    /// Sample step in seconds (clamped; default ~120 points across the window).
+    step: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TopMetricsParams {
+    /// Metric name (icmp_rtt_ms, …) or a logical alias: cpu, memory.
+    metric: String,
+    /// now (default) ⇒ most recent value; max_1h ⇒ trailing-hour peak.
+    agg: Option<String>,
+    /// Max nodes to return (1–50, default 5).
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TopInterfacesParams {
+    /// What to rank by: throughput | in_bps | out_bps | errors | discards | delta_up | delta_down.
+    rank_by: String,
+    /// now (default) | max_1h. Applies to the rate kinds only.
+    agg: Option<String>,
+    /// Comparison window in seconds (60–3600, default 300). Applies to delta_up/delta_down only.
+    window_secs: Option<u64>,
+    /// Max interfaces to return (1–50, default 6).
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct FleetThroughputParams {
+    /// Window start, Unix seconds (default: 24 hours ago).
+    from: Option<i64>,
+    /// Window end, Unix seconds (default: now).
+    to: Option<i64>,
+    /// Sample step in seconds (clamped, minimum 60; default 300).
+    step: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct NeighborsParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// Max recent adjacency changes to include (1–200, default 10).
+    history_limit: Option<i64>,
+    /// Keyset cursor: the `at` of the last change you saw (RFC 3339). Pair with `before_id`.
+    before_at: Option<String>,
+    /// Keyset cursor: the `id` of the last change you saw. Pair with `before_at`.
+    before_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TopologyParams {
     /// Keyset cursor: return nodes with an id greater than this UUID.
     after: Option<Uuid>,
@@ -1175,8 +1540,8 @@ struct TopologyParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TopFlowsParams {
-    /// The node's UUID whose flows to query.
-    node_id: Uuid,
+    /// The exporter node's UUID. Omit for the whole fleet (top_flows only; flow_fanout requires it).
+    node_id: Option<Uuid>,
     /// Aggregation: talkers, conversations, ports, protocols, or as (default talkers).
     kind: Option<String>,
     /// Window start, Unix seconds (default: one hour ago).
@@ -1400,7 +1765,7 @@ fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
         crate::api::flow::flow_window(p.from, p.to, p.limit, 100);
     let peer: Option<std::net::IpAddr> = p.peer.as_deref().and_then(|s| s.parse().ok());
     FlowQuery {
-        node_id: Some(p.node_id),
+        node_id: p.node_id,
         from_unix_ms,
         to_unix_ms,
         limit,
@@ -1569,9 +1934,9 @@ mod tests {
             checked += 1;
         }
         // The load-bearing half: if the parse stops matching, "everything is fine" must not be the
-        // answer. There were 17 tools when this was written.
+        // answer. There were 17 tools when this was written and 23 after ADR-042 I1.
         assert!(
-            checked >= 17,
+            checked >= 23,
             "only matched {checked} tools; parser drifted"
         );
     }
@@ -1613,7 +1978,7 @@ mod tests {
 
     fn flow_params(node_id: Uuid) -> TopFlowsParams {
         TopFlowsParams {
-            node_id,
+            node_id: Some(node_id),
             kind: None,
             from: None,
             to: None,
@@ -1914,5 +2279,236 @@ mod tests {
             .await
             .expect("ok result");
         assert_eq!(json_of(&status)["available"], serde_json::json!(false));
+
+        let neighbors = m
+            .neighbors_in(neighbor_params(Uuid::nil()), &unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&neighbors)["available"], serde_json::json!(false));
+
+        let groups = m
+            .list_node_groups_in(&unrestricted())
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&groups)["available"], serde_json::json!(false));
+    }
+
+    // ── ADR-042 I1 tools ────────────────────────────────────────────────────────────────────────
+
+    fn neighbor_params(node_id: Uuid) -> NeighborsParams {
+        NeighborsParams {
+            node_id,
+            history_limit: None,
+            before_at: None,
+            before_id: None,
+        }
+    }
+
+    /// The alignment invariant is what can be silently wrong here: four series on one axis, so a
+    /// chart — or a model — can read column `j` across all four without bounds-checking.
+    #[tokio::test]
+    async fn an_interface_series_returns_four_arrays_on_one_axis() {
+        let r = mcp()
+            .interface_series_in(
+                InterfaceSeriesParams {
+                    node_id: Uuid::nil(),
+                    ifindex: 1,
+                    from: None,
+                    to: None,
+                    step: None,
+                },
+                &unrestricted(),
+            )
+            .await
+            .expect("ok");
+        let body = json_of(&r);
+        let n = body["timestamps"].as_array().expect("timestamps").len();
+        for k in ["in_bps", "out_bps", "in_errors", "out_errors"] {
+            assert_eq!(
+                body[k].as_array().unwrap_or(&Vec::new()).len(),
+                n,
+                "{k} must be the same length as the shared timestamp axis"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_interface_series_hides_a_node_the_caller_cannot_see() {
+        let r = mcp()
+            .interface_series_in(
+                InterfaceSeriesParams {
+                    node_id: Uuid::nil(),
+                    ifindex: 1,
+                    from: None,
+                    to: None,
+                    step: None,
+                },
+                &sees_nothing(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["reason"], "no node with that id");
+    }
+
+    /// A bad metric name must be a rejection, not an empty ranking.
+    ///
+    /// The name reaches a PromQL selector, so this is the injection boundary — now reachable from a
+    /// second surface. An empty list would read to a model as "nothing is high", which is a claim
+    /// about the fleet rather than about the request.
+    #[tokio::test]
+    async fn top_metrics_rejects_a_name_that_is_not_an_identifier() {
+        let r = mcp()
+            .top_metrics_in(
+                TopMetricsParams {
+                    metric: "up} or vector(1) #".to_owned(),
+                    agg: None,
+                    limit: None,
+                },
+                &unrestricted(),
+            )
+            .await;
+        assert!(r.is_err(), "a junk metric name is a protocol error");
+    }
+
+    #[tokio::test]
+    async fn top_metrics_accepts_the_logical_aliases_and_clamps_the_limit() {
+        for metric in ["cpu", "memory", "icmp_rtt_ms"] {
+            let r = mcp()
+                .top_metrics_in(
+                    TopMetricsParams {
+                        metric: metric.to_owned(),
+                        agg: None,
+                        limit: Some(10_000),
+                    },
+                    &unrestricted(),
+                )
+                .await
+                .expect("ok");
+            // The in-memory store ranks nothing, so this asserts the shape rather than the rows —
+            // the clamp itself is pinned in `api::metrics`, where it now lives for both surfaces.
+            assert!(
+                json_of(&r)["entries"].is_array(),
+                "{metric} returns a ranking"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn top_interfaces_takes_one_vocabulary_and_rejects_the_rest() {
+        let m = mcp();
+        for rank_by in [
+            "throughput",
+            "in_bps",
+            "out_bps",
+            "errors",
+            "discards",
+            "delta_up",
+            "delta_down",
+        ] {
+            let r = m
+                .top_interfaces_in(
+                    TopInterfacesParams {
+                        rank_by: rank_by.to_owned(),
+                        agg: None,
+                        window_secs: None,
+                        limit: None,
+                    },
+                    &unrestricted(),
+                )
+                .await
+                .expect("ok");
+            assert!(json_of(&r)["entries"].is_array(), "{rank_by} ranks");
+        }
+        // `cpu` is a *node* metric alias. Sending it here is the mistake a folded `kind` param would
+        // have invited, and it must be a rejection the model can learn from.
+        assert!(m
+            .top_interfaces_in(
+                TopInterfacesParams {
+                    rank_by: "cpu".to_owned(),
+                    agg: None,
+                    window_secs: None,
+                    limit: None,
+                },
+                &unrestricted(),
+            )
+            .await
+            .is_err());
+    }
+
+    /// The fleet-wide forms mirror the REST refusal, and they refuse **before** consulting the tier.
+    ///
+    /// Reversed, the availability note would tell a scoped caller whether this deployment runs a
+    /// flow tier — the same ordering property `api-conventions.md` states for the REST guards. This
+    /// state has `flows: None`, so a tier-first implementation would answer `available: false` here
+    /// instead of erroring, which is exactly what this pins.
+    #[tokio::test]
+    async fn the_fleet_wide_forms_refuse_a_scoped_caller_before_looking_at_the_tier() {
+        let m = mcp();
+        let mut fleet = flow_params(Uuid::nil());
+        fleet.node_id = None;
+        assert!(
+            m.top_flows_in(fleet, &sees_nothing()).await.is_err(),
+            "fleet-wide flow is refused, not reported unavailable"
+        );
+        assert!(
+            m.fleet_throughput_in(
+                FleetThroughputParams {
+                    from: None,
+                    to: None,
+                    step: None
+                },
+                &sees_nothing()
+            )
+            .await
+            .is_err(),
+            "fleet throughput is refused, not reported unavailable"
+        );
+    }
+
+    /// Fan-out has no fleet-wide form, and the refusal says why rather than just failing.
+    #[tokio::test]
+    async fn flow_fanout_requires_a_node() {
+        let mut p = flow_params(Uuid::nil());
+        p.node_id = None;
+        assert!(mcp().flow_fanout_in(p, &unrestricted()).await.is_err());
+    }
+
+    /// A half-specified cursor is rejected, not ignored: dropping it restarts paging from the top,
+    /// so a client walking the history loops over page one forever while looking like progress.
+    ///
+    /// Asserted against the shared parser rather than through the tool, because the tool checks
+    /// availability before it parses — the same order the REST handler's extractors run in — so on
+    /// this skeleton state the cursor is never reached. Testing it through the tool would have
+    /// meant reordering the tool to suit the test, and that order is a disclosure property.
+    #[test]
+    fn a_half_specified_neighbour_cursor_is_rejected() {
+        assert!(
+            crate::api::neighbors::parse_history_cursor(Some("2026-08-03T00:00:00Z"), None)
+                .is_err()
+        );
+        assert!(crate::api::neighbors::parse_history_cursor(None, Some(7)).is_err());
+        assert!(crate::api::neighbors::parse_history_cursor(None, None)
+            .expect("no cursor is fine")
+            .is_none());
+        assert!(
+            crate::api::neighbors::parse_history_cursor(Some("2026-08-03T00:00:00Z"), Some(7))
+                .expect("both halves")
+                .is_some()
+        );
+    }
+
+    /// Scope is checked **before** availability, so the error a scoped caller gets does not reveal
+    /// whether the node exists on a live deployment.
+    #[tokio::test]
+    async fn neighbours_hide_an_invisible_node_rather_than_reporting_skeleton_mode() {
+        let r = mcp()
+            .neighbors_in(neighbor_params(Uuid::nil()), &sees_nothing())
+            .await
+            .expect("ok result");
+        assert_eq!(
+            json_of(&r)["reason"],
+            "no node with that id",
+            "the scope check runs before the live-mode check"
+        );
     }
 }
