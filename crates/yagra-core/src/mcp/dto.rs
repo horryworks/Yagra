@@ -5,10 +5,20 @@
 //! model. No tool serializes a raw `sqlx` row, a `yagra_common`/`yagra_alert` model, or anything via
 //! `#[serde(flatten)]` of one — that is how a credential reference would leak. The one
 //! credential-bearing field on [`yagra_common::Node`] (`credential`, a `CredentialId` reference) and
-//! the internal poller-assignment `pool` are deliberately **excluded** from [`NodeSummaryDto`]. The
-//! `dto_canary` test asserts no forbidden key (`credential`, `community`, `password`, `token`, `pool`,
-//! `auth_key`, `priv_key`, `secret`) ever appears in a serialized DTO, so a future field addition that
-//! reintroduces one fails the build.
+//! the internal poller-assignment `pool` are deliberately **excluded** from [`NodeSummaryDto`].
+//!
+//! The canary in this module's tests enforces that in **two tiers**, because the two bans have
+//! different reasons and different reaches:
+//!
+//! - `SECRET_KEYS` (`credential`, `community`, `password`, `token`, `auth_key`, `priv_key`,
+//!   `secret`) — never, in any tool result, at any depth (ADR-018 / security.md).
+//! - `INVENTORY_NOISE_KEYS` (`pool`, `profile`) — dropped from DTOs describing monitored
+//!   equipment. Not secret: `pool` is the *answer* to "which poller owns this node", which
+//!   ADR-042 I3 exposes deliberately.
+//!
+//! A future field addition that reintroduces one fails the build. Which types the canary covers is
+//! itself pinned: `the_canary_covers_every_dto_in_this_module` for the types declared here, and
+//! `every_typed_tool_result_is_canaried` for the REST types tools serialize straight through.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -473,36 +483,58 @@ mod tests {
 
     /// Keys that must NEVER appear in any serialized MCP DTO (ADR-018 / security.md). If a future
     /// field addition reintroduces one, this test fails the build.
-    const FORBIDDEN_KEYS: &[&str] = &[
+    const SECRET_KEYS: &[&str] = &[
         "credential",
         "community",
         "password",
         "token",
-        "pool",
         "auth_key",
         "priv_key",
         "secret",
     ];
 
-    /// Recursively assert no object key in `value` is a forbidden key.
-    fn assert_no_forbidden_keys(value: &serde_json::Value, ctx: &str) {
+    /// Internal identifiers dropped from **inventory** DTOs — a node, a group, an event. These are
+    /// not secret; they are noise on a row describing monitored equipment, and `pool` in particular
+    /// is a scheduling detail an AI client reasoning about a device has no use for.
+    ///
+    /// ⚠️ **Kept separate from [`SECRET_KEYS`] deliberately.** They were one list, which read as
+    /// "these eight things are equally forbidden" and was not true in either direction: `pool` is
+    /// the *answer* when the question is which poller owns a node (ADR-042 I3 folds `/pollers`,
+    /// `/pools` and `/nodes/:id/assignment` into a tool), while `credential` is forbidden
+    /// everywhere and for a different reason. With one list, relaxing it for the poller tools would
+    /// have relaxed it for the node DTOs too.
+    const INVENTORY_NOISE_KEYS: &[&str] = &["pool", "profile"];
+
+    /// Recursively assert no object key in `value` is in `banned`.
+    fn assert_no_keys(value: &serde_json::Value, banned: &[&str], ctx: &str, why: &str) {
         match value {
             serde_json::Value::Object(map) => {
                 for (k, v) in map {
                     assert!(
-                        !FORBIDDEN_KEYS.contains(&k.as_str()),
-                        "forbidden key {k:?} appeared in a {ctx} DTO"
+                        !banned.contains(&k.as_str()),
+                        "{why} key {k:?} appeared in a {ctx} DTO"
                     );
-                    assert_no_forbidden_keys(v, ctx);
+                    assert_no_keys(v, banned, ctx, why);
                 }
             }
             serde_json::Value::Array(items) => {
                 for v in items {
-                    assert_no_forbidden_keys(v, ctx);
+                    assert_no_keys(v, banned, ctx, why);
                 }
             }
             _ => {}
         }
+    }
+
+    /// The rule every tool result obeys: no secret material, anywhere, at any depth.
+    fn assert_no_forbidden_keys(value: &serde_json::Value, ctx: &str) {
+        assert_no_keys(value, SECRET_KEYS, ctx, "forbidden");
+    }
+
+    /// The stricter rule for a DTO describing monitored equipment: secrets *and* internal ids.
+    fn assert_inventory_dto_is_clean(value: &serde_json::Value, ctx: &str) {
+        assert_no_forbidden_keys(value, ctx);
+        assert_no_keys(value, INVENTORY_NOISE_KEYS, ctx, "internal-inventory");
     }
 
     fn sample_node_with_secret() -> Node {
@@ -539,7 +571,7 @@ mod tests {
         // Build one instance of each DTO with representative data and run the canary over each.
         let node = sample_node_with_secret();
         let summary = NodeSummaryDto::from_node(&node, Some(NodeState::Ok));
-        assert_no_forbidden_keys(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
+        assert_inventory_dto_is_clean(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
 
         let status = NodeStatusDto {
             node: summary.clone(),
@@ -552,7 +584,7 @@ mod tests {
                 last_seen: Some(unix_s_to_rfc3339(0)),
             }],
         };
-        assert_no_forbidden_keys(&serde_json::to_value(&status).unwrap(), "NodeStatus");
+        assert_inventory_dto_is_clean(&serde_json::to_value(&status).unwrap(), "NodeStatus");
 
         let alert = AlertDto {
             node_id: node.id.0,
@@ -679,7 +711,7 @@ mod tests {
             event_json.get("pool").is_none(),
             "pool dropped from EventDto"
         );
-        assert_no_forbidden_keys(&event_json, "Event");
+        assert_inventory_dto_is_clean(&event_json, "Event");
 
         // ADR-042 I1. The three metric shapes are the REST types served directly (the
         // `TopologyPage` move) — they are already clean, so a parallel DTO would only add drift.
@@ -757,7 +789,7 @@ mod tests {
             group_json["geo_source"], "own",
             "the enum keeps its serde tag"
         );
-        assert_no_forbidden_keys(&group_json, "NodeGroup");
+        assert_inventory_dto_is_clean(&group_json, "NodeGroup");
 
         let history = AlertHistoryDto::from_row(
             &AlertHistoryRow {
@@ -776,6 +808,44 @@ mod tests {
             Some("edge-router-1".to_owned()),
         );
         assert_no_forbidden_keys(&serde_json::to_value(&history).unwrap(), "AlertHistory");
+
+        // ── Types tools serve straight through, found by `every_typed_tool_result_is_canaried` ──
+
+        // `FlowRows` is `#[serde(untagged)]`, so it serializes as the bare array the REST edge
+        // returns; one variant is enough to prove the wrapper adds no key of its own.
+        let flow_rows = crate::api::flow::FlowRows::Talkers(vec![crate::flowstore::FlowTalker {
+            addr: "10.0.0.1".to_owned(),
+            bytes: 1,
+            packets: 1,
+            flows: 1,
+        }]);
+        assert_no_forbidden_keys(&serde_json::to_value(&flow_rows).unwrap(), "FlowRows");
+
+        let fanout = vec![crate::flowstore::FlowFanout {
+            src: "10.0.0.1".to_owned(),
+            distinct_dst: 2,
+            distinct_ports: 3,
+            flows: 4,
+            bytes: 5,
+        }];
+        assert_no_forbidden_keys(&serde_json::to_value(&fanout).unwrap(), "FlowFanout");
+
+        // ⚠️ **Not** `assert_inventory_dto_is_clean`: this one carries `pool` on purpose. A poll
+        // receipt saying which pool the jobs went to is the answer to "why did nothing happen" —
+        // the node's *effective* pool may be inherited, and the caller cannot derive it. That is
+        // the distinction the two-tier split exists to express; under the old single list this
+        // type was simply never checked at all.
+        let poll = crate::api::nodes::PollNowResult {
+            dispatched: 3,
+            node_id: node.id.0,
+            pool: "tokyo".to_owned(),
+        };
+        let poll_json = serde_json::to_value(&poll).unwrap();
+        assert_no_forbidden_keys(&poll_json, "PollNowResult");
+        assert_eq!(
+            poll_json["pool"], "tokyo",
+            "the dispatch pool is part of the receipt, not leakage"
+        );
     }
 
     /// **Every DTO in this module is covered by the canary above.**
@@ -831,6 +901,125 @@ mod tests {
             "these DTOs are declared here but never reach the forbidden-key canary — add an \
              instance of each to it: {missing:?}"
         );
+    }
+
+    /// Every tool that serializes a **shared type**, and the canary label covering that type.
+    ///
+    /// The sibling guard above only reaches types declared in this module. A tool may also serve a
+    /// REST type straight through (`api::topology::TopologyPage`, `api::metrics::InterfaceSeries`,
+    /// …), and for those there is nothing in this file to enumerate — so they were added to the
+    /// canary by hand, and forgetting one cost nothing. It had already cost something: `poll_now`
+    /// serialized `api::nodes::PollNowResult`, which carries `pool`, from the day ADR-028 WS-E
+    /// shipped it. Nothing failed, because no instance of that type ever reached the canary.
+    ///
+    /// One row per `ok_json` call site. Adding a tool that returns a type means adding a line here
+    /// and an instance to the canary; that is the whole cost, and it is the cost of the line that
+    /// was being skipped.
+    const TOOL_RESULT_TYPES: &[(&str, &str)] = &[
+        ("get_fleet_summary", "FleetSummary"),
+        ("list_nodes", "NodeSummary"),
+        ("get_node_status", "NodeStatus"),
+        ("get_active_alerts", "Alert"),
+        ("get_alert_history", "AlertHistory"),
+        ("query_metrics", "MetricSeries"),
+        ("get_interface_series", "InterfaceSeries"),
+        ("top_metrics", "RankedTopEntry"),
+        ("top_interfaces", "RankedInterfaceTopEntry"),
+        ("fleet_throughput", "ThroughputRange"),
+        ("list_node_groups", "NodeGroup"),
+        ("get_topology", "TopologyPage"),
+        ("top_flows", "FlowRows"),
+        ("flow_fanout", "FlowFanout"),
+        ("list_analyses", "AnalysisJob"),
+        ("search_events", "Event"),
+        ("poll_now", "PollNowResult"),
+    ];
+
+    /// Tools whose result is a `serde_json::json!` object built in the tool body. There is no
+    /// shared type to instantiate, and the keys are visible at the call site, so the canary has
+    /// nothing to hold — but the tool still has to be accounted for, or "not in either list" would
+    /// be the quiet way to skip the check.
+    const TOOLS_WITH_INLINE_RESULTS: &[(&str, &str)] = &[
+        (
+            "get_neighbors",
+            "a json! of `current` + `history`, both api::neighbors types with no secret-bearing field",
+        ),
+        (
+            "run_analysis",
+            "a json! wrapper around findings already covered as AnalysisFinding",
+        ),
+        (
+            "get_analysis_findings",
+            "a json! wrapper around findings already covered as AnalysisFinding",
+        ),
+        ("event_stats", "a json! of counts built from group-by rows"),
+        ("ack_alert", "a json! acknowledgement receipt: ids and a count"),
+        (
+            "open_maintenance",
+            "a json! receipt carrying the created window's id and bounds",
+        ),
+    ];
+
+    /// **Every `ok_json` call site names a type the canary instantiates.**
+    ///
+    /// Reads `tools.rs` for the call sites rather than the tool declarations, because the risk is
+    /// specifically about *what a tool serializes* — a tool can exist without returning a shared
+    /// type, and the write tools do.
+    #[test]
+    fn every_typed_tool_result_is_canaried() {
+        let tools_src = include_str!("tools.rs");
+        let dto_src = include_str!("dto.rs");
+        // `tools.rs` is a different file, so a literal needle is safe here; the canary-body needles
+        // below read this file and are assembled at runtime for the usual reason.
+        let mut sites = Vec::new();
+        for chunk in tools_src.split("ok_json(\"").skip(1) {
+            let name: String = chunk.chars().take_while(|c| *c != '"').collect();
+            if !name.is_empty() && !sites.contains(&name) {
+                sites.push(name);
+            }
+        }
+        assert!(
+            sites.len() >= 17,
+            "only matched {} ok_json call sites; the parser drifted",
+            sites.len()
+        );
+
+        let canary_fn = format!("fn {}_dto_is_free_of_forbidden_keys", "every");
+        let after = dto_src
+            .split(&canary_fn)
+            .nth(1)
+            .expect("the canary test must exist for this guard to mean anything");
+        let body = after
+            .split(&format!("#[{}]", "test"))
+            .next()
+            .unwrap_or(after);
+
+        for tool in &sites {
+            let Some((_, label)) = TOOL_RESULT_TYPES.iter().find(|(t, _)| t == tool) else {
+                panic!(
+                    "MCP tool `{tool}` serializes a shared type with no row in TOOL_RESULT_TYPES; \
+                     add one naming the canary label that covers it (or move the tool to \
+                     TOOLS_WITH_INLINE_RESULTS if it builds its result inline)"
+                );
+            };
+            assert!(
+                body.contains(label),
+                "`{tool}` claims canary label {label:?}, but the forbidden-key canary never \
+                 instantiates it — add an instance so the type is actually checked"
+            );
+        }
+
+        // The inline list is accounted for too: a reason, and no overlap with the typed list.
+        for (tool, why) in TOOLS_WITH_INLINE_RESULTS {
+            assert!(
+                why.len() >= 20,
+                "`{tool}` is listed as an inline result with no real explanation"
+            );
+            assert!(
+                !TOOL_RESULT_TYPES.iter().any(|(t, _)| t == tool),
+                "`{tool}` is in both result lists; it can only be one"
+            );
+        }
     }
 
     #[test]
