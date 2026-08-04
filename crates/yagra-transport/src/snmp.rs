@@ -133,11 +133,17 @@ pub async fn snmp_walk_strings_v2c(
 /// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)` and a chassis id is typed octets. Same
 /// per-column skip-on-error behaviour as the others; a value type this build has no representation
 /// for is skipped rather than coerced.
+/// `max_rows` bounds the **whole** call, across every column, and it is enforced *during* paging
+/// rather than by truncating the result. That distinction is the point: memory is consumed while
+/// the pages arrive, so a post-hoc truncation of a 400,000-row ARP table has already cost the
+/// allocation it was meant to prevent. ADR-043 Increment 3 walks `ipNetToPhysicalPhysAddress` on
+/// devices where that number is real.
 pub async fn snmp_walk_instances_v2c(
     target: IpAddr,
     community: &str,
     column_oids: &[String],
     timeout: Duration,
+    max_rows: usize,
 ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
     let client = connect(target, community, timeout).await?;
     let mut rows = Vec::new();
@@ -146,27 +152,105 @@ pub async fn snmp_walk_instances_v2c(
             tracing::warn!(%base_str, "skipping malformed table column OID");
             continue;
         };
-        match client.walk_bulk(base, WALK_MAX_REPETITIONS).await {
-            Ok(entries) => {
-                for (oid, value) in entries {
-                    let Some(tail) = oid.relative_to(&base) else {
-                        continue;
-                    };
-                    let instance = tail.as_slice().to_vec();
-                    if instance.is_empty() {
-                        continue; // the column base itself: no instance
-                    }
-                    rows.push(SnmpInstanceRow {
-                        oid_base: base_str.clone(),
-                        instance,
-                        value: raw_value(&value),
-                    });
-                }
-            }
-            Err(e) => tracing::debug!(%base_str, error = %e, "snmp instance walk failed"),
+        if rows.len() >= max_rows {
+            tracing::debug!(%base_str, max_rows, "instance walk budget spent; skipping column");
+            break;
         }
+        walk_column_capped(&client, base_str, &base, max_rows - rows.len(), &mut rows).await;
     }
     Ok(rows)
+}
+
+/// Page one column with GETBULK, stopping at the subtree edge, at end-of-MIB, or at `budget` rows.
+///
+/// Hand-rolled rather than `Snmp2cClient::walk_bulk` because that collects the entire subtree before
+/// returning — there is no point at which a caller can say "enough". The paging *decisions* live in
+/// [`page_slice`], which is pure and tested; this function is the I/O around it.
+///
+/// A column that errors or times out ends here and only here, as in the other walkers: one bad
+/// column must not fail the whole poll.
+async fn walk_column_capped(
+    client: &Snmp2cClient,
+    base_str: &str,
+    base: &ObjectIdentifier,
+    budget: usize,
+    out: &mut Vec<SnmpInstanceRow>,
+) {
+    // Defensive ceiling on requests as well as rows: an agent that answers with OIDs that do not
+    // advance would otherwise spin forever, and `budget` alone cannot catch that because such a
+    // page yields no rows either.
+    const MAX_REQUESTS: usize = 4096;
+    let mut cursor = *base;
+    let mut taken = 0usize;
+    for _ in 0..MAX_REQUESTS {
+        let page = match client.get_bulk(&[cursor], 0, WALK_MAX_REPETITIONS).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(%base_str, error = %e, "snmp instance walk failed");
+                return;
+            }
+        };
+        // `GetBulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
+        // what "leading entries" in `page_slice` means. Materialized as a slice (≤
+        // `WALK_MAX_REPETITIONS` entries) so the paging decision stays a pure function over one.
+        let entries: Vec<(ObjectIdentifier, ObjectValue)> = page.values.into_iter().collect();
+        let (take, next) = page_slice(base, &entries, budget - taken);
+        for (oid, value) in entries.iter().take(take) {
+            let Some(tail) = oid.relative_to(base) else {
+                continue;
+            };
+            let instance = tail.as_slice().to_vec();
+            if instance.is_empty() {
+                continue; // the column base itself: no instance
+            }
+            out.push(SnmpInstanceRow {
+                oid_base: base_str.to_owned(),
+                instance,
+                value: raw_value(value),
+            });
+        }
+        taken += take;
+        match next {
+            // `next != cursor` guards the non-advancing agent; GETBULK is specified to return
+            // strictly greater OIDs, but a buggy one that repeats itself must not loop us.
+            Some(n) if !page.end_of_mib_view && n != cursor => cursor = n,
+            _ => return,
+        }
+    }
+    tracing::debug!(%base_str, "instance walk hit its request ceiling");
+}
+
+/// How much of one GETBULK page this walk may keep, and where to continue from.
+///
+/// Returns the number of **leading** entries that are inside `base`'s subtree and within `budget`,
+/// plus the OID to continue after — `None` meaning stop. Leading, because a page that leaves the
+/// subtree ends the walk: everything after that point belongs to another table.
+///
+/// Pure so the four stop conditions can be tested without an agent. They are the whole correctness
+/// of a bounded walk, and three of them (budget, subtree edge, empty page) are silent when wrong —
+/// the walk simply returns less, or more, than it should.
+fn page_slice(
+    base: &ObjectIdentifier,
+    page: &[(ObjectIdentifier, ObjectValue)],
+    budget: usize,
+) -> (usize, Option<ObjectIdentifier>) {
+    let mut take = 0usize;
+    for (oid, _) in page {
+        if !base.is_prefix_of_or_equal(oid) {
+            // Out of subtree: keep what came before it and stop for good.
+            return (take, None);
+        }
+        if take == budget {
+            return (take, None);
+        }
+        take += 1;
+    }
+    // The whole page was in-subtree and affordable. Continue after its last OID — unless the budget
+    // is now spent, in which case there is nothing more to fetch.
+    if take == budget {
+        return (take, None);
+    }
+    (take, page.last().map(|(oid, _)| *oid))
 }
 
 /// Map an SNMP value onto [`SnmpValue`] without coercing.
@@ -245,6 +329,103 @@ fn numeric(value: &ObjectValue) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Bounded instance walk (ADR-043 I3) ───────────────────────────────────
+    //
+    // The cap exists because `ipNetToPhysicalPhysAddress` on a campus router is a real
+    // hundred-thousand-row table, and every one of these stop conditions fails *silently* when it
+    // is wrong: the walk just returns fewer rows, or keeps paging past its budget, and nothing
+    // downstream can tell.
+
+    fn oid(s: &str) -> ObjectIdentifier {
+        parse_oid(s).expect("test oid")
+    }
+
+    fn page(oids: &[&str]) -> Vec<(ObjectIdentifier, ObjectValue)> {
+        oids.iter()
+            .map(|s| (oid(s), ObjectValue::Integer(1)))
+            .collect()
+    }
+
+    #[test]
+    fn a_full_in_subtree_page_is_taken_and_continues_after_its_last_oid() {
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        let p = page(&[
+            "1.3.6.1.2.1.4.35.1.4.1",
+            "1.3.6.1.2.1.4.35.1.4.2",
+            "1.3.6.1.2.1.4.35.1.4.3",
+        ]);
+        let (take, next) = page_slice(&base, &p, 100);
+        assert_eq!(take, 3);
+        assert_eq!(next, Some(oid("1.3.6.1.2.1.4.35.1.4.3")));
+    }
+
+    #[test]
+    fn a_page_that_leaves_the_subtree_keeps_only_what_came_before_and_stops() {
+        // GETBULK walks off the end of a column into the next one. Everything past that boundary
+        // belongs to another table, and continuing would attribute its rows to this column.
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        let p = page(&[
+            "1.3.6.1.2.1.4.35.1.4.1",
+            "1.3.6.1.2.1.4.35.1.5.1", // next column
+            "1.3.6.1.2.1.4.35.1.5.2",
+        ]);
+        let (take, next) = page_slice(&base, &p, 100);
+        assert_eq!(take, 1);
+        assert_eq!(next, None, "leaving the subtree ends the walk for good");
+    }
+
+    #[test]
+    fn the_budget_stops_the_walk_mid_page_rather_than_after_it() {
+        // The property the whole change exists for. Taking the page and truncating afterwards has
+        // already paid for the rows it meant to refuse.
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        let p = page(&[
+            "1.3.6.1.2.1.4.35.1.4.1",
+            "1.3.6.1.2.1.4.35.1.4.2",
+            "1.3.6.1.2.1.4.35.1.4.3",
+        ]);
+        let (take, next) = page_slice(&base, &p, 2);
+        assert_eq!(take, 2);
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn a_page_that_exactly_spends_the_budget_does_not_ask_for_another() {
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        let p = page(&["1.3.6.1.2.1.4.35.1.4.1", "1.3.6.1.2.1.4.35.1.4.2"]);
+        let (take, next) = page_slice(&base, &p, 2);
+        assert_eq!(take, 2);
+        assert_eq!(next, None, "the next request could only be refused anyway");
+    }
+
+    #[test]
+    fn a_zero_budget_takes_nothing() {
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        assert_eq!(
+            page_slice(&base, &page(&["1.3.6.1.2.1.4.35.1.4.1"]), 0),
+            (0, None)
+        );
+    }
+
+    #[test]
+    fn an_empty_page_stops_instead_of_looping() {
+        // An agent that answers with nothing must end the walk; continuing from an unchanged cursor
+        // is the infinite loop the request ceiling exists as a second guard against.
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        assert_eq!(page_slice(&base, &[], 100), (0, None));
+    }
+
+    #[test]
+    fn the_column_base_itself_is_still_paged_past() {
+        // `is_prefix_of_or_equal` means the base can appear in a page. It carries no instance, so
+        // the row is dropped later — but it must not end the walk, or a column would return empty.
+        let base = oid("1.3.6.1.2.1.4.35.1.4");
+        let p = page(&["1.3.6.1.2.1.4.35.1.4", "1.3.6.1.2.1.4.35.1.4.1"]);
+        let (take, next) = page_slice(&base, &p, 100);
+        assert_eq!(take, 2);
+        assert_eq!(next, Some(oid("1.3.6.1.2.1.4.35.1.4.1")));
+    }
 
     #[test]
     fn parses_valid_oid_and_rejects_garbage() {

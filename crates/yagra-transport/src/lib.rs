@@ -343,12 +343,18 @@ pub trait Transport: Send + Sync {
     /// index** and its **raw** value (ADR-038). The neighbour walk needs both: `lldpRemTable`'s
     /// meaning is in its three-part index, and a chassis id is typed octets that lossy UTF-8 would
     /// destroy. A per-column walk failure is logged and skipped, as in the other walkers.
+    ///
+    /// `max_rows` bounds the **whole call**, across every column, and is enforced *while paging* —
+    /// not by truncating the result. The distinction is the reason the parameter exists: a
+    /// hundred-thousand-row ARP table has already cost its memory by the time a caller could
+    /// truncate it (ADR-043 Increment 3).
     async fn snmp_walk_instances(
         &self,
         target: IpAddr,
         community: &str,
         column_oids: &[String],
         timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
 
     /// The SNMP v3 (USM) analogue of [`Transport::snmp_walk_instances`]. Auth/priv come resolved
@@ -359,6 +365,7 @@ pub trait Transport: Send + Sync {
         params: &SnmpV3Params,
         column_oids: &[String],
         timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError>;
 
     /// Probe an HTTP/HTTPS URL endpoint: reachability + status code + response time, and (for
@@ -452,6 +459,22 @@ fn fake_dns_chain(resolved: bool) -> DnsChain {
 }
 
 impl FakeTransport {
+    /// The canned instance rows for `column_oids`, honouring `max_rows`.
+    ///
+    /// The fake enforces the cap because a test is where a caller's budget arithmetic gets checked:
+    /// a fake that ignored `max_rows` would let a caller pass the wrong bound and still pass its
+    /// tests, and the real walk only proves itself against a device with a hundred-thousand-row
+    /// table. Truncated after filtering and in declaration order, so which rows survive is
+    /// deterministic.
+    fn canned_instances(&self, column_oids: &[String], max_rows: usize) -> Vec<SnmpInstanceRow> {
+        self.snmp_instances
+            .iter()
+            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
+            .take(max_rows)
+            .cloned()
+            .collect()
+    }
+
     /// A fake that always reports the target reachable with the given RTT (and an HTTP 200).
     #[must_use]
     pub fn reachable(rtt_ms: f64) -> Self {
@@ -666,13 +689,9 @@ impl Transport for FakeTransport {
         _community: &str,
         column_oids: &[String],
         _timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
-        Ok(self
-            .snmp_instances
-            .iter()
-            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-            .cloned()
-            .collect())
+        Ok(self.canned_instances(column_oids, max_rows))
     }
 
     async fn snmp_v3_walk_instances(
@@ -681,14 +700,10 @@ impl Transport for FakeTransport {
         _params: &SnmpV3Params,
         column_oids: &[String],
         _timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
         // Same canned rows as the v2c walk — the fake is protocol-agnostic.
-        Ok(self
-            .snmp_instances
-            .iter()
-            .filter(|r| column_oids.iter().any(|c| c == &r.oid_base))
-            .cloned()
-            .collect())
+        Ok(self.canned_instances(column_oids, max_rows))
     }
 
     async fn probe_http(

@@ -92,3 +92,18 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Per-node exclusion from derived suppression. In a table cell, so the label wraps rather than
+   forcing a wider column. */
+.dep-optout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.dep-optout input:disabled {
+  cursor: not-allowed;
+}

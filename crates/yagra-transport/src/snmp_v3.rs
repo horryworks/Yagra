@@ -27,6 +27,13 @@ const WALK_MAX_REPETITIONS: u32 = 20;
 /// forever (`WALK_MAX_REPETITIONS` × this bounds the rows collected per column).
 const MAX_WALK_REQUESTS: usize = 1000;
 
+/// Row budget for the walkers that predate ADR-043 Increment 3's explicit cap.
+///
+/// They are not unbounded — [`MAX_WALK_REQUESTS`] × [`WALK_MAX_REPETITIONS`] bounds them at 20,000
+/// rows per column — so this names *which* bound applies rather than leaving a bare `usize::MAX`
+/// that reads as none.
+const ROWS_BOUNDED_BY_REQUEST_CEILING: usize = usize::MAX;
+
 /// Open a v3 session against `target` and run engine discovery (id/boots/time) — required
 /// before authenticated requests.
 async fn open_session(
@@ -130,6 +137,7 @@ pub async fn snmp_walk_v3(
             &mut session,
             base_str,
             timeout,
+            ROWS_BOUNDED_BY_REQUEST_CEILING,
             |tail, value| {
                 let ifindex = crate::ifindex_from_tail(tail)?;
                 numeric(value).map(|v| SnmpTableSample {
@@ -161,6 +169,7 @@ pub async fn snmp_walk_strings_v3(
             &mut session,
             base_str,
             timeout,
+            ROWS_BOUNDED_BY_REQUEST_CEILING,
             |tail, value| {
                 let ifindex = crate::ifindex_from_tail(tail)?;
                 string_value(value).map(|s| SnmpTableString {
@@ -180,19 +189,30 @@ pub async fn snmp_walk_strings_v3(
 /// (USM) — the v3 analogue of `snmp::snmp_walk_instances_v2c` (ADR-038). Adjacency data cannot go
 /// through the numeric or string walkers: those fold the multi-part index and lossily decode the
 /// octets, and `lldpRemTable` needs both preserved.
+/// `max_rows` bounds the whole call across every column, enforced while paging — see the v2c twin
+/// for why truncating afterwards would not be a bound at all. The pre-existing
+/// [`MAX_WALK_REQUESTS`] ceiling is a *request* limit and stays as the defence against an agent
+/// that never advances; it says nothing about how many rows a well-behaved agent can return.
 pub async fn snmp_walk_instances_v3(
     target: IpAddr,
     params: &SnmpV3Params,
     column_oids: &[String],
     timeout: Duration,
+    max_rows: usize,
 ) -> Result<Vec<SnmpInstanceRow>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
     let mut rows = Vec::new();
     for base_str in column_oids {
+        if rows.len() >= max_rows {
+            tracing::debug!(%base_str, max_rows, "instance walk budget spent; skipping column");
+            break;
+        }
+        let budget = max_rows - rows.len();
         walk_column_v3(
             &mut session,
             base_str,
             timeout,
+            budget,
             |tail, value| {
                 raw_value(value).map(|v| SnmpInstanceRow {
                     oid_base: base_str.clone(),
@@ -217,10 +237,15 @@ pub async fn snmp_walk_instances_v3(
 /// it with [`crate::ifindex_from_tail`] (so the v2c and v3 row keying can never diverge); the
 /// neighbour walker keeps it, because a folded `lldpRemTable` index cannot be reassembled into
 /// which local port faces which peer.
+/// `budget` caps how many rows this column may contribute. [`ROWS_BOUNDED_BY_REQUEST_CEILING`] is
+/// the value for the walkers that predate ADR-043 Increment 3 and are already bounded by
+/// [`MAX_WALK_REQUESTS`] × [`WALK_MAX_REPETITIONS`] rows — naming it says which bound applies rather
+/// than leaving a bare `usize::MAX` that reads as "no bound at all".
 async fn walk_column_v3<R>(
     session: &mut AsyncSession,
     base_str: &str,
     timeout: Duration,
+    budget: usize,
     map: impl Fn(&[u32], &Value) -> Option<R>,
     out: &mut Vec<R>,
 ) {
@@ -229,7 +254,11 @@ async fn walk_column_v3<R>(
         return;
     }
     let mut cursor_str = base_str.to_owned();
+    let mut taken = 0usize;
     for _ in 0..MAX_WALK_REQUESTS {
+        if taken >= budget {
+            return;
+        }
         let Some(cursor) = parse_oid(&cursor_str) else {
             return;
         };
@@ -255,6 +284,13 @@ async fn walk_column_v3<R>(
         let mut last_in_subtree: Option<String> = None;
         let mut stop = false;
         for (oid, value) in pdu.varbinds {
+            // The budget is checked here, inside the page loop, rather than after it: the cost this
+            // bound exists to refuse is the memory the rows occupy, and a row already pushed has
+            // already cost it.
+            if taken >= budget {
+                stop = true;
+                break;
+            }
             if matches!(
                 value,
                 Value::EndOfMibView | Value::NoSuchObject | Value::NoSuchInstance
@@ -267,6 +303,9 @@ async fn walk_column_v3<R>(
                 stop = true; // walked past this column's subtree — done
                 break;
             };
+            // Counted whether or not `map` produced a row: the budget bounds what the *device* is
+            // allowed to make this walk read, and a row the mapper declined still arrived.
+            taken += 1;
             if let Some(row) = map(&tail, &value) {
                 out.push(row);
             }

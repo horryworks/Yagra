@@ -467,6 +467,7 @@ mod tests {
             _community: &str,
             _column_oids: &[String],
             _timeout: Duration,
+            _max_rows: usize,
         ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
             Ok(Vec::new())
         }
@@ -477,6 +478,7 @@ mod tests {
             _params: &SnmpV3Params,
             _column_oids: &[String],
             _timeout: Duration,
+            _max_rows: usize,
         ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
             Ok(Vec::new())
         }
@@ -772,6 +774,7 @@ mod tests {
                 _c: &str,
                 _o: &[String],
                 _to: Duration,
+                _max: usize,
             ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
                 Ok(Vec::new())
             }
@@ -781,6 +784,7 @@ mod tests {
                 _p: &SnmpV3Params,
                 _o: &[String],
                 _to: Duration,
+                _max: usize,
             ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
                 Ok(Vec::new())
             }

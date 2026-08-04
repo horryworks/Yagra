@@ -58,6 +58,7 @@ use yagra_common::{
     set_node_group,
     set_node_pool,
     set_node_parent,
+    set_node_suppression_opt_out,
     place_node,
     list_pools
 ))]
@@ -80,6 +81,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/pool", put(set_node_pool))
         .route("/api/v1/nodes/:node_id/parent", put(set_node_parent))
+        .route(
+            "/api/v1/nodes/:node_id/suppression-opt-out",
+            put(set_node_suppression_opt_out),
+        )
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
         .route("/api/v1/pools", get(list_pools))
 }
@@ -849,6 +854,54 @@ async fn set_node_group(
             ApiError::from_internal(e.as_ref(), "set node group", "failed to move node")
         })?;
     node_write_result(found, id)
+}
+
+/// Whether this node is excluded from derived alert suppression.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NodeSuppressionOptOut {
+    /// `true` ⇒ this node's alerts always stand on their own, whatever the derived graph says.
+    opt_out: bool,
+}
+
+/// Exclude a node from derived alert suppression, or put it back.
+///
+/// An excluded node keeps its place in the connectivity graph — everything behind it still resolves
+/// through it — but is given no upstream of its own, so its alert is never rolled up under
+/// something else. Use it for the one box that must page whatever else is happening.
+///
+/// This only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no
+/// effect while the deployment is on the hand-authored graph.
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/suppression-opt-out", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NodeSuppressionOptOut,
+    responses(
+        (status = 204, description = "The exclusion was set or cleared"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_suppression_opt_out(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NodeSuppressionOptOut>,
+) -> ApiResult<StatusCode> {
+    match admin.repo.set_suppression_opt_out(id, body.opt_out).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::not_found(
+            "node_not_found",
+            format!("no node {id}"),
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "set suppression opt-out",
+            "failed to update the node",
+        )),
+    }
 }
 
 /// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the

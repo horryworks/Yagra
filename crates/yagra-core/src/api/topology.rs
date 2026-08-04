@@ -596,6 +596,21 @@ pub(crate) struct TopologyShadow {
     pub unresolved_pools: Vec<String>,
     /// Poller ids that could not be placed, so an operator knows which to give an anchor.
     pub unresolved_pollers: Vec<String>,
+    /// When the mode was last changed (RFC 3339), or `null` if it never has been.
+    pub mode_since: Option<String>,
+    /// How many nodes the derived graph gives at least one upstream.
+    ///
+    /// Read with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as
+    /// it does now, which is usually the point rather than a problem.
+    pub covered_nodes: usize,
+    /// Nodes in the inventory.
+    pub total_nodes: usize,
+    /// Nodes an operator has excluded from derived suppression entirely.
+    ///
+    /// A list rather than a count: the screen that shows the comparison is also where the exclusion
+    /// is toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an
+    /// operator typed in, not by the fleet.
+    pub opted_out: Vec<Uuid>,
 }
 
 /// Cap on how many differing edges or affected alerts are listed.
@@ -647,6 +662,7 @@ pub(crate) async fn topology_shadow(
         links: admin.topology_links.clone(),
         pollers: admin.pollers.clone(),
         l3: admin.l3.clone(),
+        nodes: admin.repo.clone(),
     };
     let manual = crate::topology_projection::manual_topology(&nodes);
     let (derived, resolution) =
@@ -733,6 +749,27 @@ pub(crate) async fn topology_shadow(
             .collect(),
         unresolved_pools: resolution.unresolved.keys().cloned().collect(),
         unresolved_pollers: resolution.unresolved.values().flatten().cloned().collect(),
+        // The checklist below is **advisory and stays advisory**. Enforcing "shadow for 24 hours"
+        // would put approval back on a schedule, which is the input cost ADR-043 exists to remove;
+        // the one genuinely blocking condition is `unresolved_pools`, above.
+        mode_since: admin
+            .repo
+            .topology_mode_since()
+            .await
+            .map(|t| t.to_rfc3339()),
+        covered_nodes: nodes
+            .iter()
+            .filter(|n| visible(n.id) && !derived.parents_of(n.id).is_empty())
+            .count(),
+        total_nodes: nodes.iter().filter(|n| visible(n.id)).count(),
+        opted_out: admin
+            .repo
+            .suppression_opt_outs()
+            .await
+            .iter()
+            .filter(|id| visible(**id))
+            .map(|id| id.as_uuid())
+            .collect(),
     })
 }
 
@@ -780,6 +817,7 @@ async fn set_topology_mode(
             links: admin.topology_links.clone(),
             pollers: admin.pollers.clone(),
             l3: admin.l3.clone(),
+            nodes: admin.repo.clone(),
         };
         let resolution = crate::topology_projection::resolve(&sources, &nodes).await;
         // Only pools that actually have nodes block. An idle pool with a misconfigured poller is a

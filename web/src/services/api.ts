@@ -796,6 +796,15 @@ export const api = {
       body: { parent_id: parentId },
     }),
 
+  /** Exclude a node from derived alert suppression, or put it back. Only ever removes suppression,
+   *  so it cannot cause an outage to go unreported. No effect while the deployment uses the
+   *  hand-authored graph. */
+  setNodeSuppressionOptOut: (id: string, optOut: boolean): Promise<void> =>
+    apiPut('/api/v1/nodes/{node_id}/suppression-opt-out', {
+      path: { node_id: id },
+      body: { opt_out: optOut },
+    }),
+
   /** Drag-reorder a node: place it in `group_id` (`null` ⇒ ungrouped) next to a sibling node.
    *  `before`/`after` name the sibling (at most one; omit both to append). */
   placeNode: (

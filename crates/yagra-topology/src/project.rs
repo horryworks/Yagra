@@ -152,8 +152,17 @@ pub fn resolve_anchors(
 /// An operator's `forced_parent` on a link overrides both directions of that edge — it names the
 /// upstream end, and the other end is then never treated as upstream through that link no matter
 /// what the distances say.
+///
+/// `opt_out` names nodes an operator has excluded from derived suppression entirely. They keep their
+/// place in the graph — other nodes still reach the anchors *through* them — but are given no
+/// parents of their own, so their alerts always stand. The flag can only ever remove suppression,
+/// never add it, which is why it is safe to hand to an operator in a way per-edge approval was not.
 #[must_use]
-pub fn predecessors(links: &[DerivedLink], anchors: &BTreeSet<NodeId>) -> Topology {
+pub fn predecessors(
+    links: &[DerivedLink],
+    anchors: &BTreeSet<NodeId>,
+    opt_out: &BTreeSet<NodeId>,
+) -> Topology {
     // BFS runs over the undirected graph including forced edges, so a hand-declared link still
     // shortens paths; only the *direction* assignment below consults `forced_parent`.
     let mut adj: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
@@ -209,7 +218,7 @@ pub fn predecessors(links: &[DerivedLink], anchors: &BTreeSet<NodeId>) -> Topolo
         // Anchors are roots by definition and must never be suppressed: they are the reference point
         // the whole projection is measured from, and a root with a parent is a contradiction that
         // would let one segment silence the poller's own view of it.
-        if anchors.contains(&child) {
+        if anchors.contains(&child) || opt_out.contains(&child) {
             continue;
         }
         for parent in parents.into_iter().take(MAX_DERIVED_PARENTS) {
@@ -263,6 +272,13 @@ mod tests {
 
     fn anchors(ids: &[NodeId]) -> BTreeSet<NodeId> {
         ids.iter().copied().collect()
+    }
+
+    /// Projection with no opt-outs — the ordinary case, so the tests below read as being about the
+    /// graph rather than about the escape hatch. Shadows the real one inside this module; the
+    /// opt-out tests call `super::predecessors` explicitly.
+    fn predecessors(links: &[DerivedLink], anchors: &BTreeSet<NodeId>) -> Topology {
+        super::predecessors(links, anchors, &BTreeSet::new())
     }
 
     fn snapshot(addrs: &[(&str, u8)]) -> L3Snapshot {
@@ -534,6 +550,56 @@ mod tests {
             !topo.is_suppressed(n[2], &anchors(&[n[1], n[2]])),
             "n[0] is up, so a path remains"
         );
+    }
+
+    #[test]
+    fn an_opted_out_node_gets_no_parents_but_still_carries_the_path() {
+        // The escape hatch, and the two halves that make it safe. The opted-out node's own alert
+        // always stands — that is the whole point. And it stays *in* the graph, so the node behind
+        // it is still reachable and still gets a parent; removing it from the topology instead
+        // would silently unsuppress everything downstream of it too.
+        let n = nodes(3); // anchor → mid (opted out) → leaf
+        let opt_out = anchors(&[n[1]]);
+        let topo = super::predecessors(
+            &[link(n[0], n[1]), link(n[1], n[2])],
+            &anchors(&[n[0]]),
+            &opt_out,
+        );
+        let all_down = anchors(&[n[0], n[1], n[2]]);
+        assert!(
+            !topo.is_suppressed(n[1], &all_down),
+            "an opted-out node must always alert on its own"
+        );
+        assert!(
+            topo.is_suppressed(n[2], &all_down),
+            "the node behind it is still explained by it"
+        );
+    }
+
+    #[test]
+    fn opting_out_can_only_ever_remove_suppression() {
+        // The property that makes this flag safe to hand to an operator where per-edge approval was
+        // not: it cannot create the silent-failure class. For every node, suppression with the flag
+        // set implies suppression without it.
+        let n = nodes(5);
+        let links = [
+            link(n[0], n[1]),
+            link(n[0], n[2]),
+            link(n[1], n[3]),
+            link(n[2], n[3]),
+            link(n[3], n[4]),
+        ];
+        let down: BTreeSet<NodeId> = n[1..].iter().copied().collect();
+        let base = super::predecessors(&links, &anchors(&[n[0]]), &BTreeSet::new());
+        for opted in &n {
+            let with = super::predecessors(&links, &anchors(&[n[0]]), &anchors(&[*opted]));
+            for node in &n {
+                assert!(
+                    !with.is_suppressed(*node, &down) || base.is_suppressed(*node, &down),
+                    "opting {opted} out made {node} suppressed when it was not"
+                );
+            }
+        }
     }
 
     #[test]

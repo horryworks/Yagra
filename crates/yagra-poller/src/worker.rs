@@ -404,22 +404,28 @@ impl SnmpWalker {
     }
 
     /// Walk table columns keeping raw instance indices and raw octets (the neighbour walk).
+    ///
+    /// `max_rows` is the caller's budget for the whole walk — see `Transport::snmp_walk_instances`.
+    /// Every caller states one; there is deliberately no default, because the tables this walker is
+    /// pointed at range from tens of rows (`ipAddrTable`) to hundreds of thousands
+    /// (`ipNetToPhysicalTable`) and no single number is right for both.
     async fn walk_instances(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         columns: &[String],
         timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
         match self {
             SnmpWalker::V2c(community) => {
                 transport
-                    .snmp_walk_instances(target, community, columns, timeout)
+                    .snmp_walk_instances(target, community, columns, timeout, max_rows)
                     .await
             }
             SnmpWalker::V3(params) => {
                 transport
-                    .snmp_v3_walk_instances(target, params, columns, timeout)
+                    .snmp_v3_walk_instances(target, params, columns, timeout, max_rows)
                     .await
             }
         }
@@ -624,7 +630,13 @@ async fn execute_neighbors(
     let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
     r.observational = true;
     match walker
-        .walk_instances(transport, job.target, &bases, timeout)
+        .walk_instances(
+            transport,
+            job.target,
+            &bases,
+            timeout,
+            yagra_common::MAX_NEIGHBOR_WALK_ROWS,
+        )
         .await
     {
         Ok(rows) => {
@@ -676,7 +688,13 @@ async fn execute_l3(
     let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
     r.observational = true;
     match walker
-        .walk_instances(transport, job.target, &bases, timeout)
+        .walk_instances(
+            transport,
+            job.target,
+            &bases,
+            timeout,
+            yagra_common::MAX_L3_WALK_ROWS,
+        )
         .await
     {
         Ok(rows) => {
@@ -1173,6 +1191,7 @@ mod tests {
                 _c: &str,
                 _o: &[String],
                 _to: Duration,
+                _max: usize,
             ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
                 Err(TransportError::Io("snmp connect refused".into()))
             }
@@ -1182,6 +1201,7 @@ mod tests {
                 _p: &SnmpV3Params,
                 _o: &[String],
                 _to: Duration,
+                _max: usize,
             ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
                 Err(TransportError::Io("snmp connect refused".into()))
             }

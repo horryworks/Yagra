@@ -11,6 +11,15 @@
 ## Unreleased
 
 ### New Features
+- **One box can be excluded from derived suppression entirely.** Tick *Never suppress* against a
+  node on **Topology ▸ Dependencies** (or `PUT /api/v1/nodes/{id}/suppression-opt-out`) and its
+  alert always stands on its own, whatever the discovered graph says. The node keeps its place in
+  the graph, so everything behind it still resolves through it. This only ever *removes*
+  suppression, so it cannot cause an outage to go unreported — which is why it is a per-node switch
+  where per-edge approval was rejected.
+- **The comparison now shows how much of the fleet the derived graph actually covers**: how many
+  nodes would get an upstream, how many are excluded by hand, and how long the deployment has been
+  comparing. Advisory, not a gate — the one blocking condition is still an unplaced poller.
 - **See what the derived graph would do to your alerts, before it does anything.**
   **Topology ▸ Dependencies** gained a mode switch with three positions. *The hand-authored graph*
   is the default and is what every existing deployment stays on. *Comparing* changes nothing about

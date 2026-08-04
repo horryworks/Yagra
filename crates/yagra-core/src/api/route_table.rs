@@ -1060,6 +1060,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("GET", "/api/v1/poller-health", INFRA, PENDING_INFRA),
     ("GET", "/api/v1/pollers", INFRA, PENDING_INFRA),
+    (
+        "PUT",
+        "/api/v1/nodes/:node_id/suppression-opt-out",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
     ("DELETE", "/api/v1/pollers/:id", INFRA, NO_MCP_WRITE),
     ("PUT", "/api/v1/pollers/:id/anchor", INFRA, NO_MCP_WRITE),
     (

@@ -500,6 +500,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         links: topo_link_repo.clone(),
         pollers: poller_repo.clone(),
         l3: l3_repo.clone(),
+        nodes: repo.clone(),
     };
     alerts.set_config(
         load_alert_config(&repo, &thresholds, &maintenance, &group_repo, &topo_sources).await,
@@ -1137,6 +1138,7 @@ impl LeaderTasks {
                     links: self.topology_links.clone(),
                     pollers: self.pollers.clone(),
                     l3: self.l3.clone(),
+                    nodes: self.repo.clone(),
                 },
             ),
         );

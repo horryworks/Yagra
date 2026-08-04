@@ -1397,6 +1397,41 @@ impl NodeRepo {
         Ok(())
     }
 
+    /// Nodes an operator has excluded from derived suppression (ADR-043 Increment 3).
+    ///
+    /// Read as a set rather than a column on [`yagra_common::Node`] on purpose: only the projection
+    /// consults it, and widening the shared node model would ripple through every construction site
+    /// of a type that already carries everything else about a node.
+    ///
+    /// Degrades to **empty** on a read failure — empty means nothing is excluded, i.e. the derived
+    /// graph applies in full. That is the wrong direction to fail in, so it is worth being explicit:
+    /// the alternative (treating a failed read as "exclude everything") would silently disable
+    /// suppression fleet-wide on a transient, which is a louder failure but a much more confusing
+    /// one. The read is a single indexed scan alongside the node list it accompanies.
+    pub async fn suppression_opt_outs(&self) -> std::collections::BTreeSet<yagra_common::NodeId> {
+        let Ok(rows) = sqlx::query("SELECT id FROM nodes WHERE suppression_opt_out")
+            .fetch_all(&self.pool)
+            .await
+        else {
+            tracing::warn!("failed to read suppression opt-outs; treating none as excluded");
+            return std::collections::BTreeSet::new();
+        };
+        rows.iter()
+            .filter_map(|r| r.try_get::<Uuid, _>("id").ok())
+            .map(yagra_common::NodeId)
+            .collect()
+    }
+
+    /// Exclude one node from derived suppression, or put it back. Returns whether the node exists.
+    pub async fn set_suppression_opt_out(&self, id: Uuid, opt_out: bool) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE nodes SET suppression_opt_out = $2 WHERE id = $1")
+            .bind(id)
+            .bind(opt_out)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Which dependency graph the alert engine uses (ADR-043 決定 5).
     ///
     /// Degrades to [`TopologyMode::Manual`] on any read failure, and on any value it cannot parse.
@@ -1420,15 +1455,33 @@ impl NodeRepo {
     /// (`TopologyMode::from_token`) and checks the blocking preconditions; the column carries no
     /// `CHECK` on purpose (see migration 0067).
     pub async fn set_topology_mode(&self, mode: TopologyMode) -> anyhow::Result<()> {
+        // `topology_mode_since` moves only when the mode actually changes. Stamping it on every
+        // write would make "how long has this been in shadow" reset whenever an unrelated save
+        // touched the row — and that number is the only evidence the promotion checklist has.
         sqlx::query(
-            "INSERT INTO app_settings (id, topology_mode, updated_at) \
-             VALUES (TRUE, $1, now()) \
-             ON CONFLICT (id) DO UPDATE SET topology_mode = $1, updated_at = now()",
+            "INSERT INTO app_settings (id, topology_mode, topology_mode_since, updated_at) \
+             VALUES (TRUE, $1, now(), now()) \
+             ON CONFLICT (id) DO UPDATE SET \
+                 topology_mode_since = CASE \
+                     WHEN app_settings.topology_mode IS DISTINCT FROM $1 THEN now() \
+                     ELSE app_settings.topology_mode_since END, \
+                 topology_mode = $1, \
+                 updated_at = now()",
         )
         .bind(mode.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// When the topology mode was last changed, or `None` if it never has been.
+    pub async fn topology_mode_since(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        sqlx::query("SELECT topology_mode_since FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.try_get("topology_mode_since").ok())
     }
 
     /// The global Cisco Meraki polling kill switch (safeguard). Defaults to `true` (enabled) if the

@@ -191,8 +191,10 @@ impl Transport for SurgePingTransport {
         community: &str,
         column_oids: &[String],
         timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<crate::SnmpInstanceRow>, TransportError> {
-        crate::snmp::snmp_walk_instances_v2c(target, community, column_oids, timeout).await
+        crate::snmp::snmp_walk_instances_v2c(target, community, column_oids, timeout, max_rows)
+            .await
     }
 
     async fn snmp_v3_walk_instances(
@@ -201,8 +203,9 @@ impl Transport for SurgePingTransport {
         params: &crate::SnmpV3Params,
         column_oids: &[String],
         timeout: Duration,
+        max_rows: usize,
     ) -> Result<Vec<crate::SnmpInstanceRow>, TransportError> {
-        crate::snmp_v3::snmp_walk_instances_v3(target, params, column_oids, timeout).await
+        crate::snmp_v3::snmp_walk_instances_v3(target, params, column_oids, timeout, max_rows).await
     }
 
     async fn probe_http(

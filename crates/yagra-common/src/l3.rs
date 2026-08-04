@@ -43,6 +43,15 @@ pub const METRIC_SNMP_L3_ADDRESS_COUNT: &str = "snmp_l3_address_count";
 /// than dropped silently — the [`crate::MAX_NEIGHBORS_PER_NODE`] rule.
 pub const MAX_ADDRESSES_PER_NODE: usize = 512;
 
+/// Row budget for the interface-address walk itself, across all of its columns.
+///
+/// Distinct from [`MAX_ADDRESSES_PER_NODE`], which caps the *assembled* result: a walk row is one
+/// column value, and five columns describe one address, so the walk legitimately reads several
+/// times what it keeps. Generous enough that no real device is truncated
+/// (`512 × 5` plus room for the older table's overlap) and small enough that a broken agent cannot
+/// make the poller read an unbounded table.
+pub const MAX_L3_WALK_ROWS: usize = 4096;
+
 /// The RowPointer prefix every `ipAddressPrefix` value starts with (`ipAddressPrefixOrigin`).
 const OID_IP_ADDRESS_PREFIX_ENTRY: &str = "1.3.6.1.2.1.4.32.1.5";
 

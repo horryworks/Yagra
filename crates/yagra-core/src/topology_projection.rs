@@ -36,6 +36,8 @@ pub struct TopologySources {
     pub pollers: Arc<PollerRepo>,
     /// Interface addresses, used to place a poller on a segment.
     pub l3: Arc<L3Repo>,
+    /// The inventory, for the per-node suppression opt-out (ADR-043 Increment 3).
+    pub nodes: Arc<crate::repo::NodeRepo>,
 }
 
 /// Project the stored links into a dependency graph, and report how the anchors resolved.
@@ -56,7 +58,8 @@ pub async fn derived_topology(
             return (Topology::new(), resolution);
         }
     };
-    let topology = project::predecessors(&links, &resolution.anchors);
+    let opt_out = topo.nodes.suppression_opt_outs().await;
+    let topology = project::predecessors(&links, &resolution.anchors, &opt_out);
     (topology, resolution)
 }
 

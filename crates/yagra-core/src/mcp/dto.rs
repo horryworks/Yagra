@@ -705,6 +705,10 @@ mod tests {
             // node's `pool`, and the distinction is why the check is per-key rather than per-word.
             unresolved_pools: vec!["default".to_owned()],
             unresolved_pollers: vec!["edge-1".to_owned()],
+            mode_since: Some("2026-08-03T00:00:00Z".to_owned()),
+            covered_nodes: 1,
+            total_nodes: 2,
+            opted_out: vec![],
         };
         assert_no_forbidden_keys(&serde_json::to_value(&shadow).unwrap(), "TopologyShadow");
 

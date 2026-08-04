@@ -41,6 +41,14 @@ pub const METRIC_SNMP_NEIGHBOR_COUNT: &str = "snmp_neighbor_count";
 /// [`NeighborSet::truncated`] rather than dropped silently.
 pub const MAX_NEIGHBORS_PER_NODE: usize = 256;
 
+/// Row budget for the adjacency walk itself, across all of its columns.
+///
+/// Distinct from [`MAX_NEIGHBORS_PER_NODE`], which caps the *assembled* result: nineteen columns
+/// describe one neighbour, so the walk legitimately reads far more rows than it keeps. Sized at
+/// `256 × 19` rounded up, so a device at the entity cap is never truncated by the row cap first —
+/// the two limits would otherwise interact in a way that made the reported `truncated` flag lie.
+pub const MAX_NEIGHBOR_WALK_ROWS: usize = 8192;
+
 /// Cap on any single device-supplied string, in characters. `sysDescr` in particular runs to
 /// hundreds of bytes on some agents and is pure payload.
 pub const MAX_FIELD_CHARS: usize = 255;

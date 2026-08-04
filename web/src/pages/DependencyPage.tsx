@@ -18,7 +18,7 @@ import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
 import { useAuthStore } from '../store';
-import { stateColorVar, stateLabel } from '../lib/format';
+import { formatExactTime, stateColorVar, stateLabel } from '../lib/format';
 import type { NodeState, TopologyMode, TopologyNode } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -112,6 +112,18 @@ export function DependencyPage() {
     });
   }, [nodes, query, filter]);
 
+  const optedOut = useMemo(() => new Set(shadow?.opted_out ?? []), [shadow]);
+
+  const toggleOptOut = async (id: string, next: boolean) => {
+    setModeError(null);
+    try {
+      await api.setNodeSuppressionOptOut(id, next);
+      setRefreshNonce((v) => v + 1);
+    } catch (e) {
+      setModeError(errMsg(e, t('dependency.optOutFailed')));
+    }
+  };
+
   const changeMode = async (next: TopologyMode) => {
     setModeBusy(true);
     setModeError(null);
@@ -180,6 +192,25 @@ export function DependencyPage() {
               },
             },
             {
+              key: 'optout',
+              header: t('dependency.cols2.optOut'),
+              width: '120px',
+              render: (r: TopologyNode) => (
+                <label className="dep-optout" title={t('dependency.optOutHelp')}>
+                  <input
+                    type="checkbox"
+                    checked={optedOut.has(r.id)}
+                    disabled={!authed}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      void toggleOptOut(r.id, e.target.checked);
+                    }}
+                  />
+                  <span>{t('dependency.optOut')}</span>
+                </label>
+              ),
+            },
+            {
               key: 'verdict',
               header: t('dependency.cols2.verdict'),
               width: '150px',
@@ -211,7 +242,7 @@ export function DependencyPage() {
           ) : null,
       },
     ],
-    [authed, comparing, diffs, mode, nameOf, t],
+    [authed, comparing, diffs, mode, nameOf, optedOut, t],
   );
 
   return (
@@ -233,6 +264,18 @@ export function DependencyPage() {
             </div>
             <p className="muted dep-mode-note">{t(`dependency.mode.${mode}Note`)}</p>
 
+            {comparing && (
+              <p className="dep-mode-counts">
+                {t('dependency.mode.coverage', {
+                  covered: shadow.covered_nodes,
+                  total: shadow.total_nodes,
+                })}
+                {optedOut.size > 0 &&
+                  ` · ${t('dependency.mode.optedOut', { count: optedOut.size })}`}
+                {shadow.mode_since &&
+                  ` · ${t('dependency.mode.since', { at: formatExactTime(shadow.mode_since) })}`}
+              </p>
+            )}
             {comparing && (
               <p className="dep-mode-counts">
                 {t('dependency.mode.edges', {

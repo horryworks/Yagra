@@ -2181,6 +2181,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/suppression-opt-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Exclude a node from derived alert suppression, or put it back.
+         * @description An excluded node keeps its place in the connectivity graph — everything behind it still resolves
+         *     through it — but is given no upstream of its own, so its alert is never rolled up under
+         *     something else. Use it for the one box that must page whatever else is happening.
+         *
+         *     This only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no
+         *     effect while the deployment is on the hand-authored graph.
+         */
+        put: operations["set_node_suppression_opt_out"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/url-check": {
         parameters: {
             query?: never;
@@ -6398,6 +6423,11 @@ export interface components {
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;
         };
+        /** @description Whether this node is excluded from derived alert suppression. */
+        NodeSuppressionOptOut: {
+            /** @description `true` ⇒ this node's alerts always stand on their own, whatever the derived graph says. */
+            opt_out: boolean;
+        };
         /**
          * @description Something the export or the import did that the operator would not otherwise see.
          *
@@ -7746,16 +7776,35 @@ export interface components {
         TopologyShadow: {
             /** @description Nodes the derived graph treats as roots, because a poller sits on their segment. */
             anchors: string[];
+            /**
+             * @description How many nodes the derived graph gives at least one upstream.
+             *
+             *     Read with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as
+             *     it does now, which is usually the point rather than a problem.
+             */
+            covered_nodes: number;
             /** @description Edges in the derived graph. */
             derived_edges: number;
             /** @description Edges in the hand-authored graph. */
             manual_edges: number;
             /** @description `manual`, `shadow` or `derived`. */
             mode: components["schemas"]["TopologyMode"];
+            /** @description When the mode was last changed (RFC 3339), or `null` if it never has been. */
+            mode_since?: string | null;
             /** @description Parent edges only the derived graph has. */
             only_in_derived: components["schemas"]["ShadowEdge"][];
             /** @description Parent edges only the hand-authored graph has. */
             only_in_manual: components["schemas"]["ShadowEdge"][];
+            /**
+             * @description Nodes an operator has excluded from derived suppression entirely.
+             *
+             *     A list rather than a count: the screen that shows the comparison is also where the exclusion
+             *     is toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an
+             *     operator typed in, not by the fleet.
+             */
+            opted_out: string[];
+            /** @description Nodes in the inventory. */
+            total_nodes: number;
             /** @description Poller ids that could not be placed, so an operator knows which to give an anchor. */
             unresolved_pollers: string[];
             /**
@@ -16435,6 +16484,67 @@ export interface operations {
             };
             /** @description Role lacks the View permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_suppression_opt_out: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeSuppressionOptOut"];
+            };
+        };
+        responses: {
+            /** @description The exclusion was set or cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -51,7 +51,8 @@
     "emptyFiltered": "No matching nodes — adjust the search or filter.",
     "cols2": {
       "derived": "Derived upstream",
-      "verdict": "Comparison"
+      "verdict": "Comparison",
+      "optOut": "Never suppress"
     },
     "verdict": {
       "agree": "Agrees",
@@ -84,8 +85,14 @@
       "edges": "{{manual}} hand-authored dependencies · {{derived}} discovered",
       "reviewFirst": "Review the alerts that would newly be suppressed before switching — each of those is an alert that would stop being raised.",
       "noChange": "No active alert's suppression would change.",
-      "changeFailed": "Could not change the mode."
+      "changeFailed": "Could not change the mode.",
+      "coverage": "{{covered}} of {{total}} nodes would get an upstream",
+      "optedOut_one": "{{count}} node excluded by hand",
+      "optedOut_other": "{{count}} nodes excluded by hand",
+      "since": "comparing since {{at}}"
     },
+    "optOutHelp": "Excluded from derived suppression: this node's alert always stands on its own, whatever the discovered graph says. Only ever removes suppression, so it cannot hide an outage.",
+    "optOutFailed": "Could not change the exclusion.",
     "editHiddenInDerived": "The upstream is discovered in this mode, so it is not edited here. Correct a wrong link on the Network map instead."
   },
   "geo": {

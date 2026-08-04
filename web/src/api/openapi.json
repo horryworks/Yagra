@@ -11359,6 +11359,83 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/suppression-opt-out": {
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "Exclude a node from derived alert suppression, or put it back.",
+        "description": "An excluded node keeps its place in the connectivity graph — everything behind it still resolves\nthrough it — but is given no upstream of its own, so its alert is never rolled up under\nsomething else. Use it for the one box that must page whatever else is happening.\n\nThis only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no\neffect while the deployment is on the hand-authored graph.",
+        "operationId": "set_node_suppression_opt_out",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeSuppressionOptOut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The exclusion was set or cleared"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/url-check": {
       "get": {
         "tags": [
@@ -24194,6 +24271,19 @@
           }
         }
       },
+      "NodeSuppressionOptOut": {
+        "type": "object",
+        "description": "Whether this node is excluded from derived alert suppression.",
+        "required": [
+          "opt_out"
+        ],
+        "properties": {
+          "opt_out": {
+            "type": "boolean",
+            "description": "`true` ⇒ this node's alerts always stand on their own, whatever the derived graph says."
+          }
+        }
+      },
       "NoteCode": {
         "type": "string",
         "description": "Something the export or the import did that the operator would not otherwise see.\n\nA silent drop is the failure mode that matters here: a bundle that quietly left out half the\nrules imports without error and the operator finds out during an incident.",
@@ -27341,7 +27431,10 @@
           "would_unsuppress",
           "anchors",
           "unresolved_pools",
-          "unresolved_pollers"
+          "unresolved_pollers",
+          "covered_nodes",
+          "total_nodes",
+          "opted_out"
         ],
         "properties": {
           "anchors": {
@@ -27351,6 +27444,11 @@
               "format": "uuid"
             },
             "description": "Nodes the derived graph treats as roots, because a poller sits on their segment."
+          },
+          "covered_nodes": {
+            "type": "integer",
+            "description": "How many nodes the derived graph gives at least one upstream.\n\nRead with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as\nit does now, which is usually the point rather than a problem.",
+            "minimum": 0
           },
           "derived_edges": {
             "type": "integer",
@@ -27366,6 +27464,13 @@
             "$ref": "#/components/schemas/TopologyMode",
             "description": "`manual`, `shadow` or `derived`."
           },
+          "mode_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the mode was last changed (RFC 3339), or `null` if it never has been."
+          },
           "only_in_derived": {
             "type": "array",
             "items": {
@@ -27379,6 +27484,19 @@
               "$ref": "#/components/schemas/ShadowEdge"
             },
             "description": "Parent edges only the hand-authored graph has."
+          },
+          "opted_out": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Nodes an operator has excluded from derived suppression entirely.\n\nA list rather than a count: the screen that shows the comparison is also where the exclusion\nis toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an\noperator typed in, not by the fleet."
+          },
+          "total_nodes": {
+            "type": "integer",
+            "description": "Nodes in the inventory.",
+            "minimum": 0
           },
           "unresolved_pollers": {
             "type": "array",
