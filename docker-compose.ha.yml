@@ -45,8 +45,14 @@ services:
       YAGRA_DISK_WATCH_PATHS: "/=root,/hostfs/vm=metrics"
       YAGRA_ENABLE_HA: "true"
       YAGRA_CORE_ID: "core-b"
+      # Both cores materialize the WebUI certificate (ADR-044), and neither waits for leadership to
+      # do it: on a fresh database a standby that starts first must still be able to bootstrap one,
+      # or `web` waits forever for a file the leader has not been elected to write. The write is
+      # content-addressed and atomic, so two cores writing the same bytes is harmless.
+      YAGRA_TLS_DIR: /var/lib/yagra/tls
     ports:
       - "8081:8080"   # standby/leader northbound API on a distinct host port
     volumes:
       - vmdata:/hostfs/vm:ro
+      - tlsdata:/var/lib/yagra/tls
     restart: unless-stopped

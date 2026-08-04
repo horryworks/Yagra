@@ -90,10 +90,37 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Compose files are configuration nothing else parses: `docker compose up` on a deployed machine
+  # was the first thing that ever read them, so a typo surfaced as a failed deploy. ADR-044 touches
+  # all four at once (a new service, a new volume, changed ports), which is what finally made this
+  # worth a job. Seconds to run, and it gates `images` because a stack that cannot be composed is
+  # not worth building.
+  compose:
+    name: compose files parse
+    runs-on: [self-hosted, linux, yagra-build]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate every composition
+        run: |
+          set -e
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.deploy.yml config -q
+          # An overlay, not a standalone file — it has no stores of its own.
+          docker compose -f docker-compose.yml -f docker-compose.ha.yml config -q
+          # The remote-poller file uses ${VAR:?...} required-variable syntax so a misconfigured
+          # poller fails loudly at `up` rather than silently dialling nothing. That makes `config`
+          # fail here without values, so supply throwaway ones — we are checking the YAML, not the
+          # deployment.
+          YAGRA_BUS_URL=tls://poller:x@example.invalid:4222 \
+          YAGRA_POLLER_ID=ci \
+          YAGRA_POLLER_POOL=ci \
+            docker compose -f docker-compose.poller.yml config -q
+          docker compose -f docker-compose.registry.yml config -q
+
   images:
     name: docker image
     runs-on: [self-hosted, linux, yagra-build]
-    needs: [backend, frontend]
+    needs: [backend, frontend, compose]
     permissions:
       contents: read
       # `permissions` cannot be conditional, so this grant is declared for every ref. What actually

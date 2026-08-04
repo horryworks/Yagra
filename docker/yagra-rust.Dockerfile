@@ -96,7 +96,17 @@ RUN apt-get update \
     && apt-get purge -y wget \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-RUN useradd -r -u 10001 yagra
+# The `install -d` creates the directory core materializes the WebUI's TLS certificate into
+# (ADR-044), owned by the runtime user. Same reasoning as the poller's buffer directory below, and
+# the same trap: /var/lib is root-owned, and Docker seeds an empty named volume from the image path
+# *including ownership*, whereas a mount point it has to invent itself is root-owned. Without this,
+# core could not write its own certificate and the WebUI would never come up. 0750 because the file
+# it holds contains the server's private key; the web container reads it as a group member.
+#
+# The `tls-init` one-shot in the compose files covers the orderings this does not — if the *web*
+# container mounts the empty volume first, this image's ownership never gets a vote.
+RUN useradd -r -u 10001 yagra \
+ && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls
 COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile
 COPY --from=build /app/yagra-core /usr/local/bin/yagra-core

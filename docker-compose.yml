@@ -8,6 +8,20 @@
 name: yagra
 
 services:
+  # ── TLS volume init — decide the certificate volume's ownership before anyone else can ──
+  # See the long note in docker-compose.deploy.yml. Short version: core (uid 10001) writes the
+  # WebUI certificate into `tlsdata` and nginx (uid 101) reads it, and whoever mounts the empty
+  # volume first decides its ownership — so a root one-shot settles it before either can.
+  tls-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "mkdir -p /tls && chown 10001:10001 /tls && chmod 0750 /tls"
+    volumes:
+      - tlsdata:/tls
+    restart: "no"
+
   # ── Yagra-core — orchestration, scheduling, northbound API ──
   core:
     build:
@@ -15,7 +29,14 @@ services:
       dockerfile: docker/yagra-rust.Dockerfile
       target: core
     image: ghcr.io/horryworks/yagra-core:dev
-    depends_on: [postgres, redis, nats, victoriametrics, victorialogs, clickhouse]
+    depends_on:
+      postgres: { condition: service_started }
+      redis: { condition: service_started }
+      nats: { condition: service_started }
+      victoriametrics: { condition: service_started }
+      victorialogs: { condition: service_started }
+      clickhouse: { condition: service_started }
+      tls-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:yagra@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
@@ -60,12 +81,23 @@ services:
       # export spans over OTLP/HTTP to the `jaeger` service below (run it with
       # `docker compose --profile tracing up`). At scale, also sample — see the poller note.
       # YAGRA_OTEL_ENDPOINT: "http://jaeger:4318"
+      # Where core materializes the WebUI's TLS certificate (ADR-044), written before it binds its
+      # listener so `web`'s depends_on-healthy is a real guarantee that the file exists.
+      #
+      # ⚠️ This stack has no kek-init, so the KEK is EPHEMERAL — regenerated every restart. A
+      # self-signed certificate is therefore regenerated too (harmless, new browser warning). An
+      # *imported* one cannot be decrypted after a restart: core leaves the materialized file alone,
+      # logs an error and raises an event rather than replacing your certificate with a self-signed
+      # one. Use docker-compose.deploy.yml, which mounts a persistent KEK, for anything real.
+      YAGRA_TLS_DIR: /var/lib/yagra/tls
     ports:
       - "8080:8080"   # northbound API
     volumes:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend. Read-only: core only measures capacity, never writes here.
       - vmdata:/hostfs/vm:ro
+      # WebUI TLS certificate (ADR-044) — read-write here, read-only in `web`.
+      - tlsdata:/var/lib/yagra/tls
       # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only, from the named `ipasndata` volume
       # the `ipasn-updater` sidecar writes. Uncomment with YAGRA_IPASN_DB above.
       # - ipasndata:/data/ipasn:ro
@@ -133,19 +165,37 @@ services:
     # deploy: { replicas: 1 }  # scale out here when distributing polling
     restart: unless-stopped
 
-  # ── Yagra-web (WebUI) ──
+  # ── Yagra-web (WebUI) — HTTPS by default (ADR-044) ──
+  # https://localhost:8443/ once the stack is up. The certificate is the self-signed one core
+  # generates on first start, so the browser will warn; import a real one at Settings ▸ TLS.
+  #
+  # 8443 rather than 443 here on purpose: this is the developer stack, a laptop usually has 443
+  # taken already, and rootless Docker cannot publish a port below 1024 at all — a first-run
+  # failure on `docker compose up --build` would be a poor trade for matching the deploy file.
+  # docker-compose.deploy.yml uses 443.
   web:
     build:
       context: ./web
       dockerfile: ../docker/web.Dockerfile
     image: ghcr.io/horryworks/yagra-web:dev
     # Wait for core to actually serve (its image HEALTHCHECK probes /healthz), not just to start —
-    # nginx proxies /api to it, so starting before core is ready would 502 the first requests.
+    # nginx proxies /api to it, so starting before core is ready would 502 the first requests. Since
+    # ADR-044 core also writes the certificate before it binds, so healthy ⇒ server.pem exists.
     depends_on:
       core:
         condition: service_healthy
+      tls-init:
+        condition: service_completed_successfully
+    environment:
+      YAGRA_WEB_TLS: ${YAGRA_WEB_TLS:-on}
+    # nginx is uid 101; the certificate volume is owned by core's uid 10001, mode 0750. See the
+    # note in docker-compose.deploy.yml — `user: "10001:10001"` would break the image.
+    group_add:
+      - "10001"
+    volumes:
+      - tlsdata:/etc/nginx/certs:ro
     ports:
-      - "3000:8080"   # container listens on 8080 (rootless nginx-unprivileged)
+      - "${YAGRA_WEB_PORT:-8443}:8080"   # container port is 8080 in both TLS and plaintext modes
     restart: unless-stopped
 
   # ── Stores ──
@@ -270,4 +320,5 @@ volumes:
   vldata:
   chdata:      # ClickHouse flow store (ADR-031)
   pollerbuf:   # store-and-forward result buffer (Phase 3)
+  tlsdata:     # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init
   # ipasndata: # offline IP→ASN dataset (ADR-031) — uncomment with the ipasn-updater service above

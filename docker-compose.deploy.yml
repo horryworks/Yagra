@@ -40,6 +40,30 @@ services:
       - kekdata:/kek
     restart: "no"
 
+  # ── TLS volume init — decide the certificate volume's ownership before anyone else can ──
+  # The WebUI is HTTPS by default (ADR-044). Core writes the certificate of record from PostgreSQL
+  # into `tlsdata`; the web container reads it read-only. That means two containers with different
+  # uids share one volume, and **whoever mounts an empty named volume first decides its ownership** —
+  # Docker seeds it from the mounting image's path, ownership included. If `web` gets there first
+  # (`up -d web` on its own, a `--no-deps` restart, or anything after `docker volume rm`), the
+  # directory ends up owned by nginx's uid 101 and core can never write into it. `depends_on` does
+  # not cover those orderings and `:ro` does not prevent the seeding.
+  #
+  # So a root one-shot settles it, exactly as `kek-init` above settles the KEK. 0750 owned by core's
+  # uid, with `web` joining the group via `group_add` below: core writes, nginx reads, nothing else
+  # on the host can. 10001 is core's runtime uid — `useradd -r -u 10001 yagra` in
+  # docker/yagra-rust.Dockerfile, which also creates this directory in the image so the ownership is
+  # right in the ordinary case too. This service is the guarantee for the orderings that skip it.
+  tls-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "mkdir -p /tls && chown 10001:10001 /tls && chmod 0750 /tls"
+    volumes:
+      - tlsdata:/tls
+    restart: "no"
+
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
@@ -52,6 +76,7 @@ services:
       victorialogs: { condition: service_started }
       clickhouse: { condition: service_started }
       kek-init: { condition: service_completed_successfully }
+      tls-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
@@ -75,6 +100,13 @@ services:
       YAGRA_IPASN_RELOAD_SECS: ${YAGRA_IPASN_RELOAD_SECS:-21600}
       # Persistent KEK (mounted from the kekdata volume) — credentials survive restarts.
       YAGRA_KEK_FILE: /kek/key
+      # Where core materializes the WebUI's TLS certificate (ADR-044). The certificate of record is
+      # a row in PostgreSQL — the private key envelope-encrypted with the KEK above, the chain in
+      # plaintext because a certificate is public by construction. Core writes the pair here as one
+      # `server.pem` before it binds its listener, so "core is healthy" means the file exists and
+      # `web`'s depends_on below is a real guarantee rather than a coincidence. The web container
+      # re-reads it within seconds of a change, so importing a certificate needs no restart.
+      YAGRA_TLS_DIR: /var/lib/yagra/tls
       # Host self-metrics (Settings ▸ System Health ▸ Host resources): `root` = container rootfs,
       # `metrics` = the VictoriaMetrics data volume (mounted read-only below). Database growth is
       # tracked via pg_database_size instead (the pgdata dir is 0700 and can't be stat'd).
@@ -126,6 +158,10 @@ services:
       # the runner's `git clean` (no host path). If the file is absent core just runs enrichment off
       # and hot-loads it once the updater populates the volume.
       - ipasndata:/data/ipasn:ro
+      # The WebUI's TLS certificate (ADR-044) — read-write here, read-only in `web`. Core is the
+      # only writer; the volume is a materialization of the PostgreSQL row, not the source of truth.
+      # A Kubernetes deployment materializes through a Secret instead and never sees this volume.
+      - tlsdata:/var/lib/yagra/tls
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
@@ -133,7 +169,19 @@ services:
       # the KEK). Every core in an HA set mounts the SAME key. Uncomment with YAGRA_SESSION_KEY_FILE.
       # - ${YAGRA_SESSION_KEY_DIR:-./session}:/etc/yagra/session:ro
     ports:
-      - "${YAGRA_API_PORT:-8080}:8080"   # northbound API
+      # Core's own API port, plaintext. The TLS edge is the web container (ADR-044) and proxies
+      # /api/ and /mcp to it over the internal network, so browsers never come here.
+      #
+      # It stays open on the LAN by default, and that is a sequencing decision rather than an
+      # oversight: this port is what keeps machine clients working while the deployment is still on
+      # the bootstrap self-signed certificate — Prometheus scrapes, webhook senders, direct API
+      # scripts. Closing it in the same upgrade that introduces an untrusted certificate would break
+      # all of them at once, with two overlapping causes and nothing to tell them apart.
+      #
+      # Once those clients are on https://<host>/api/v1 with a certificate they trust, close it:
+      #   YAGRA_API_BIND=127.0.0.1
+      # in .env leaves it reachable on the box and off the network. Settings ▸ TLS says so too.
+      - "${YAGRA_API_BIND:-0.0.0.0}:${YAGRA_API_PORT:-8080}:8080"
     restart: unless-stopped
 
   # ── Yagra-poller (crates/poller) — stateless poller worker ──
@@ -184,21 +232,44 @@ services:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     restart: unless-stopped
 
-  # ── Yagra-web (web/) — WebUI ──
-  # TLS: the UI/API carries the login password, bearer tokens, and (pre-encryption) plaintext
-  # device credentials. Before exposing this port beyond a trusted LAN, front it with HTTPS —
-  # either an external reverse proxy or the in-container TLS block in web/nginx.conf. Do NOT
-  # publish this plain-HTTP port (or core's :8080) to an untrusted network without it.
+  # ── Yagra-web (web/) — WebUI, and the deployment's TLS edge ──
+  # HTTPS by default on host :443 (ADR-044). The UI/API carries the login password, bearer tokens
+  # and (pre-encryption) plaintext device credentials, so this is encrypted out of the box rather
+  # than after following a hardening procedure.
+  #
+  # The certificate starts as a self-signed one core generates on first start — browsers will warn.
+  # That is a starting point, not the destination: import your own at Settings ▸ TLS, which takes
+  # effect within seconds without restarting anything.
+  #
+  # Set YAGRA_WEB_TLS=off if something in front of this container already terminates HTTPS (an
+  # external reverse proxy or a cloud LB). Then, and only then, this port is plain HTTP again.
   web:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-web:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
     # Wait for core to actually serve (its image HEALTHCHECK probes /healthz), not just to start —
-    # nginx proxies /api to it, so starting before core is ready would 502 the first requests.
+    # nginx proxies /api to it, so starting before core is ready would 502 the first requests. Since
+    # ADR-044 this also carries the certificate: core materializes server.pem *before* it binds its
+    # listener, so "core is healthy" implies the file nginx is about to open already exists.
     depends_on:
       core:
         condition: service_healthy
+      tls-init:
+        condition: service_completed_successfully
+    environment:
+      # on (default) = terminate TLS here. off = plain HTTP, for an external-proxy deployment.
+      YAGRA_WEB_TLS: ${YAGRA_WEB_TLS:-on}
+    # nginx runs as uid 101 and the certificate volume is owned by core's uid 10001 with mode 0750,
+    # so nginx reads it as a supplementary group member. `group_add` is the whole mechanism — do NOT
+    # "simplify" this to `user: "10001:10001"`, which breaks the image: nginx-unprivileged chowns
+    # /etc/nginx and /var/cache/nginx to $UID:0 and depends on gid 0 for its own files.
+    group_add:
+      - "10001"
+    volumes:
+      - tlsdata:/etc/nginx/certs:ro
     ports:
-      - "${YAGRA_WEB_PORT:-3000}:8080"   # container listens on 8080 (rootless nginx-unprivileged)
+      # Container port is 8080 whether or not TLS is on — only the scheme changes, so nothing here
+      # has to track a moving port. The host port is the one that moved: 3000 → 443.
+      - "${YAGRA_WEB_PORT:-443}:8080"
     restart: unless-stopped
 
   # ── Stores (persistent data lives here; preserved across upgrades) ──
@@ -335,3 +406,6 @@ volumes:
   chdata:    # ClickHouse flow store (ADR-031)
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts
   pollerbuf: # store-and-forward result buffer (Phase 3) — survives poller restarts
+  tlsdata:   # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init.
+             # A cache of the PostgreSQL row, not the source of truth: deleting it is safe and
+             # core rewrites it on the next start.
