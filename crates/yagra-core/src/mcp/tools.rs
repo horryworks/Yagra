@@ -2030,7 +2030,7 @@ impl YagraMcp {
         let Some(identity) = authed_for(&ctx, want) else {
             return tool_forbidden(
                 TOOL,
-                &format!("this token lacks the {} permission", want.key()),
+                &format!("this token lacks {} permission", permission_label(want)),
             );
         };
         let scope = match self.scope_of(&ctx).await {
@@ -2173,9 +2173,21 @@ impl YagraMcp {
         }
         Some(tool_forbidden(
             tool,
-            &format!("this token lacks the {} permission", want.key()),
+            &format!("this token lacks {} permission", permission_label(want)),
         ))
     }
+}
+
+/// How this surface names a permission to a model.
+///
+/// `Permission::key()` is the stored form (`manage_config`) and is what a *database* row holds.
+/// Every tool description and refusal on this surface has always used the hyphenated spelling
+/// (`manage-config`, `ack-alerts`), so a permission rendered from the key would read differently in
+/// a tool's error than in the description that told the model what it needed — a small mismatch,
+/// but this text is a specification a model reasons from, and two spellings for one thing is
+/// exactly what makes it guess.
+fn permission_label(p: Permission) -> String {
+    p.key().replace('_', "-")
 }
 
 /// Which fleet view `get_fleet_summary` was asked for.
@@ -3705,6 +3717,22 @@ mod tests {
 
     /// A typo is refused, not silently resolved to a default. `get_system_health` has no sensible
     /// default section — every one answers a different question.
+    /// A refusal must name the permission the way the descriptions do. The stored key is
+    /// `manage_config`; every description on this surface says `manage-config`, and a model told
+    /// one thing then shown another has to guess which is real.
+    #[test]
+    fn a_permission_is_named_the_way_the_descriptions_name_it() {
+        assert_eq!(permission_label(Permission::ManageConfig), "manage-config");
+        assert_eq!(permission_label(Permission::AckAlerts), "ack-alerts");
+        assert_eq!(permission_label(Permission::ViewAudit), "view-audit");
+        assert_eq!(permission_label(Permission::View), "view");
+        // The spelling the existing hand-written refusals use, so the two families agree.
+        assert!(
+            include_str!("tools.rs").contains("lacks ack-alerts permission"),
+            "the older refusals spell it hyphenated; this helper must match them"
+        );
+    }
+
     #[test]
     fn an_unknown_health_section_is_rejected() {
         assert!(
