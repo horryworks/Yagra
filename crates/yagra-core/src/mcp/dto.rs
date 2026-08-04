@@ -1250,6 +1250,18 @@ mod tests {
             .unwrap_or(after);
 
         for tool in &sites {
+            // A tool whose branches are all in the folded table is already checked, and checked
+            // harder: `folded::every_folded_result_is_free_of_forbidden_keys` walks the OpenAPI
+            // schema of each branch's response, which sees every field of every nested type —
+            // where an instance only shows the fields that instance happened to populate. Asking
+            // for a hand-built instance *as well* would be ~20 of them for `get_system_health`
+            // alone, to prove less. So the schema walk discharges the obligation for these.
+            if crate::mcp::folded::FOLDED_READS
+                .iter()
+                .any(|f| f.tool == *tool)
+            {
+                continue;
+            }
             let labels: Vec<_> = TOOL_RESULT_TYPES
                 .iter()
                 .filter(|(t, _)| t == tool)
@@ -1257,9 +1269,10 @@ mod tests {
                 .collect();
             assert!(
                 !labels.is_empty(),
-                "MCP tool `{tool}` serializes a shared type with no row in TOOL_RESULT_TYPES; add \
-                 one naming the canary label that covers it (or move the tool to \
-                 TOOLS_WITH_INLINE_RESULTS if it builds its result inline)"
+                "MCP tool `{tool}` serializes a shared type that nothing checks. Either add a row \
+                 to TOOL_RESULT_TYPES plus an instance in the canary, or — if every branch of the \
+                 tool mirrors a REST route — add its rows to `folded::FOLDED_READS`, which checks \
+                 the response schema instead and needs no instance."
             );
             for label in labels {
                 assert!(

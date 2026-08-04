@@ -881,24 +881,34 @@ pub(crate) struct DnsHistoryQuery {
 
 impl DnsHistoryQuery {
     /// The keyset cursor this query names, if any.
-    ///
-    /// Both halves or neither. A half-specified cursor is rejected rather than ignored: silently
-    /// dropping it restarts paging from the top, so a client walking the history would loop over
-    /// the first page forever while looking like it was making progress.
     fn cursor(&self) -> Result<Option<(chrono::DateTime<chrono::Utc>, i64)>, ApiError> {
-        match (self.before_at.as_deref(), self.before_id) {
-            (Some(at), Some(id)) => {
-                let ts = super::parse_rfc3339(at).ok_or_else(|| {
-                    ApiError::bad_request("invalid_cursor", "before_at must be RFC 3339")
-                })?;
-                Ok(Some((ts, id)))
-            }
-            (None, None) => Ok(None),
-            _ => Err(ApiError::bad_request(
-                "invalid_cursor",
-                "before_at and before_id must be given together",
-            )),
+        parse_history_cursor(self.before_at.as_deref(), self.before_id)
+    }
+}
+
+/// The DNS-history keyset cursor: both halves or neither.
+///
+/// A half-specified cursor is **rejected rather than ignored**: silently dropping it restarts
+/// paging from the top, so a client walking the history would loop over the first page forever
+/// while looking like it was making progress. Shared by the REST query type and the MCP tool for
+/// exactly that reason — the rule is the part worth having once, and the same shape guards the
+/// neighbour history (`neighbors::parse_history_cursor`).
+pub(crate) fn parse_history_cursor(
+    before_at: Option<&str>,
+    before_id: Option<i64>,
+) -> Result<Option<(chrono::DateTime<chrono::Utc>, i64)>, ApiError> {
+    match (before_at, before_id) {
+        (Some(at), Some(id)) => {
+            let ts = super::parse_rfc3339(at).ok_or_else(|| {
+                ApiError::bad_request("invalid_cursor", "before_at must be RFC 3339")
+            })?;
+            Ok(Some((ts, id)))
         }
+        (None, None) => Ok(None),
+        _ => Err(ApiError::bad_request(
+            "invalid_cursor",
+            "before_at and before_id must be given together",
+        )),
     }
 }
 
@@ -920,27 +930,26 @@ async fn list_dns_chain_history(
     Path(node_id): Path<Uuid>,
     Query(q): Query<DnsHistoryQuery>,
 ) -> ApiResult<Json<DnsChainHistory>> {
-    Ok(Json(dns_chain_history(&admin, node_id, &q).await?))
+    Ok(Json(
+        dns_chain_history(&admin, node_id, q.limit, q.cursor()?).await?,
+    ))
 }
 
 /// One page of a DNS-monitor node's chain changes — shared by
 /// `GET /api/v1/nodes/{node_id}/dns-chain/history` and the MCP `get_dns_chain(history=true)` tool
 /// (ADR-042 I3a).
 ///
-/// Takes the query struct rather than loose parts so the **keyset-cursor rule travels with it**:
-/// `DnsHistoryQuery::cursor` rejects a half-specified cursor instead of ignoring it, because
-/// silently restarting from the top makes a client loop over the first page forever while looking
-/// like it is making progress. The limit clamp is here for the same reason.
+/// The limit clamp lives here so neither surface can ask for more; the cursor is parsed by the
+/// shared [`parse_history_cursor`], which both callers reach.
 pub(crate) async fn dns_chain_history(
     admin: &super::AdminState,
     node_id: Uuid,
-    q: &DnsHistoryQuery,
+    limit: Option<i64>,
+    before: Option<(chrono::DateTime<chrono::Utc>, i64)>,
 ) -> Result<DnsChainHistory, ApiError> {
-    let limit = q
-        .limit
+    let limit = limit
         .unwrap_or(DNS_HISTORY_DEFAULT_LIMIT)
         .clamp(1, DNS_HISTORY_MAX_LIMIT);
-    let before = q.cursor()?;
     let rows = admin
         .dns_checks
         .list_changes(node_id, before, limit)

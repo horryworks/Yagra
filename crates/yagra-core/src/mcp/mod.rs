@@ -28,6 +28,7 @@
 //! placed in a tool result (ADR-018; enforced structurally in [`dto`] + its canary test).
 
 mod dto;
+mod folded;
 mod tools;
 
 use axum::extract::{Request, State};
@@ -64,7 +65,11 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     a fleet is healthy, check list_suppressions — a silenced fleet looks quiet. For how alerting has \
     behaved over time use alert_trends, and to find what diagnostics have turned up across runs use \
     search_analysis_findings. Use run_analysis for deeper diagnosis (poll a long run with \
-    get_analysis_findings). Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
+    get_analysis_findings), and run_rca to have a configured LLM explain one incident. Before \
+    trusting any of the above, check get_system_health — if a poller is offline or a store is \
+    unreachable, missing data means missing collection rather than a healthy quiet, and its \
+    monitoring_gaps section names the windows where that was true. get_audit says who changed or \
+    acknowledged what. Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
 
 /// The MCP server handler: holds the shared read state and the macro-generated tool router. Cheap to
 /// clone (the state is all `Arc`s); a fresh instance is created per session by the transport factory.
@@ -237,12 +242,19 @@ mod tests {
         // The same parser the route ledger uses, so there is one definition of "a declared tool".
         let declared = crate::api::route_table::declared_mcp_tools();
         assert!(
-            declared.len() >= 26,
+            declared.len() >= 33,
             "only found {} tool declarations; the parser drifted",
             declared.len()
         );
         // Tool names are the only lowercase_with_underscore words in the prose, which makes them
-        // findable without a second list to keep in step.
+        // findable without a second list to keep in step. Since ADR-042 I3a a folded tool's
+        // argument vocabulary — `monitoring_gaps`, `poller_nodes` — is published the same way and
+        // is just as real, so those count as valid names too. What must not appear is a word that
+        // *looks* like part of this surface and names nothing on it.
+        let sections: Vec<&str> = crate::mcp::folded::FOLDED_READS
+            .iter()
+            .map(|f| f.arg)
+            .collect();
         let named: Vec<&str> = INSTRUCTIONS
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .filter(|w| w.contains('_') && w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
@@ -252,11 +264,14 @@ mod tests {
             "only found {} tool-shaped words in the instructions; the parser drifted",
             named.len()
         );
-        let missing: Vec<&&str> = named.iter().filter(|w| !declared.contains(**w)).collect();
+        let missing: Vec<&&str> = named
+            .iter()
+            .filter(|w| !declared.contains(**w) && !sections.contains(*w))
+            .collect();
         assert!(
             missing.is_empty(),
-            "the MCP instructions name tools that do not exist, and that text is published \
-             verbatim to every client: {missing:?}"
+            "the MCP instructions name tools or sections that do not exist, and that text is \
+             published verbatim to every client: {missing:?}"
         );
     }
     use crate::auth::{LoginThrottle, SessionStore};

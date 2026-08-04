@@ -75,14 +75,44 @@ impl YagraMcp {
     #[tool(
         description = "Fleet health summary: total node count, node counts per rolled-up state \
                        (ok/warning/critical/unknown/unreachable/maintenance), the number of active \
-                       alerts, and which optional data tiers (metrics/flow/log) are enabled. Start here."
+                       alerts, and which optional data tiers (metrics/flow/log) are enabled. Start here. \
+                       Pass kind=\"coverage\" instead for the blind-spot view — which nodes have \
+                       actually reported recently, and a watchlist of the ones that have not."
     )]
     async fn get_fleet_summary(
         &self,
+        Parameters(p): Parameters<FleetSummaryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let kind = match fleet_summary_kind(p.kind.as_deref()) {
+            Some(k) => k,
+            None => {
+                return tool_bad_params(
+                    "get_fleet_summary",
+                    &format!(
+                        "unknown kind {:?}; must be summary or coverage",
+                        p.kind.unwrap_or_default()
+                    ),
+                )
+            }
+        };
         match self.scope_of(&ctx).await {
+            Ok(scope) if kind == FleetSummaryKind::Coverage => self.fleet_coverage_in(&scope).await,
             Ok(scope) => self.fleet_summary_in(&scope).await,
+            Err(e) => tool_api_error("get_fleet_summary", &e),
+        }
+    }
+
+    /// The coverage branch: folded in rather than given its own tool because "is the fleet
+    /// healthy?" and "is the fleet actually being *watched*?" are the same question asked twice —
+    /// a model that starts here should not have to know a second tool name to find out that a
+    /// third of the answer is stale.
+    async fn fleet_coverage_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("get_fleet_summary", "coverage requires live mode");
+        };
+        match crate::api::fleet::coverage(&self.state, admin, scope).await {
+            Ok(c) => ok_json("get_fleet_summary", &c),
             Err(e) => tool_api_error("get_fleet_summary", &e),
         }
     }
@@ -1115,9 +1145,9 @@ impl YagraMcp {
         // could already query, so this gate is not about disclosure — it is that launching one is
         // incident-response work with a real compute cost, and the two surfaces must agree on who
         // may do it. They did not: this was `View` while REST was admin-only.
-        if authed_for(&ctx, Permission::AckAlerts).is_none() {
+        let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
             return tool_forbidden("run_analysis", "this token lacks ack-alerts permission");
-        }
+        };
         let visible = match self.scope_of(&ctx).await {
             Ok(s) => s,
             Err(e) => return tool_api_error("run_analysis", &e),
@@ -1164,7 +1194,22 @@ impl YagraMcp {
             family: p.family.clone(),
             notify: false,
         };
-        let job = match crate::api::analysis::launch(admin, req, Some("mcp".to_owned())).await {
+        let launched = crate::api::analysis::launch(admin, req, Some("mcp".to_owned())).await;
+        // Audited here, deliberately. `POST /api/v1/analysis/jobs` gets its row from `audit_mw`,
+        // which is REST-only middleware — so the identical job launched through the identical
+        // `launch()` seam over MCP produced no record at all. Two surfaces that can start the same
+        // work must leave the same trace, or the audit log quietly answers "nobody" for half of it.
+        record_audit(
+            &self.state,
+            &identity,
+            &format!("mcp.run_analysis tool={}", p.tool),
+            match &launched {
+                Ok(_) => 202,
+                Err(e) => e.status().as_u16(),
+            },
+        )
+        .await;
+        let job = match launched {
             Ok(j) => j,
             // 429 (capacity/rate) arrives here as a *successful* unavailable-with-reason result so
             // the model retries rather than treating a transient refusal as a hard failure.
@@ -1652,6 +1697,376 @@ impl YagraMcp {
         ok_json("poll_now", &result)
     }
 
+    #[tool(
+        description = "Is Yagra itself healthy? Check this before trusting anything else you read. \
+                       `section` is one of: pollers (the poller fleet and per-pool summary), \
+                       poller_health (poll-loop counters), pools, poller_nodes (which nodes one \
+                       poller holds — needs `poller_id`), node_assignment (the inverse: which \
+                       poller owns one node — needs `node_id`; the first thing to check when a \
+                       single node stops reporting while its pool is fine), monitoring_gaps (recent core↔poller \
+                       outages: data missing from these windows is missing, not flat), \
+                       dependencies (per-store reachability), hosts (core/poller CPU, memory, \
+                       disk), host_trends (one host over time — needs `instance`, optional \
+                       `from`/`to`/`step`), forwarding (relay delivery status), credentials \
+                       (whether stored credentials still decrypt), version, deployment (which \
+                       optional tiers are enabled). Sections require different permissions: most \
+                       need view, forwarding needs manage-config, credentials needs \
+                       manage-credentials."
+    )]
+    async fn get_system_health(
+        &self,
+        Parameters(p): Parameters<SystemHealthParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(section) = HealthSection::parse(&p.section) else {
+            return tool_bad_params(
+                "get_system_health",
+                &format!(
+                    "unknown section {:?}; must be one of: {}",
+                    p.section,
+                    HealthSection::NAMES.join(", ")
+                ),
+            );
+        };
+        // Resolve → authorize → scope → availability. The permission check sits above every store
+        // lookup so a caller who may not read a section cannot infer, from a 403-vs-unavailable,
+        // whether this deployment has that subsystem configured at all.
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_system_health", section.arg()) {
+            return deny;
+        }
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("get_system_health", &e),
+        };
+        self.system_health_in(section, p, &scope).await
+    }
+
+    async fn system_health_in(
+        &self,
+        section: HealthSection,
+        p: SystemHealthParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_system_health";
+        // The sections that read the write side; `dependencies` and `hosts` deliberately do not,
+        // because reporting that the database is unreachable is most useful when it is.
+        let admin = self.state.admin.as_ref();
+        match section {
+            HealthSection::Pollers => match admin {
+                Some(a) => ok_json(TOOL, &crate::api::pollers::poller_inventory(a).await),
+                None => tool_unavailable(TOOL, "the poller inventory requires live mode"),
+            },
+            HealthSection::PollerHealth => match admin {
+                Some(a) => ok_json(TOOL, &a.scheduler_stats.snapshot()),
+                None => tool_unavailable(TOOL, "poll-loop counters require live mode"),
+            },
+            HealthSection::Pools => match admin {
+                Some(a) => ok_json(TOOL, &crate::api::nodes::pool_options(a).await),
+                None => tool_unavailable(TOOL, "the pool list requires live mode"),
+            },
+            HealthSection::PollerNodes => {
+                let Some(poller_id) = p.poller_id else {
+                    return tool_bad_params(TOOL, "section poller_nodes needs `poller_id`");
+                };
+                match admin {
+                    Some(a) => {
+                        let page = crate::api::pollers::poller_nodes_page(
+                            &self.state,
+                            a,
+                            poller_id,
+                            p.limit,
+                            scope,
+                        )
+                        .await;
+                        ok_json(TOOL, &page)
+                    }
+                    None => tool_unavailable(TOOL, "the poller drill-down requires live mode"),
+                }
+            }
+            HealthSection::NodeAssignment => {
+                let Some(node_id) = p.node_id else {
+                    return tool_bad_params(TOOL, "section node_assignment needs `node_id`");
+                };
+                // The one node-scoped section. Out of scope answers exactly what a nonexistent id
+                // answers, so the tool cannot be used to confirm a node exists outside the
+                // caller's groups.
+                if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, node_id) {
+                    return deny;
+                }
+                match admin {
+                    Some(a) => {
+                        match crate::api::pollers::node_assignment_of(&self.state, a, node_id).await
+                        {
+                            Ok(r) => ok_json(TOOL, &r),
+                            Err(e) => tool_api_error(TOOL, &e),
+                        }
+                    }
+                    None => tool_unavailable(TOOL, "node assignment requires live mode"),
+                }
+            }
+            HealthSection::MonitoringGaps => match admin {
+                Some(a) => ok_json(TOOL, &crate::api::pollers::monitoring_gaps(a).await),
+                None => tool_unavailable(TOOL, "monitoring gaps require live mode"),
+            },
+            HealthSection::Dependencies => ok_json(
+                TOOL,
+                &crate::api::health::system_health_snapshot(&self.state).await,
+            ),
+            HealthSection::Hosts => ok_json(TOOL, &crate::api::system::host_inventory(&self.state)),
+            HealthSection::HostTrends => {
+                let Some(instance) = p.instance else {
+                    return tool_bad_params(
+                        TOOL,
+                        "section host_trends needs `instance` (`core`, or a poller id from \
+                         section=hosts)",
+                    );
+                };
+                match crate::api::system::host_trends(&self.state, instance, p.from, p.to, p.step)
+                    .await
+                {
+                    Ok(r) => ok_json(TOOL, &r),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            HealthSection::Forwarding => match admin {
+                Some(a) => ok_json(
+                    TOOL,
+                    &crate::api::forwarding::forwarding_delivery_status(&self.state, a),
+                ),
+                None => tool_unavailable(TOOL, "forwarding status requires live mode"),
+            },
+            HealthSection::Credentials => match admin {
+                Some(a) => match crate::api::credentials::credential_decrypt_health(a).await {
+                    Ok(h) => ok_json(TOOL, &h),
+                    Err(e) => tool_api_error(TOOL, &e),
+                },
+                None => tool_unavailable(TOOL, "credential health requires live mode"),
+            },
+            HealthSection::Version => ok_json(TOOL, &crate::api::health::running_version()),
+            HealthSection::Deployment => {
+                ok_json(TOOL, &crate::api::health::client_config(&self.state).await)
+            }
+        }
+    }
+
+    #[tool(
+        description = "How many nodes were in each state over time, as one aligned series per \
+                       state. `from`/`to` are Unix seconds (default the last 24h, max a 90-day \
+                       window). Fleet-wide only: the timeline is stored already summed with no \
+                       per-node attribution, so a group-scoped token is refused rather than shown \
+                       the whole fleet."
+    )]
+    async fn fleet_state_history(
+        &self,
+        Parameters(p): Parameters<StateHistoryParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "fleet_state_history", "") {
+            return deny;
+        }
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.state_history_in(p, &scope).await,
+            Err(e) => tool_api_error("fleet_state_history", &e),
+        }
+    }
+
+    async fn state_history_in(
+        &self,
+        p: StateHistoryParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("fleet_state_history", "state history requires live mode");
+        };
+        // The refusal lives inside the seam, so it cannot be forgotten here.
+        match crate::api::fleet::state_history(admin, scope, p.from, p.to).await {
+            Ok(h) => ok_json("fleet_state_history", &h),
+            Err(e) => tool_api_error("fleet_state_history", &e),
+        }
+    }
+
+    #[tool(
+        description = "Saved report runs. Without `run_id`, the most recent runs (newest first, \
+                       `limit` 1–500, default 50); with `run_id`, that run plus its rendered \
+                       result. Fleet-wide only: a rendered report keeps no per-node attribution, \
+                       so a group-scoped token is refused rather than shown the whole fleet."
+    )]
+    async fn get_report_runs(
+        &self,
+        Parameters(p): Parameters<ReportRunsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let arg = if p.run_id.is_some() { "detail" } else { "list" };
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_report_runs", arg) {
+            return deny;
+        }
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.report_runs_in(p, &scope).await,
+            Err(e) => tool_api_error("get_report_runs", &e),
+        }
+    }
+
+    async fn report_runs_in(
+        &self,
+        p: ReportRunsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        match p.run_id {
+            Some(id) => {
+                match crate::api::reports::report_run_detail(&self.state, scope, id).await {
+                    Ok(r) => ok_json("get_report_runs", &r),
+                    Err(e) => tool_api_error("get_report_runs", &e),
+                }
+            }
+            None => match crate::api::reports::report_runs(&self.state, scope, p.limit).await {
+                Ok(rows) => ok_json("get_report_runs", &rows),
+                Err(e) => tool_api_error("get_report_runs", &e),
+            },
+        }
+    }
+
+    #[tool(
+        description = "The audit log: who changed, acknowledged or triggered what, newest first. \
+                       `limit` is 1–500 (default 100); `before` is an RFC 3339 timestamp for the \
+                       next page. Requires the view-audit permission, which is separate from view."
+    )]
+    async fn get_audit(
+        &self,
+        Parameters(p): Parameters<AuditParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_audit", "") {
+            return deny;
+        }
+        self.audit_in(p).await
+    }
+
+    async fn audit_in(&self, p: AuditParams) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable("get_audit", "the audit log requires live mode");
+        };
+        // An unparseable cursor is a 400 here as it is over REST, never a silent jump back to the
+        // newest page — a client walking the log would otherwise loop forever on page one.
+        match crate::api::audit::audit_page(admin, p.limit, p.before.as_deref()).await {
+            Ok(rows) => ok_json("get_audit", &rows),
+            Err(e) => tool_api_error("get_audit", &e),
+        }
+    }
+
+    #[tool(
+        description = "The recorded DNS resolution chain for a DNS-monitor node. By default the \
+                       current chain and how long it has held; with `history=true`, the log of \
+                       changes (newest first, `limit` 1–200). A node that has never resolved \
+                       returns an availability note rather than an error."
+    )]
+    async fn get_dns_chain(
+        &self,
+        Parameters(p): Parameters<DnsChainParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let arg = if p.history.unwrap_or(false) {
+            "history"
+        } else {
+            "current"
+        };
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_dns_chain", arg) {
+            return deny;
+        }
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.dns_chain_in(p, &scope).await,
+            Err(e) => tool_api_error("get_dns_chain", &e),
+        }
+    }
+
+    async fn dns_chain_in(
+        &self,
+        p: DnsChainParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_dns_chain";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "the resolution chain requires live mode");
+        };
+        if p.history.unwrap_or(false) {
+            let before =
+                match crate::api::checks::parse_history_cursor(p.before_at.as_deref(), p.before_id)
+                {
+                    Ok(c) => c,
+                    Err(e) => return tool_api_error(TOOL, &e),
+                };
+            match crate::api::checks::dns_chain_history(admin, p.node_id, p.limit, before).await {
+                Ok(h) => ok_json(TOOL, &h),
+                Err(e) => tool_api_error(TOOL, &e),
+            }
+        } else {
+            match crate::api::checks::dns_chain_current(admin, p.node_id).await {
+                Ok(c) => ok_json(TOOL, &c),
+                Err(e) => tool_api_error(TOOL, &e),
+            }
+        }
+    }
+
+    #[tool(
+        description = "Ask the configured LLM to explain one incident, grounded in the node's \
+                       alert, timeline, dependents and recent config changes. Needs the \
+                       ack-alerts permission and is audited, because unlike every other read here \
+                       it spends money at an external provider. A recent identical request is \
+                       served from cache unless `force` is set. Returns an availability note when \
+                       no provider is configured, or when the rate cap is reached. Reads only — it \
+                       changes no configuration and touches no device."
+    )]
+    async fn run_rca(
+        &self,
+        Parameters(p): Parameters<RunRcaParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "run_rca";
+        // Holds the identity rather than just the scope: it is both the audit actor and the
+        // `created_by` stamped on the stored report, exactly as `Actor` is over REST.
+        let want = crate::mcp::folded::required_permission(TOOL, "");
+        let Some(identity) = authed_for(&ctx, want) else {
+            return tool_forbidden(
+                TOOL,
+                &format!("this token lacks the {} permission", want.key()),
+            );
+        };
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
+        let req = crate::rca::orchestrator::RcaRequest {
+            node: NodeId::from(p.node_id),
+            check: yagra_common::CheckId::from(p.check_id),
+            window_secs: p.window_secs,
+            language: crate::rca::prompt::Language::from_tag(p.language.as_deref().unwrap_or("en")),
+            force: p.force.unwrap_or(false),
+            // The stored report's `created_by`, and the audit actor below — one value for both, as
+            // `Actor` is over REST.
+            username: identity.actor.clone(),
+        };
+        let result = crate::api::rca::explain_incident(&self.state, &scope, req).await;
+        // Audited on both outcomes. A refusal is as interesting as a success here — it is the
+        // record that someone tried to spend the provider budget.
+        let status = match &result {
+            Ok(_) => 200,
+            Err(e) => e.status().as_u16(),
+        };
+        record_audit(
+            &self.state,
+            &identity,
+            &format!("mcp.run_rca node={}", p.node_id),
+            status,
+        )
+        .await;
+        match result {
+            Ok(report) => ok_json(TOOL, &report),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
     /// The caller's resolved visibility scope for this request (ADR-028 WS-F).
     ///
     /// This is why every read tool takes a `RequestContext` it otherwise has no use for: a tool
@@ -1739,9 +2154,211 @@ impl YagraMcp {
     // rows, so `name_of(0)` is `None` regardless — but it is the copy drifting silently that
     // matters, since nothing would have caught it if the loader's behaviour changed. Both surfaces
     // now reach the fill through `api::flow::flow_agg_rows`.
+
+    /// Refuse unless the caller holds what this folded branch demands (ADR-042 I3a).
+    ///
+    /// The permission comes from `folded::FOLDED_READS`, never from a literal here, because the
+    /// endpoints behind one folded tool do not share one — `get_system_health` alone spans `View`,
+    /// `ManageConfig` and `ManageCredentials`. A test compares each row against the REST handler's
+    /// own extractor, so this cannot drift from what the WebUI enforces.
+    fn deny_unless_permitted(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        tool: &'static str,
+        arg: &str,
+    ) -> Option<Result<CallToolResult, McpError>> {
+        let want = crate::mcp::folded::required_permission(tool, arg);
+        if authed_for(ctx, want).is_some() {
+            return None;
+        }
+        Some(tool_forbidden(
+            tool,
+            &format!("this token lacks the {} permission", want.key()),
+        ))
+    }
+}
+
+/// Which fleet view `get_fleet_summary` was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FleetSummaryKind {
+    Summary,
+    Coverage,
+}
+
+/// Resolve the `kind` argument, or `None` for one that names neither view.
+///
+/// Split out for the same reason as `topology_kind`: the `#[tool]` wrapper cannot be called from a
+/// test, so the decision has to live somewhere a test can reach. Omitted means the summary — this
+/// tool is the documented starting point and had no argument before I3a, so a caller that passes
+/// nothing must keep getting what it always got.
+fn fleet_summary_kind(kind: Option<&str>) -> Option<FleetSummaryKind> {
+    match kind {
+        None | Some("summary") => Some(FleetSummaryKind::Summary),
+        Some("coverage") => Some(FleetSummaryKind::Coverage),
+        Some(_) => None,
+    }
+}
+
+/// Which self-health question `get_system_health` was asked (ADR-042 I3a).
+///
+/// Split out of the tool body so the folding decision is testable without a `RequestContext`, the
+/// same shape `topology_kind` uses. Parsing is exact: a caller who types `Pollers` is told, rather
+/// than silently handed a different section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthSection {
+    Pollers,
+    PollerHealth,
+    Pools,
+    PollerNodes,
+    NodeAssignment,
+    MonitoringGaps,
+    Dependencies,
+    Hosts,
+    HostTrends,
+    Forwarding,
+    Credentials,
+    Version,
+    Deployment,
+}
+
+impl HealthSection {
+    /// Every accepted `section` value, in the order the description lists them.
+    const NAMES: &'static [&'static str] = &[
+        "pollers",
+        "poller_health",
+        "pools",
+        "poller_nodes",
+        "node_assignment",
+        "monitoring_gaps",
+        "dependencies",
+        "hosts",
+        "host_trends",
+        "forwarding",
+        "credentials",
+        "version",
+        "deployment",
+    ];
+
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "pollers" => Self::Pollers,
+            "poller_health" => Self::PollerHealth,
+            "pools" => Self::Pools,
+            "poller_nodes" => Self::PollerNodes,
+            "node_assignment" => Self::NodeAssignment,
+            "monitoring_gaps" => Self::MonitoringGaps,
+            "dependencies" => Self::Dependencies,
+            "hosts" => Self::Hosts,
+            "host_trends" => Self::HostTrends,
+            "forwarding" => Self::Forwarding,
+            "credentials" => Self::Credentials,
+            "version" => Self::Version,
+            "deployment" => Self::Deployment,
+            _ => return None,
+        })
+    }
+
+    /// The `folded::FOLDED_READS` key for this section — the string the permission is filed under.
+    fn arg(self) -> &'static str {
+        match self {
+            Self::Pollers => "pollers",
+            Self::PollerHealth => "poller_health",
+            Self::Pools => "pools",
+            Self::PollerNodes => "poller_nodes",
+            Self::NodeAssignment => "node_assignment",
+            Self::MonitoringGaps => "monitoring_gaps",
+            Self::Dependencies => "dependencies",
+            Self::Hosts => "hosts",
+            Self::HostTrends => "host_trends",
+            Self::Forwarding => "forwarding",
+            Self::Credentials => "credentials",
+            Self::Version => "version",
+            Self::Deployment => "deployment",
+        }
+    }
 }
 
 // ── Tool parameter structs (schemas derived for `tools/list`) ─────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct FleetSummaryParams {
+    /// `summary` (default) for the state tally, or `coverage` for the monitoring blind-spot view.
+    kind: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct SystemHealthParams {
+    /// Which self-health question: pollers | poller_health | pools | poller_nodes |
+    /// monitoring_gaps | dependencies | hosts | host_trends | forwarding | credentials | version |
+    /// deployment.
+    section: String,
+    /// The poller to drill into (section=poller_nodes).
+    poller_id: Option<String>,
+    /// Which node's poller assignment to resolve (section=node_assignment).
+    node_id: Option<Uuid>,
+    /// Which host to trend (section=host_trends): `core`, or a poller id from section=hosts.
+    instance: Option<String>,
+    /// Trend window start, Unix seconds (section=host_trends; default 1h ago).
+    from: Option<i64>,
+    /// Trend window end, Unix seconds (section=host_trends; default now).
+    to: Option<i64>,
+    /// Trend resolution in seconds (section=host_trends; clamped to the window).
+    step: Option<u64>,
+    /// Max nodes to return (section=poller_nodes; 1–500, default 500).
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct StateHistoryParams {
+    /// Window start, Unix seconds (default 24h ago).
+    from: Option<i64>,
+    /// Window end, Unix seconds (default now). The window may not exceed 90 days.
+    to: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct ReportRunsParams {
+    /// One run to fetch with its rendered result; omit for the recent-runs list.
+    run_id: Option<Uuid>,
+    /// Max runs to list (1–500, default 50). Ignored when `run_id` is given.
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct AuditParams {
+    /// Max rows (1–500, default 100).
+    limit: Option<i64>,
+    /// Keyset cursor: return rows older than this RFC 3339 timestamp.
+    before: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DnsChainParams {
+    /// The DNS-monitor node's UUID.
+    node_id: Uuid,
+    /// `true` for the log of chain changes instead of the current chain.
+    history: Option<bool>,
+    /// Max changes to return (history only; 1–200, default 50).
+    limit: Option<i64>,
+    /// Keyset cursor timestamp (history only). Must be given with `before_id`.
+    before_at: Option<String>,
+    /// Keyset cursor id (history only). Must be given with `before_at`.
+    before_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RunRcaParams {
+    /// The alerting node's UUID.
+    node_id: Uuid,
+    /// The check that is alerting on it.
+    check_id: Uuid,
+    /// Timeline window in seconds (default 1h, clamped by the orchestrator).
+    window_secs: Option<i64>,
+    /// Answer language tag (`en`, `ja`, …). Unknown tags fall back to English.
+    language: Option<String>,
+    /// Regenerate instead of serving a recent cached answer. Still rate-limited.
+    force: Option<bool>,
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ListNodesParams {
@@ -2355,7 +2972,7 @@ mod tests {
         // The load-bearing half: if the parse stops matching, "everything is fine" must not be the
         // answer. There were 17 tools when this was written and 23 after ADR-042 I1.
         assert!(
-            checked >= 26,
+            checked >= 33,
             "only matched {checked} tools; parser drifted"
         );
     }
@@ -3058,5 +3675,195 @@ mod tests {
             .is_err(),
             "an unknown kind is a protocol error"
         );
+    }
+
+    // ── ADR-042 I3a ─────────────────────────────────────────────────────────────────────────────
+
+    /// Every section the description advertises is one the dispatcher accepts, and vice versa.
+    ///
+    /// The description is published verbatim, so a section named there but not parsed would have a
+    /// model calling it and reasoning from the failure — the same class of harm as a wrong tool
+    /// name, one level down.
+    #[test]
+    fn every_advertised_health_section_parses() {
+        for name in HealthSection::NAMES {
+            let parsed = HealthSection::parse(name)
+                .unwrap_or_else(|| panic!("section {name} is advertised but not parsed"));
+            assert_eq!(
+                parsed.arg(),
+                *name,
+                "section {name} round-trips to a different key, so its permission would be looked \
+                 up under the wrong row"
+            );
+        }
+        assert_eq!(
+            HealthSection::NAMES.len(),
+            13,
+            "the advertised section list changed; check the description and folded.rs together"
+        );
+    }
+
+    /// A typo is refused, not silently resolved to a default. `get_system_health` has no sensible
+    /// default section — every one answers a different question.
+    #[test]
+    fn an_unknown_health_section_is_rejected() {
+        assert!(
+            HealthSection::parse("Pollers").is_none(),
+            "parsing is exact"
+        );
+        assert!(HealthSection::parse("poller-nodes").is_none());
+        assert!(HealthSection::parse("").is_none());
+    }
+
+    /// The two sections that need an id say so instead of answering about something else.
+    #[tokio::test]
+    async fn the_sections_that_need_an_id_refuse_without_one() {
+        let m = mcp();
+        for section in [HealthSection::PollerNodes, HealthSection::NodeAssignment] {
+            let r = m
+                .system_health_in(section, SystemHealthParams::default(), &unrestricted())
+                .await;
+            assert!(
+                r.is_err(),
+                "section {} answered without the id it needs",
+                section.arg()
+            );
+        }
+    }
+
+    /// A section whose subsystem is absent reports that as an availability note, not a hard error —
+    /// the model should say "this deployment has no write side" and move on.
+    #[tokio::test]
+    async fn skeleton_mode_reports_unavailable_rather_than_failing() {
+        let r = mcp()
+            .system_health_in(
+                HealthSection::Pollers,
+                SystemHealthParams::default(),
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["available"], serde_json::json!(false));
+    }
+
+    /// The sections that read no store answer for real even in skeleton mode. `dependencies` in
+    /// particular must: reporting that the database is unreachable is most useful when it is.
+    #[tokio::test]
+    async fn the_stateless_sections_answer_in_skeleton_mode() {
+        let m = mcp();
+        let deps = json_of(
+            &m.system_health_in(
+                HealthSection::Dependencies,
+                SystemHealthParams::default(),
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result"),
+        );
+        assert_eq!(
+            deps["overall"], "degraded",
+            "skeleton mode has no write side, and that is a fact to report rather than an error"
+        );
+        let version = json_of(
+            &m.system_health_in(
+                HealthSection::Version,
+                SystemHealthParams::default(),
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result"),
+        );
+        assert!(version["core"].is_string());
+    }
+
+    /// A node the caller cannot see answers exactly what a nonexistent one answers.
+    #[tokio::test]
+    async fn node_assignment_hides_a_node_outside_the_scope() {
+        let r = mcp()
+            .system_health_in(
+                HealthSection::NodeAssignment,
+                SystemHealthParams {
+                    section: "node_assignment".to_owned(),
+                    node_id: Some(Uuid::nil()),
+                    ..Default::default()
+                },
+                &sees_nothing(),
+            )
+            .await
+            .expect("ok result");
+        let body = json_of(&r);
+        assert_eq!(body["available"], serde_json::json!(false));
+        assert_eq!(body["reason"], "no node with that id");
+    }
+
+    /// `get_fleet_summary` gained a second kind. Omitting it must still mean the summary — this is
+    /// the documented entry point and every existing caller passes nothing — and a typo must be
+    /// refused rather than silently resolving to that same default.
+    #[test]
+    fn the_fleet_summary_kind_defaults_to_summary_and_rejects_a_typo() {
+        assert_eq!(fleet_summary_kind(None), Some(FleetSummaryKind::Summary));
+        assert_eq!(
+            fleet_summary_kind(Some("summary")),
+            Some(FleetSummaryKind::Summary)
+        );
+        assert_eq!(
+            fleet_summary_kind(Some("coverage")),
+            Some(FleetSummaryKind::Coverage)
+        );
+        assert_eq!(fleet_summary_kind(Some("Coverage")), None);
+        assert_eq!(fleet_summary_kind(Some("")), None);
+    }
+
+    /// The DNS chain answers "nothing recorded" as availability, not as a fault: a monitor that has
+    /// never resolved is a normal state to report.
+    #[tokio::test]
+    async fn the_dns_chain_reports_an_unmonitored_node_as_unavailable() {
+        let r = mcp()
+            .dns_chain_in(
+                DnsChainParams {
+                    node_id: Uuid::nil(),
+                    history: None,
+                    limit: None,
+                    before_at: None,
+                    before_id: None,
+                },
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["available"], serde_json::json!(false));
+    }
+
+    /// A half-specified keyset cursor is a protocol error on this surface as it is over REST.
+    /// Dropping it would restart paging from the newest page, so a client walking the history would
+    /// loop over page one forever while looking like it was progressing.
+    #[test]
+    fn a_half_specified_dns_cursor_is_rejected() {
+        assert!(
+            crate::api::checks::parse_history_cursor(Some("2026-08-04T00:00:00Z"), None).is_err()
+        );
+        assert!(crate::api::checks::parse_history_cursor(None, Some(7)).is_err());
+        assert!(crate::api::checks::parse_history_cursor(None, None).is_ok());
+        assert!(crate::api::checks::parse_history_cursor(Some("not-a-time"), Some(7)).is_err());
+    }
+
+    /// Without a write side the audit tool says so, rather than answering an empty log — "nobody
+    /// has done anything" and "this deployment keeps no audit log" must not read alike to a model.
+    ///
+    /// The cursor rule itself is not reachable from here (it lives in `audit::audit_page`, behind
+    /// the live store, and is covered on the REST side). Saying that is better than a test whose
+    /// name claims more than it checks.
+    #[tokio::test]
+    async fn the_audit_tool_reports_a_missing_write_side_rather_than_an_empty_log() {
+        let r = mcp()
+            .audit_in(AuditParams {
+                limit: None,
+                before: Some("yesterday".to_owned()),
+            })
+            .await
+            .expect("ok result");
+        let body = json_of(&r);
+        assert_eq!(body["available"], serde_json::json!(false));
+        assert_eq!(body["reason"], "the audit log requires live mode");
     }
 }

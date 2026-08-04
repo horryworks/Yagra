@@ -1189,6 +1189,12 @@ fn build_pool_options(
     ),
 )]
 async fn list_pools(_perm: RequireView, admin: Admin) -> ApiResult<Json<PoolOptions>> {
+    Ok(Json(pool_options(&admin).await))
+}
+
+/// The known poller pools and whether each has a live poller — shared by `GET /api/v1/pools` and
+/// the MCP `get_system_health(section="pools")` tool (ADR-042 I3a).
+pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
     // A read error degrades to "fewer suggestions", never to a failed picker — the operator can
     // still type any pool via Custom.
     let node_pools = admin.repo.distinct_pools().await.unwrap_or_else(|e| {
@@ -1200,9 +1206,9 @@ async fn list_pools(_perm: RequireView, admin: Admin) -> ApiResult<Json<PoolOpti
         Vec::new()
     });
     let live = admin.coordinator.live_pools(Instant::now());
-    Ok(Json(PoolOptions {
+    PoolOptions {
         pools: build_pool_options(node_pools, group_pools, &live),
-    }))
+    }
 }
 
 // ── Manual poll ──────────────────────────────────────────────────────────────

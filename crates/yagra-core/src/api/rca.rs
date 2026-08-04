@@ -137,7 +137,28 @@ async fn create_rca(
     Json(body): Json<RcaBody>,
 ) -> ApiResult<Json<crate::rca::store::RcaReport>> {
     let username = actor.0.unwrap_or_else(|| "(unknown)".to_owned());
-    Ok(Json(explain_incident(&st, &scope, &body, &username).await?))
+    Ok(Json(
+        explain_incident(&st, &scope, body.into_request(&username)).await?,
+    ))
+}
+
+impl RcaBody {
+    /// The orchestrator request this body asks for, with the caller's audit identity attached.
+    ///
+    /// `username` is not on the wire and must not be: it is who the server resolved the caller to
+    /// be, and it lands on the stored report as `created_by`.
+    pub(crate) fn into_request(self, username: &str) -> crate::rca::orchestrator::RcaRequest {
+        crate::rca::orchestrator::RcaRequest {
+            node: yagra_common::NodeId::from(self.node),
+            check: yagra_common::CheckId::from(self.check),
+            window_secs: self.window_secs,
+            language: crate::rca::prompt::Language::from_tag(
+                self.language.as_deref().unwrap_or("en"),
+            ),
+            force: self.force,
+            username: username.to_owned(),
+        }
+    }
 }
 
 /// Generate (or serve from cache) an LLM explanation of one incident — shared by
@@ -154,19 +175,10 @@ async fn create_rca(
 pub(crate) async fn explain_incident(
     st: &ApiState,
     scope: &super::scope::NodeScope,
-    body: &RcaBody,
-    username: &str,
+    req: crate::rca::orchestrator::RcaRequest,
 ) -> Result<crate::rca::store::RcaReport, ApiError> {
-    super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(body.node))?;
+    super::scope::require_visible_node(st, scope, req.node)?;
     let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
-    let req = crate::rca::orchestrator::RcaRequest {
-        node: yagra_common::NodeId::from(body.node),
-        check: yagra_common::CheckId::from(body.check),
-        window_secs: body.window_secs,
-        language: crate::rca::prompt::Language::from_tag(body.language.as_deref().unwrap_or("en")),
-        force: body.force,
-        username: username.to_owned(),
-    };
     rca.explain(&req).await.map_err(|e| rca_error(&e))
 }
 
