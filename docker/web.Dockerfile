@@ -45,21 +45,25 @@ COPY --chmod=0755 docker-entrypoint.d/40-yagra-tls.sh /docker-entrypoint.d/40-ya
 COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# Prepare the two paths the entrypoint owns, and prove the configuration parses.
+# Prepare the two paths the entrypoint owns: the mount point for the certificate volume, and the
+# listener fragment nginx.conf includes. The fragment is written in its plaintext shape so the image
+# has a valid configuration even if the entrypoint never runs.
 #
-# `nginx -t` here is a build-time gate on web/nginx.conf: a syntax error in it would otherwise first
-# appear as a crash-looping container on a deployed machine. It runs in the plaintext shape because
-# nginx will not parse `ssl_certificate` pointing at a file that does not exist, and generating a
-# throwaway certificate would mean pulling openssl into this image for one build step. The three
-# generated `ssl_*` lines are covered instead by the runtime `nginx -t` the entrypoint runs before
-# every reload. The plaintext fragment it leaves behind is also a sane default if the entrypoint
-# never runs at all.
+# ⚠️ **`nginx -t` cannot run here, and this comment exists so nobody adds it back.** It was tried and
+# reverted while writing ADR-044. nginx resolves a `proxy_pass` upstream **when it parses the
+# config**, not per request — which is why a web container reports `[emerg] host not found in
+# upstream "core"` whenever core is down, as the deploy runbooks note. During a build there is no
+# `core`, so the parse fails. The two ways around it are both worse than no check: writing
+# `/etc/hosts` fails because BuildKit bind-mounts it read-only during RUN, and `--add-host` on the
+# build command makes the Dockerfile silently unbuildable for anyone who does not pass that flag.
+#
+# What covers the config instead: the entrypoint runs `nginx -t` before every reload, and the deploy
+# smoke test fails if the container does not come up.
 USER root
 RUN install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
  && printf 'listen 8080;\n' > /etc/nginx/yagra-listen.conf \
  && chown 101:0 /etc/nginx/yagra-listen.conf \
- && chmod 0664 /etc/nginx/yagra-listen.conf \
- && nginx -t
+ && chmod 0664 /etc/nginx/yagra-listen.conf
 USER 101
 
 # TLS on by default (ADR-044). Set YAGRA_WEB_TLS=off when something in front already terminates it.
