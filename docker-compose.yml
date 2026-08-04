@@ -191,6 +191,9 @@ services:
     # nginx is uid 101; the certificate volume is owned by core's uid 10001, mode 0750. See the
     # note in docker-compose.deploy.yml — `user: "10001:10001"` would break the image.
     group_add:
+      # core's uid AND gid, both pinned to 10001 in docker/yagra-rust.Dockerfile. The gid is the half
+      # that matters here: the bundle is written 0640 owned by that group, so joining any other group
+      # lets nginx traverse the directory and still fail to read the file.
       - "10001"
     volumes:
       - tlsdata:/etc/nginx/certs:ro

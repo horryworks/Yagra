@@ -105,7 +105,16 @@ RUN apt-get update \
 #
 # The `tls-init` one-shot in the compose files covers the orderings this does not — if the *web*
 # container mounts the empty volume first, this image's ownership never gets a vote.
-RUN useradd -r -u 10001 yagra \
+# ⚠️ The GROUP id is pinned, not just the user id, and that is load-bearing since ADR-044.
+# `useradd -r -u 10001 yagra` alone fixes only the uid and lets the system pick a gid — on Debian
+# bookworm that came out as 999. The certificate this stage's directory holds is written 0640 and
+# read by nginx in another container through `group_add: ["10001"]`, so a gid of anything but 10001
+# means the web container joins a group the file does not belong to: it can traverse the 0750
+# directory and still gets "Permission denied" on the file, and the WebUI never comes up. Found on
+# the first real deployment — nothing before that point can see it, because the uid was right and
+# every other signal was green.
+RUN groupadd -r -g 10001 yagra \
+ && useradd -r -u 10001 -g 10001 yagra \
  && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls
 COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile

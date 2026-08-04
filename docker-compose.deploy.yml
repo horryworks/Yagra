@@ -51,9 +51,14 @@ services:
   #
   # So a root one-shot settles it, exactly as `kek-init` above settles the KEK. 0750 owned by core's
   # uid, with `web` joining the group via `group_add` below: core writes, nginx reads, nothing else
-  # on the host can. 10001 is core's runtime uid — `useradd -r -u 10001 yagra` in
+  # on the host can. 10001 is core's runtime uid **and gid** — both pinned in
   # docker/yagra-rust.Dockerfile, which also creates this directory in the image so the ownership is
   # right in the ordinary case too. This service is the guarantee for the orderings that skip it.
+  #
+  # ⚠️ The gid being pinned is not incidental. Left to `useradd` alone the system picks one (999 on
+  # bookworm), the bundle is then written 0640 owned by *that* group, and nginx — added to group
+  # 10001 — traverses the directory and gets "Permission denied" on the file. The WebUI never comes
+  # up, with every other signal green. That is what happened on the first real deployment of ADR-044.
   tls-init:
     image: busybox:stable
     command:
@@ -263,6 +268,9 @@ services:
     # "simplify" this to `user: "10001:10001"`, which breaks the image: nginx-unprivileged chowns
     # /etc/nginx and /var/cache/nginx to $UID:0 and depends on gid 0 for its own files.
     group_add:
+      # core's uid AND gid, both pinned to 10001 in docker/yagra-rust.Dockerfile. The gid is the half
+      # that matters here: the bundle is written 0640 owned by that group, so joining any other group
+      # lets nginx traverse the directory and still fail to read the file.
       - "10001"
     volumes:
       - tlsdata:/etc/nginx/certs:ro
