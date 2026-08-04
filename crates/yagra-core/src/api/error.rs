@@ -41,8 +41,13 @@ pub(crate) struct ErrorDetail {
     message: String,
 }
 
-/// Build the ADR-019 error envelope directly. Retained for the handlers that have not yet moved to
-/// [`ApiError`]; new code should return an `ApiError` instead.
+/// Build the ADR-019 error envelope directly — the one place it is rendered.
+///
+/// It has two callers, and the second is the reason this is not private: [`ApiError`]'s
+/// `IntoResponse` below, and the `/mcp` edge (`mcp/mod.rs`), which refuses an unauthenticated or
+/// unpermitted caller in its own tower layer *before* any handler runs and so has no `ApiError` to
+/// return. An API handler must not call this — it returns `ApiResult` and lets `ApiError` render
+/// (`api-conventions.md`); there is no hand-built-response path left to match.
 pub(crate) fn error_response(status: StatusCode, code: &str, message: String) -> Response {
     (
         status,
