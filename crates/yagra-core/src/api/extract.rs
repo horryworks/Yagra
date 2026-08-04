@@ -326,6 +326,28 @@ impl std::ops::Deref for Oidc {
     }
 }
 
+/// The WebUI's TLS certificate store (ADR-044) — absent only in skeleton mode.
+pub struct WebTls(pub Arc<crate::webtls::WebTlsRepo>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for WebTls {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.webtls
+            .as_ref()
+            .map(|t| Self(t.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for WebTls {
+    type Target = crate::webtls::WebTlsRepo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The LDAP/AD directory store — present only when this deployment persists directory
 /// configuration (ADR-041).
 ///

@@ -76,6 +76,7 @@ pub(crate) mod thresholds;
 pub(crate) mod topology;
 mod users;
 pub(crate) mod util;
+mod webtls;
 
 pub(crate) use error::error_response;
 pub use error::{ApiError, ApiResult};
@@ -352,6 +353,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(api_tokens::routes())
         .merge(session::routes())
         .merge(ldap::routes())
+        .merge(webtls::routes())
         .merge(oidc::routes())
         .merge(system::routes())
         .merge(collection::routes())

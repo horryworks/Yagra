@@ -1274,6 +1274,27 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/settings/tls",
+        ADMIN_CFG,
+        // Written out rather than joining PENDING_CONFIG_READ. The config-read family is deferred
+        // work that ADR-042 I3 will close; this one is a decision, and pretending otherwise would
+        // inflate a gap count that is supposed to mean something.
+        Exempt(
+            "the deployment's own TLS material — the private key never leaves the server, and \
+             certificate metadata answers no question about the monitored fleet that a model would \
+             ask. Certificate *expiry* is a monitoring question and is answered by the system-health \
+             tool, not by exposing this",
+        ),
+    ),
+    ("PUT", "/api/v1/settings/tls", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/settings/tls/regenerate",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/shared-dashboard",
         Global("one admin-edited layout shown to everyone; its widgets' queries are scoped"),
         Exempt(

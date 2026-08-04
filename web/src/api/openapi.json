@@ -15162,6 +15162,197 @@
         }
       }
     },
+    "/api/v1/settings/tls": {
+      "get": {
+        "tags": [
+          "tls"
+        ],
+        "summary": "The certificate the WebUI is serving. Never includes the private key.",
+        "operationId": "get_web_tls",
+        "responses": {
+          "200": {
+            "description": "The current certificate, or null if none has been established yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebTlsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-configuration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no certificate store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "tls"
+        ],
+        "summary": "Import a certificate and its private key.",
+        "operationId": "put_web_tls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebTlsImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Imported and live; the body is the new certificate's details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebTlsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The pair is not usable; the message says which of the checks it failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-configuration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no certificate store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/tls/regenerate": {
+      "post": {
+        "tags": [
+          "tls"
+        ],
+        "summary": "Generate a new self-signed certificate, replacing whatever is being served.",
+        "operationId": "regenerate_web_tls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebTlsRegenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Generated and live; the body is the new certificate's details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebTlsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A supplied name is not a usable hostname or IP address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-configuration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no certificate store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/topology": {
       "put": {
         "tags": [
@@ -27507,6 +27698,15 @@
           }
         }
       },
+      "TlsCertSource": {
+        "type": "string",
+        "description": "Where a certificate came from, and therefore whether core may replace it on its own.",
+        "enum": [
+          "self_signed",
+          "imported",
+          "unknown"
+        ]
+      },
       "TokenSurface": {
         "type": "string",
         "description": "Which authentication surface a credential may be presented at.\n\nA personal access token authenticated `/mcp` and nothing else, so there was never a choice to\nexpress. Now that the REST API accepts one too the two surfaces differ enough that \"may\nauthenticate here\" has to be recorded per token: `/mcp` is a curated, mostly-read tool surface,\nwhile REST is the entire configuration API. A token minted for an AI client must not become a\nconfiguration credential because the server learned a new trick — so the surfaces are named on\nthe token, and anything that does not name [`TokenSurface::Rest`] cannot reach `/api/v1`.",
@@ -28187,6 +28387,144 @@
         "properties": {
           "core": {
             "type": "string"
+          }
+        }
+      },
+      "WebTlsImport": {
+        "type": "object",
+        "description": "A certificate chain and its private key, in PEM.",
+        "required": [
+          "certificate",
+          "private_key"
+        ],
+        "properties": {
+          "certificate": {
+            "type": "string",
+            "description": "The full certificate chain in PEM, leaf first. A private key in this field is rejected —\nsend it in `private_key`."
+          },
+          "private_key": {
+            "type": "string",
+            "description": "The matching private key in PEM: PKCS#8, PKCS#1 or SEC1, and not passphrase-protected.\nNever returned by any endpoint."
+          }
+        }
+      },
+      "WebTlsRegenerate": {
+        "type": "object",
+        "description": "Which names a regenerated self-signed certificate should cover.",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hostnames and IP addresses to put in the subject alternative name. If empty, the deployment's\ndefaults are used — loopback plus the server's own hostname, which is rarely the address\nbrowsers actually use."
+          }
+        }
+      },
+      "WebTlsResponse": {
+        "type": "object",
+        "description": "The WebUI's TLS certificate, plus one fact about how this deployment is exposed.",
+        "required": [
+          "api_port_is_public"
+        ],
+        "properties": {
+          "api_port_is_public": {
+            "type": "boolean",
+            "description": "Whether Yagra's API port is reachable beyond the server itself. When `true`, the API is also\navailable over plain HTTP on that port, so the encrypted WebUI is not the only way in."
+          },
+          "config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebTlsView",
+                "description": "The certificate being served, or `null` if none has been established yet."
+              }
+            ]
+          }
+        }
+      },
+      "WebTlsView": {
+        "type": "object",
+        "description": "The certificate the WebUI is serving. Never includes the private key.",
+        "required": [
+          "source",
+          "certificate",
+          "subject",
+          "issuer",
+          "sans",
+          "not_before",
+          "not_after",
+          "fingerprint_sha256",
+          "key_algorithm",
+          "expires_in_days",
+          "imported_at",
+          "materialized",
+          "key_unreadable"
+        ],
+        "properties": {
+          "certificate": {
+            "type": "string",
+            "description": "The certificate chain in PEM, leaf first. Safe to distribute — this is what a client would\nadd to a trust store or pass to `curl --cacert`."
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Days until expiry; negative once it has passed."
+          },
+          "fingerprint_sha256": {
+            "type": "string",
+            "description": "Lowercase hex SHA-256 of the certificate, matching what a browser displays."
+          },
+          "imported_at": {
+            "type": "string",
+            "description": "When this certificate was imported or generated, RFC 3339."
+          },
+          "imported_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account that imported it, if it was imported by a signed-in user."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Distinguished name of the issuer. Equal to `subject` for a self-signed certificate."
+          },
+          "key_algorithm": {
+            "type": "string",
+            "description": "Key type and size, for example `RSA-2048` or `ECDSA P-256`."
+          },
+          "key_unreadable": {
+            "type": "boolean",
+            "description": "Whether the private key can still be decrypted. `false` means the encryption key has changed\nor been lost: the certificate cannot be served or renewed until it is imported again."
+          },
+          "materialized": {
+            "type": "boolean",
+            "description": "Whether the web server is currently serving this certificate. `false` means it is stored but\nhas not reached the web container yet."
+          },
+          "not_after": {
+            "type": "string",
+            "description": "End of the validity window, RFC 3339."
+          },
+          "not_before": {
+            "type": "string",
+            "description": "Start of the validity window, RFC 3339."
+          },
+          "sans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hostnames and IP addresses this certificate is valid for."
+          },
+          "source": {
+            "$ref": "#/components/schemas/TlsCertSource"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Distinguished name of the certificate's subject."
           }
         }
       },

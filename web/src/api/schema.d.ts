@@ -2916,6 +2916,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/tls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The certificate the WebUI is serving. Never includes the private key. */
+        get: operations["get_web_tls"];
+        /** Import a certificate and its private key. */
+        put: operations["put_web_tls"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/tls/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate a new self-signed certificate, replacing whatever is being served. */
+        post: operations["regenerate_web_tls"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/topology": {
         parameters: {
             query?: never;
@@ -7741,6 +7776,11 @@ export interface components {
             timestamps: number[];
         };
         /**
+         * @description Where a certificate came from, and therefore whether core may replace it on its own.
+         * @enum {string}
+         */
+        TlsCertSource: "self_signed" | "imported" | "unknown";
+        /**
          * @description Which authentication surface a credential may be presented at.
          *
          *     A personal access token authenticated `/mcp` and nothing else, so there was never a choice to
@@ -8106,6 +8146,79 @@ export interface components {
         /** @description Build version for Settings ▸ About. */
         VersionInfo: {
             core: string;
+        };
+        /** @description A certificate chain and its private key, in PEM. */
+        WebTlsImport: {
+            /**
+             * @description The full certificate chain in PEM, leaf first. A private key in this field is rejected —
+             *     send it in `private_key`.
+             */
+            certificate: string;
+            /**
+             * @description The matching private key in PEM: PKCS#8, PKCS#1 or SEC1, and not passphrase-protected.
+             *     Never returned by any endpoint.
+             */
+            private_key: string;
+        };
+        /** @description Which names a regenerated self-signed certificate should cover. */
+        WebTlsRegenerate: {
+            /**
+             * @description Hostnames and IP addresses to put in the subject alternative name. If empty, the deployment's
+             *     defaults are used — loopback plus the server's own hostname, which is rarely the address
+             *     browsers actually use.
+             */
+            names?: string[];
+        };
+        /** @description The WebUI's TLS certificate, plus one fact about how this deployment is exposed. */
+        WebTlsResponse: {
+            /**
+             * @description Whether Yagra's API port is reachable beyond the server itself. When `true`, the API is also
+             *     available over plain HTTP on that port, so the encrypted WebUI is not the only way in.
+             */
+            api_port_is_public: boolean;
+            config?: null | components["schemas"]["WebTlsView"];
+        };
+        /** @description The certificate the WebUI is serving. Never includes the private key. */
+        WebTlsView: {
+            /**
+             * @description The certificate chain in PEM, leaf first. Safe to distribute — this is what a client would
+             *     add to a trust store or pass to `curl --cacert`.
+             */
+            certificate: string;
+            /**
+             * Format: int64
+             * @description Days until expiry; negative once it has passed.
+             */
+            expires_in_days: number;
+            /** @description Lowercase hex SHA-256 of the certificate, matching what a browser displays. */
+            fingerprint_sha256: string;
+            /** @description When this certificate was imported or generated, RFC 3339. */
+            imported_at: string;
+            /** @description The account that imported it, if it was imported by a signed-in user. */
+            imported_by?: string | null;
+            /** @description Distinguished name of the issuer. Equal to `subject` for a self-signed certificate. */
+            issuer: string;
+            /** @description Key type and size, for example `RSA-2048` or `ECDSA P-256`. */
+            key_algorithm: string;
+            /**
+             * @description Whether the private key can still be decrypted. `false` means the encryption key has changed
+             *     or been lost: the certificate cannot be served or renewed until it is imported again.
+             */
+            key_unreadable: boolean;
+            /**
+             * @description Whether the web server is currently serving this certificate. `false` means it is stored but
+             *     has not reached the web container yet.
+             */
+            materialized: boolean;
+            /** @description End of the validity window, RFC 3339. */
+            not_after: string;
+            /** @description Start of the validity window, RFC 3339. */
+            not_before: string;
+            /** @description The hostnames and IP addresses this certificate is valid for. */
+            sans: string[];
+            source: components["schemas"]["TlsCertSource"];
+            /** @description Distinguished name of the certificate's subject. */
+            subject: string;
         };
         /**
          * @description How a maintenance window is scoped. The first three mirror threshold scoping (ADR-013):
@@ -19867,6 +19980,173 @@ export interface operations {
                 };
             };
             /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_web_tls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current certificate, or null if none has been established yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebTlsResponse"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-configuration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no certificate store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_web_tls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebTlsImport"];
+            };
+        };
+        responses: {
+            /** @description Imported and live; the body is the new certificate's details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebTlsResponse"];
+                };
+            };
+            /** @description The pair is not usable; the message says which of the checks it failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-configuration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no certificate store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    regenerate_web_tls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebTlsRegenerate"];
+            };
+        };
+        responses: {
+            /** @description Generated and live; the body is the new certificate's details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebTlsResponse"];
+                };
+            };
+            /** @description A supplied name is not a usable hostname or IP address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-configuration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no certificate store */
             503: {
                 headers: {
                     [name: string]: unknown;
