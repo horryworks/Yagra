@@ -11,6 +11,37 @@
 ## Unreleased
 
 ### New Features
+- **The Network map now draws the network, not a list of parent links you typed in.** Yagra derives
+  the connectivity graph from what devices report: CDP/LLDP adjacency, and nodes that have an
+  interface address in the same IP subnet. Two nodes sharing a subnet are adjacent as a matter of
+  fact, so a map appears without anyone entering a single link. Each edge carries the evidence
+  behind it — LLDP, CDP, or shared subnet — and the map labels and legends them. Redundant paths are
+  kept rather than collapsed: a server reached through two routers shows both links. **This changes
+  what the map draws only; alert suppression still follows the dependency graph you maintain by
+  hand, and nothing about it changes in this release.**
+- **A new read endpoint, `GET /api/v1/topology/links`**, returns that graph in keyset pages, with a
+  `summary` of everything the derivation observed but declined to turn into a link (unmatched
+  neighbours, ambiguous management addresses, segments with no identifiable router). A group-scoped
+  caller sees only links whose **both** endpoints are visible to them.
+- **The MCP `get_topology` tool takes a `kind` parameter**: `dependency` (the default, unchanged)
+  or `links` for the connectivity graph. Existing calls behave exactly as before.
+- **Interface addresses are collected and their changes recorded**, the same way CDP/LLDP adjacency
+  already was: one current set per node plus an append-on-change history, visible under
+  **Settings ▸ Data retention** as *Interface address changes*. Collection is on by default at the
+  same hourly cadence, with its own toggle at `PUT /api/v1/settings/neighbors`
+  (`l3_enabled` / `l3_interval_secs`; omitting them leaves those settings unchanged).
+- **LLDP neighbours now carry the peer's management address.** That is what lets an adjacency be
+  matched to a monitored node, and it is why the map can be built from L2 at all. ⚠️ The first poll
+  after upgrading records **one extra neighbour-change row per LLDP-speaking node**, because the
+  recorded set genuinely gained a field. Devices that do not implement LLDP-MIB record nothing new.
+
+  Three things the map deliberately does **not** draw yet, so their absence is not a fault to
+  report: a point-to-point `/32` link (a PPPoE dialer, a tunnel) shares no subnet with its peer, so
+  the shared-subnet rule cannot see it — the addresses are collected and stored, but resolving those
+  peers needs the routing table and is a later increment; an unnumbered interface has no address of
+  its own and is invisible for the same reason; and a segment with more than two members where no
+  member can be identified as routing for the others produces **no** links rather than a guessed
+  one, and is counted in the map's summary instead.
 - **Sign in with an LDAP or Active Directory account.** Configure your directory at
   **Settings ▸ Auth ▸ Directory (LDAP/AD)** and people log in with their corporate credentials at the
   ordinary login form — there is no second button and no separate URL. Yagra searches for the person

@@ -37,33 +37,48 @@ pub fn interval_in_bounds(secs: u32) -> bool {
     (MIN_NEIGHBOR_INTERVAL_SECS..=MAX_NEIGHBOR_INTERVAL_SECS).contains(&secs)
 }
 
-/// How the deployment collects adjacency, as stored on the singleton `app_settings` row.
+/// How the deployment discovers what is connected to what, as stored on the singleton
+/// `app_settings` row: the L2 adjacency walk (ADR-038) and the L3 interface-address walk (ADR-043).
 ///
-/// Deployment-wide rather than per node or per profile: the OIDs are fixed standards (LLDP-MIB /
-/// CISCO-CDP-MIB), so there is nothing to tune per device — only whether to collect and how often.
-/// A finer grain (per profile) is a later increment if a fleet ever needs it.
+/// Deployment-wide rather than per node or per profile: every OID involved is a fixed standard
+/// (LLDP-MIB / CISCO-CDP-MIB, RFC 1213 / RFC 4293), so there is nothing to tune per device — only
+/// whether to collect and how often. A finer grain (per profile) is a later increment if a fleet
+/// ever needs it.
+///
+/// The two walks share a struct, and are resolved together once per sweep, because they answer the
+/// same operator question ("is a discovery walk being issued, and how often") and because a second
+/// settings query inside the scheduling loop is exactly what the sweep-level resolution exists to
+/// avoid. They keep **separate** toggles and cadences: a fleet may have reason to collect one and
+/// not the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NeighborSettings {
-    /// Whether neighbour jobs are scheduled at all.
-    pub enabled: bool,
+pub struct AdjacencySettings {
+    /// Whether CDP/LLDP neighbour jobs are scheduled at all.
+    pub neighbors_enabled: bool,
     /// How often each SNMP node's neighbour tables are walked.
-    pub interval_secs: u32,
+    pub neighbors_interval_secs: u32,
+    /// Whether interface-address jobs are scheduled at all (ADR-043).
+    pub l3_enabled: bool,
+    /// How often each SNMP node's `ipAddrTable`/`ipAddressTable` are walked.
+    pub l3_interval_secs: u32,
 }
 
-impl Default for NeighborSettings {
+impl Default for AdjacencySettings {
     fn default() -> Self {
         Self {
-            enabled: true,
-            interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
+            neighbors_enabled: true,
+            neighbors_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
+            l3_enabled: true,
+            l3_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
         }
     }
 }
 
-impl NeighborSettings {
-    /// Whether the cadence is inside its configurable band. The API edge rejects anything else.
+impl AdjacencySettings {
+    /// Whether both cadences are inside the configurable band. The API edge rejects anything else.
     #[must_use]
     pub fn in_bounds(&self) -> bool {
-        interval_in_bounds(self.interval_secs)
+        interval_in_bounds(self.neighbors_interval_secs)
+            && interval_in_bounds(self.l3_interval_secs)
     }
 }
 
@@ -169,6 +184,33 @@ impl NeighborRepo {
             first_seen: row.try_get("first_seen")?,
             last_seen: row.try_get("last_seen")?,
         }))
+    }
+
+    /// Every node's current neighbour set — half the derivation task's input (ADR-043).
+    ///
+    /// Deliberately unpaged, for the same reason `L3Repo::all_current` is: deriving a graph from a
+    /// slice of the fleet produces a wrong graph, not a partial one.
+    pub async fn all_current(&self) -> anyhow::Result<Vec<(yagra_common::NodeId, NeighborSet)>> {
+        let rows = sqlx::query("SELECT node_id, neighbors FROM node_neighbors")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let set: Json<NeighborSet> = row.try_get("neighbors")?;
+                Ok((yagra_common::NodeId(row.try_get("node_id")?), set.0))
+            })
+            .collect()
+    }
+
+    /// The newest `last_seen` across every node, or `None` when nothing has been observed.
+    ///
+    /// Half of the derivation task's change signal — see `L3Repo::observation_watermark` for why
+    /// `config_gen` alone is not enough.
+    pub async fn observation_watermark(&self) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query("SELECT max(last_seen) AS w FROM node_neighbors")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get("w")?)
     }
 
     /// A keyset page of change rows, newest first (ADR-019 — never OFFSET).
@@ -312,12 +354,14 @@ mod tests {
 
     #[test]
     fn the_default_cadence_is_in_bounds_and_slow() {
-        let d = NeighborSettings::default();
-        assert!(d.enabled, "shipped on by default (ADR-038)");
+        let d = AdjacencySettings::default();
+        assert!(d.neighbors_enabled, "shipped on by default (ADR-038)");
+        assert!(d.l3_enabled, "shipped on by default (ADR-043)");
         assert!(d.in_bounds());
-        // A tripwire, not a tautology: dropping the cadence to the metric interval would walk two
-        // extra tables on every SNMP node every minute.
-        assert_eq!(d.interval_secs, 3600);
+        // A tripwire, not a tautology: dropping either cadence to the metric interval would walk
+        // several extra tables on every SNMP node every minute.
+        assert_eq!(d.neighbors_interval_secs, 3600);
+        assert_eq!(d.l3_interval_secs, 3600);
     }
 
     #[test]
@@ -327,9 +371,14 @@ mod tests {
         assert!(interval_in_bounds(MIN_NEIGHBOR_INTERVAL_SECS));
         assert!(interval_in_bounds(MAX_NEIGHBOR_INTERVAL_SECS));
         assert!(!interval_in_bounds(MAX_NEIGHBOR_INTERVAL_SECS + 1));
-        assert!(!NeighborSettings {
-            enabled: true,
-            interval_secs: 30
+        assert!(!AdjacencySettings {
+            neighbors_interval_secs: 30,
+            ..AdjacencySettings::default()
+        }
+        .in_bounds());
+        assert!(!AdjacencySettings {
+            l3_interval_secs: 30,
+            ..AdjacencySettings::default()
         }
         .in_bounds());
     }

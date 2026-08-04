@@ -20,7 +20,7 @@ use uuid::Uuid;
 use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
-use crate::neighbors::NeighborSettings;
+use crate::neighbors::AdjacencySettings;
 use crate::retention::RetentionSettings;
 
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
@@ -1333,15 +1333,21 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// How this deployment collects CDP/LLDP adjacency (ADR-038).
+    /// How this deployment discovers connectivity: CDP/LLDP adjacency (ADR-038) and interface
+    /// addresses (ADR-043).
     ///
     /// Like `get_retention_settings`, returns a value rather than a `Result` and degrades to the
     /// compiled defaults on any read failure: the scheduler calls this every sweep, and a database
     /// blip must not silently stop collecting or change the cadence.
-    pub async fn get_neighbor_settings(&self) -> NeighborSettings {
-        let fallback = NeighborSettings::default();
+    ///
+    /// Each column is read independently and falls back on its own, so a deployment mid-upgrade —
+    /// where migration `0065` has not run and the L3 columns do not exist yet — still gets working
+    /// neighbour settings rather than the whole struct collapsing to defaults.
+    pub async fn get_adjacency_settings(&self) -> AdjacencySettings {
+        let fallback = AdjacencySettings::default();
         let Ok(Some(row)) = sqlx::query(
-            "SELECT neighbor_discovery_enabled, neighbor_interval_secs \
+            "SELECT neighbor_discovery_enabled, neighbor_interval_secs, \
+                    l3_discovery_enabled, l3_interval_secs \
              FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
@@ -1349,30 +1355,42 @@ impl NodeRepo {
         else {
             return fallback;
         };
-        NeighborSettings {
-            enabled: row
+        AdjacencySettings {
+            neighbors_enabled: row
                 .try_get::<bool, _>("neighbor_discovery_enabled")
-                .unwrap_or(fallback.enabled),
-            interval_secs: row
+                .unwrap_or(fallback.neighbors_enabled),
+            neighbors_interval_secs: row
                 .try_get::<i32, _>("neighbor_interval_secs")
                 .ok()
                 .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(fallback.interval_secs),
+                .unwrap_or(fallback.neighbors_interval_secs),
+            l3_enabled: row
+                .try_get::<bool, _>("l3_discovery_enabled")
+                .unwrap_or(fallback.l3_enabled),
+            l3_interval_secs: row
+                .try_get::<i32, _>("l3_interval_secs")
+                .ok()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(fallback.l3_interval_secs),
         }
     }
 
-    /// Set the adjacency-collection settings, upserting the singleton row. The API edge validates
-    /// the cadence (`neighbors::interval_in_bounds`); the table CHECK is the backstop.
-    pub async fn set_neighbor_settings(&self, s: &NeighborSettings) -> anyhow::Result<()> {
+    /// Set the connectivity-discovery settings, upserting the singleton row. The API edge validates
+    /// both cadences (`neighbors::interval_in_bounds`); the table CHECKs are the backstop.
+    pub async fn set_adjacency_settings(&self, s: &AdjacencySettings) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO app_settings \
-                 (id, neighbor_discovery_enabled, neighbor_interval_secs, updated_at) \
-             VALUES (TRUE, $1, $2, now()) \
+                 (id, neighbor_discovery_enabled, neighbor_interval_secs, \
+                  l3_discovery_enabled, l3_interval_secs, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, now()) \
              ON CONFLICT (id) DO UPDATE SET neighbor_discovery_enabled = $1, \
-                 neighbor_interval_secs = $2, updated_at = now()",
+                 neighbor_interval_secs = $2, l3_discovery_enabled = $3, \
+                 l3_interval_secs = $4, updated_at = now()",
         )
-        .bind(s.enabled)
-        .bind(i32::try_from(s.interval_secs).unwrap_or(i32::MAX))
+        .bind(s.neighbors_enabled)
+        .bind(i32::try_from(s.neighbors_interval_secs).unwrap_or(i32::MAX))
+        .bind(s.l3_enabled)
+        .bind(i32::try_from(s.l3_interval_secs).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())

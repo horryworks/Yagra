@@ -5,10 +5,10 @@
 
 import { describe, expect, it } from 'vitest';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
-import type { TopologyLayout } from './layout';
+import type { GraphLayout } from './graphLayout';
 
-const layout = (width: number, height: number): TopologyLayout =>
-  ({ width, height, nodes: [], edges: [] }) as unknown as TopologyLayout;
+const layout = (width: number, height: number): GraphLayout =>
+  ({ width, height, nodes: [], edges: [] }) as unknown as GraphLayout;
 
 describe('fitView', () => {
   it('centers the diagram in the viewport', () => {

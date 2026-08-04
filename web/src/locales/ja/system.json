@@ -199,7 +199,8 @@
         "event_log_store": "イベントログ",
         "metrics": "メトリクス",
         "audit_log": "監査ログ",
-        "neighbor_changes": "隣接の変更"
+        "neighbor_changes": "隣接の変更",
+        "l3_changes": "インタフェースアドレスの変更"
       },
       "err": {
         "range": "{{name}}: {{min}}〜{{max}} の範囲で整数を入力してください。",

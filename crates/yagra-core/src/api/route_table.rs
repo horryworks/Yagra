@@ -1318,6 +1318,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         GroupFiltered,
         Tool("get_topology"),
     ),
+    (
+        "GET",
+        "/api/v1/topology/links",
+        // Both endpoints must be visible, not either — a link with one visible end would tell a
+        // scoped operator that a node exists outside their scope.
+        GroupFiltered,
+        // Folded rather than given its own tool: `get_topology(kind="links")` answers this. Both
+        // branches take the same `cursor`+`limit` and return a keyset page of graph structure,
+        // which is ADR-042's fold criterion — a model picks worse from a longer tool list.
+        Tool("get_topology"),
+    ),
     ("POST", "/api/v1/url-monitors", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",

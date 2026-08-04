@@ -205,7 +205,8 @@
         "event_log_store": "Event log",
         "metrics": "Metrics",
         "audit_log": "Audit log",
-        "neighbor_changes": "Neighbor changes"
+        "neighbor_changes": "Neighbor changes",
+        "l3_changes": "Interface address changes"
       },
       "err": {
         "range": "{{name}}: enter a whole number between {{min}} and {{max}}.",

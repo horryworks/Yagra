@@ -64,10 +64,44 @@
   stroke-width: 1.5;
   fill: none;
 }
+/* Evidence behind a link. Never colour-alone: the dash pattern differs too, each edge carries a
+   <title> naming its source, and the legend spells it out. L2 adjacency (LLDP/CDP) is a solid
+   stroke because it names a physical port; a shared-subnet link is inferred from co-membership and
+   is drawn dashed to say so. */
+.topomap-edge.lldp,
+.topomap-edge.cdp {
+  stroke: var(--accent-color);
+}
+.topomap-edge.l3_subnet {
+  stroke: var(--text-tertiary);
+  stroke-dasharray: 6 4;
+}
+.topomap-edge.manual {
+  stroke: var(--accent-color);
+  stroke-width: 2;
+}
+/* Suppression wins over the source styling: which node is silenced matters more to an operator
+   reading the map than which walk found the link. */
 .topomap-edge.suppressed {
   stroke: var(--status-unreachable);
   stroke-dasharray: 4 3;
   opacity: 0.7;
+}
+
+.topomap-legend-edge {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--accent-color);
+}
+.topomap-legend-edge.l3_subnet {
+  border-top-style: dashed;
+  border-top-color: var(--text-tertiary);
+}
+
+.topomap-hint {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
 }
 
 /* ---- nodes ---- */

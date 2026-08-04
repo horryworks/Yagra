@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The dependency map itself: an SVG render of the tidy-tree layout with wheel-zoom + drag-pan.
+// The network map itself: an SVG render of the derived connectivity graph with wheel-zoom +
+// drag-pan. The layout is in `graphLayout.ts` and is deterministic — see its header for why that
+// and the fit-once guard below are both required and neither substitutes for the other.
 // Status color is the canonical palette (stateColorVar) — a node's color here is identical to its
 // dot in the table and its threshold line in a chart. Clicking (or Enter/Space on a focused) node
 // drills into that node's detail page. Device-supplied names render as React <text> children, so
@@ -9,8 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { stateColorVar, stateLabel } from '../../lib/format';
-import type { PlacedNode, TopologyLayout } from './layout';
-import { NODE_H, NODE_W } from './layout';
+import type { GraphLayout, PlacedNode } from './graphLayout';
+import { NODE_H, NODE_W } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE, type View } from './fitView';
 import './TopologyMap.css';
 
@@ -63,7 +65,7 @@ function NodeBox({
   );
 }
 
-export function TopologyMap({ layout }: { layout: TopologyLayout }) {
+export function TopologyMap({ layout }: { layout: GraphLayout }) {
   const { t } = useTranslation('topology');
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -230,16 +232,34 @@ export function TopologyMap({ layout }: { layout: TopologyLayout }) {
         onPointerLeave={onPointerUp}
       >
         <g transform={`translate(${v.tx}, ${v.ty}) scale(${v.scale})`}>
-          {layout.edges.map((e) => (
-            <line
-              key={e.id}
-              className={`topomap-edge${e.suppressed ? ' suppressed' : ''}`}
-              x1={e.x1}
-              y1={e.y1}
-              x2={e.x2}
-              y2={e.y2}
-            />
-          ))}
+          {/* A rank-adjacent edge is a straight line, exactly as the dependency map drew it. A
+              same-rank or rank-skipping edge — which only a graph can have — bows sideways so it
+              does not run through the boxes between its ends. The evidence behind the link becomes
+              a class so the legend and the stroke agree; it is never colour-alone, the title
+              carries it too. */}
+          {layout.edges.map((e) =>
+            e.kind === 'bow' ? (
+              <path
+                key={e.id}
+                className={`topomap-edge ${e.source}${e.suppressed ? ' suppressed' : ''}`}
+                d={e.path}
+                fill="none"
+              >
+                <title>{t(`map.source.${e.source}`)}</title>
+              </path>
+            ) : (
+              <line
+                key={e.id}
+                className={`topomap-edge ${e.source}${e.suppressed ? ' suppressed' : ''}`}
+                x1={e.x1}
+                y1={e.y1}
+                x2={e.x2}
+                y2={e.y2}
+              >
+                <title>{t(`map.source.${e.source}`)}</title>
+              </line>
+            ),
+          )}
           {layout.nodes.map((n) => (
             <NodeBox key={n.id} node={n} onOpen={(id) => navigate(`/nodes/${id}`)} nameById={nameById} />
           ))}

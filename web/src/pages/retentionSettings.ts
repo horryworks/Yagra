@@ -36,6 +36,7 @@ export const RETENTION_SUBJECTS = [
   'node_state_snapshots',
   'dns_chain_changes',
   'neighbor_changes',
+  'l3_changes',
   'events_matched',
   'events_unmatched',
   'report_runs',

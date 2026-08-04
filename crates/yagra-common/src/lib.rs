@@ -14,6 +14,7 @@ pub mod collection;
 pub mod dns_check;
 pub mod host;
 pub mod ids;
+pub mod l3;
 pub mod meraki;
 pub mod metric;
 pub mod neighbor;
@@ -25,6 +26,7 @@ pub mod rbac;
 pub mod severity;
 pub mod state;
 pub mod thresholds;
+pub mod topology;
 pub mod trap;
 pub mod url_check;
 
@@ -44,6 +46,11 @@ pub use dns_check::{
 };
 pub use host::{DiskUsage, HostSample};
 pub use ids::{CheckId, CredentialId, GroupId, IfIndex, NodeId, ProfileId};
+pub use l3::{
+    builtin_l3_columns, decode_prefix_pointer, inet_address_from_index, prefix_len_from_mask,
+    subnet_key, L3AddrType, L3Address, L3Column, L3Snapshot, L3SourceTable, SubnetKey,
+    MAX_ADDRESSES_PER_NODE, METRIC_SNMP_L3_ADDRESS_COUNT,
+};
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,
     uplink_ifindex, uplink_name, uplink_status_value, MerakiDeviceConfig, MerakiTier,
@@ -70,6 +77,7 @@ pub use state::NodeState;
 pub use thresholds::{
     resolve_effective, Direction, EffectiveThreshold, ScopeLevel, ScopedThreshold, ThresholdRule,
 };
+pub use topology::{DerivedLink, LinkSource, TopologyLinkSummary, MAX_LINKS_PER_NODE};
 pub use trap::trap_oid_name;
 pub use url_check::{
     host_ip, is_ssrf_blocked, ExpectedStatus, HttpAuth, HttpMethod, UrlCheckConfig,

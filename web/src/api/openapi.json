@@ -14296,7 +14296,7 @@
           "settings"
         ],
         "summary": "The deployment's adjacency-collection settings, with the accepted cadence range.",
-        "operationId": "get_neighbor_settings",
+        "operationId": "get_adjacency_settings",
         "responses": {
           "200": {
             "description": "Whether adjacency is collected, how often, and the accepted range",
@@ -15504,6 +15504,86 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TopologyPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no inventory to build the graph from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/topology/links": {
+      "get": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "The derived connectivity graph: every link between monitored nodes, with the evidence that\nproduced it.",
+        "description": "Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet; they are\nrecomputed periodically rather than stored by hand. A group-scoped caller sees only links whose\n**both** endpoints are visible to them.",
+        "operationId": "get_topology_links",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Return links with an id greater than this (the previous page's `next_cursor`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum links to return.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One keyset page of the connectivity graph; `next_cursor` is null on the last page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopologyLinkPage"
                 }
               }
             }
@@ -21961,6 +22041,16 @@
           }
         }
       },
+      "LinkSource": {
+        "type": "string",
+        "description": "What kind of evidence produced a link, ordered strongest first.",
+        "enum": [
+          "manual",
+          "lldp",
+          "cdp",
+          "l3_subnet"
+        ]
+      },
       "LlmConfigInput": {
         "type": "object",
         "description": "The `PUT /api/v1/llm/config` body.",
@@ -22766,7 +22856,7 @@
               "string",
               "null"
             ],
-            "description": "The peer's management address. Filled from `cdpCacheAddress` for CDP. LLDP keeps this in\n`lldpRemManAddrTable`, whose index *encodes* the address — a separate walk plus index\ndecoding — so LLDP records leave this `None` in this increment."
+            "description": "The peer's management address, from `cdpCacheAddress` for CDP and from `lldpRemManAddrTable`\nfor LLDP. `None` when the peer advertised none."
           },
           "remote_platform": {
             "type": [
@@ -22850,7 +22940,7 @@
       },
       "NeighborConfig": {
         "type": "object",
-        "description": "How this deployment collects adjacency.",
+        "description": "How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses.",
         "required": [
           "enabled",
           "interval_secs"
@@ -22858,12 +22948,28 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "description": "Whether neighbour walks are issued at all."
+            "description": "Whether CDP/LLDP neighbour walks are issued at all."
           },
           "interval_secs": {
             "type": "integer",
             "format": "int32",
             "description": "How often each SNMP node's neighbour tables are walked, in seconds.",
+            "minimum": 0
+          },
+          "l3_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether interface-address walks are issued at all. Omitted on update leaves it unchanged."
+          },
+          "l3_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often each SNMP node's interface-address tables are walked, in seconds. Omitted on\nupdate leaves it unchanged.",
             "minimum": 0
           },
           "max_interval_secs": {
@@ -26337,6 +26443,203 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "TopologyLink": {
+        "type": "object",
+        "description": "One undirected link in the derived connectivity graph.",
+        "required": [
+          "id",
+          "sources",
+          "source",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "a_if_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Port name on the `a` side, when a source reported one."
+          },
+          "a_ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`ifIndex` on the `a` side, when a source reported one."
+          },
+          "a_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "One endpoint. `null` is reserved for an endpoint that is not a monitored node."
+          },
+          "b_if_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Port name on the `b` side, when a source reported one."
+          },
+          "b_ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`ifIndex` on the `b` side, when a source reported one."
+          },
+          "b_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The other endpoint. `null` is reserved for an endpoint that is not a monitored node."
+          },
+          "first_seen": {
+            "type": "string",
+            "description": "When this link was first derived (RFC 3339)."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stable id, and the keyset cursor."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "When it was last confirmed (RFC 3339)."
+          },
+          "source": {
+            "$ref": "#/components/schemas/LinkSource",
+            "description": "The strongest of `sources` — what to label the link with."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkSource"
+            },
+            "description": "Every kind of evidence that produced this link."
+          },
+          "subnet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subnet behind a shared-subnet link, e.g. `192.168.1.0/24`."
+          }
+        }
+      },
+      "TopologyLinkPage": {
+        "type": "object",
+        "description": "One keyset page of the derived connectivity graph, with what the last derivation run saw.",
+        "required": [
+          "links",
+          "summary",
+          "total_links"
+        ],
+        "properties": {
+          "derived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the graph was last derived (RFC 3339), or `null` before the first run."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopologyLink"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass back as `cursor` for the next page; `null` ⇒ this was the last one."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TopologyLinkSummary",
+            "description": "Counters for everything the last derivation declined to turn into a link."
+          },
+          "total_links": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many links the whole graph holds, not just this page."
+          }
+        }
+      },
+      "TopologyLinkSummary": {
+        "type": "object",
+        "description": "What the last derivation run observed but did not turn into a link.",
+        "properties": {
+          "ambiguous_mgmt_addrs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Adjacency rows whose management address matched more than one node, so no link could be\nattributed without guessing which.",
+            "minimum": 0
+          },
+          "cdp_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links produced from a CDP adjacency.",
+            "minimum": 0
+          },
+          "duplicate_addresses": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Addresses claimed by two or more nodes — a shared virtual IP, or a duplicate-address\nmisconfiguration.",
+            "minimum": 0
+          },
+          "l3_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links whose strongest evidence is shared-subnet membership.",
+            "minimum": 0
+          },
+          "lldp_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links produced from an LLDP adjacency.",
+            "minimum": 0
+          },
+          "oversized_segments": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Segments with more than two members where no member could be identified as routing for the\nothers, so no link was drawn.",
+            "minimum": 0
+          },
+          "subnet_prefix_mismatch": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Addresses sharing network bits but disagreeing on prefix length.",
+            "minimum": 0
+          },
+          "truncated_nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Nodes whose observation hit a per-node cap, so what is recorded for them is incomplete.",
+            "minimum": 0
+          },
+          "unmatched_cdp_rows": {
+            "type": "integer",
+            "format": "int32",
+            "description": "CDP rows whose management address matched no monitored node.",
+            "minimum": 0
+          },
+          "unmatched_lldp_rows": {
+            "type": "integer",
+            "format": "int32",
+            "description": "LLDP rows whose management address matched no monitored node.",
+            "minimum": 0
           }
         }
       },

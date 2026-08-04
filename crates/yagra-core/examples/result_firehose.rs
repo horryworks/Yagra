@@ -93,6 +93,7 @@ fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResu
         sys_descr: None,
         dns_chain: None,
         neighbors: None,
+        l3: None,
         observational: false,
         poller_id: Some("firehose".to_owned()),
         trace_context: Default::default(),

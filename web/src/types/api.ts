@@ -739,6 +739,22 @@ export type FleetGroupSummary = components['schemas']['FleetGroupSummary'];
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */
 export type TopologyNode = components['schemas']['TopologyNode'];
 
+/** One undirected link in the derived connectivity graph (`GET /api/v1/topology/links`). */
+export type TopologyLink = components['schemas']['TopologyLink'];
+
+/** What the last derivation run observed but did not turn into a link. */
+export type TopologyLinkSummary = components['schemas']['TopologyLinkSummary'];
+
+/** What kind of evidence produced a link.
+ *
+ *  An `as const` array, not just the generated union: ~150 call sites build an i18n key at runtime
+ *  (`` t(`map.source.${l.source}`) ``), and EN/JA parity cannot prove either locale is complete —
+ *  a new backend variant is missing from *both*, so parity passes while the map renders a raw key.
+ *  `i18nEnumKeys.test.ts` iterates this, which only works if the union exists at runtime
+ *  (extensibility.md §4). Ordered strongest-first, matching the server's rank. */
+export const LINK_SOURCES = ['manual', 'lldp', 'cdp', 'l3_subnet'] as const;
+export type LinkSource = (typeof LINK_SOURCES)[number];
+
 /** The fixed error envelope (ADR-019). */
 export type ApiErrorBody = components['schemas']['ApiErrorBody'];
 

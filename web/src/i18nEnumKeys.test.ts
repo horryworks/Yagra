@@ -35,6 +35,7 @@ import {
   BUNDLE_NOTE_CODES,
   NEIGHBOR_CAPABILITIES,
   NEIGHBOR_PROTOS,
+  LINK_SOURCES,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
@@ -78,6 +79,8 @@ import enTroubleshoot from './locales/en/troubleshoot.json';
 import jaTroubleshoot from './locales/ja/troubleshoot.json';
 import enSystem from './locales/en/system.json';
 import jaSystem from './locales/ja/system.json';
+import enTopology from './locales/en/topology.json';
+import jaTopology from './locales/ja/topology.json';
 
 type Json = Record<string, unknown>;
 
@@ -337,6 +340,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'none',
     ]);
     expectKeys('neighbor diff kind', locales, 'neighbors.diff.', ['added', 'removed', 'changed']);
+  });
+
+  it('every link source has strings (topology:map.source.*)', () => {
+    // The map labels each edge with the evidence behind it, from a value the server derived —
+    // `t(`map.source.${link.source}`)`. Increments 2-4 add `route`, `bgp` and `ospf`, so this is
+    // an enum that is *going* to grow, which is exactly the case parity cannot catch.
+    const locales = { en: enTopology, ja: jaTopology };
+    expectKeys('link source', locales, 'map.source.', LINK_SOURCES);
   });
 
   it('every retention subject has strings (system:settings.retention.subject.*)', () => {

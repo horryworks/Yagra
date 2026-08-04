@@ -796,4 +796,66 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(ifindex_from_tail(&[1, 0, 0]), a, "folding is deterministic");
     }
+
+    /// `snmp_v3::raw_value`'s doc says it "mirrors `snmp::raw_value`", and nothing checked that —
+    /// so it had silently drifted on two types (`IpAddress` and `Opaque`) that the v2c mapper
+    /// handles. Nobody noticed because the only consumer at the time, the neighbour walk, reads
+    /// neither. `ipAdEntNetMask` is an ASN.1 `IpAddress`, so ADR-043's IPv4 mask column would have
+    /// come back empty on every SNMPv3 node while working perfectly on v2c — a difference no error
+    /// would ever surface.
+    ///
+    /// The two clients have separate value enums, so this feeds each mapper its *own* spelling of
+    /// the same ASN.1 type and demands the same [`SnmpValue`] out. That is the only form of this
+    /// assertion that can catch a one-sided change.
+    #[test]
+    fn both_snmp_mappers_agree_on_every_value_type_they_share() {
+        use csnmp::ObjectValue;
+        use snmp2::Value;
+
+        let v2c = |v: &ObjectValue| Some(crate::snmp::raw_value(v));
+        let v3 = crate::snmp_v3::raw_value;
+
+        // INTEGER
+        assert_eq!(v2c(&ObjectValue::Integer(-5)), v3(&Value::Integer(-5)));
+        // Counter32
+        assert_eq!(v2c(&ObjectValue::Counter32(7)), v3(&Value::Counter32(7)));
+        // Counter64, including the saturating out-of-range case.
+        assert_eq!(
+            v2c(&ObjectValue::Counter64(u64::MAX)),
+            v3(&Value::Counter64(u64::MAX))
+        );
+        // OCTET STRING — octets verbatim on both.
+        let mac = b"\x00\x1bT\xff\x00\x9a";
+        assert_eq!(
+            v2c(&ObjectValue::String(mac.to_vec())),
+            v3(&Value::OctetString(mac))
+        );
+        // Opaque — the second variant the v3 wildcard used to swallow.
+        assert_eq!(
+            v2c(&ObjectValue::Opaque(mac.to_vec())),
+            v3(&Value::Opaque(mac))
+        );
+        // IpAddress — the one ADR-043 actually needs. Both must yield the four octets, so the
+        // caller reads a netmask the same way on either transport.
+        assert_eq!(
+            v2c(&ObjectValue::IpAddress(Ipv4Addr::new(255, 255, 255, 0))),
+            v3(&Value::IpAddress([255, 255, 255, 0]))
+        );
+        assert_eq!(
+            v3(&Value::IpAddress([255, 255, 255, 0])),
+            Some(SnmpValue::Bytes(vec![255, 255, 255, 0])),
+            "a netmask must survive the v3 walk as its octets"
+        );
+        // OBJECT IDENTIFIER — dotted decimal on both. This is what carries `ipAddressPrefix`.
+        let dotted = "1.3.6.1.2.1.4.32.1.5.8.1.4.192.168.1.0.24";
+        let v2c_oid: csnmp::ObjectIdentifier = dotted.parse().unwrap();
+        let v3_oid = {
+            let parts: Vec<u64> = dotted.split('.').map(|p| p.parse().unwrap()).collect();
+            snmp2::Oid::from(parts.as_slice()).unwrap()
+        };
+        assert_eq!(
+            v2c(&ObjectValue::ObjectId(v2c_oid)),
+            v3(&Value::ObjectIdentifier(v3_oid))
+        );
+    }
 }

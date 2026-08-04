@@ -8,7 +8,7 @@
 
 use crate::collection::CollectionRepo;
 use crate::dns_check::DnsCheckRepo;
-use crate::neighbors::NeighborSettings;
+use crate::neighbors::AdjacencySettings;
 use crate::secrets::{self, CredentialStore, SnmpV3Secret};
 use crate::url_check::UrlCheckRepo;
 use std::collections::{HashMap, HashSet};
@@ -16,13 +16,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn,
-    SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn, SnmpTableCheck, SnmpV3Check,
-    SnmpV3NeighborCheck, SnmpV3TableCheck, SyncBus,
+    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpL3Check,
+    SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn, SnmpTableCheck,
+    SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
-    builtin_interface_meta_columns, builtin_neighbor_columns, CollectionItem, CollectionKind,
-    DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows, ProfileId, UrlCheckConfig,
+    builtin_interface_meta_columns, builtin_l3_columns, builtin_neighbor_columns, CollectionItem,
+    CollectionKind, DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows, ProfileId,
+    UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -298,6 +299,47 @@ pub fn build_snmp_v3_neighbor_check(secret: &SnmpV3Secret, timeout_ms: u32) -> S
     }
 }
 
+/// Build the SNMP v2c interface-address check for a node (ADR-043).
+///
+/// The column list is the fixed RFC 1213 / RFC 4293 set — like the neighbour columns there is
+/// nothing here for an operator to configure, and for the same reason it could not be a collection
+/// template: a `CollectionItem` declares a TSDB series, and an interface address must never become
+/// one. Sent on the wire rather than assumed poller-side so core stays the one place the OID set is
+/// decided.
+#[must_use]
+pub fn build_snmp_l3_check(community: &str, timeout_ms: u32) -> SnmpL3Check {
+    SnmpL3Check {
+        community: community.to_owned(),
+        columns: l3_columns(),
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v3 (USM) interface-address check — the v3 analogue of [`build_snmp_l3_check`].
+#[must_use]
+pub fn build_snmp_v3_l3_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3L3Check {
+    SnmpV3L3Check {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        columns: l3_columns(),
+        timeout_ms,
+    }
+}
+
+fn l3_columns() -> Vec<SnmpL3Column> {
+    builtin_l3_columns()
+        .into_iter()
+        .map(|(field, oid)| SnmpL3Column {
+            field,
+            oid: oid.to_owned(),
+        })
+        .collect()
+}
+
 fn neighbor_columns() -> Vec<SnmpNeighborColumn> {
     builtin_neighbor_columns()
         .into_iter()
@@ -308,28 +350,41 @@ fn neighbor_columns() -> Vec<SnmpNeighborColumn> {
         .collect()
 }
 
-/// Whether this deployment collects adjacency, and how often — resolved once per sweep and passed
-/// into [`assemble_node_jobs`] so that function stays pure (no store, no clock).
+/// Whether this deployment collects connectivity data, and how often — resolved once per sweep and
+/// passed into [`assemble_node_jobs`] so that function stays pure (no store, no clock).
+///
+/// One struct for both walks (L2 adjacency, ADR-038; L3 interface addresses, ADR-043) so the sweep
+/// resolves settings once. Increment 3's ARP cadence and Increment 4's routing cadence become
+/// fields here rather than another settings query in the scheduling loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NeighborPolicy {
-    pub enabled: bool,
-    /// Cadence in seconds. Deliberately slower than the node's metric interval; the poller's local
-    /// scheduler honours it per spec, and the legacy publish path gates on it separately.
-    pub interval_secs: u32,
+pub struct AdjacencyPolicy {
+    /// Whether CDP/LLDP neighbour jobs are issued.
+    pub neighbors_enabled: bool,
+    /// Neighbour cadence in seconds. Deliberately slower than the node's metric interval; the
+    /// poller's local scheduler honours it per spec, and the legacy publish path gates on it
+    /// separately.
+    pub neighbors_interval_secs: u32,
+    /// Whether interface-address jobs are issued.
+    pub l3_enabled: bool,
+    /// Interface-address cadence in seconds. Same reasoning as the neighbour cadence: addressing
+    /// changes on the order of months.
+    pub l3_interval_secs: u32,
 }
 
-impl From<NeighborSettings> for NeighborPolicy {
-    fn from(s: NeighborSettings) -> Self {
+impl From<AdjacencySettings> for AdjacencyPolicy {
+    fn from(s: AdjacencySettings) -> Self {
         Self {
-            enabled: s.enabled,
-            interval_secs: s.interval_secs,
+            neighbors_enabled: s.neighbors_enabled,
+            neighbors_interval_secs: s.neighbors_interval_secs,
+            l3_enabled: s.l3_enabled,
+            l3_interval_secs: s.l3_interval_secs,
         }
     }
 }
 
-impl Default for NeighborPolicy {
+impl Default for AdjacencyPolicy {
     fn default() -> Self {
-        NeighborSettings::default().into()
+        AdjacencySettings::default().into()
     }
 }
 
@@ -413,7 +468,7 @@ pub fn assemble_node_jobs(
     items: &[CollectionItem],
     monitor: Option<SpecialMonitor<'_>>,
     interval_secs: u32,
-    neighbors: NeighborPolicy,
+    neighbors: AdjacencyPolicy,
 ) -> Vec<(PollJob, &'static str)> {
     // A URL or DNS monitor is its own node kind: dispatch that one job and nothing else. ICMP is
     // *not* added — a URL target may be non-pingable (e.g. behind a CDN), and a name has no
@@ -448,15 +503,25 @@ pub fn assemble_node_jobs(
                 let job = build_snmp_table_job(node, check, interval_secs, Uuid::new_v4());
                 jobs.push((job, "snmp_table"));
             }
-            if neighbors.enabled {
+            if neighbors.neighbors_enabled {
                 let job = PollJob::snmp_neighbors(
                     Uuid::new_v4(),
                     node.id,
                     node.address,
                     build_snmp_neighbor_check(community, SNMP_TIMEOUT_MS),
-                    neighbors.interval_secs,
+                    neighbors.neighbors_interval_secs,
                 );
                 jobs.push((job, "snmp_neighbors"));
+            }
+            if neighbors.l3_enabled {
+                let job = PollJob::snmp_l3(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_l3_check(community, SNMP_TIMEOUT_MS),
+                    neighbors.l3_interval_secs,
+                );
+                jobs.push((job, "snmp_l3"));
             }
         }
         Some(SnmpAuth::V3(secret)) => {
@@ -469,15 +534,25 @@ pub fn assemble_node_jobs(
                 let job = build_snmp_v3_table_job(node, check, interval_secs, Uuid::new_v4());
                 jobs.push((job, "snmp_v3_table"));
             }
-            if neighbors.enabled {
+            if neighbors.neighbors_enabled {
                 let job = PollJob::snmp_v3_neighbors(
                     Uuid::new_v4(),
                     node.id,
                     node.address,
                     build_snmp_v3_neighbor_check(secret, SNMP_TIMEOUT_MS),
-                    neighbors.interval_secs,
+                    neighbors.neighbors_interval_secs,
                 );
                 jobs.push((job, "snmp_v3_neighbors"));
+            }
+            if neighbors.l3_enabled {
+                let job = PollJob::snmp_v3_l3(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_v3_l3_check(secret, SNMP_TIMEOUT_MS),
+                    neighbors.l3_interval_secs,
+                );
+                jobs.push((job, "snmp_v3_l3"));
             }
         }
         None => {}
@@ -566,8 +641,8 @@ impl PollDispatcher {
 
     /// The deployment's adjacency policy, degrading to the compiled default on a read failure —
     /// used by the on-demand path only (the sweep resolves it once per round instead).
-    pub async fn neighbor_policy(&self) -> NeighborPolicy {
-        self.settings.get_neighbor_settings().await.into()
+    pub async fn adjacency_policy(&self) -> AdjacencyPolicy {
+        self.settings.get_adjacency_settings().await.into()
     }
 
     /// Every node that is a DNS monitor, for the periodic scheduler to preload once per sweep.
@@ -612,7 +687,7 @@ impl PollDispatcher {
             return Vec::new();
         }
         // One node, one settings read — this path is an operator action, not the sweep.
-        let neighbors = self.neighbor_policy().await;
+        let neighbors = self.adjacency_policy().await;
         self.build_scheduled_jobs_hinted(node, interval_secs, None, neighbors)
             .await
     }
@@ -635,7 +710,7 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
         dns_hint: Option<&HashSet<Uuid>>,
-        neighbors: NeighborPolicy,
+        neighbors: AdjacencyPolicy,
     ) -> Vec<(PollJob, &'static str)> {
         let node_uuid = node.id.as_uuid();
         let url = self.url_checks.get(node_uuid).await.unwrap_or_else(|e| {
@@ -689,7 +764,7 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
         dns_hint: Option<&HashSet<Uuid>>,
-        neighbors: NeighborPolicy,
+        neighbors: AdjacencyPolicy,
     ) -> Vec<JobSpec> {
         self.build_scheduled_jobs_hinted(node, interval_secs, dns_hint, neighbors)
             .await
@@ -1189,7 +1264,7 @@ mod tests {
             &[],
             None,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["icmp"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Icmp(_)));
@@ -1206,7 +1281,7 @@ mod tests {
             &[],
             monitor,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Http(_)));
@@ -1224,7 +1299,7 @@ mod tests {
             &[],
             monitor,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["dns"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Dns(_)));
@@ -1245,7 +1320,7 @@ mod tests {
             &[],
             monitor,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
     }
@@ -1356,11 +1431,11 @@ mod tests {
             &items,
             None,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(
             kinds(&jobs),
-            vec!["snmp", "snmp_table", "snmp_neighbors", "icmp"]
+            vec!["snmp", "snmp_table", "snmp_neighbors", "snmp_l3", "icmp"]
         );
         // The maker is unknown (vendor None), so the scalar SNMP job carries the identity probe.
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
@@ -1377,7 +1452,14 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let jobs = assemble_node_jobs(&n, Some(&auth), &items, None, 30, NeighborPolicy::default());
+        let jobs = assemble_node_jobs(
+            &n,
+            Some(&auth),
+            &items,
+            None,
+            30,
+            AdjacencyPolicy::default(),
+        );
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
         assert!(
             !snmp.0.probe_identity,
@@ -1408,11 +1490,17 @@ mod tests {
             &items,
             None,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(
             kinds(&jobs),
-            vec!["snmp_v3", "snmp_v3_table", "snmp_v3_neighbors", "icmp"]
+            vec![
+                "snmp_v3",
+                "snmp_v3_table",
+                "snmp_v3_neighbors",
+                "snmp_v3_l3",
+                "icmp"
+            ]
         );
         assert!(matches!(
             jobs.iter().find(|(_, k)| *k == "snmp_v3").unwrap().0.check,
@@ -1443,9 +1531,12 @@ mod tests {
             &items,
             None,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
-        assert_eq!(kinds(&jobs), vec!["snmp_v3", "snmp_v3_neighbors", "icmp"]);
+        assert_eq!(
+            kinds(&jobs),
+            vec!["snmp_v3", "snmp_v3_neighbors", "snmp_v3_l3", "icmp"]
+        );
     }
 
     /// The neighbour job is the only one that does **not** run at the node's interval. Adjacency
@@ -1459,28 +1550,34 @@ mod tests {
             CollectionKind::Table,
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
-        let policy = NeighborPolicy {
-            enabled: true,
-            interval_secs: 3600,
-        };
+        let policy = AdjacencyPolicy::default();
         let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, policy);
         for (job, kind) in &jobs {
-            let expected = if kind.contains("neighbors") { 3600 } else { 30 };
+            let expected = if kind.contains("neighbors") || kind.contains("l3") {
+                3600
+            } else {
+                30
+            };
             assert_eq!(job.interval_secs, expected, "{kind} cadence");
         }
         // The legacy publish path keys its extra due-check off exactly this inequality.
         let neighbor = jobs.iter().find(|(_, k)| *k == "snmp_neighbors").unwrap();
         assert!(neighbor.0.interval_secs > 30);
         assert!(matches!(neighbor.0.check, CheckSpec::SnmpNeighbors(_)));
+        // The interface-address walk rides the same slow tier, for the same reason (ADR-043).
+        let l3 = jobs.iter().find(|(_, k)| *k == "snmp_l3").unwrap();
+        assert!(l3.0.interval_secs > 30);
+        assert!(matches!(l3.0.check, CheckSpec::SnmpL3(_)));
     }
 
     /// The toggle is the whole safety valve: off must mean no job is built at all, on either
     /// protocol — not a job the poller then declines to run.
     #[test]
     fn disabling_collection_emits_no_neighbor_job_for_either_protocol() {
-        let off = NeighborPolicy {
-            enabled: false,
-            interval_secs: 3600,
+        let off = AdjacencyPolicy {
+            neighbors_enabled: false,
+            l3_enabled: false,
+            ..AdjacencyPolicy::default()
         };
         let items = [item(
             "if_hc_in_octets",
@@ -1507,6 +1604,47 @@ mod tests {
         assert_eq!(kinds(&v3), vec!["snmp_v3_table", "icmp"]);
     }
 
+    /// The two walks share a settings struct but not a switch. A fleet may want L2 adjacency and
+    /// not L3 addressing (or the reverse), and folding them onto one toggle would take that away —
+    /// this pins that the sharing is about *when settings are resolved*, not about what they mean.
+    #[test]
+    fn the_two_discovery_walks_toggle_independently() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        let auth = SnmpAuth::V2c("public".to_owned());
+
+        let l3_only = AdjacencyPolicy {
+            neighbors_enabled: false,
+            ..AdjacencyPolicy::default()
+        };
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, l3_only);
+        assert_eq!(kinds(&jobs), vec!["snmp_table", "snmp_l3", "icmp"]);
+
+        let neighbors_only = AdjacencyPolicy {
+            l3_enabled: false,
+            ..AdjacencyPolicy::default()
+        };
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, neighbors_only);
+        assert_eq!(kinds(&jobs), vec!["snmp_table", "snmp_neighbors", "icmp"]);
+    }
+
+    /// The L3 job must carry exactly the columns `yagra-common` declares — core is the one place
+    /// the OID set is decided, and a poller that receives a short list silently collects less.
+    #[test]
+    fn the_l3_job_carries_every_declared_column() {
+        let check = build_snmp_l3_check("public", 2000);
+        assert_eq!(check.columns.len(), builtin_l3_columns().len());
+        let v3 = build_snmp_v3_l3_check(&v3_secret(), 2000);
+        assert_eq!(v3.columns.len(), builtin_l3_columns().len());
+        // Both protocols must ask for the same thing, or a v3 fleet quietly derives fewer links.
+        let v2c_oids: Vec<&str> = check.columns.iter().map(|c| c.oid.as_str()).collect();
+        let v3_oids: Vec<&str> = v3.columns.iter().map(|c| c.oid.as_str()).collect();
+        assert_eq!(v2c_oids, v3_oids);
+    }
+
     /// A node with no SNMP credential gets no neighbour job even with collection enabled: there is
     /// nothing to authenticate the walk with, and an ICMP-only node has no LLDP/CDP tables anyway.
     #[test]
@@ -1517,7 +1655,7 @@ mod tests {
             &[],
             None,
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["icmp"]);
     }
@@ -1533,7 +1671,7 @@ mod tests {
             &[],
             SpecialMonitor::resolve(Some(&url), None),
             30,
-            NeighborPolicy::default(),
+            AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
     }

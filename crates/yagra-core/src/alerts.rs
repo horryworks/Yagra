@@ -1819,6 +1819,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

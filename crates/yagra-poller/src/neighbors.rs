@@ -55,10 +55,11 @@ pub fn assemble(columns: &[SnmpNeighborColumn], rows: &[SnmpInstanceRow]) -> Nei
     // cannot read its own local port's name out of its own entry. Lift both out first.
     let lldp_ports = lldp_local_port_names(&by_instance);
     let cdp_ports = cdp_interface_names(&by_instance);
+    let lldp_mgmt = lldp_mgmt_addrs(&by_instance);
 
     let mut neighbors = Vec::new();
     for (instance, row) in &by_instance {
-        if let Some(n) = lldp_neighbor(instance, row, &lldp_ports) {
+        if let Some(n) = lldp_neighbor(instance, row, &lldp_ports, &lldp_mgmt) {
             neighbors.push(n);
         } else if let Some(n) = cdp_neighbor(instance, row, &cdp_ports) {
             neighbors.push(n);
@@ -104,10 +105,13 @@ fn lldp_neighbor(
     instance: &[u32],
     row: &Row<'_>,
     local_ports: &BTreeMap<u32, String>,
+    mgmt_addrs: &BTreeMap<[u32; 3], String>,
 ) -> Option<Neighbor> {
     // The three-part index is the tell. `time_mark` and `rem_index` are bound only to be discarded
-    // — naming them is the documentation that dropping them is deliberate, not an oversight.
-    let &[_time_mark, local_port_num, _rem_index] = instance else {
+    // from the *record* — naming them is the documentation that dropping them is deliberate, not an
+    // oversight. They are still needed here as the join key into `lldpRemManAddrTable`, which is
+    // indexed by the same triple plus the address.
+    let &[time_mark, local_port_num, rem_index] = instance else {
         return None;
     };
     let chassis_bytes = bytes(row, NeighborColumn::LldpRemChassisId)?;
@@ -135,9 +139,55 @@ fn lldp_neighbor(
     n.capabilities = bytes(row, NeighborColumn::LldpRemSysCapEnabled)
         .map(lldp_capabilities)
         .unwrap_or_default();
-    // `remote_mgmt_addr` stays None: LLDP keeps it in `lldpRemManAddrTable`, whose index encodes
-    // the address itself. That decode is a separate increment (see `Neighbor::remote_mgmt_addr`).
+    // The management address is what lets this row be matched back to an inventory node (ADR-043);
+    // without it an LLDP adjacency names its peer only by chassis id, which is not an address.
+    n.remote_mgmt_addr = mgmt_addrs
+        .get(&[time_mark, local_port_num, rem_index])
+        .cloned();
     Some(n)
+}
+
+/// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)` → the peer's management address.
+///
+/// `lldpRemManAddrTable` is the third naming table lifted out before the adjacency rows are read,
+/// alongside `lldpLocPortTable` and `cdpInterfaceName` — and the strangest of them, because the
+/// value it returns is worthless. Its index is
+/// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex, lldpRemManAddrSubtype, lldpRemManAddr)`,
+/// and both address components are `not-accessible`, so **the address is only ever available as
+/// index sub-identifiers**. That is exactly what [`SnmpInstanceRow`] preserves and what the folded
+/// walkers would have destroyed.
+///
+/// A peer may advertise several addresses (v4 and v6, or one per interface). The lowest by
+/// canonical order wins, deterministically, rather than "whichever the walk reached last".
+fn lldp_mgmt_addrs(by_instance: &BTreeMap<Vec<u32>, Row<'_>>) -> BTreeMap<[u32; 3], String> {
+    let mut out: BTreeMap<[u32; 3], String> = BTreeMap::new();
+    for (instance, row) in by_instance {
+        // Only rows of this table carry this column; everything else is a different table's row
+        // that happens to have a long index.
+        if !row.contains_key(&NeighborColumn::LldpRemManAddrIfSubtype) {
+            continue;
+        }
+        let &[time_mark, local_port_num, rem_index, addr_subtype, ref rest @ ..] = &instance[..]
+        else {
+            continue;
+        };
+        // `lldpRemManAddrSubtype` is an IANA address family (1 = IPv4, 2 = IPv6) and
+        // `lldpRemManAddr` is a length-prefixed octet string — the same encoding the address
+        // tables use, so the same decoder reads it.
+        let Some(ip) = yagra_common::inet_address_from_index(addr_subtype, rest) else {
+            continue;
+        };
+        let key = [time_mark, local_port_num, rem_index];
+        let rendered = ip.to_string();
+        out.entry(key)
+            .and_modify(|cur| {
+                if rendered < *cur {
+                    cur.clone_from(&rendered);
+                }
+            })
+            .or_insert(rendered);
+    }
+    out
 }
 
 /// One `cdpCacheTable` row → a neighbour, or `None` when this instance is not a CDP cache row.
@@ -276,6 +326,106 @@ mod tests {
         );
         // LLDP's local port number is not an ifIndex, so none is claimed.
         assert_eq!(n.local_ifindex, None);
+        // No `lldpRemManAddrTable` row was supplied, so no address is invented.
+        assert_eq!(n.remote_mgmt_addr, None);
+    }
+
+    /// `lldpRemManAddrTable` rows for one adjacency. The address lives in the **index**, so this
+    /// builds the index the RFC defines and gives the value column something meaningless — which is
+    /// exactly what the real table returns.
+    fn lldp_mgmt_rows(time_mark: u32, rem_index: u32, addrs: &[&str]) -> Vec<SnmpInstanceRow> {
+        addrs
+            .iter()
+            .map(|a| {
+                let ip: std::net::IpAddr = a.parse().unwrap();
+                let (subtype, octets): (u32, Vec<u32>) = match ip {
+                    std::net::IpAddr::V4(v) => {
+                        (1, v.octets().iter().map(|b| u32::from(*b)).collect())
+                    }
+                    std::net::IpAddr::V6(v) => {
+                        (2, v.octets().iter().map(|b| u32::from(*b)).collect())
+                    }
+                };
+                let mut idx = vec![time_mark, 3, rem_index, subtype];
+                #[allow(clippy::cast_possible_truncation)]
+                idx.push(octets.len() as u32);
+                idx.extend(octets);
+                // `lldpRemManAddrIfSubtype` — walked only to make the row exist. The value is not read.
+                i(NeighborColumn::LldpRemManAddrIfSubtype, &idx, 2)
+            })
+            .collect()
+    }
+
+    /// ADR-043's reason for collecting this table at all: an LLDP row names its peer by chassis id,
+    /// which cannot be matched to an inventory node. The management address can.
+    ///
+    /// ⚠️ Not verifiable against real hardware in this lab — the only SNMP device answers
+    /// "No Such Object" for LLDP-MIB. The index shape here is built from the RFC's own index
+    /// definition, and the real-device claim this change makes is the no-op one, tested separately.
+    #[test]
+    fn the_lldp_management_address_is_decoded_from_the_index() {
+        let mut rows = lldp_rows(1000, 1);
+        rows.extend(lldp_mgmt_rows(1000, 1, &["192.168.1.10"]));
+        let set = assemble(&columns(), &rows);
+        assert_eq!(set.len(), 1);
+        assert_eq!(
+            set.neighbors[0].remote_mgmt_addr.as_deref(),
+            Some("192.168.1.10")
+        );
+
+        // IPv6 peers decode through the same path — the project bans a v4-only answer.
+        let mut v6 = lldp_rows(1000, 1);
+        v6.extend(lldp_mgmt_rows(1000, 1, &["2001:db8::1"]));
+        let set = assemble(&columns(), &v6);
+        assert_eq!(
+            set.neighbors[0].remote_mgmt_addr.as_deref(),
+            Some("2001:db8::1")
+        );
+    }
+
+    /// A peer advertising several management addresses must resolve to the same one on every poll,
+    /// or the content key moves and the change log fills with rewiring that never happened.
+    #[test]
+    fn several_management_addresses_resolve_deterministically() {
+        let mut a = lldp_rows(1000, 1);
+        a.extend(lldp_mgmt_rows(1000, 1, &["192.168.1.10", "10.0.0.5"]));
+        let mut b = lldp_rows(1000, 1);
+        b.extend(lldp_mgmt_rows(1000, 1, &["10.0.0.5", "192.168.1.10"]));
+        let first = assemble(&columns(), &a);
+        let second = assemble(&columns(), &b);
+        assert_eq!(first, second);
+        assert_eq!(first.content_key(), second.content_key());
+    }
+
+    /// The management address is payload, but a `timeMark` bump must still not register as a change
+    /// — the join key moving is not the peer moving.
+    #[test]
+    fn a_moved_time_mark_does_not_disturb_the_management_address() {
+        let mut early = lldp_rows(1000, 1);
+        early.extend(lldp_mgmt_rows(1000, 1, &["192.168.1.10"]));
+        let mut late = lldp_rows(987_654, 9);
+        late.extend(lldp_mgmt_rows(987_654, 9, &["192.168.1.10"]));
+        let first = assemble(&columns(), &early);
+        let later = assemble(&columns(), &late);
+        assert_eq!(first.content_key(), later.content_key());
+    }
+
+    /// **The claim this change actually makes on the lab's hardware.** The Huawei USG answers
+    /// "No Such Object" for every LLDP-MIB column, so the new walk returns no rows at all — and the
+    /// neighbour set must come out exactly as it did before the column was added. Adding a column
+    /// to the walk is not allowed to change what a device that does not answer it reports.
+    #[test]
+    fn a_device_with_no_lldp_mib_produces_the_same_set_as_before() {
+        // A CDP-only device: no LLDP rows of any kind, including the new table.
+        let rows = cdp_rows();
+        let set = assemble(&columns(), &rows);
+        let without_the_new_column: Vec<SnmpNeighborColumn> = columns()
+            .into_iter()
+            .filter(|c| c.field != NeighborColumn::LldpRemManAddrIfSubtype)
+            .collect();
+        let before = assemble(&without_the_new_column, &rows);
+        assert_eq!(set, before);
+        assert_eq!(set.content_key(), before.content_key());
     }
 
     /// **The property this whole module exists for.** `lldpRemTimeMark` advances on every agent
@@ -315,10 +465,10 @@ mod tests {
         assert_eq!(set.neighbors[0].local_port, "GigabitEthernet0/3");
     }
 
-    #[test]
-    fn a_cdp_row_becomes_one_normalized_neighbor() {
+    /// One CDP adjacency on ifIndex 7, facing `edge-rtr-02`.
+    fn cdp_rows() -> Vec<SnmpInstanceRow> {
         let idx = [7, 2];
-        let rows = vec![
+        vec![
             b(
                 NeighborColumn::CdpInterfaceName,
                 &[7],
@@ -330,7 +480,12 @@ mod tests {
             i(NeighborColumn::CdpCacheAddressType, &idx, 1),
             b(NeighborColumn::CdpCacheAddress, &idx, &[192, 168, 1, 9]),
             b(NeighborColumn::CdpCacheCapabilities, &idx, &[0, 0, 0, 0x09]),
-        ];
+        ]
+    }
+
+    #[test]
+    fn a_cdp_row_becomes_one_normalized_neighbor() {
+        let rows = cdp_rows();
         let set = assemble(&columns(), &rows);
         assert_eq!(set.len(), 1);
         let n = &set.neighbors[0];

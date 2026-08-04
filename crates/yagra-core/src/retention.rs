@@ -155,6 +155,7 @@ pub enum Subject {
     NodeStateSnapshots,
     DnsChainChanges,
     NeighborChanges,
+    L3Changes,
     EventsMatched,
     EventsUnmatched,
     ReportRuns,
@@ -257,11 +258,12 @@ pub struct Row {
 
 impl Subject {
     /// Every subject, in the order the UI and the ADR table present them.
-    pub const ALL: [Subject; 11] = [
+    pub const ALL: [Subject; 12] = [
         Subject::AlertHistory,
         Subject::NodeStateSnapshots,
         Subject::DnsChainChanges,
         Subject::NeighborChanges,
+        Subject::L3Changes,
         Subject::EventsMatched,
         Subject::EventsUnmatched,
         Subject::ReportRuns,
@@ -280,6 +282,7 @@ impl Subject {
             Subject::NodeStateSnapshots => "node_state_snapshots",
             Subject::DnsChainChanges => "dns_chain_changes",
             Subject::NeighborChanges => "neighbor_changes",
+            Subject::L3Changes => "l3_changes",
             Subject::EventsMatched => "events_matched",
             Subject::EventsUnmatched => "events_unmatched",
             Subject::ReportRuns => "report_runs",
@@ -325,6 +328,14 @@ impl Subject {
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
                 note: "Append-on-change CDP/LLDP adjacency; a rack that nobody is repatching writes nothing here.",
+            },
+            Subject::L3Changes => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::PgPrune,
+                tunable: Tunable::Settings,
+                field: Field::AlertLinkedDays,
+                note: "Append-on-change interface addressing; a network nobody is re-subnetting writes nothing here.",
             },
             Subject::EventsMatched => Row {
                 subject: self,
@@ -432,6 +443,7 @@ mod tests {
             Subject::NodeStateSnapshots,
             Subject::DnsChainChanges,
             Subject::NeighborChanges,
+            Subject::L3Changes,
             Subject::EventsMatched,
             Subject::EventsUnmatched,
             Subject::ReportRuns,

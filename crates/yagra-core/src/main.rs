@@ -36,6 +36,7 @@ mod gcp;
 mod groups;
 mod history;
 mod ipasn;
+mod l3;
 mod ldap;
 mod leader;
 mod logstore;
@@ -69,6 +70,7 @@ mod stored_enum;
 mod thresholds;
 mod tls;
 mod token;
+mod topology_links;
 mod url_check;
 mod volatile;
 
@@ -452,6 +454,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let url_checks = Arc::new(url_check::UrlCheckRepo::new(repo.pool()));
     let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
+    let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
+    let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
 
     // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
@@ -615,6 +619,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         reports: reports.clone(),
         dns_checks: dns_checks.clone(),
         neighbors: neighbor_repo.clone(),
+        l3: l3_repo.clone(),
+        topology_links: topo_link_repo.clone(),
         forward_handle: forward_handle.clone(),
         forward_runner: Some(forward_runner),
     };
@@ -657,6 +663,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         url_checks,
         dns_checks,
         neighbors: neighbor_repo.clone(),
+        topology_links: topo_link_repo.clone(),
         meraki_orgs,
         meraki_devices,
         events: events_repo,
@@ -859,6 +866,8 @@ struct LeaderTasks {
     reports: Arc<reports::ReportRunner>,
     dns_checks: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
+    l3: Arc<l3::L3Repo>,
+    topology_links: Arc<topology_links::TopoLinkRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -933,10 +942,13 @@ impl LeaderTasks {
         tokio::spawn(run_pg_writer(
             meta_rx,
             history_rx,
-            self.repo.clone(),
+            MetaStores {
+                repo: self.repo.clone(),
+                dns: self.dns_checks.clone(),
+                neighbors: self.neighbors.clone(),
+                l3: self.l3.clone(),
+            },
             self.history.clone(),
-            self.dns_checks.clone(),
-            self.neighbors.clone(),
             self.shutdown.clone(),
         ));
         {
@@ -1113,6 +1125,16 @@ impl LeaderTasks {
                 self.events_repo.clone(),
                 self.dns_checks.clone(),
                 self.neighbors.clone(),
+                self.l3.clone(),
+            ),
+        );
+        spawn_cancellable(
+            &self.shutdown,
+            run_topology_derivation(
+                self.repo.clone(),
+                self.l3.clone(),
+                self.neighbors.clone(),
+                self.topology_links.clone(),
             ),
         );
         spawn_cancellable(
@@ -1175,6 +1197,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         sys_descr: None,
         dns_chain: None,
         neighbors: None,
+        l3: None,
         observational: false,
         poller_id: None,
         trace_context: Default::default(),
@@ -1339,6 +1362,9 @@ struct MetaRecord {
     /// The CDP/LLDP neighbour set observed on this poll (neighbour walks only, ADR-038). Same tier
     /// again. `None` means no set was observed and nothing is written — never "no neighbours".
     neighbors: Option<yagra_common::NeighborSet>,
+    /// The interface addresses observed on this poll (L3 walks only, ADR-043). Same tier again.
+    /// `None` means no snapshot was observed and nothing is written — never "no addresses".
+    l3: Option<yagra_common::L3Snapshot>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -1465,13 +1491,21 @@ fn persist_metrics_and_meta(
     // Neighbours ride the same shed-able tier for the same reason: dropping one only defers
     // recording a change by a poll, since the next walk re-reports the current set.
     let neighbors = result.neighbors.clone();
-    if !interfaces.is_empty() || identity.is_some() || dns_chain.is_some() || neighbors.is_some() {
+    // Interface addresses ride the same shed-able tier, for the same reason again.
+    let l3 = result.l3.clone();
+    if !interfaces.is_empty()
+        || identity.is_some()
+        || dns_chain.is_some()
+        || neighbors.is_some()
+        || l3.is_some()
+    {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
             interfaces,
             identity,
             dns_chain,
             neighbors,
+            l3,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -1543,6 +1577,7 @@ async fn run_fleet_health_timeline(
     events_repo: Arc<events::EventRepo>,
     dns_checks: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
+    l3: Arc<l3::L3Repo>,
 ) {
     const SNAPSHOT_SECS: u64 = 300;
     loop {
@@ -1588,6 +1623,106 @@ async fn run_fleet_health_timeline(
         if let Err(e) = neighbors.prune_changes(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune neighbour history failed");
         }
+        // Interface-address history, same shape and same window (`retention::Subject::L3Changes`):
+        // a network nobody is re-subnetting writes nothing.
+        if let Err(e) = l3.prune_changes(alert_linked_secs).await {
+            tracing::warn!(error = %e, "prune interface-address history failed");
+        }
+    }
+}
+
+/// How often the derived connectivity graph is recomputed (ADR-043).
+///
+/// Slow on purpose: its inputs are walked hourly, so a tighter cycle would re-derive an unchanged
+/// graph. The watermark check below usually makes even this a no-op.
+const TOPO_DERIVE_INTERVAL_SECS: u64 = 300;
+
+/// Leader-only loop: recompute the derived connectivity graph from the L2 and L3 observations
+/// (ADR-043).
+///
+/// **Leader-only** because it is a whole-fleet read followed by a whole-table write; two cores doing
+/// it concurrently would be pure waste (the upsert is idempotent, so it would not corrupt anything —
+/// it would just double the load).
+///
+/// **Skipped when nothing moved.** The trigger is a watermark over the *observations* plus
+/// `config_gen` (ADR-026), and it needs both: `config_gen` moves when an operator edits
+/// configuration, which is exactly what a poll does not do — gating on it alone would leave the map
+/// frozen while the network changed underneath it. Gating on the watermark alone would miss a node
+/// being deleted or re-addressed by hand.
+async fn run_topology_derivation(
+    repo: Arc<NodeRepo>,
+    l3: Arc<l3::L3Repo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
+    links: Arc<topology_links::TopoLinkRepo>,
+) {
+    type Watermark = Option<chrono::DateTime<chrono::Utc>>;
+    let mut last_signal: Option<(u64, Watermark, Watermark)> = None;
+    loop {
+        tokio::time::sleep(Duration::from_secs(TOPO_DERIVE_INTERVAL_SECS)).await;
+
+        let l3_mark = l3.observation_watermark().await.unwrap_or(None);
+        let nb_mark = neighbors.observation_watermark().await.unwrap_or(None);
+        let signal = (config_gen::current(), l3_mark, nb_mark);
+        if last_signal.as_ref() == Some(&signal) {
+            metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
+            continue;
+        }
+
+        let started = std::time::Instant::now();
+        let nodes = repo.list_nodes().await.unwrap_or_default();
+        let inventory: Vec<(yagra_common::NodeId, std::net::IpAddr)> =
+            nodes.iter().map(|n| (n.id, n.address)).collect();
+        let l3_rows = match l3.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "topology derivation: reading interface addresses failed");
+                continue;
+            }
+        };
+        let nb_rows = match neighbors.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "topology derivation: reading adjacency failed");
+                continue;
+            }
+        };
+
+        let out = yagra_topology::derive::derive_links(yagra_topology::derive::DeriveInput {
+            nodes: &inventory,
+            l3: &l3_rows,
+            neighbors: &nb_rows,
+            // Increment 2 fills this in; the argument exists now so that adding overrides is a
+            // change to what is passed, not to the function's shape.
+            overrides: &[],
+        });
+
+        if let Err(e) = links.upsert_batch(&out.links).await {
+            tracing::warn!(error = %e, "topology derivation: writing links failed");
+            continue;
+        }
+        // Only prune once the write succeeded, so a failed cycle never deletes a live graph.
+        match links
+            .prune_stale(i64::try_from(TOPO_DERIVE_INTERVAL_SECS).unwrap_or(i64::MAX))
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!(removed = n, "pruned stale topology links"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "topology derivation: pruning stale links failed"),
+        }
+        if let Err(e) = links.record_run(&out.summary, out.links.len()).await {
+            tracing::warn!(error = %e, "topology derivation: recording the run failed");
+        }
+
+        last_signal = Some(signal);
+        metrics::gauge!("yagra_topology_links_total").set(out.links.len() as f64);
+        metrics::histogram!("yagra_topology_derive_seconds")
+            .record(started.elapsed().as_secs_f64());
+        tracing::debug!(
+            links = out.links.len(),
+            unmatched_lldp = out.summary.unmatched_lldp_rows,
+            oversized_segments = out.summary.oversized_segments,
+            "derived the connectivity graph"
+        );
     }
 }
 
@@ -2058,13 +2193,22 @@ async fn write_vm_with_retry(store: &Arc<dyn MetricStore>, batch: &[Arc<PollResu
 /// Async PostgreSQL batch writer for result metadata + alert history (ADR-025). Interface upserts and
 /// identity fills are best-effort (shed at the matcher); alert history is preserved (inline fallback
 /// at the matcher). Batches each stream independently and does a best-effort final flush on shutdown.
+/// Where a batch of result metadata lands. One struct rather than four parameters: these are not
+/// independent knobs, they are "the stores the metadata tier writes to", and every one of them is
+/// needed by both `run_pg_writer` and `flush_meta`.
+#[derive(Clone)]
+struct MetaStores {
+    repo: Arc<NodeRepo>,
+    dns: Arc<dns_check::DnsCheckRepo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
+    l3: Arc<l3::L3Repo>,
+}
+
 async fn run_pg_writer(
     mut meta_rx: tokio::sync::mpsc::Receiver<MetaRecord>,
     mut history_rx: tokio::sync::mpsc::Receiver<HistoryRecord>,
-    repo: Arc<NodeRepo>,
+    stores: MetaStores,
     history: Arc<AlertHistoryStore>,
-    dns: Arc<dns_check::DnsCheckRepo>,
-    neighbors: Arc<neighbors::NeighborRepo>,
     shutdown: CancellationToken,
 ) {
     let mut meta_buf: Vec<MetaRecord> = Vec::with_capacity(RESULT_PERSIST_BATCH_MAX);
@@ -2076,7 +2220,7 @@ async fn run_pg_writer(
                 while let Ok(m) = meta_rx.try_recv() {
                     meta_buf.push(m);
                     if meta_buf.len() >= RESULT_PERSIST_BATCH_MAX {
-                        flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
+                        flush_meta(&stores, &mut meta_buf).await;
                     }
                 }
                 while let Ok(h) = history_rx.try_recv() {
@@ -2085,13 +2229,13 @@ async fn run_pg_writer(
                         flush_history(&history, &mut hist_buf).await;
                     }
                 }
-                flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
+                flush_meta(&stores, &mut meta_buf).await;
                 flush_history(&history, &mut hist_buf).await;
                 break;
             }
             m = meta_rx.recv() => {
                 let Some(m) = m else {
-                    flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
+                    flush_meta(&stores, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -2102,13 +2246,13 @@ async fn run_pg_writer(
                         Err(_) => break,
                     }
                 }
-                flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
+                flush_meta(&stores, &mut meta_buf).await;
                 metrics::gauge!("yagra_persist_queue_depth", "stream" => "meta")
                     .set(meta_rx.len() as f64);
             }
             h = history_rx.recv() => {
                 let Some(h) = h else {
-                    flush_meta(&repo, &dns, &neighbors, &mut meta_buf).await;
+                    flush_meta(&stores, &mut meta_buf).await;
                     flush_history(&history, &mut hist_buf).await;
                     break;
                 };
@@ -2129,12 +2273,13 @@ async fn run_pg_writer(
 
 /// Flush buffered metadata: coalesce every buffered result's interfaces into one cross-node upsert
 /// and every identity into one cross-node fill. Best-effort — a DB error is logged, never propagated.
-async fn flush_meta(
-    repo: &Arc<NodeRepo>,
-    dns: &Arc<dns_check::DnsCheckRepo>,
-    neighbors: &Arc<neighbors::NeighborRepo>,
-    buf: &mut Vec<MetaRecord>,
-) {
+async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
+    let MetaStores {
+        repo,
+        dns,
+        neighbors,
+        l3,
+    } = stores;
     if buf.is_empty() {
         return;
     }
@@ -2143,6 +2288,7 @@ async fn flush_meta(
     let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
+    let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
     for rec in buf.drain(..) {
         for (ifindex, name, alias, speed) in rec.interfaces {
             iface_rows.push((rec.node_id, ifindex, name, alias, speed));
@@ -2155,6 +2301,9 @@ async fn flush_meta(
         }
         if let Some(set) = rec.neighbors {
             neighbor_rows.push((rec.node_id, set));
+        }
+        if let Some(snapshot) = rec.l3 {
+            l3_rows.push((rec.node_id, snapshot));
         }
     }
     if !iface_rows.is_empty() {
@@ -2190,6 +2339,17 @@ async fn flush_meta(
     }
     if !neighbor_rows.is_empty() {
         metrics::counter!("yagra_neighbors_persisted_total").increment(neighbor_rows.len() as u64);
+    }
+    // One statement per observation and deliberately NOT coalesced per node, for the third time and
+    // the same reason: address observations are a *sequence*, and collapsing two of them for one
+    // node would erase a real A→B→A transition — an interface that was renumbered and put back.
+    for (node_id, snapshot) in &l3_rows {
+        if let Err(e) = l3.record_observation(*node_id, snapshot).await {
+            tracing::warn!(node = %node_id, error = %e, "interface-address observation failed");
+        }
+    }
+    if !l3_rows.is_empty() {
+        metrics::counter!("yagra_l3_persisted_total").increment(l3_rows.len() as u64);
     }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
@@ -2348,7 +2508,7 @@ async fn run_scheduler(
         let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
         // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
         // no per-node settings query enters the sweep. Degrades to the compiled default.
-        let neighbors: scheduler::NeighborPolicy = repo.get_neighbor_settings().await.into();
+        let neighbors: scheduler::AdjacencyPolicy = repo.get_adjacency_settings().await.into();
         // Folder-pool inheritance (ADR-009/020). One small query per rebuild — never on the cached
         // fast path above, which is already generation-keyed.
         match groups_repo.pool_rows().await {
@@ -3146,6 +3306,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
@@ -3222,6 +3383,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
+            l3: None,
             observational: true,
             poller_id: None,
             trace_context: Default::default(),
@@ -3232,6 +3394,7 @@ mod tests {
         PollResult {
             observational: false,
             neighbors: None,
+            l3: None,
             ..observational_result(node, outcome, at)
         }
     }
@@ -3383,6 +3546,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

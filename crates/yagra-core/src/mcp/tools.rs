@@ -831,10 +831,15 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "The dependency graph in keyset pages: each node with its upstream parent, \
-                       current state, and the upstream node blamed for its alert (root_cause), plus \
-                       a `next_cursor` for the following page. `after` is a cursor UUID (return \
-                       nodes with a greater id); `limit` is 1–1000 (default 200). Requires live mode."
+        description = "How the network is connected, in keyset pages. `kind=dependency` (default) \
+                       is the alert-suppression graph: each node with its upstream parent, current \
+                       state, and the upstream node blamed for its alert (root_cause). \
+                       `kind=links` is the physical/logical connectivity graph derived from \
+                       CDP/LLDP adjacency and shared IP subnets: undirected links between nodes, \
+                       each with the evidence that produced it (`sources`) and the subnet behind a \
+                       shared-subnet link. Both return `next_cursor` for the following page. \
+                       `after` is that cursor (a node UUID for dependency, a number for links); \
+                       `limit` is 1–1000 (default 200). Requires live mode."
     )]
     async fn get_topology(
         &self,
@@ -848,13 +853,47 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_topology", "topology requires live mode");
         };
-        // Same assembly as `GET /api/v1/topology`; only the page bound differs, because an AI
-        // client wants a handful of edges where the graph view wants the fleet.
+        // Same assembly as the REST handlers; only the page bound differs, because an AI client
+        // wants a handful of edges where the graph view wants the fleet.
         let limit = p.limit.unwrap_or(200).clamp(1, 1000);
-        match crate::api::topology::topology_page(&self.state, admin, &scope, p.after, limit).await
-        {
-            Ok(page) => ok_json("get_topology", &page),
-            Err(e) => tool_api_error("get_topology", &e),
+        match topology_kind(p.kind.as_deref()) {
+            TopologyKind::Dependency => {
+                let after = match p.after.as_deref().map(str::parse::<Uuid>) {
+                    Some(Ok(id)) => Some(id),
+                    Some(Err(_)) => {
+                        return tool_bad_params(
+                            "get_topology",
+                            "`after` must be a node UUID when kind is dependency",
+                        )
+                    }
+                    None => None,
+                };
+                match crate::api::topology::topology_page(&self.state, admin, &scope, after, limit)
+                    .await
+                {
+                    Ok(page) => ok_json("get_topology", &page),
+                    Err(e) => tool_api_error("get_topology", &e),
+                }
+            }
+            TopologyKind::Links => {
+                let after = match p.after.as_deref().map(str::parse::<i64>) {
+                    Some(Ok(id)) => Some(id),
+                    Some(Err(_)) => {
+                        return tool_bad_params(
+                            "get_topology",
+                            "`after` must be a number when kind is links",
+                        )
+                    }
+                    None => None,
+                };
+                match crate::api::topology::topology_link_page(admin, &scope, after, limit).await {
+                    Ok(page) => ok_json("get_topology", &page),
+                    Err(e) => tool_api_error("get_topology", &e),
+                }
+            }
+            TopologyKind::Unknown => {
+                tool_bad_params("get_topology", "`kind` must be one of: dependency, links")
+            }
         }
     }
 
@@ -1731,9 +1770,12 @@ struct NeighborsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TopologyParams {
-    /// Keyset cursor: return nodes with an id greater than this UUID.
-    after: Option<Uuid>,
-    /// Max edges to return (1–1000, default 200).
+    /// Which graph: "dependency" (default) or "links".
+    kind: Option<String>,
+    /// Keyset cursor. For kind=dependency this is a node UUID; for kind=links it is the numeric
+    /// `next_cursor` from the previous page.
+    after: Option<String>,
+    /// Max rows to return (1–1000, default 200).
     limit: Option<i64>,
 }
 
@@ -1924,6 +1966,26 @@ fn tool_unavailable(tool: &str, reason: &str) -> Result<CallToolResult, McpError
     )]))
 }
 
+/// Which graph `get_topology` was asked for.
+///
+/// Split out of the tool body so the folding decision is testable without a `RequestContext` — the
+/// `*_in` shape `api-conventions.md` asks for. `Unknown` is deliberately distinct from the default:
+/// a caller who typed `kind="Links"` should be told, not silently handed the dependency graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopologyKind {
+    Dependency,
+    Links,
+    Unknown,
+}
+
+fn topology_kind(kind: Option<&str>) -> TopologyKind {
+    match kind {
+        None | Some("dependency") => TopologyKind::Dependency,
+        Some("links") => TopologyKind::Links,
+        Some(_) => TopologyKind::Unknown,
+    }
+}
+
 /// A bad-parameter error (records `bad_params`). Maps to a JSON-RPC invalid-params error.
 fn tool_bad_params(tool: &str, reason: &str) -> Result<CallToolResult, McpError> {
     record_tool(tool, "bad_params");
@@ -2094,6 +2156,23 @@ mod tests {
     use crate::sink::InMemorySink;
     use crate::store::MetricStore;
     use std::sync::Arc;
+
+    /// The fold's dispatch, tested without a `RequestContext`. Two properties matter: the default
+    /// is the graph that existed before the fold (so an existing client's call is unchanged), and a
+    /// misspelled kind is an error rather than a silent fallback to that default.
+    #[test]
+    fn the_topology_kind_defaults_to_dependency_and_rejects_a_typo() {
+        assert_eq!(topology_kind(None), TopologyKind::Dependency);
+        assert_eq!(topology_kind(Some("dependency")), TopologyKind::Dependency);
+        assert_eq!(topology_kind(Some("links")), TopologyKind::Links);
+        for bad in ["Links", "link", "LINKS", "", "edges"] {
+            assert_eq!(
+                topology_kind(Some(bad)),
+                TopologyKind::Unknown,
+                "{bad} must be refused, not silently treated as the default"
+            );
+        }
+    }
 
     /// A skeleton-mode state: no `admin`, no flow/log tier. This is deliberately the *degraded*
     /// shape — it is what exercises every "tier not enabled / requires live mode" branch, which is

@@ -120,6 +120,23 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             });
             execute_neighbors(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
         }
+        CheckSpec::SnmpL3(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_l3(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
+        }
+        CheckSpec::SnmpV3L3(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_l3(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -294,6 +311,7 @@ pub async fn execute_meraki(
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),
@@ -574,6 +592,7 @@ async fn execute_table_walk(
         sys_descr: None,
         dns_chain: None,
         neighbors: None,
+        l3: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
@@ -628,6 +647,58 @@ async fn execute_neighbors(
             // No set, no count sample: the poll observed nothing, and saying "0 neighbours" here
             // would be a claim the walk never made.
             tracing::debug!(job_id = %job.job_id, error = %err, "neighbour walk failed");
+        }
+    }
+    r
+}
+
+/// Execute an interface-address walk (v2c or v3, selected by `walker`) — ADR-043.
+///
+/// Structurally identical to [`execute_neighbors`], and for the same three reasons:
+///
+/// * The result is **observational**. An hourly address walk that timed out must not push
+///   `Unreachable` into the dwell window ICMP owns, and must not report `Reachable` either — that
+///   would cancel a genuine outage. It has nothing to say about liveness, so it says nothing.
+/// * `l3` is `Some` **only when the walk actually produced rows**. A transport failure sends `None`,
+///   so core writes nothing rather than recording that the device lost its addressing — which, one
+///   derivation later, would read as every link through that node disappearing.
+/// * A device with no addresses to report sends `Some(empty)`, which *does* replace the stored
+///   snapshot. That is a real observation.
+async fn execute_l3(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    columns: &[yagra_bus::SnmpL3Column],
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let bases: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+    let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
+    r.observational = true;
+    match walker
+        .walk_instances(transport, job.target, &bases, timeout)
+        .await
+    {
+        Ok(rows) => {
+            let snapshot = crate::l3::assemble(columns, &rows);
+            if snapshot.truncated {
+                metrics::counter!("yagra_l3_rows_truncated_total").increment(1);
+                tracing::warn!(
+                    job_id = %job.job_id,
+                    kept = snapshot.len(),
+                    "interface-address set exceeded the per-node cap; the excess was dropped"
+                );
+            }
+            r.samples.push(Sample::gauge(
+                yagra_common::METRIC_SNMP_L3_ADDRESS_COUNT,
+                snapshot.len() as f64,
+            ));
+            r.l3 = Some(snapshot);
+        }
+        Err(err) => {
+            // No snapshot, no count sample: the poll observed nothing, and saying "0 addresses"
+            // here would be a claim the walk never made.
+            tracing::debug!(job_id = %job.job_id, error = %err, "interface-address walk failed");
         }
     }
     r
@@ -817,6 +888,7 @@ fn result(
         sys_descr: None,
         dns_chain: None,
         neighbors: None,
+        l3: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
@@ -1021,6 +1093,70 @@ mod tests {
             r.samples[0].metric,
             yagra_common::METRIC_SNMP_NEIGHBOR_COUNT
         );
+    }
+
+    fn l3_job() -> PollJob {
+        PollJob::snmp_l3(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpL3Check {
+                community: "public".into(),
+                columns: yagra_common::builtin_l3_columns()
+                    .into_iter()
+                    .map(|(field, oid)| yagra_bus::SnmpL3Column {
+                        field,
+                        oid: oid.to_owned(),
+                    })
+                    .collect(),
+                timeout_ms: 2000,
+            },
+            3600,
+        )
+    }
+
+    /// The same safety property ADR-038 established, now for ADR-043's walk. `outcome` feeds the
+    /// liveness state machine on *every* result, so an hourly address walk must be able to say
+    /// nothing about reachability — reporting a failure would page someone for a healthy device,
+    /// and reporting success would cancel a genuine outage ICMP had detected.
+    #[tokio::test]
+    async fn an_l3_result_is_observational_and_states_nothing_about_liveness() {
+        let transport = FakeTransport::reachable(1.0);
+        let r = execute(&l3_job(), &transport, 0).await;
+        assert!(
+            r.observational,
+            "core keys its skip-the-alert-engine branch off this flag"
+        );
+        // A device with no addresses to report still made a real observation: an empty snapshot,
+        // which replaces whatever was stored.
+        assert_eq!(r.l3.as_ref().map(yagra_common::L3Snapshot::len), Some(0));
+        assert_eq!(
+            r.samples.len(),
+            1,
+            "one bounded node-level count sample, and no per-address series — an IP in a label is \
+             the cardinality explosion CLAUDE.md §7.1 names"
+        );
+        assert_eq!(
+            r.samples[0].metric,
+            yagra_common::METRIC_SNMP_L3_ADDRESS_COUNT
+        );
+    }
+
+    /// The other direction, which is the half that is easy to forget: an ordinary liveness check
+    /// must **not** be marked observational, or it stops driving alerts entirely.
+    #[tokio::test]
+    async fn an_icmp_result_is_not_observational() {
+        let transport = FakeTransport::reachable(1.0);
+        let job = PollJob::icmp(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::IcmpCheck::default(),
+            60,
+        );
+        let r = execute(&job, &transport, 0).await;
+        assert!(!r.observational);
+        assert!(r.l3.is_none());
     }
 
     /// A failed walk must send **no** set. Sending `Some(empty)` would tell core the device has no

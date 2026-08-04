@@ -30,7 +30,8 @@ use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
     DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth, HttpMethod, IfIndex,
-    InterfaceField, MerakiTier, MetricKind, NeighborColumn, NeighborSet, NodeId, SeriesKey,
+    InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind, NeighborColumn, NeighborSet,
+    NodeId, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -285,6 +286,48 @@ impl PollJob {
             node_id,
             target,
             check: CheckSpec::SnmpV3Neighbors(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v2c interface-address walk job (ADR-043).
+    #[must_use]
+    pub fn snmp_l3(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpL3Check,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpL3(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) interface-address walk job (ADR-043).
+    #[must_use]
+    pub fn snmp_v3_l3(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3L3Check,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3L3(check),
             interval_secs,
             credential_ref: None,
             probe_identity: false,
@@ -652,6 +695,21 @@ pub enum CheckSpec {
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpNeighbors`], following the
     /// `SnmpTable`/`SnmpV3Table` pairing.
     SnmpV3Neighbors(SnmpV3NeighborCheck),
+    /// SNMP v2c walk of the interface-address tables (ADR-043), on the same slow cadence as the
+    /// neighbour walk.
+    ///
+    /// This is what makes the connectivity graph derivable: two nodes with an address in the same
+    /// prefix are L3-adjacent as a matter of fact, not inference. Kept off the interface-metric
+    /// interval for the same reason [`CheckSpec::SnmpNeighbors`] is — addressing changes on the
+    /// order of months. Deliberately *not* a routing-table walk: `ipCidrRouteTable` runs to
+    /// hundreds of thousands of rows on a core router, whereas these tables have one row per
+    /// interface address. The result is **observational** ([`PollResult::observational`]).
+    SnmpL3(SnmpL3Check),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpL3`], following the same pairing as every other
+    /// v2c/v3 pair here. Split by credential shape, not by walk logic: v2c carries a community
+    /// string and v3 carries six USM fields, and folding them would mean one struct with seven
+    /// mutually exclusive optional fields plus a poller that re-derives which protocol to speak.
+    SnmpV3L3(SnmpV3L3Check),
 }
 
 /// ICMP echo parameters.
@@ -897,6 +955,63 @@ pub struct SnmpV3NeighborCheck {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c interface-address walk parameters (ADR-043).
+///
+/// `columns` is the fixed RFC 1213 / RFC 4293 list from [`yagra_common::builtin_l3_columns`], sent
+/// explicitly for the same reason [`SnmpNeighborCheck`]'s is: core stays the one place the OID set
+/// is decided. A poller that receives a column it has no handling for ignores that column's rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpL3Check {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Address table columns to walk, keeping raw instance indices and raw octets — both tables
+    /// carry the address itself in the row *index*, so a folded index would destroy the answer.
+    #[serde(default)]
+    pub columns: Vec<SnmpL3Column>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) interface-address walk parameters — the v3 analogue of [`SnmpL3Check`]. Auth/priv
+/// keys are resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the
+/// secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3L3Check {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// Address table columns to walk.
+    #[serde(default)]
+    pub columns: Vec<SnmpL3Column>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One address-table column to walk: which field it carries and the column base OID. Relational
+/// metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpNeighborColumn`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpL3Column {
+    /// Which address attribute this column carries.
+    pub field: L3Column,
+    /// Column base OID, e.g. `1.3.6.1.2.1.4.34.1.5` (ipAddressPrefix).
+    pub oid: String,
+}
+
 /// One neighbour-table column to walk: which field it carries and the column base OID. The value
 /// is relational metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpMetaColumn`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1035,6 +1150,19 @@ pub struct PollResult {
     /// stored set. Conflating them would let one failed walk read as "every link disappeared".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neighbors: Option<NeighborSet>,
+    /// The interface addresses observed on this poll (L3 walks only, ADR-043). Same tier as
+    /// `neighbors`: relational metadata core persists into PostgreSQL, **never** a TSDB label
+    /// (ADR-011) — an IP in a series label is the cardinality explosion CLAUDE.md §7.1 names.
+    /// Defaulted so an older poller stays N-1 compatible; skipped when absent so every other
+    /// result's wire form is unchanged.
+    ///
+    /// `None` and `Some(empty snapshot)` mean different things and core acts on the difference,
+    /// exactly as for `neighbors`: `None` = "the walk did not produce a snapshot" and nothing is
+    /// written; `Some(empty)` = "this device reports no interface addresses", which replaces the
+    /// stored snapshot. Conflating them would let one failed walk read as "every address
+    /// disappeared" — and, one derivation later, as "every link disappeared".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l3: Option<L3Snapshot>,
     /// This result carries **observations only** and makes no claim about the node's reachability.
     ///
     /// Core skips the alert engine entirely for such results. That is not a nicety: `outcome` feeds
@@ -2166,6 +2294,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
@@ -2219,6 +2348,71 @@ mod tests {
         let back: PollResult = serde_json::from_str(&wire).unwrap();
         assert_eq!(back.neighbors, Some(yagra_common::NeighborSet::default()));
         assert!(back.observational);
+    }
+
+    /// ADR-043's result field, N-1 sensitive in exactly the way `neighbors` was.
+    #[test]
+    fn an_l3_result_field_tolerates_missing_and_unknown_fields() {
+        // An N-1 poller sends no `l3` at all.
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.l3.is_none());
+
+        // A result that carries no L3 snapshot is byte-identical to what it was before the field
+        // existed — the whole point of `skip_serializing_if` here.
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("l3"), "{wire}");
+    }
+
+    /// `None` (no snapshot observed) and `Some(empty)` (this device reports no addresses) must
+    /// survive the wire as different values, for the same reason the neighbour set must: core
+    /// writes nothing for the first and *replaces* the stored snapshot for the second. Collapse
+    /// them and one failed walk erases a node's addressing — and, one derivation later, every link
+    /// that node was part of.
+    #[test]
+    fn an_empty_l3_snapshot_is_distinct_from_no_snapshot_on_the_wire() {
+        let mut result: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable"}"#,
+        )
+        .unwrap();
+        result.l3 = Some(yagra_common::L3Snapshot::default());
+        result.observational = true;
+        let wire = serde_json::to_string(&result).unwrap();
+        let back: PollResult = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.l3, Some(yagra_common::L3Snapshot::default()));
+        assert_ne!(
+            back.l3, None,
+            "an empty observation is still an observation"
+        );
+        assert!(back.observational);
+    }
+
+    /// An L3 check from an N-1 core (or one that gains a field later) still decodes.
+    #[test]
+    fn an_l3_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpL3Check =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert!(v2c.columns.is_empty());
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        let v3: SnmpV3L3Check =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+
+        // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
+        let spec = CheckSpec::SnmpL3(v2c);
+        let wire = serde_json::to_string(&spec).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_l3""#), "{wire}");
+        let spec3 = CheckSpec::SnmpV3L3(v3);
+        let wire3 = serde_json::to_string(&spec3).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_l3""#), "{wire3}");
     }
 
     /// A neighbour check from an N-1 core (or one that gains a field later) still decodes.

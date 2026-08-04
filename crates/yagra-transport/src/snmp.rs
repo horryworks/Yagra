@@ -174,7 +174,7 @@ pub async fn snmp_walk_instances_v2c(
 /// Total, and matched variant-by-variant rather than with a wildcard: this is the walker that must
 /// not silently drop a column, so a value type gaining a representation should be a compile error
 /// here rather than a row that quietly disappears from an operator's neighbour table.
-fn raw_value(value: &ObjectValue) -> SnmpValue {
+pub(crate) fn raw_value(value: &ObjectValue) -> SnmpValue {
     match value {
         ObjectValue::Integer(i) => SnmpValue::Int(i64::from(*i)),
         ObjectValue::Counter32(c) | ObjectValue::Unsigned32(c) | ObjectValue::TimeTicks(c) => {

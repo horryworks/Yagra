@@ -5096,6 +5096,7 @@ dependencies = [
 name = "yagra-topology"
 version = "0.1.21"
 dependencies = [
+ "uuid",
  "yagra-common",
 ]
 

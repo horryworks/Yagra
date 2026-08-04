@@ -116,6 +116,8 @@ import type {
   ThresholdPage,
   RankedNodes,
   TopologyNode,
+  TopologyLink,
+  TopologyLinkSummary,
   UrlCheckConfig,
   DnsCheckConfig,
   CurrentNeighbors,
@@ -1204,6 +1206,31 @@ export const api = {
       cursor = page.next_cursor;
     }
     return { nodes };
+  },
+
+  /** The derived connectivity graph: undirected links between nodes, with the evidence that
+   *  produced each one. Same keyset-paging contract as `getTopology`, and the same bounded loop.
+   *
+   *  `summary` and `derived_at` come from the last derivation run and are the same on every page,
+   *  so the last page's copy is the one returned — they describe the run, not the page. */
+  getTopologyLinks: async (): Promise<{
+    links: TopologyLink[];
+    summary: TopologyLinkSummary;
+    derivedAt: string | null;
+  }> => {
+    const links: TopologyLink[] = [];
+    let cursor: number | undefined;
+    let summary: TopologyLinkSummary = {};
+    let derivedAt: string | null = null;
+    for (let i = 0; i < 200; i++) {
+      const page = await apiGet('/api/v1/topology/links', { query: { cursor } });
+      links.push(...page.links);
+      summary = page.summary;
+      derivedAt = page.derived_at ?? null;
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+    return { links, summary, derivedAt };
   },
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard

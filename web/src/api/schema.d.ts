@@ -2747,7 +2747,7 @@ export interface paths {
             cookie?: never;
         };
         /** The deployment's adjacency-collection settings, with the accepted cadence range. */
-        get: operations["get_neighbor_settings"];
+        get: operations["get_adjacency_settings"];
         /**
          * Change whether and how often adjacency is collected.
          * @description Applies from the next scheduler sweep. Turning collection off stops issuing walks but keeps
@@ -3031,6 +3031,29 @@ export interface paths {
          *     better — but bounded, so no single response is a multi-MB blob.
          */
         get: operations["get_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/topology/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The derived connectivity graph: every link between monitored nodes, with the evidence that
+         *     produced it.
+         * @description Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet; they are
+         *     recomputed periodically rather than stored by hand. A group-scoped caller sees only links whose
+         *     **both** endpoints are visible to them.
+         */
+        get: operations["get_topology_links"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5535,6 +5558,11 @@ export interface components {
             name: string;
             ok: boolean;
         };
+        /**
+         * @description What kind of evidence produced a link, ordered strongest first.
+         * @enum {string}
+         */
+        LinkSource: "manual" | "lldp" | "cdp" | "l3_subnet";
         /** @description The `PUT /api/v1/llm/config` body. */
         LlmConfigInput: {
             /**
@@ -5835,9 +5863,8 @@ export interface components {
             /** @description The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`. */
             remote_chassis: string;
             /**
-             * @description The peer's management address. Filled from `cdpCacheAddress` for CDP. LLDP keeps this in
-             *     `lldpRemManAddrTable`, whose index *encodes* the address — a separate walk plus index
-             *     decoding — so LLDP records leave this `None` in this increment.
+             * @description The peer's management address, from `cdpCacheAddress` for CDP and from `lldpRemManAddrTable`
+             *     for LLDP. `None` when the peer advertised none.
              */
             remote_mgmt_addr?: string | null;
             /** @description `cdpCachePlatform` — the peer's hardware/software platform string (CDP only). */
@@ -5872,15 +5899,23 @@ export interface components {
             /** @description The content key this replaced; `null` marks the first observation ever recorded for the node. */
             prev_neighbor_key?: string | null;
         };
-        /** @description How this deployment collects adjacency. */
+        /** @description How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses. */
         NeighborConfig: {
-            /** @description Whether neighbour walks are issued at all. */
+            /** @description Whether CDP/LLDP neighbour walks are issued at all. */
             enabled: boolean;
             /**
              * Format: int32
              * @description How often each SNMP node's neighbour tables are walked, in seconds.
              */
             interval_secs: number;
+            /** @description Whether interface-address walks are issued at all. Omitted on update leaves it unchanged. */
+            l3_enabled?: boolean | null;
+            /**
+             * Format: int32
+             * @description How often each SNMP node's interface-address tables are walked, in seconds. Omitted on
+             *     update leaves it unchanged.
+             */
+            l3_interval_secs?: number | null;
             /**
              * Format: int32
              * @description Largest cadence this deployment accepts, in seconds.
@@ -7332,6 +7367,122 @@ export interface components {
             node_id: string;
             /** Format: double */
             value: number;
+        };
+        /** @description One undirected link in the derived connectivity graph. */
+        TopologyLink: {
+            /** @description Port name on the `a` side, when a source reported one. */
+            a_if_name?: string | null;
+            /**
+             * Format: int32
+             * @description `ifIndex` on the `a` side, when a source reported one.
+             */
+            a_ifindex?: number | null;
+            /**
+             * Format: uuid
+             * @description One endpoint. `null` is reserved for an endpoint that is not a monitored node.
+             */
+            a_node?: string | null;
+            /** @description Port name on the `b` side, when a source reported one. */
+            b_if_name?: string | null;
+            /**
+             * Format: int32
+             * @description `ifIndex` on the `b` side, when a source reported one.
+             */
+            b_ifindex?: number | null;
+            /**
+             * Format: uuid
+             * @description The other endpoint. `null` is reserved for an endpoint that is not a monitored node.
+             */
+            b_node?: string | null;
+            /** @description When this link was first derived (RFC 3339). */
+            first_seen: string;
+            /**
+             * Format: int64
+             * @description Stable id, and the keyset cursor.
+             */
+            id: number;
+            /** @description When it was last confirmed (RFC 3339). */
+            last_seen: string;
+            /** @description The strongest of `sources` — what to label the link with. */
+            source: components["schemas"]["LinkSource"];
+            /** @description Every kind of evidence that produced this link. */
+            sources: components["schemas"]["LinkSource"][];
+            /** @description The subnet behind a shared-subnet link, e.g. `192.168.1.0/24`. */
+            subnet?: string | null;
+        };
+        /** @description One keyset page of the derived connectivity graph, with what the last derivation run saw. */
+        TopologyLinkPage: {
+            /** @description When the graph was last derived (RFC 3339), or `null` before the first run. */
+            derived_at?: string | null;
+            links: components["schemas"]["TopologyLink"][];
+            /**
+             * Format: int64
+             * @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one.
+             */
+            next_cursor?: number | null;
+            /** @description Counters for everything the last derivation declined to turn into a link. */
+            summary: components["schemas"]["TopologyLinkSummary"];
+            /**
+             * Format: int64
+             * @description How many links the whole graph holds, not just this page.
+             */
+            total_links: number;
+        };
+        /** @description What the last derivation run observed but did not turn into a link. */
+        TopologyLinkSummary: {
+            /**
+             * Format: int32
+             * @description Adjacency rows whose management address matched more than one node, so no link could be
+             *     attributed without guessing which.
+             */
+            ambiguous_mgmt_addrs?: number;
+            /**
+             * Format: int32
+             * @description Links produced from a CDP adjacency.
+             */
+            cdp_links?: number;
+            /**
+             * Format: int32
+             * @description Addresses claimed by two or more nodes — a shared virtual IP, or a duplicate-address
+             *     misconfiguration.
+             */
+            duplicate_addresses?: number;
+            /**
+             * Format: int32
+             * @description Links whose strongest evidence is shared-subnet membership.
+             */
+            l3_links?: number;
+            /**
+             * Format: int32
+             * @description Links produced from an LLDP adjacency.
+             */
+            lldp_links?: number;
+            /**
+             * Format: int32
+             * @description Segments with more than two members where no member could be identified as routing for the
+             *     others, so no link was drawn.
+             */
+            oversized_segments?: number;
+            /**
+             * Format: int32
+             * @description Addresses sharing network bits but disagreeing on prefix length.
+             */
+            subnet_prefix_mismatch?: number;
+            /**
+             * Format: int32
+             * @description Nodes whose observation hit a per-node cap, so what is recorded for them is incomplete.
+             */
+            truncated_nodes?: number;
+            /**
+             * Format: int32
+             * @description CDP rows whose management address matched no monitored node.
+             */
+            unmatched_cdp_rows?: number;
+            /**
+             * Format: int32
+             * @description LLDP rows whose management address matched no monitored node.
+             */
+            unmatched_lldp_rows?: number;
         };
         /** @description One node in the dependency/topology graph. */
         TopologyNode: {
@@ -18511,7 +18662,7 @@ export interface operations {
             };
         };
     };
-    get_neighbor_settings: {
+    get_adjacency_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -19566,6 +19717,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TopologyPage"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no inventory to build the graph from */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_topology_links: {
+        parameters: {
+            query?: {
+                /** @description Return links with an id greater than this (the previous page's `next_cursor`). */
+                cursor?: number | null;
+                /** @description Maximum links to return. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One keyset page of the connectivity graph; `next_cursor` is null on the last page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopologyLinkPage"];
                 };
             };
             /** @description No valid bearer token */

@@ -58,6 +58,14 @@ const OID_LLDP_REM_PORT_DESC: &str = "1.0.8802.1.1.2.1.4.1.1.8";
 const OID_LLDP_REM_SYS_NAME: &str = "1.0.8802.1.1.2.1.4.1.1.9";
 const OID_LLDP_REM_SYS_DESC: &str = "1.0.8802.1.1.2.1.4.1.1.10";
 const OID_LLDP_REM_SYS_CAP_ENABLED: &str = "1.0.8802.1.1.2.1.4.1.1.12";
+/// `lldpRemManAddrTable` — walked for its **index**, not its value (ADR-043).
+///
+/// `lldpRemManAddrSubtype` and `lldpRemManAddr` are `not-accessible`: the peer's management address
+/// is carried in the row index, as
+/// `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex, addrSubtype, addrLen, addr…)`. So any
+/// accessible column of the table will do, and `lldpRemManAddrIfSubtype` is the cheapest. What
+/// comes back is discarded; the address is decoded from the instance.
+const OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE: &str = "1.0.8802.1.1.2.1.4.2.1.3";
 /// CISCO-CDP-MIB columns.
 const OID_CDP_INTERFACE_NAME: &str = "1.3.6.1.4.1.9.9.23.1.1.1.1.6";
 const OID_CDP_CACHE_ADDRESS_TYPE: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.3";
@@ -229,9 +237,17 @@ pub struct Neighbor {
     /// `lldpRemSysDesc`.
     #[serde(default)]
     pub remote_sys_desc: Option<String>,
-    /// The peer's management address. Filled from `cdpCacheAddress` for CDP. LLDP keeps this in
-    /// `lldpRemManAddrTable`, whose index *encodes* the address — a separate walk plus index
-    /// decoding — so LLDP records leave this `None` in this increment.
+    /// The peer's management address, from `cdpCacheAddress` for CDP and from `lldpRemManAddrTable`
+    /// for LLDP. `None` when the peer advertised none.
+    //
+    // ⚠️ The `///` above is published verbatim to API clients through the generated OpenAPI
+    // document, so the reasoning lives here instead.
+    //
+    // This is the field that lets an adjacency row be matched back to an inventory node, and it is
+    // why ADR-043 could not build a graph from L2 alone until it was collected: a bare LLDP row
+    // names its peer by chassis id and port id, neither of which is an address. LLDP keeps it in
+    // the *index* of `lldpRemManAddrTable` rather than in a column, which is why collecting it
+    // needed the instance-preserving walker.
     #[serde(default)]
     pub remote_mgmt_addr: Option<String>,
     /// `cdpCachePlatform` — the peer's hardware/software platform string (CDP only).
@@ -649,6 +665,9 @@ pub enum NeighborColumn {
     LldpRemSysDesc,
     /// `lldpRemSysCapEnabled`
     LldpRemSysCapEnabled,
+    /// `lldpRemManAddrIfSubtype` — walked only so its row index yields the peer's management
+    /// address; the value itself is discarded.
+    LldpRemManAddrIfSubtype,
     /// `cdpInterfaceName` — the local port name, indexed by `ifIndex`.
     CdpInterfaceName,
     /// `cdpCacheAddressType`
@@ -700,6 +719,10 @@ pub fn builtin_neighbor_columns() -> Vec<(NeighborColumn, &'static str)> {
         (
             NeighborColumn::LldpRemSysCapEnabled,
             OID_LLDP_REM_SYS_CAP_ENABLED,
+        ),
+        (
+            NeighborColumn::LldpRemManAddrIfSubtype,
+            OID_LLDP_REM_MAN_ADDR_IF_SUBTYPE,
         ),
         (NeighborColumn::CdpInterfaceName, OID_CDP_INTERFACE_NAME),
         (
@@ -1107,7 +1130,11 @@ mod tests {
                 "{oid} is not a dotted numeric OID"
             );
         }
-        assert_eq!(cols.len(), 18);
+        assert_eq!(
+            cols.len(),
+            19,
+            "the column list is a bus contract — adding one is an N/N-1 event, not a tidy-up"
+        );
     }
 
     /// The `lldpRemTable` and `cdpCacheTable` column bases must not be prefixes of one another, or

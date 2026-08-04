@@ -1,14 +1,12 @@
 {
   "map": {
     "note": {
-      "linked": "{{linked}} linked · {{unlinked}} unlinked (no dependencies, not shown)",
-      "default": "Dependency graph — parent → child links, colored by live status."
+      "linked": "{{linked}} linked · {{unlinked}} unlinked (no discovered links, not shown)",
+      "default": "Connectivity graph — links discovered from CDP/LLDP adjacency and shared IP subnets."
     },
     "loading": "Loading topology…",
     "emptyInventory": "No nodes in the inventory yet.",
-    "noLinks_one": "No dependency links defined yet. Set a node's upstream on the <depLink>Dependencies</depLink> page (or a node's \"Dependency…\" action) to build the map. {{count}} node in the inventory.",
-    "noLinks_other": "No dependency links defined yet. Set a node's upstream on the <depLink>Dependencies</depLink> page (or a node's \"Dependency…\" action) to build the map. {{count}} nodes in the inventory.",
-    "tooMany": "This topology has {{count}} linked nodes — too many to render as a legible map. Drill in from a specific node's detail page, or use the dependency widget on the dashboard.",
+    "tooMany": "This graph has {{count}} nodes and {{links}} links — too many to render as a legible map. Drill in from a specific node’s detail page instead.",
     "legend": "Legend",
     "suppressed": "Suppressed (upstream cause)",
     "nodeTitle": "{{name}} — {{state}}",
@@ -18,6 +16,18 @@
       "fitToView": "Fit to view",
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out"
+    },
+    "noLinksYet_one": "No links discovered yet. Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run. {{count}} node in the inventory.",
+    "noLinksYet_other": "No links discovered yet. Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run. {{count}} nodes in the inventory.",
+    "components_one": "{{count}} connected group.",
+    "components_other": "{{count}} connected groups. Separate groups are normal — a device that reports no adjacency, or a site reached over a link nothing reported, stands on its own.",
+    "unresolved_one": "{{count}} observation could not be resolved to a link (an unmatched neighbour, or a segment with no identifiable router).",
+    "unresolved_other": "{{count}} observations could not be resolved to links (unmatched neighbours, or segments with no identifiable router).",
+    "source": {
+      "manual": "Confirmed by hand",
+      "lldp": "LLDP",
+      "cdp": "CDP",
+      "l3_subnet": "Shared subnet"
     }
   },
   "dependency": {

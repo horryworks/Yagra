@@ -10,3 +10,9 @@ repository.workspace = true
 
 [dependencies]
 yagra-common = { path = "../yagra-common" }
+
+[dev-dependencies]
+# Tests only: the derivation's expectations depend on node ordering, so they build ids from a
+# counter rather than `NodeId::new()`'s random v4 — a graph test whose assertions shuffle with the
+# ids is a test that passes for the wrong reason.
+uuid = { workspace = true }

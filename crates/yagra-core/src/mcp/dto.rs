@@ -644,6 +644,31 @@ mod tests {
         };
         assert_no_forbidden_keys(&serde_json::to_value(&topo).unwrap(), "TopologyPage");
 
+        // The other shape `get_topology` can return (`kind=links`, ADR-043). Also served straight
+        // from the REST DTO, so it needs its own instance — a folded tool's every branch is a
+        // separate result type as far as this canary is concerned.
+        let links = crate::api::topology::TopologyLinkPage {
+            links: vec![crate::api::topology::TopologyLink {
+                id: 1,
+                a_node: Some(node.id.0),
+                b_node: Some(uuid::Uuid::nil()),
+                a_ifindex: Some(8),
+                b_ifindex: None,
+                a_if_name: Some("GigabitEthernet0/1".to_owned()),
+                b_if_name: None,
+                sources: vec![yagra_common::LinkSource::L3Subnet],
+                source: yagra_common::LinkSource::L3Subnet,
+                subnet: Some("192.168.1.0/24".to_owned()),
+                first_seen: "2026-08-04T00:00:00Z".to_owned(),
+                last_seen: "2026-08-04T01:00:00Z".to_owned(),
+            }],
+            next_cursor: None,
+            summary: yagra_common::TopologyLinkSummary::default(),
+            total_links: 1,
+            derived_at: Some("2026-08-04T01:00:00Z".to_owned()),
+        };
+        assert_no_forbidden_keys(&serde_json::to_value(&links).unwrap(), "TopologyLinkPage");
+
         let series = MetricSeriesDto {
             node_id: node.id.0,
             metric: "cpu_percent".to_owned(),
@@ -1056,6 +1081,7 @@ mod tests {
         ("fleet_throughput", "ThroughputRange"),
         ("list_node_groups", "NodeGroup"),
         ("get_topology", "TopologyPage"),
+        ("get_topology", "TopologyLinkPage"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("list_analyses", "AnalysisJob"),

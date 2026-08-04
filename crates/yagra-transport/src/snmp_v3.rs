@@ -376,15 +376,46 @@ fn numeric(value: &Value) -> Option<f64> {
 /// types with no representation (null, end-of-MIB, the exception markers), skipped like any other
 /// unusable row. Mirrors `snmp::raw_value`; kept per-module because the two clients have separate
 /// value enums.
-fn raw_value(value: &Value) -> Option<SnmpValue> {
+///
+/// Matched variant-by-variant rather than with a wildcard, for the same reason `snmp::raw_value`
+/// is: this is a walker that must not silently drop a column. It used to end in `_ => None`, and
+/// that wildcard swallowed two types the v2c mapper handles — `IpAddress` and `Opaque`. Nothing
+/// noticed, because the only consumer at the time (the neighbour walk) reads neither. `ipAdEntNetMask`
+/// is an ASN.1 `IpAddress`, so ADR-043's IPv4 mask column would have come back empty on every
+/// SNMPv3 node while working perfectly on v2c. A new variant should be a compile error here, not a
+/// row that quietly disappears.
+pub(crate) fn raw_value(value: &Value) -> Option<SnmpValue> {
     match value {
         Value::Integer(i) => Some(SnmpValue::Int(*i)),
         Value::Counter32(c) | Value::Unsigned32(c) => Some(SnmpValue::Int(i64::from(*c))),
         Value::Timeticks(t) => Some(SnmpValue::Int(i64::from(*t))),
+        // Saturate rather than wrap: a negative value would be read as a different subtype.
         Value::Counter64(c) => Some(SnmpValue::Int(i64::try_from(*c).unwrap_or(i64::MAX))),
-        Value::OctetString(bytes) => Some(SnmpValue::Bytes((*bytes).to_vec())),
+        Value::OctetString(bytes) | Value::Opaque(bytes) => {
+            Some(SnmpValue::Bytes((*bytes).to_vec()))
+        }
+        // Kept as octets so the caller reads it the same way it reads any other address column.
+        Value::IpAddress(octets) => Some(SnmpValue::Bytes(octets.to_vec())),
         Value::ObjectIdentifier(oid) => Some(SnmpValue::Oid(oid.to_id_string())),
-        _ => None,
+        // No representation as a scalar column value: structural types, the three exception
+        // markers an agent returns instead of a value, and the PDU tags that never appear in a
+        // varbind at all. Listed so the next variant added upstream lands here as a compile error.
+        Value::Boolean(_)
+        | Value::Null
+        | Value::Sequence(_)
+        | Value::Set(_)
+        | Value::Constructed(..)
+        | Value::EndOfMibView
+        | Value::NoSuchObject
+        | Value::NoSuchInstance
+        | Value::GetRequest(_)
+        | Value::GetNextRequest(_)
+        | Value::GetBulkRequest(_)
+        | Value::Response(_)
+        | Value::SetRequest(_)
+        | Value::InformRequest(_)
+        | Value::Trap(_)
+        | Value::Report(_) => None,
     }
 }
 

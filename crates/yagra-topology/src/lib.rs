@@ -9,6 +9,8 @@
 //! if any parent is still up, a path remains and the node's own alert stands. Cycles are
 //! tolerated via a visited set so a misconfigured graph can never loop forever.
 
+pub mod derive;
+
 use std::collections::{BTreeMap, BTreeSet};
 use yagra_common::NodeId;
 

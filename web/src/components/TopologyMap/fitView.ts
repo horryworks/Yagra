@@ -6,7 +6,7 @@
 // sibling `layout.ts` — which decides where the nodes go — has been tested all along; this half,
 // which decides what the operator actually sees of that layout, had not.
 
-import type { TopologyLayout } from './layout';
+import type { GraphLayout } from './graphLayout';
 
 /** Zoom bounds. Shared by the initial fit and the pinch/wheel handlers so no gesture can leave the
  *  diagram at a scale the fit could never produce. */
@@ -29,7 +29,7 @@ export interface View {
  *  A zero dimension on either side means there is nothing to fit yet (an empty topology, or a pane
  *  that has not been measured): the identity transform is returned rather than a division by zero,
  *  which would put the diagram at `NaN` and render nothing at all with no error. */
-export function fitView(layout: TopologyLayout, vw: number, vh: number): View {
+export function fitView(layout: GraphLayout, vw: number, vh: number): View {
   if (layout.width === 0 || layout.height === 0 || vw === 0 || vh === 0) {
     return { tx: 0, ty: 0, scale: 1 };
   }

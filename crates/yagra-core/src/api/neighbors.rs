@@ -13,7 +13,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
 use super::ApiState;
-use crate::neighbors::{self, NeighborSettings};
+use crate::neighbors::{self, AdjacencySettings};
 use axum::extract::{Path, Query};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ const HISTORY_MAX_LIMIT: i64 = 200;
 #[openapi(paths(
     get_neighbors,
     list_neighbor_history,
-    get_neighbor_settings,
+    get_adjacency_settings,
     update_neighbor_settings
 ))]
 pub(super) struct Doc;
@@ -45,7 +45,7 @@ pub(super) fn routes() -> Router<ApiState> {
         )
         .route(
             "/api/v1/settings/neighbors",
-            get(get_neighbor_settings).put(update_neighbor_settings),
+            get(get_adjacency_settings).put(update_neighbor_settings),
         )
 }
 
@@ -267,13 +267,26 @@ pub(crate) async fn neighbor_history(
 
 // ── Deployment-wide settings ─────────────────────────────────────────────────
 
-/// How this deployment collects adjacency.
+/// How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses.
+//
+// The `enabled` / `interval_secs` field names describe the neighbour walk and are kept verbatim:
+// renaming them would break every existing client for no gain. The L3 pair is added alongside as
+// `Option`, so a client that predates it can still `PUT` this body — absent means "leave that
+// setting as it is" rather than "turn it off", which is the difference between an additive field
+// and a silent regression.
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct NeighborConfig {
-    /// Whether neighbour walks are issued at all.
+    /// Whether CDP/LLDP neighbour walks are issued at all.
     pub enabled: bool,
     /// How often each SNMP node's neighbour tables are walked, in seconds.
     pub interval_secs: u32,
+    /// Whether interface-address walks are issued at all. Omitted on update leaves it unchanged.
+    #[serde(default)]
+    pub l3_enabled: Option<bool>,
+    /// How often each SNMP node's interface-address tables are walked, in seconds. Omitted on
+    /// update leaves it unchanged.
+    #[serde(default)]
+    pub l3_interval_secs: Option<u32>,
     /// Smallest cadence this deployment accepts, in seconds.
     #[serde(default)]
     pub min_interval_secs: u32,
@@ -292,14 +305,16 @@ pub(crate) struct NeighborConfig {
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
-async fn get_neighbor_settings(
+async fn get_adjacency_settings(
     _guard: RequireView,
     admin: Admin,
 ) -> ApiResult<Json<NeighborConfig>> {
-    let s = admin.repo.get_neighbor_settings().await;
+    let s = admin.repo.get_adjacency_settings().await;
     Ok(Json(NeighborConfig {
-        enabled: s.enabled,
-        interval_secs: s.interval_secs,
+        enabled: s.neighbors_enabled,
+        interval_secs: s.neighbors_interval_secs,
+        l3_enabled: Some(s.l3_enabled),
+        l3_interval_secs: Some(s.l3_interval_secs),
         min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
     }))
@@ -327,27 +342,37 @@ async fn update_neighbor_settings(
 ) -> ApiResult<StatusCode> {
     // The bounds in the request body are informational (they let one shape serve both directions);
     // what the server accepts is decided here, never by what the client sent back.
-    let next = NeighborSettings {
-        enabled: body.enabled,
-        interval_secs: body.interval_secs,
+    //
+    // The L3 pair falls back to what is already stored, so a client that predates those fields
+    // updates the neighbour settings without silently switching L3 discovery off.
+    let current = admin.repo.get_adjacency_settings().await;
+    let next = AdjacencySettings {
+        neighbors_enabled: body.enabled,
+        neighbors_interval_secs: body.interval_secs,
+        l3_enabled: body.l3_enabled.unwrap_or(current.l3_enabled),
+        l3_interval_secs: body.l3_interval_secs.unwrap_or(current.l3_interval_secs),
     };
     if !next.in_bounds() {
         return Err(ApiError::bad_request(
             "invalid_neighbor_interval",
             format!(
-                "the neighbour interval must be between {} and {} seconds",
+                "the neighbour and interface-address intervals must be between {} and {} seconds",
                 neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
                 neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
             ),
         ));
     }
-    admin.repo.set_neighbor_settings(&next).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "set neighbor settings",
-            "failed to update neighbour settings",
-        )
-    })?;
+    admin
+        .repo
+        .set_adjacency_settings(&next)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set neighbor settings",
+                "failed to update neighbour settings",
+            )
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -430,12 +455,21 @@ mod tests {
     fn the_cadence_band_is_the_one_the_module_declares() {
         for bad in [0, 1, neighbors::MIN_NEIGHBOR_INTERVAL_SECS - 1, 999_999] {
             assert!(
-                !NeighborSettings {
-                    enabled: true,
-                    interval_secs: bad
+                !AdjacencySettings {
+                    neighbors_interval_secs: bad,
+                    ..AdjacencySettings::default()
                 }
                 .in_bounds(),
-                "{bad} should be rejected"
+                "{bad} should be rejected as a neighbour cadence"
+            );
+            // Both cadences are bounded. Checking only the first would let the L3 one through.
+            assert!(
+                !AdjacencySettings {
+                    l3_interval_secs: bad,
+                    ..AdjacencySettings::default()
+                }
+                .in_bounds(),
+                "{bad} should be rejected as an interface-address cadence"
             );
         }
         for ok in [
@@ -443,9 +477,10 @@ mod tests {
             3600,
             neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
         ] {
-            assert!(NeighborSettings {
-                enabled: true,
-                interval_secs: ok
+            assert!(AdjacencySettings {
+                neighbors_interval_secs: ok,
+                l3_interval_secs: ok,
+                ..AdjacencySettings::default()
             }
             .in_bounds());
         }
@@ -458,6 +493,8 @@ mod tests {
         let cfg = NeighborConfig {
             enabled: true,
             interval_secs: 3600,
+            l3_enabled: Some(true),
+            l3_interval_secs: Some(3600),
             min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
             max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
         };

@@ -161,6 +161,9 @@ pub struct AdminState {
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
     /// Observed CDP/LLDP adjacency per node, and its append-on-change history (ADR-038).
     pub neighbors: Arc<crate::neighbors::NeighborRepo>,
+    /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
+    /// truth, so a stale read is a stale map rather than lost data.
+    pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// Per-node Cisco Meraki device bindings.
@@ -609,6 +612,7 @@ mod tests {
             sys_descr: None,
             dns_chain: None,
             neighbors: None,
+            l3: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),
