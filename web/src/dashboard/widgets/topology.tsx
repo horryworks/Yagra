@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// 04 · Dependency / root-cause view. Renders the parent→child dependency forest as a compact
-// indented tree (no graph library): each node shows a status dot, its name, and — when the alert
-// engine has attributed an upstream root cause — a muted "← caused by <name>" so downstream
-// alerts read as collapsed under the cause. Data: GET /api/v1/topology (parent links + root_cause),
-// fetched on a slow reconcile cadence and kept live via the node-state SSE stream (S14).
+// 04 · Dependency / root-cause view. A flat list of what is actually broken: each root cause with
+// the alerts rolled up under it, biggest first, then any problem the engine could not attribute.
+//
+// It used to render an indented parent→child tree. ADR-043 Increment 2 made the dependency graph
+// multi-parent — a node reached by two equal-length paths from a poller has two upstreams, which is
+// exactly the redundant-pair case the suppression rule exists for — and a tree cannot show that
+// without silently picking one parent. The widget's question was always "what is broken and what
+// does it explain", so it now answers that directly.
+//
+// Data: GET /api/v1/topology (root_cause attribution), on a slow reconcile cadence, kept live via
+// the node-state SSE stream (S14). All judgement is in `util.ts::rootCauseRows` — Vitest never runs
+// a `.tsx`.
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,50 +18,12 @@ import { StatusDot } from '../../components/ui/StatusDot';
 import { api } from '../../services/api';
 import { usePolled } from '../usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../useNodeStates';
-import { buildForest, type TopoTreeNode } from './util';
+import { rootCauseRows } from './util';
 import './topology.css';
 
-/** Max render depth — a backstop against a parent cycle (server guards, but be safe). */
-const MAX_DEPTH = 8;
-
-function TreeRow({
-  node,
-  depth,
-  names,
-}: {
-  node: TopoTreeNode;
-  depth: number;
-  names: Map<string, string>;
-}) {
-  const { t } = useTranslation('dashboard');
-  // Don't silently drop the subtree at the depth backstop — show why it stopped.
-  if (depth > MAX_DEPTH) {
-    return (
-      <li className="topo-item">
-        <div className="topo-row" style={{ paddingLeft: `${depth * 16}px` }}>
-          <span className="topo-name muted">{t('widgets.dependency.depthLimit')}</span>
-        </div>
-      </li>
-    );
-  }
-  const cause = node.node.root_cause ? names.get(node.node.root_cause) : null;
-  return (
-    <li className="topo-item">
-      <div className="topo-row" style={{ paddingLeft: `${depth * 16}px` }}>
-        <StatusDot state={node.node.state} withLabel={false} />
-        <span className="topo-name">{node.node.name}</span>
-        {cause && <span className="topo-cause muted">← {cause}</span>}
-      </div>
-      {node.children.length > 0 && (
-        <ul className="topo-children">
-          {node.children.map((c) => (
-            <TreeRow key={c.node.id} node={c} depth={depth + 1} names={names} />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
+/** Max affected nodes named per cause before the rest are summarized. A cause explaining a whole
+ *  site would otherwise fill the widget with names nobody reads. */
+const NAMED_AFFECTED = 4;
 
 export function DependencyWidget() {
   const { t } = useTranslation('dashboard');
@@ -68,17 +37,54 @@ export function DependencyWidget() {
       return s && s !== n.state ? { ...n, state: s } : n;
     });
   }, [data, live]);
+  const rows = useMemo(() => rootCauseRows(nodes), [nodes]);
+
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   if (nodes.length === 0) return <p className="muted">{t('widgets.dependency.empty')}</p>;
-  const names = new Map(nodes.map((n) => [n.id, n.name]));
-  const forest = buildForest(nodes);
-  // A flat inventory (no parent links) still renders — just a single-level list.
+  // A healthy fleet has no causes. Distinct from "no inventory" above, and worth saying so.
+  if (rows.length === 0) return <p className="muted">{t('widgets.dependency.allClear')}</p>;
+
   return (
     <ul className="topo">
-      {forest.map((r) => (
-        <TreeRow key={r.node.id} node={r} depth={0} names={names} />
-      ))}
+      {rows.map((r) => {
+        const named = r.affected.slice(0, NAMED_AFFECTED);
+        const rest = r.affected.length - named.length;
+        return (
+          <li className="topo-item" key={r.node.id}>
+            <div className="topo-row">
+              <StatusDot state={r.node.state} withLabel={false} />
+              <span className="topo-name">{r.node.name}</span>
+              {r.affected.length > 0 && (
+                <span className="topo-cause muted">
+                  {t('widgets.dependency.explains', { count: r.affected.length })}
+                </span>
+              )}
+            </div>
+            {named.length > 0 && (
+              <ul className="topo-children">
+                {named.map((a) => (
+                  <li className="topo-item" key={a.id}>
+                    <div className="topo-row" style={{ paddingLeft: '16px' }}>
+                      <StatusDot state={a.state} withLabel={false} />
+                      <span className="topo-name muted">{a.name}</span>
+                    </div>
+                  </li>
+                ))}
+                {rest > 0 && (
+                  <li className="topo-item">
+                    <div className="topo-row" style={{ paddingLeft: '16px' }}>
+                      <span className="topo-name muted">
+                        {t('widgets.dependency.andMore', { count: rest })}
+                      </span>
+                    </div>
+                  </li>
+                )}
+              </ul>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

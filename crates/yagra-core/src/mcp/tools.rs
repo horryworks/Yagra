@@ -837,9 +837,16 @@ impl YagraMcp {
                        `kind=links` is the physical/logical connectivity graph derived from \
                        CDP/LLDP adjacency and shared IP subnets: undirected links between nodes, \
                        each with the evidence that produced it (`sources`) and the subnet behind a \
-                       shared-subnet link. Both return `next_cursor` for the following page. \
-                       `after` is that cursor (a node UUID for dependency, a number for links); \
-                       `limit` is 1–1000 (default 200). Requires live mode."
+                       shared-subnet link. `kind=overrides` lists the decisions an operator has \
+                       recorded about links (pin, hide, or which end is upstream), which always \
+                       beat what was derived. `kind=shadow` compares the two dependency graphs and \
+                       is what answers whether derived suppression is safe to enable here: it \
+                       reports which active alerts the derived graph would newly suppress \
+                       (`would_suppress` — the risky direction) or stop suppressing, plus any \
+                       pools whose poller has no place in the graph yet (`unresolved_pools`, which \
+                       block enabling it). Dependency and links return `next_cursor` for the \
+                       following page; `after` is that cursor (a node UUID for dependency, a \
+                       number for links) and `limit` is 1–1000 (default 200). Requires live mode."
     )]
     async fn get_topology(
         &self,
@@ -891,9 +898,22 @@ impl YagraMcp {
                     Err(e) => tool_api_error("get_topology", &e),
                 }
             }
-            TopologyKind::Unknown => {
-                tool_bad_params("get_topology", "`kind` must be one of: dependency, links")
+            TopologyKind::Overrides => {
+                match crate::api::topology::link_override_list(&self.state, admin, &scope).await {
+                    Ok(list) => ok_json("get_topology", &list),
+                    Err(e) => tool_api_error("get_topology", &e),
+                }
             }
+            TopologyKind::Shadow => {
+                match crate::api::topology::topology_shadow(&self.state, admin, &scope).await {
+                    Ok(s) => ok_json("get_topology", &s),
+                    Err(e) => tool_api_error("get_topology", &e),
+                }
+            }
+            TopologyKind::Unknown => tool_bad_params(
+                "get_topology",
+                "`kind` must be one of: dependency, links, overrides, shadow",
+            ),
         }
     }
 
@@ -1770,7 +1790,7 @@ struct NeighborsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TopologyParams {
-    /// Which graph: "dependency" (default) or "links".
+    /// Which view: "dependency" (default), "links", "overrides" or "shadow".
     kind: Option<String>,
     /// Keyset cursor. For kind=dependency this is a node UUID; for kind=links it is the numeric
     /// `next_cursor` from the previous page.
@@ -1975,6 +1995,8 @@ fn tool_unavailable(tool: &str, reason: &str) -> Result<CallToolResult, McpError
 enum TopologyKind {
     Dependency,
     Links,
+    Overrides,
+    Shadow,
     Unknown,
 }
 
@@ -1982,6 +2004,8 @@ fn topology_kind(kind: Option<&str>) -> TopologyKind {
     match kind {
         None | Some("dependency") => TopologyKind::Dependency,
         Some("links") => TopologyKind::Links,
+        Some("overrides") => TopologyKind::Overrides,
+        Some("shadow") => TopologyKind::Shadow,
         Some(_) => TopologyKind::Unknown,
     }
 }

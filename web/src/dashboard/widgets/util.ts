@@ -161,25 +161,58 @@ export function densifyTimeBuckets(
   return out;
 }
 
-/** A node in the dependency forest (parent → children). */
-export interface TopoTreeNode {
+// `buildForest` / `TopoTreeNode` were removed with ADR-043 Increment 2. They built a tree from the
+// single `parent_id` column, and the dependency graph is no longer a tree: a node reached by two
+// equal-length paths from a poller has two upstreams, which is the case the multi-parent
+// suppression rule exists for. A forest cannot represent that — it would have had to pick one
+// parent and silently drop the other, i.e. show the operator a graph the engine does not use.
+//
+// What replaced it is `rootCauseRows` below: the widget's question was always "what is actually
+// broken", and a root-cause list answers it without claiming the structure is a tree.
+
+/** One row of the root-cause summary: a node whose alert the engine has rolled up under an
+ *  upstream, or an unattributed problem node. */
+export interface RootCauseRow {
+  /** The upstream being blamed, or the problem node itself when nothing was attributed. */
   node: TopologyNode;
-  children: TopoTreeNode[];
+  /** Nodes whose alerts are suppressed under `node`. Empty for an unattributed problem. */
+  affected: TopologyNode[];
 }
 
-/** Build a parent→children forest from a flat topology node list. Nodes whose parent is missing
- *  (or absent) become roots; a self-parent is treated as a root. Each node appears once, so a
- *  parent cycle can't duplicate nodes — render with a depth cap as a belt-and-braces guard. */
-export function buildForest(nodes: TopologyNode[]): TopoTreeNode[] {
-  const byId = new Map<string, TopoTreeNode>(nodes.map((n) => [n.id, { node: n, children: [] }]));
-  const roots: TopoTreeNode[] = [];
+/**
+ * Group the topology into causes and what they explain.
+ *
+ * Sorted by how much each cause explains, then by name, so the list is stable across refreshes and
+ * the biggest incident is first. A node that is both a cause and itself suppressed appears once, as
+ * the cause — the engine's `root_cause` already climbed to the top of the down chain, so re-nesting
+ * would just re-derive what it decided.
+ */
+export function rootCauseRows(nodes: TopologyNode[]): RootCauseRow[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const affected = new Map<string, TopologyNode[]>();
+  const suppressed = new Set<string>();
   for (const n of nodes) {
-    const entry = byId.get(n.id)!;
-    const parent = n.parent_id ? byId.get(n.parent_id) : undefined;
-    if (parent && parent !== entry) parent.children.push(entry);
-    else roots.push(entry);
+    if (!n.root_cause) continue;
+    suppressed.add(n.id);
+    affected.set(n.root_cause, [...(affected.get(n.root_cause) ?? []), n]);
   }
-  return roots;
+  const rows: RootCauseRow[] = [];
+  for (const [causeId, kids] of affected) {
+    const cause = byId.get(causeId);
+    // A cause outside the caller's scope is not in the payload. Skipping the row is the honest
+    // rendering — the same reason `topology_page` leaves an invisible parent's id dangling.
+    if (cause) rows.push({ node: cause, affected: kids });
+  }
+  // Problems nothing explained: still the operator's business, and the state most of a fleet is in
+  // while no dependencies are modelled at all.
+  for (const n of nodes) {
+    if (suppressed.has(n.id) || affected.has(n.id)) continue;
+    if (n.state === 'critical' || n.state === 'unreachable') rows.push({ node: n, affected: [] });
+  }
+  rows.sort(
+    (a, b) => b.affected.length - a.affected.length || a.node.name.localeCompare(b.node.name),
+  );
+  return rows;
 }
 
 /** Expand sparse weekday×hour buckets into a dense 7×24 matrix (`m[dow][hour]`), zero-filled.

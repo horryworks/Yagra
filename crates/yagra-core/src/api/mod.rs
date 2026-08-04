@@ -161,9 +161,16 @@ pub struct AdminState {
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
     /// Observed CDP/LLDP adjacency per node, and its append-on-change history (ADR-038).
     pub neighbors: Arc<crate::neighbors::NeighborRepo>,
+    /// Observed interface addresses per node (ADR-043). Read here to place a poller on a segment
+    /// when the shadow preview resolves anchors.
+    pub l3: Arc<crate::l3::L3Repo>,
     /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
     /// truth, so a stale read is a stale map rather than lost data.
     pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
+    /// Operator decisions about links (ADR-043 決定 4). Unlike `topology_links` this is a source of
+    /// truth — nothing here is recomputable — which is why it is a separate store rather than a
+    /// column on the cache.
+    pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// Per-node Cisco Meraki device bindings.

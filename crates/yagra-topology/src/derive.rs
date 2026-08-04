@@ -22,8 +22,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use yagra_common::{
-    DerivedLink, L3Snapshot, LinkSource, NeighborProto, NeighborSet, NodeId, SubnetKey,
-    TopologyLinkSummary, MAX_LINKS_PER_NODE,
+    DerivedLink, L3Snapshot, LinkOverride, LinkOverrideAction, LinkSource, NeighborProto,
+    NeighborSet, NodeId, SubnetKey, TopologyLinkSummary, MAX_LINKS_PER_NODE,
 };
 
 /// Cap on how many members of one subnet are considered. A `/16` with every host answering SNMP
@@ -33,31 +33,6 @@ pub const MAX_MEMBERS_PER_SUBNET: usize = 1024;
 /// Cap on how many members of one segment are treated as transit nodes. Beyond a handful, the
 /// "which of these routes" question has stopped having a useful answer.
 pub const MAX_ROUTERS_PER_SEGMENT: usize = 8;
-
-/// What an operator has decided about a link, overriding whatever the derivation produces.
-///
-/// Increment 2 owns the table, the API and the UI for these. The type and its application live here
-/// from Increment 1 so that "manual always wins" is a property of one function from the start,
-/// rather than a rule bolted onto a derivation that was written without it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkOverrideAction {
-    /// This link exists, whatever the observations say. Re-emitted on every run, so the ordinary
-    /// staleness prune never reaches it — one mechanism, not a second exception in the pruner.
-    Pin,
-    /// This link does not exist, whatever the observations say.
-    Hide,
-}
-
-/// One operator decision about one node pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinkOverride {
-    /// One endpoint; order does not matter, the link is canonicalized before comparison.
-    pub a_node: NodeId,
-    /// The other endpoint.
-    pub b_node: NodeId,
-    /// What the operator decided.
-    pub action: LinkOverrideAction,
-}
 
 /// Everything the derivation reads.
 #[derive(Debug, Clone, Copy)]
@@ -326,24 +301,47 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
 
 /// Apply operator decisions to a derived set. **The only place "manual always wins" is expressed.**
 ///
-/// `Hide` removes the link whatever produced it; `Pin` inserts one that the observations did not.
-/// A pinned link is re-emitted by every run, which is why the ordinary staleness prune never has to
-/// know about it.
+/// `Hide` removes the link whatever produced it; `Pin` inserts one that the observations did not;
+/// `Direction` marks which endpoint is upstream so the projection stops deriving that from
+/// distance. A pinned link is re-emitted by every run, which is why the ordinary staleness prune
+/// never has to know about it.
+///
+/// **Order matters, and it is fixed here rather than left to the caller.** `Hide` is applied last,
+/// so hiding a link an operator also pinned removes it — the two decisions contradict, and the
+/// removing one is the safe reading: an edge that should not exist can suppress a real outage,
+/// whereas a missing edge only fails to suppress a redundant one.
 fn apply_overrides(links: &mut BTreeMap<String, DerivedLink>, overrides: &[LinkOverride]) {
-    for ov in overrides {
-        let pinned = DerivedLink::new(ov.a_node, ov.b_node, LinkSource::Manual);
-        let key = pinned.link_key();
+    for ov in overrides
+        .iter()
+        .filter(|o| o.action != LinkOverrideAction::Hide)
+    {
+        let mut manual = DerivedLink::new(ov.a_node, ov.b_node, LinkSource::Manual);
+        manual.forced_parent = ov.forced_parent();
+        let key = manual.link_key();
         match ov.action {
-            LinkOverrideAction::Hide => {
-                links.remove(&key);
-            }
             LinkOverrideAction::Pin => {
                 links
                     .entry(key)
-                    .and_modify(|existing| existing.merge(&pinned))
-                    .or_insert(pinned);
+                    .and_modify(|existing| existing.merge(&manual))
+                    .or_insert(manual);
             }
+            // A direction annotates a link; it does not assert one. An operator who wants both says
+            // so with both rows, which is why the table lets them coexist. Applied to a link that
+            // was not derived, it does nothing — and that is visible, because the link is not on
+            // the map either.
+            LinkOverrideAction::Direction => {
+                if let Some(existing) = links.get_mut(&key) {
+                    existing.forced_parent = manual.forced_parent;
+                }
+            }
+            LinkOverrideAction::Hide => unreachable!("filtered out above"),
         }
+    }
+    for ov in overrides
+        .iter()
+        .filter(|o| o.action == LinkOverrideAction::Hide)
+    {
+        links.remove(&DerivedLink::new(ov.a_node, ov.b_node, LinkSource::Manual).link_key());
     }
 }
 
@@ -731,6 +729,7 @@ mod tests {
                 a_node: n[1],
                 b_node: n[0], // reversed on purpose: the override is canonicalized like any link
                 action: LinkOverrideAction::Hide,
+                direction: None,
             }],
         });
         assert!(hidden.links.is_empty(), "manual always wins");
@@ -743,6 +742,7 @@ mod tests {
                 a_node: n[0],
                 b_node: n[2],
                 action: LinkOverrideAction::Pin,
+                direction: None,
             }],
         });
         assert_eq!(pinned.links.len(), 1);

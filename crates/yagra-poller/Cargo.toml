@@ -35,6 +35,8 @@ rand = { workspace = true }
 hostname = { workspace = true }
 # SO_REUSEPORT + SO_RCVBUF for the parallel edge UDP listeners (S9).
 socket2 = { workspace = true }
+# Own interface addresses for the heartbeat's `mgmt_addrs` (ADR-043 anchor resolution).
+if-addrs = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

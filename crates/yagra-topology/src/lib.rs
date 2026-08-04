@@ -10,6 +10,7 @@
 //! tolerated via a visited set so a misconfigured graph can never loop forever.
 
 pub mod derive;
+pub mod project;
 
 use std::collections::{BTreeMap, BTreeSet};
 use yagra_common::NodeId;
@@ -36,6 +37,22 @@ impl Topology {
     pub fn add_dependency(&mut self, child: NodeId, parent: NodeId) {
         self.parents.entry(child).or_default().insert(parent);
         self.children.entry(parent).or_default().insert(child);
+    }
+
+    /// This node's direct parents. Empty for a root, and for a node the graph has never heard of.
+    ///
+    /// Exists so ADR-043's shadow preview can compare two graphs edge by edge without either of them
+    /// exposing its internals — the comparison is the operator's evidence for enabling derived
+    /// suppression, so it has to read the same structure `is_suppressed` does.
+    #[must_use]
+    pub fn parents_of(&self, node: NodeId) -> BTreeSet<NodeId> {
+        self.parents.get(&node).cloned().unwrap_or_default()
+    }
+
+    /// How many child→parent edges the graph holds.
+    #[must_use]
+    pub fn edge_count(&self) -> usize {
+        self.parents.values().map(BTreeSet::len).sum()
     }
 
     /// All transitive descendants (downstreams) of `node` — every node that has `node` on an

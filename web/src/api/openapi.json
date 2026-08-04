@@ -12227,6 +12227,82 @@
         }
       }
     },
+    "/api/v1/pollers/{id}/anchor": {
+      "put": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "Name the node a poller attaches to, rooting the derived dependency graph.",
+        "description": "Direction in the derived graph comes from distance to a poller, so core has to know where each\npoller sits. It works that out from the addresses the poller reports — but a poller running in a\ncontainer reports a container-network address that matches no monitored node, which is the\ncommon case rather than the unusual one. This is how an operator says where it really is.\n\nUntil every pool that has nodes has a placed poller, derived suppression cannot be enabled.",
+        "operationId": "set_poller_anchor",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Poller id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PollerAnchorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The anchor was set or cleared"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageConfig permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such poller, or no such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no durable poller store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pollers/{id}/nodes": {
       "get": {
         "tags": [
@@ -14796,6 +14872,71 @@
         }
       }
     },
+    "/api/v1/settings/topology": {
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Choose which dependency graph drives alert suppression.",
+        "description": "`manual` uses each node's hand-authored parent. `shadow` changes nothing about alerting and only\nmakes the comparison at `GET /api/v1/topology/shadow` meaningful. `derived` hands suppression to\nthe graph derived from CDP/LLDP adjacency and shared subnets.\n\nMoving to `derived` is **refused** while any pool that has nodes has a poller whose location\ncould not be resolved: such a pool contributes no roots, so none of its nodes would ever be\nsuppressed — the change would look like it worked and quietly do nothing.",
+        "operationId": "set_topology_mode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopologyModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The mode was changed"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-config permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`derived` was requested while a pool with nodes has an unplaced poller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/shared-dashboard": {
       "get": {
         "tags": [
@@ -15541,6 +15682,204 @@
         }
       }
     },
+    "/api/v1/topology/link-overrides": {
+      "get": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "Operator decisions that override the derived connectivity graph.",
+        "description": "A group-scoped caller sees only decisions whose **both** endpoints are visible to them, matching\nhow the links themselves are filtered.",
+        "operationId": "get_link_overrides",
+        "responses": {
+          "200": {
+            "description": "Every visible link override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkOverrideList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "Record a decision about a link, replacing any previous decision of the same kind for that pair.",
+        "description": "The decision takes effect on the next derivation cycle. A pinned link is re-emitted by every run,\nso it never expires the way an unobserved derived link does.",
+        "operationId": "create_link_override",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The decision was recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The two endpoints are the same node, or `direction` disagrees with `action`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-config permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "One of the endpoints is not a node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/topology/link-overrides/{id}": {
+      "delete": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "Remove an operator decision, letting the derivation's own answer stand again.",
+        "operationId": "delete_link_override",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The override's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The decision was removed"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-config permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such override, or its endpoints are not visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/topology/links": {
       "get": {
         "tags": [
@@ -15610,6 +15949,58 @@
           },
           "503": {
             "description": "Skeleton mode has no inventory to build the graph from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/topology/shadow": {
+      "get": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "What the derived dependency graph would do to alerting, compared with the hand-authored one.",
+        "description": "This is the review surface for enabling derived suppression: `would_suppress` lists the active\nalerts that would stop being raised, and `unresolved_pools` lists the pollers that have no place\nin the graph yet. Both are computed on demand and neither affects alerting.",
+        "operationId": "get_topology_shadow",
+        "responses": {
+          "200": {
+            "description": "The comparison between the manual and derived dependency graphs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopologyShadow"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no inventory to compare",
             "content": {
               "application/json": {
                 "schema": {
@@ -22041,6 +22432,139 @@
           }
         }
       },
+      "LinkDirection": {
+        "type": "string",
+        "description": "Which end of a link is upstream.",
+        "enum": [
+          "a_parent",
+          "b_parent"
+        ]
+      },
+      "LinkOverrideAction": {
+        "type": "string",
+        "description": "What an operator has decided about a link, overriding whatever the derivation produces.",
+        "enum": [
+          "pin",
+          "hide",
+          "direction"
+        ]
+      },
+      "LinkOverrideList": {
+        "type": "object",
+        "description": "Every operator decision visible to the caller.",
+        "required": [
+          "overrides"
+        ],
+        "properties": {
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkOverrideRow"
+            }
+          }
+        }
+      },
+      "LinkOverrideRequest": {
+        "type": "object",
+        "description": "A decision to record about one link.",
+        "required": [
+          "a_node",
+          "b_node",
+          "action"
+        ],
+        "properties": {
+          "a_node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "One endpoint. Order is not significant — the pair is canonicalized before storing, and a\n`direction` is re-expressed to match."
+          },
+          "action": {
+            "$ref": "#/components/schemas/LinkOverrideAction",
+            "description": "`pin`, `hide` or `direction`."
+          },
+          "b_node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The other endpoint."
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LinkDirection",
+                "description": "Which endpoint is upstream. Required when `action` is `direction`, rejected otherwise."
+              }
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text note for whoever reads this decision later."
+          }
+        }
+      },
+      "LinkOverrideRow": {
+        "type": "object",
+        "description": "One operator decision about one link.",
+        "required": [
+          "id",
+          "a_node",
+          "b_node",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "a_node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The lower-ordered endpoint. Endpoints are stored in a canonical order, so this is not\nnecessarily the one that was submitted first."
+          },
+          "action": {
+            "$ref": "#/components/schemas/LinkOverrideAction"
+          },
+          "b_node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The higher-ordered endpoint."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was recorded (RFC 3339)."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who recorded the decision."
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LinkDirection",
+                "description": "Which endpoint is upstream. Present only when `action` is `direction`."
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "LinkSource": {
         "type": "string",
         "description": "What kind of evidence produced a link, ordered strongest first.",
@@ -23915,6 +24439,20 @@
           }
         }
       },
+      "PollerAnchorRequest": {
+        "type": "object",
+        "description": "Where a poller attaches to the monitored network.",
+        "properties": {
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node the poller sits behind. `null` clears the anchor, returning the poller to being\nplaced by its own reported addresses."
+          }
+        }
+      },
       "PollerInfo": {
         "type": "object",
         "description": "One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current\nstatus/telemetry) and the durable inventory (so an offline poller still lists). No secrets.",
@@ -23924,9 +24462,18 @@
           "status",
           "working_set_nodes",
           "working_set_specs",
-          "results_total"
+          "results_total",
+          "mgmt_addrs"
         ],
         "properties": {
+          "anchor_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this poller attaches to, naming where it sits in the derived dependency graph.\n`null` ⇒ core places it from `mgmt_addrs` instead."
+          },
           "cpu_pct": {
             "type": [
               "number",
@@ -23968,6 +24515,13 @@
             ],
             "format": "double",
             "description": "Current host memory-used % (0–100); `null` when unavailable."
+          },
+          "mgmt_addrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Interface addresses the poller reported for itself. Empty for an older poller build, and\nempty for a containerized poller whose only address is a container-network one."
           },
           "pool": {
             "type": "string",
@@ -25766,6 +26320,48 @@
           "critical"
         ]
       },
+      "ShadowAlert": {
+        "type": "object",
+        "description": "One node whose suppression would change if the deployment moved to the derived graph.",
+        "required": [
+          "node_id"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The node whose active alert is affected."
+          },
+          "root_cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node the derived graph blames, when it has one."
+          }
+        }
+      },
+      "ShadowEdge": {
+        "type": "object",
+        "description": "One node whose parent set differs between the two graphs.",
+        "required": [
+          "child",
+          "parent"
+        ],
+        "properties": {
+          "child": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The downstream node."
+          },
+          "parent": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The upstream node."
+          }
+        }
+      },
       "SourceKind": {
         "type": "string",
         "description": "Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`\nstrings, the API validation and the WebUI all agree on one spelling.",
@@ -26507,6 +27103,14 @@
             "type": "string",
             "description": "When this link was first derived (RFC 3339)."
           },
+          "forced_parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The endpoint an operator declared upstream, when one was declared. `null` means the direction\nis worked out from how far each end is from a poller."
+          },
           "id": {
             "type": "integer",
             "format": "int64",
@@ -26643,6 +27247,28 @@
           }
         }
       },
+      "TopologyMode": {
+        "type": "string",
+        "description": "Which dependency graph the alert engine uses.",
+        "enum": [
+          "manual",
+          "shadow",
+          "derived"
+        ]
+      },
+      "TopologyModeRequest": {
+        "type": "object",
+        "description": "The topology mode to move the deployment to.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/TopologyMode",
+            "description": "`manual`, `shadow` or `derived`."
+          }
+        }
+      },
       "TopologyNode": {
         "type": "object",
         "description": "One node in the dependency/topology graph.",
@@ -26699,6 +27325,88 @@
             "items": {
               "$ref": "#/components/schemas/TopologyNode"
             }
+          }
+        }
+      },
+      "TopologyShadow": {
+        "type": "object",
+        "description": "What the derived dependency graph would do, against what the manual one does.",
+        "required": [
+          "mode",
+          "manual_edges",
+          "derived_edges",
+          "only_in_manual",
+          "only_in_derived",
+          "would_suppress",
+          "would_unsuppress",
+          "anchors",
+          "unresolved_pools",
+          "unresolved_pollers"
+        ],
+        "properties": {
+          "anchors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Nodes the derived graph treats as roots, because a poller sits on their segment."
+          },
+          "derived_edges": {
+            "type": "integer",
+            "description": "Edges in the derived graph.",
+            "minimum": 0
+          },
+          "manual_edges": {
+            "type": "integer",
+            "description": "Edges in the hand-authored graph.",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TopologyMode",
+            "description": "`manual`, `shadow` or `derived`."
+          },
+          "only_in_derived": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShadowEdge"
+            },
+            "description": "Parent edges only the derived graph has."
+          },
+          "only_in_manual": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShadowEdge"
+            },
+            "description": "Parent edges only the hand-authored graph has."
+          },
+          "unresolved_pollers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Poller ids that could not be placed, so an operator knows which to give an anchor."
+          },
+          "unresolved_pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pools with at least one poller whose location could not be resolved.\n\n**Non-empty blocks `derived`.** A pool with no anchor contributes no roots, so none of its\nnodes would ever be suppressed while every screen showed the feature as on."
+          },
+          "would_suppress": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShadowAlert"
+            },
+            "description": "Active alerts the derived graph **would suppress** and the manual one does not.\n\nThe number to review before enabling `derived`: each of these is an alert that would stop\nbeing raised."
+          },
+          "would_unsuppress": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShadowAlert"
+            },
+            "description": "Active alerts the manual graph suppresses and the derived one would not — the noise\ndirection."
           }
         }
       },

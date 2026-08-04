@@ -48,7 +48,45 @@
       "actions": "Actions"
     },
     "emptyInventory": "No nodes in the inventory yet.",
-    "emptyFiltered": "No matching nodes — adjust the search or filter."
+    "emptyFiltered": "No matching nodes — adjust the search or filter.",
+    "cols2": {
+      "derived": "Derived upstream",
+      "verdict": "Comparison"
+    },
+    "verdict": {
+      "agree": "Agrees",
+      "only_manual": "Only set by hand",
+      "only_derived": "Only derived",
+      "unmodelled": "No upstream"
+    },
+    "verdictHelp": {
+      "agree": "Both graphs give this node the same upstreams.",
+      "only_manual": "Set by hand but not discovered. Switching to the derived graph would drop this dependency, so this node's alert would stop rolling up.",
+      "only_derived": "Discovered but never set by hand. Switching to the derived graph would add this dependency — this is the direction that can suppress a real outage, so check it.",
+      "unmodelled": "Neither graph gives this node an upstream, so its alert always stands on its own."
+    },
+    "mode": {
+      "label": "Suppression follows",
+      "manual": "The hand-authored graph",
+      "shadow": "The hand-authored graph (comparing)",
+      "derived": "The derived graph",
+      "manualNote": "Alert suppression follows each node's hand-authored upstream. Switch to Comparing to see what the discovered graph would do, without changing anything.",
+      "shadowNote": "Alerting is unchanged — this is a preview. The table below shows where the two graphs differ, and how many active alerts would change.",
+      "derivedNote": "Alert suppression follows the graph discovered from CDP/LLDP adjacency and shared subnets. Editing a node's upstream by hand no longer affects suppression.",
+      "compare": "Compare",
+      "enable": "Use the derived graph",
+      "revert": "Go back to the hand-authored graph",
+      "blocked": "Cannot use the derived graph yet: {{pools}} has nodes but no poller that could be placed in the graph. Set an anchor node for its poller under Settings ▸ Pollers first.",
+      "wouldSuppress_one": "{{count}} active alert would newly be suppressed.",
+      "wouldSuppress_other": "{{count}} active alerts would newly be suppressed.",
+      "wouldUnsuppress_one": "{{count}} active alert would stop being suppressed.",
+      "wouldUnsuppress_other": "{{count}} active alerts would stop being suppressed.",
+      "edges": "{{manual}} hand-authored dependencies · {{derived}} discovered",
+      "reviewFirst": "Review the alerts that would newly be suppressed before switching — each of those is an alert that would stop being raised.",
+      "noChange": "No active alert's suppression would change.",
+      "changeFailed": "Could not change the mode."
+    },
+    "editHiddenInDerived": "The upstream is discovered in this mode, so it is not edited here. Correct a wrong link on the Network map instead."
   },
   "geo": {
     "title": "Geo map",

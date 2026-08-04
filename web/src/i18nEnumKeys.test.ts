@@ -36,7 +36,9 @@ import {
   NEIGHBOR_CAPABILITIES,
   NEIGHBOR_PROTOS,
   LINK_SOURCES,
+  TOPOLOGY_MODES,
 } from './types/api';
+import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -348,6 +350,28 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // an enum that is *going* to grow, which is exactly the case parity cannot catch.
     const locales = { en: enTopology, ja: jaTopology };
     expectKeys('link source', locales, 'map.source.', LINK_SOURCES);
+  });
+
+  it('every topology mode has strings (topology:dependency.mode.*)', () => {
+    // The Dependencies banner builds `dependency.mode.${mode}` and `${mode}Note` from a value the
+    // server returns. A fourth mode would reach both locales missing, and the screen that decides
+    // how the whole fleet suppresses alerts would render the raw token.
+    const locales = { en: enTopology, ja: jaTopology };
+    expectKeys('topology mode', locales, 'dependency.mode.', TOPOLOGY_MODES);
+    expectKeys(
+      'topology mode note',
+      locales,
+      'dependency.mode.',
+      TOPOLOGY_MODES.map((m) => `${m}Note`),
+    );
+  });
+
+  it('every comparison verdict has strings (topology:dependency.verdict.*)', () => {
+    // Built as `dependency.verdict.${row.verdict}` plus a `verdictHelp` tooltip, from the pure
+    // classifier — so both key families are checked, not just the visible label.
+    const locales = { en: enTopology, ja: jaTopology };
+    expectKeys('diff verdict', locales, 'dependency.verdict.', DIFF_VERDICTS);
+    expectKeys('diff verdict help', locales, 'dependency.verdictHelp.', DIFF_VERDICTS);
   });
 
   it('every retention subject has strings (system:settings.retention.subject.*)', () => {

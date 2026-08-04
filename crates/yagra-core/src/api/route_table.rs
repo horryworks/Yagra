@@ -1061,6 +1061,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("GET", "/api/v1/poller-health", INFRA, PENDING_INFRA),
     ("GET", "/api/v1/pollers", INFRA, PENDING_INFRA),
     ("DELETE", "/api/v1/pollers/:id", INFRA, NO_MCP_WRITE),
+    ("PUT", "/api/v1/pollers/:id/anchor", INFRA, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/pollers/:id/nodes",
@@ -1231,6 +1232,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
+    // ⚠️ Write-only, and there is deliberately no `GET` beside it. A configuration read here would
+    // take `PENDING_CONFIG_READ` and raise `MCP_PENDING`, which only moves down. The mode is
+    // already reported by `GET /api/v1/topology/shadow`, which has a tool — so the read exists
+    // without the gap. Adding the symmetric GET "for consistency" would undo that.
+    (
+        "PUT",
+        "/api/v1/settings/topology",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
     (
         "GET",
         "/api/v1/settings/oidc",
@@ -1327,6 +1338,40 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         // Folded rather than given its own tool: `get_topology(kind="links")` answers this. Both
         // branches take the same `cursor`+`limit` and return a keyset page of graph structure,
         // which is ADR-042's fold criterion — a model picks worse from a longer tool list.
+        Tool("get_topology"),
+    ),
+    (
+        "GET",
+        "/api/v1/topology/link-overrides",
+        // Both endpoints visible, exactly as for the links themselves — a decision naming a node
+        // the caller cannot see would disclose that the node exists.
+        GroupFiltered,
+        // Folded on the same criterion: `get_topology(kind="overrides")`. "Why is this edge here"
+        // and "what did an operator decide about it" are one question a model asks together.
+        Tool("get_topology"),
+    ),
+    (
+        "POST",
+        "/api/v1/topology/link-overrides",
+        // The body names both endpoints, so the handler takes `Scoped` and checks each itself
+        // (`scope::require_visible_node`) rather than relying on a path param.
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "DELETE",
+        "/api/v1/topology/link-overrides/:id",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/topology/shadow",
+        GroupFiltered,
+        // **Not exempt.** Asked "should derived suppression be enabled here", a model cannot
+        // synthesize this from the other two tools without reimplementing `is_suppressed` over the
+        // fleet's live down-set — which is exactly the kind of question read parity exists for.
+        // Folded as `get_topology(kind="shadow")`.
         Tool("get_topology"),
     ),
     ("POST", "/api/v1/url-monitors", ADMIN_CFG, NO_MCP_WRITE),

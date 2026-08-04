@@ -89,6 +89,11 @@ hostname = "0.4"
 # bursts. The Unix-only options are cfg-gated; the non-unix dev box falls back to a single socket.
 # `set_reuse_port` lives behind socket2's `all` feature, so it must be enabled for the Linux build.
 socket2 = { version = "0.5", features = ["all"] }
+# The poller's own interface addresses, reported in its heartbeat so core can root the derived
+# dependency graph at the poller's segment (ADR-043). A `UdpSocket::connect` probe would name only
+# the interface facing the bus, which on a multi-homed remote poller is the WAN side rather than the
+# monitored one. Tiny, no transitive dependencies beyond the platform's own bindings.
+if-addrs = "0.13"
 # Host self-metrics (self-observability): CPU/load/memory of the core & poller hosts. Cross-platform
 # so `cargo run` still works on the Windows dev box. Only yagra-hoststats (pulled by core + poller)
 # depends on it, keeping the heavy collector out of the shared/bus/alert crates.

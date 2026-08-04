@@ -22,6 +22,7 @@ use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, Node
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
 use crate::neighbors::AdjacencySettings;
 use crate::retention::RetentionSettings;
+use crate::topology_mode::TopologyMode;
 
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -1391,6 +1392,40 @@ impl NodeRepo {
         .bind(i32::try_from(s.neighbors_interval_secs).unwrap_or(i32::MAX))
         .bind(s.l3_enabled)
         .bind(i32::try_from(s.l3_interval_secs).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Which dependency graph the alert engine uses (ADR-043 決定 5).
+    ///
+    /// Degrades to [`TopologyMode::Manual`] on any read failure, and on any value it cannot parse.
+    /// Both are the same decision: a database blip or a value written by a newer core must not be
+    /// able to *turn on* derived suppression, because the failure mode of a wrong dependency graph
+    /// is a real outage nobody is told about. Falling back to the mode that changes nothing is the
+    /// only fallback that cannot silence anything.
+    pub async fn get_topology_mode(&self) -> TopologyMode {
+        let Ok(Some(row)) = sqlx::query("SELECT topology_mode FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+        else {
+            return TopologyMode::Manual;
+        };
+        row.try_get::<String, _>("topology_mode")
+            .map(|s| TopologyMode::from_stored(&s))
+            .unwrap_or(TopologyMode::Manual)
+    }
+
+    /// Set the topology mode, upserting the singleton row. The API edge validates the token
+    /// (`TopologyMode::from_token`) and checks the blocking preconditions; the column carries no
+    /// `CHECK` on purpose (see migration 0067).
+    pub async fn set_topology_mode(&self, mode: TopologyMode) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, topology_mode, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET topology_mode = $1, updated_at = now()",
+        )
+        .bind(mode.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())

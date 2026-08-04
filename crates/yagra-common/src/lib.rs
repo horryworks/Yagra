@@ -77,7 +77,10 @@ pub use state::NodeState;
 pub use thresholds::{
     resolve_effective, Direction, EffectiveThreshold, ScopeLevel, ScopedThreshold, ThresholdRule,
 };
-pub use topology::{DerivedLink, LinkSource, TopologyLinkSummary, MAX_LINKS_PER_NODE};
+pub use topology::{
+    DerivedLink, LinkDirection, LinkOverride, LinkOverrideAction, LinkSource, TopologyLinkSummary,
+    MAX_LINKS_PER_NODE,
+};
 pub use trap::trap_oid_name;
 pub use url_check::{
     host_ip, is_ssrf_blocked, ExpectedStatus, HttpAuth, HttpMethod, UrlCheckConfig,

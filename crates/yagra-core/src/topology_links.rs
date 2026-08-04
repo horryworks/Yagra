@@ -44,6 +44,8 @@ pub struct StoredLink {
     pub sources: Vec<LinkSource>,
     /// The subnet behind an `l3_subnet` edge.
     pub subnet: Option<String>,
+    /// The endpoint an operator declared upstream, if any (ADR-043 I2).
+    pub forced_parent: Option<NodeId>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
 }
@@ -91,6 +93,7 @@ impl TopoLinkRepo {
         let mut b_names: Vec<Option<String>> = Vec::with_capacity(links.len());
         let mut sources: Vec<String> = Vec::with_capacity(links.len());
         let mut subnets: Vec<Option<String>> = Vec::with_capacity(links.len());
+        let mut forced: Vec<Option<Uuid>> = Vec::with_capacity(links.len());
         for l in links {
             keys.push(l.link_key());
             a_nodes.push(Some(l.a_node.as_uuid()));
@@ -107,18 +110,19 @@ impl TopoLinkRepo {
                     .join(","),
             );
             subnets.push(l.subnet.clone());
+            forced.push(l.forced_parent.map(|n| n.as_uuid()));
         }
 
         let res = sqlx::query(
             "INSERT INTO node_links \
                 (link_key, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources, subnet, \
-                 first_seen, last_seen) \
+                 forced_parent, first_seen, last_seen) \
              SELECT t.link_key, t.a_node, t.b_node, t.a_if, t.b_if, t.a_if_name, t.b_if_name, \
-                    string_to_array(t.sources_csv, ','), t.subnet, now(), now() \
+                    string_to_array(t.sources_csv, ','), t.subnet, t.forced_parent, now(), now() \
              FROM UNNEST($1::text[], $2::uuid[], $3::uuid[], $4::int[], $5::int[], \
-                         $6::text[], $7::text[], $8::text[], $9::text[]) \
+                         $6::text[], $7::text[], $8::text[], $9::text[], $10::uuid[]) \
                   AS t(link_key, a_node, b_node, a_if, b_if, a_if_name, b_if_name, \
-                       sources_csv, subnet) \
+                       sources_csv, subnet, forced_parent) \
              ON CONFLICT (link_key) DO UPDATE SET \
                  a_node = EXCLUDED.a_node, \
                  b_node = EXCLUDED.b_node, \
@@ -128,6 +132,7 @@ impl TopoLinkRepo {
                  b_if_name = EXCLUDED.b_if_name, \
                  sources = EXCLUDED.sources, \
                  subnet = EXCLUDED.subnet, \
+                 forced_parent = EXCLUDED.forced_parent, \
                  last_seen = now()",
         )
         .bind(&keys)
@@ -139,6 +144,7 @@ impl TopoLinkRepo {
         .bind(&b_names)
         .bind(&sources)
         .bind(&subnets)
+        .bind(&forced)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -194,6 +200,45 @@ impl TopoLinkRepo {
         }))
     }
 
+    /// Every link with both endpoints in the inventory, for the projection (ADR-043 I2).
+    ///
+    /// **Unscoped, and it must stay that way.** This feeds the alert engine's dependency graph, not
+    /// a response: a graph filtered to one operator's groups would attribute a root cause to the
+    /// nearest *visible* node rather than the actual one, so suppression would differ per viewer.
+    /// The scoped read is [`Self::list_page`]; these two callers want opposite things and the API
+    /// never reaches this one.
+    ///
+    /// Rows whose endpoints are NULL are skipped — Increment 3's non-inventory endpoints are map
+    /// vertices, never dependency vertices, because a node with no state cannot be up or down.
+    pub async fn all_links(&self) -> anyhow::Result<Vec<DerivedLink>> {
+        let rows = sqlx::query(
+            "SELECT a_node, b_node, sources, subnet, forced_parent FROM node_links \
+             WHERE a_node IS NOT NULL AND b_node IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let (Some(a), Some(b)) = (
+                row.try_get::<Option<Uuid>, _>("a_node")?,
+                row.try_get::<Option<Uuid>, _>("b_node")?,
+            ) else {
+                continue;
+            };
+            let tokens: Vec<String> = row.try_get("sources")?;
+            let mut link = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::L3Subnet);
+            link.sources = tokens
+                .iter()
+                .filter_map(|t| LinkSource::from_token(t))
+                .collect();
+            link.sources.sort_unstable();
+            link.subnet = row.try_get("subnet")?;
+            link.forced_parent = row.try_get::<Option<Uuid>, _>("forced_parent")?.map(NodeId);
+            out.push(link);
+        }
+        Ok(out)
+    }
+
     /// A keyset page of links, ordered by id (ADR-019 — never OFFSET).
     ///
     /// ⚠️ **Both endpoints must be visible to the caller.** `groups` is the group-scope filter (the
@@ -215,7 +260,7 @@ impl TopoLinkRepo {
             None => {
                 sqlx::query(
                     "SELECT id, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources, \
-                            subnet, first_seen, last_seen \
+                            subnet, forced_parent, first_seen, last_seen \
                      FROM node_links \
                      WHERE ($1::uuid[] IS NULL OR ( \
                              EXISTS (SELECT 1 FROM nodes n WHERE n.id = node_links.a_node \
@@ -232,7 +277,7 @@ impl TopoLinkRepo {
             Some(cursor) => {
                 sqlx::query(
                     "SELECT id, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources, \
-                            subnet, first_seen, last_seen \
+                            subnet, forced_parent, first_seen, last_seen \
                      FROM node_links \
                      WHERE ($1::uuid[] IS NULL OR ( \
                              EXISTS (SELECT 1 FROM nodes n WHERE n.id = node_links.a_node \
@@ -268,6 +313,7 @@ impl TopoLinkRepo {
                     b_if_name: row.try_get("b_if_name")?,
                     sources,
                     subnet: row.try_get("subnet")?,
+                    forced_parent: row.try_get::<Option<Uuid>, _>("forced_parent")?.map(NodeId),
                     first_seen: row.try_get("first_seen")?,
                     last_seen: row.try_get("last_seen")?,
                 })

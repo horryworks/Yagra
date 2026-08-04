@@ -39,6 +39,7 @@ mod ipasn;
 mod l3;
 mod ldap;
 mod leader;
+mod link_overrides;
 mod logstore;
 mod maintenance;
 mod mcp;
@@ -71,6 +72,8 @@ mod thresholds;
 mod tls;
 mod token;
 mod topology_links;
+mod topology_mode;
+mod topology_projection;
 mod url_check;
 mod volatile;
 
@@ -456,6 +459,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
     let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
+    let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
 
     // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
@@ -492,7 +496,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
     // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
     // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
-    alerts.set_config(load_alert_config(&repo, &thresholds, &maintenance, &group_repo).await);
+    let topo_sources = topology_projection::TopologySources {
+        links: topo_link_repo.clone(),
+        pollers: poller_repo.clone(),
+        l3: l3_repo.clone(),
+    };
+    alerts.set_config(
+        load_alert_config(&repo, &thresholds, &maintenance, &group_repo, &topo_sources).await,
+    );
 
     // Notification templates (ADR-039) interpolate node names, groups and profiles, none of which
     // an `Alert` carries. Wired once, here, because it needs the write side; a skeleton-mode core
@@ -621,6 +632,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
         topology_links: topo_link_repo.clone(),
+        link_overrides: link_override_repo.clone(),
+        pollers: poller_repo.clone(),
         forward_handle: forward_handle.clone(),
         forward_runner: Some(forward_runner),
     };
@@ -663,7 +676,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         url_checks,
         dns_checks,
         neighbors: neighbor_repo.clone(),
+        l3: l3_repo.clone(),
         topology_links: topo_link_repo.clone(),
+        link_overrides: link_override_repo.clone(),
         meraki_orgs,
         meraki_devices,
         events: events_repo,
@@ -868,6 +883,10 @@ struct LeaderTasks {
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
     topology_links: Arc<topology_links::TopoLinkRepo>,
+    link_overrides: Arc<link_overrides::LinkOverrideRepo>,
+    /// Durable poller inventory — where the pollers are, which is what roots the derived dependency
+    /// graph (ADR-043 I2).
+    pollers: Arc<PollerRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -1114,6 +1133,11 @@ impl LeaderTasks {
                 self.classifier.clone(),
                 self.classification.clone(),
                 self.event_engine.clone(),
+                topology_projection::TopologySources {
+                    links: self.topology_links.clone(),
+                    pollers: self.pollers.clone(),
+                    l3: self.l3.clone(),
+                },
             ),
         );
         spawn_cancellable(
@@ -1135,6 +1159,7 @@ impl LeaderTasks {
                 self.l3.clone(),
                 self.neighbors.clone(),
                 self.topology_links.clone(),
+                self.link_overrides.clone(),
             ),
         );
         spawn_cancellable(
@@ -1532,6 +1557,7 @@ async fn run_alert_config_refresh(
     classifier: Arc<classification::Classifier>,
     classification: Arc<classification::ClassificationRepo>,
     event_engine: Arc<events::EventEngine>,
+    topo_sources: topology_projection::TopologySources,
 ) {
     // Cache the config-derived alert base keyed by the config generation, so the full node scan +
     // meta/topology rebuild runs only after an actual config change (S6). Maintenance windows are
@@ -1544,7 +1570,10 @@ async fn run_alert_config_refresh(
         let generation = config_gen::current();
         let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
         if base_changed {
-            cached_base = Some((generation, load_alert_config_base(&repo, &thresholds).await));
+            cached_base = Some((
+                generation,
+                load_alert_config_base(&repo, &thresholds, &topo_sources).await,
+            ));
         }
         let base = &cached_base.as_ref().expect("alert base set above").1;
         let in_maintenance =
@@ -1654,6 +1683,7 @@ async fn run_topology_derivation(
     l3: Arc<l3::L3Repo>,
     neighbors: Arc<neighbors::NeighborRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
+    overrides: Arc<link_overrides::LinkOverrideRepo>,
 ) {
     type Watermark = Option<chrono::DateTime<chrono::Utc>>;
     let mut last_signal: Option<(u64, Watermark, Watermark)> = None;
@@ -1687,13 +1717,19 @@ async fn run_topology_derivation(
             }
         };
 
+        // An override read that fails degrades to *no* overrides rather than skipping the cycle:
+        // the derivation's own output is still correct, it just lacks the operator's corrections
+        // for one cycle. Skipping instead would freeze the whole map on a transient.
+        let ovr = overrides.all().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "topology derivation: reading link overrides failed");
+            Vec::new()
+        });
+
         let out = yagra_topology::derive::derive_links(yagra_topology::derive::DeriveInput {
             nodes: &inventory,
             l3: &l3_rows,
             neighbors: &nb_rows,
-            // Increment 2 fills this in; the argument exists now so that adding overrides is a
-            // change to what is passed, not to the function's shape.
-            overrides: &[],
+            overrides: &ovr,
         });
 
         if let Err(e) = links.upsert_batch(&out.links).await {
@@ -3021,23 +3057,30 @@ struct AlertConfigBase {
     rules: Vec<thresholds::StoredThreshold>,
     nodes: Vec<yagra_common::Node>,
     meta: HashMap<NodeId, NodeMeta>,
+    /// The graph the alert engine suppresses with.
+    ///
+    /// **This is the only topology in the struct, deliberately.** ADR-043 決定 5's shadow mode does
+    /// not put a second graph here for the engine to maybe-use: in `shadow` this field holds the
+    /// *manual* graph, exactly as in `manual`, and the derived alternative is computed on demand by
+    /// the read-side endpoint that displays the difference. There is therefore no runtime state in
+    /// which a shadow graph can suppress anything — not because a flag says so, but because the
+    /// engine is never given one.
     topology: Topology,
 }
 
 /// Load the config-derived alert base (thresholds + node-meta + dependency topology).
-async fn load_alert_config_base(repo: &NodeRepo, thresholds: &ThresholdStore) -> AlertConfigBase {
+async fn load_alert_config_base(
+    repo: &NodeRepo,
+    thresholds: &ThresholdStore,
+    topo: &topology_projection::TopologySources,
+) -> AlertConfigBase {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load thresholds");
         Vec::new()
     });
     let nodes = repo.list_nodes().await.unwrap_or_default();
     let mut meta = HashMap::new();
-    let mut topology = Topology::new();
     for node in &nodes {
-        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
-        if let Some(parent) = node.parent {
-            topology.add_dependency(node.id, parent);
-        }
         meta.insert(
             node.id,
             NodeMeta {
@@ -3049,6 +3092,16 @@ async fn load_alert_config_base(repo: &NodeRepo, thresholds: &ThresholdStore) ->
             },
         );
     }
+
+    // ADR-043 決定 5. The engine gets the derived graph only in `derived`; `shadow` is byte-for-byte
+    // `manual` here, and the comparison an operator reviews is computed by the read-side endpoint.
+    let topology = if repo.get_topology_mode().await.uses_derived() {
+        topology_projection::derived_topology(topo, &nodes).await.0
+    } else {
+        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
+        topology_projection::manual_topology(&nodes)
+    };
+
     AlertConfigBase {
         rules,
         nodes,
@@ -3108,8 +3161,9 @@ async fn load_alert_config(
     thresholds: &ThresholdStore,
     maintenance: &MaintenanceRepo,
     groups: &groups::GroupRepo,
+    topo: &topology_projection::TopologySources,
 ) -> AlertConfig {
-    let base = load_alert_config_base(repo, thresholds).await;
+    let base = load_alert_config_base(repo, thresholds, topo).await;
     let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
     AlertConfig::new(base.rules, base.meta)
         .with_topology(base.topology)
@@ -3212,6 +3266,42 @@ mod tests {
     use store::MetricPoint;
     use yagra_bus::{CheckOutcome, Sample};
     use yagra_common::{NodeId, SeriesKey};
+
+    /// This file's own source, for the structural assertion below.
+    const SRC: &str = include_str!("main.rs");
+
+    /// **In shadow mode the alert engine receives the manual graph, and nothing else.**
+    ///
+    /// ADR-043 決定 5's safety property, and the reason `AlertConfigBase` carries one topology
+    /// rather than two: the derived graph is chosen *only* when the mode says to use it, so there is
+    /// no runtime state in which a preview graph could suppress a real alert. That is a property of
+    /// one expression, and this is what stops the expression growing a second branch.
+    ///
+    /// The needles are assembled at runtime — a literal one would match this test's own source and
+    /// pass forever.
+    #[test]
+    fn only_the_derived_mode_hands_the_engine_a_derived_graph() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let guard = format!("get_topology_mode().await.{}()", "uses_derived");
+        assert!(
+            production.contains(&guard),
+            "the topology choice is no longer gated on `uses_derived`"
+        );
+        let call = format!("{}::derived_topology", "topology_projection");
+        assert_eq!(
+            production.matches(call.as_str()).count(),
+            1,
+            "the derived graph reaches the engine from exactly one place; a second call site is \
+             how a preview graph starts suppressing alerts"
+        );
+        assert!(
+            !production.contains("shadow_topology"),
+            "a shadow graph must not be a field the engine could be handed"
+        );
+    }
 
     // ── Sweep pool grouping (effective pool + live-pool seeding) ──────────────
 

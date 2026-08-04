@@ -394,8 +394,11 @@ impl Coordinator {
         }
         if do_pg {
             if let Some(repo) = &self.pollers_repo {
+                // Where the poller says it is, for ADR-043 anchor resolution. Rendered here rather
+                // than in the repo so the store keeps taking plain bound values.
+                let mgmt: Vec<String> = hb.mgmt_addrs.iter().map(ToString::to_string).collect();
                 if let Err(e) = repo
-                    .upsert_seen(&hb.poller_id, &hb.pool, &hb.version, hb.incarnation)
+                    .upsert_seen(&hb.poller_id, &hb.pool, &hb.version, hb.incarnation, &mgmt)
                     .await
                 {
                     tracing::warn!(error = %e, poller = %hb.poller_id, "poller inventory upsert failed");
@@ -905,6 +908,7 @@ mod tests {
             caps: Vec::new(),
             host: None,
             leaving: false,
+            mgmt_addrs: Vec::new(),
         }
     }
 

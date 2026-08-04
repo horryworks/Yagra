@@ -585,6 +585,7 @@ mod tests {
             caps: Vec::new(),
             host: None,
             leaving: false,
+            mgmt_addrs: Vec::new(),
         };
         SyncBus::publish_heartbeat(&bus, hb.clone()).await.unwrap();
 

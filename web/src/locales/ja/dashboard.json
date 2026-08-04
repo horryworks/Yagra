@@ -390,7 +390,11 @@
     },
     "dependency": {
       "empty": "インベントリにノードがありません。",
-      "depthLimit": "… 深さの上限に達しました（依存関係の循環の可能性）"
+      "allClear": "ダウンしているノードはありません。",
+      "explains_one": "アラート {{count}} 件の原因",
+      "explains_other": "アラート {{count}} 件の原因",
+      "andMore_one": "… 他 {{count}} 件",
+      "andMore_other": "… 他 {{count}} 件"
     },
     "eventFeed": {
       "empty": "受信イベントはまだありません。",

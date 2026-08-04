@@ -659,6 +659,7 @@ mod tests {
                 sources: vec![yagra_common::LinkSource::L3Subnet],
                 source: yagra_common::LinkSource::L3Subnet,
                 subnet: Some("192.168.1.0/24".to_owned()),
+                forced_parent: None,
                 first_seen: "2026-08-04T00:00:00Z".to_owned(),
                 last_seen: "2026-08-04T01:00:00Z".to_owned(),
             }],
@@ -668,6 +669,44 @@ mod tests {
             derived_at: Some("2026-08-04T01:00:00Z".to_owned()),
         };
         assert_no_forbidden_keys(&serde_json::to_value(&links).unwrap(), "TopologyLinkPage");
+
+        // `kind=overrides` and `kind=shadow` (ADR-043 I2) — the folded tool's remaining branches.
+        let ovr = crate::api::topology::LinkOverrideList {
+            overrides: vec![crate::api::topology::LinkOverrideRow {
+                id: uuid::Uuid::nil(),
+                a_node: node.id.0,
+                b_node: uuid::Uuid::nil(),
+                action: yagra_common::LinkOverrideAction::Direction,
+                direction: Some(yagra_common::LinkDirection::AParent),
+                note: Some("core switch is upstream".to_owned()),
+                created_by: Some("admin".to_owned()),
+                created_at: "2026-08-04T01:00:00Z".to_owned(),
+            }],
+        };
+        assert_no_forbidden_keys(&serde_json::to_value(&ovr).unwrap(), "LinkOverrideList");
+
+        let shadow = crate::api::topology::TopologyShadow {
+            mode: crate::topology_mode::TopologyMode::Shadow,
+            manual_edges: 1,
+            derived_edges: 2,
+            only_in_manual: vec![crate::api::topology::ShadowEdge {
+                child: node.id.0,
+                parent: uuid::Uuid::nil(),
+            }],
+            only_in_derived: vec![],
+            would_suppress: vec![crate::api::topology::ShadowAlert {
+                node_id: node.id.0,
+                root_cause: Some(uuid::Uuid::nil()),
+            }],
+            would_unsuppress: vec![],
+            anchors: vec![uuid::Uuid::nil()],
+            // `pool` is an `INVENTORY_NOISE_KEYS` word, but these are *pool names in a list*, not a
+            // key naming which poller owns a node — the field this canary is guarding against is a
+            // node's `pool`, and the distinction is why the check is per-key rather than per-word.
+            unresolved_pools: vec!["default".to_owned()],
+            unresolved_pollers: vec!["edge-1".to_owned()],
+        };
+        assert_no_forbidden_keys(&serde_json::to_value(&shadow).unwrap(), "TopologyShadow");
 
         let series = MetricSeriesDto {
             node_id: node.id.0,
@@ -1082,6 +1121,8 @@ mod tests {
         ("list_node_groups", "NodeGroup"),
         ("get_topology", "TopologyPage"),
         ("get_topology", "TopologyLinkPage"),
+        ("get_topology", "LinkOverrideList"),
+        ("get_topology", "TopologyShadow"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("list_analyses", "AnalysisJob"),

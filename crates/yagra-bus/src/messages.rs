@@ -636,6 +636,26 @@ pub struct HeartbeatMsg {
     /// so the two upgrade in either order.
     #[serde(default)]
     pub leaving: bool,
+    /// The poller's own non-loopback interface addresses — where it sits on the network (ADR-043).
+    ///
+    /// Core needs this to root the derived dependency graph: a node's parents are the nodes
+    /// immediately before it on the path *from a poller*, so without knowing where the poller is
+    /// there is no direction to derive and the graph has no roots. Every inventory node sharing a
+    /// subnet with one of these addresses is an anchor — that is not a guess about which box is the
+    /// first hop, it is the statement that a node on the poller's own segment has nothing upstream
+    /// of it.
+    ///
+    /// No prefix length travels with them on purpose: containment is evaluated against each
+    /// *node's* prefix, which core already stores, so the wire carries the one fact only the poller
+    /// knows.
+    ///
+    /// ⚠️ A containerized poller reports its bridge address (`172.18.0.x`) and matches nothing. That
+    /// is the common case, not the exception, which is why `pollers.anchor_node_id` exists and why
+    /// an unresolved anchor blocks derived suppression outright rather than quietly producing a
+    /// rootless graph. Empty from an N-1 poller — indistinguishable from "matched nothing", and
+    /// both are handled the same way.
+    #[serde(default)]
+    pub mgmt_addrs: Vec<IpAddr>,
 }
 
 /// A poller's request for a fresh full snapshot, published on [`crate::subjects::sync_request`]
@@ -2517,6 +2537,32 @@ mod tests {
         let back: HeartbeatMsg = serde_json::from_str(&wire).unwrap();
         assert!(back.leaving);
     }
+
+    #[test]
+    fn a_heartbeat_tolerates_missing_and_unknown_fields() {
+        // ADR-043 added `mgmt_addrs`. An N-1 poller sends none, and a beat that fails to decode is
+        // a poller core believes is dead — so the absence has to read as "reported no addresses",
+        // which is also what a poller that has none reports.
+        let json = r#"{
+            "poller_id": "edge-1",
+            "pool": "default",
+            "incarnation": "00000000-0000-0000-0000-000000000000",
+            "future_field": "ignored"
+        }"#;
+        let hb: HeartbeatMsg = serde_json::from_str(json).unwrap();
+        assert!(hb.mgmt_addrs.is_empty());
+
+        // Both families survive the round trip; a v4-only assumption here would silently drop a
+        // v6-addressed poller's location.
+        let mut located = hb;
+        located.mgmt_addrs = vec![
+            "192.168.1.9".parse().unwrap(),
+            "2001:db8::9".parse().unwrap(),
+        ];
+        let wire = serde_json::to_string(&located).unwrap();
+        let back: HeartbeatMsg = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.mgmt_addrs, located.mgmt_addrs);
+    }
     #[test]
     fn http_check_tolerates_missing_and_unknown_fields() {
         // N-1 producer: no `auth` at all. It must decode as an unauthenticated check rather than
@@ -2680,6 +2726,7 @@ mod tests {
             listeners: vec!["syslog:514".into()],
             caps: vec![CAP_RAW_CAPTURE.to_owned()],
             leaving: false,
+            mgmt_addrs: Vec::new(),
             host: Some(yagra_common::HostSample {
                 cpu_pct: 12.5,
                 mem_used_bytes: 2,

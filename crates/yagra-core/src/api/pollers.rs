@@ -41,7 +41,8 @@ use yagra_common::{HostSample, NodeId};
     poller_nodes,
     delete_poller,
     node_assignment,
-    list_monitoring_gaps
+    list_monitoring_gaps,
+    set_poller_anchor
 ))]
 pub(super) struct Doc;
 
@@ -52,6 +53,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/pollers", get(list_pollers))
         .route("/api/v1/pollers/:id/nodes", get(poller_nodes))
         .route("/api/v1/pollers/:id", delete(delete_poller))
+        .route(
+            "/api/v1/pollers/:id/anchor",
+            axum::routing::put(set_poller_anchor),
+        )
         .route("/api/v1/nodes/:node_id/assignment", get(node_assignment))
         .route("/api/v1/monitoring-gaps", get(list_monitoring_gaps))
 }
@@ -104,6 +109,12 @@ pub(super) struct PollerInfo {
     mem_used_pct: Option<f64>,
     /// Highest watched-filesystem used % (0–100); `null` when unavailable.
     disk_used_pct: Option<f64>,
+    /// Interface addresses the poller reported for itself. Empty for an older poller build, and
+    /// empty for a containerized poller whose only address is a container-network one.
+    mgmt_addrs: Vec<String>,
+    /// The node this poller attaches to, naming where it sits in the derived dependency graph.
+    /// `null` ⇒ core places it from `mgmt_addrs` instead.
+    anchor_node_id: Option<Uuid>,
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
@@ -192,6 +203,10 @@ fn build_pollers_response(
                 disk_used_pct: lv
                     .and_then(|v| v.host.as_ref())
                     .and_then(HostSample::primary_disk_used_pct),
+                // From the durable row only: the live registry does not carry the poller's
+                // addresses, and the anchor is not the poller's to report at all.
+                mgmt_addrs: inv.map(|r| r.mgmt_addrs.clone()).unwrap_or_default(),
+                anchor_node_id: inv.and_then(|r| r.anchor_node_id),
             }
         })
         .collect();
@@ -608,6 +623,73 @@ async fn delete_poller(
     }
 }
 
+/// Where a poller attaches to the monitored network.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub(super) struct PollerAnchorRequest {
+    /// The node the poller sits behind. `null` clears the anchor, returning the poller to being
+    /// placed by its own reported addresses.
+    node_id: Option<Uuid>,
+}
+
+/// Name the node a poller attaches to, rooting the derived dependency graph.
+///
+/// Direction in the derived graph comes from distance to a poller, so core has to know where each
+/// poller sits. It works that out from the addresses the poller reports — but a poller running in a
+/// container reports a container-network address that matches no monitored node, which is the
+/// common case rather than the unusual one. This is how an operator says where it really is.
+///
+/// Until every pool that has nodes has a placed poller, derived suppression cannot be enabled.
+#[utoipa::path(
+    put, path = "/api/v1/pollers/{id}/anchor", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id")),
+    request_body = PollerAnchorRequest,
+    responses(
+        (status = 204, description = "The anchor was set or cleared"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such poller, or no such node", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_poller_anchor(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<String>,
+    Json(req): Json<PollerAnchorRequest>,
+) -> ApiResult<StatusCode> {
+    // Check the node exists before storing the reference. The column has a foreign key, so a bad id
+    // would fail anyway — as a 500 naming a constraint, which tells the operator nothing about what
+    // they got wrong.
+    if let Some(node_id) = req.node_id {
+        if admin
+            .repo
+            .get_node(node_id)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(e.as_ref(), "anchor node lookup", "failed to read the node")
+            })?
+            .is_none()
+        {
+            return Err(ApiError::not_found(
+                "node_not_found",
+                format!("no node {node_id}"),
+            ));
+        }
+    }
+    match admin.pollers.set_anchor(&id, req.node_id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::not_found(
+            "poller_not_found",
+            format!("no poller {id}"),
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "set poller anchor",
+            "failed to set the poller anchor",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,6 +950,8 @@ mod tests {
             last_seen: "2026-07-06T01:00:00+00:00".to_owned(),
             last_version: Some("0.1.1".to_owned()),
             last_incarnation: None,
+            mgmt_addrs: Vec::new(),
+            anchor_node_id: None,
         }
     }
 }

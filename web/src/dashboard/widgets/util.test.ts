@@ -9,7 +9,7 @@ import type {
 } from '../../types/api';
 import {
   bucketAlertsByHour,
-  buildForest,
+  rootCauseRows,
   calendarMatrix,
   countsTotal,
   densifyTimeBuckets,
@@ -106,31 +106,70 @@ describe('bucketAlertsByHour', () => {
   });
 });
 
-describe('buildForest', () => {
-  const tnode = (id: string, parent_id: string | null, root_cause: string | null = null): TopologyNode => ({
-    id,
-    name: id,
-    parent_id,
-    state: 'ok',
-    root_cause,
-  });
+describe('rootCauseRows', () => {
+  const tnode = (
+    id: string,
+    root_cause: string | null = null,
+    state: TopologyNode['state'] = 'ok',
+  ): TopologyNode => ({ id, name: id, parent_id: null, state, root_cause });
 
-  it('nests children under parents and keeps parentless nodes as roots', () => {
-    const forest = buildForest([
-      tnode('core', null),
-      tnode('dist', 'core'),
-      tnode('access', 'dist'),
-      tnode('island', null),
+  it('groups suppressed alerts under the cause the engine blamed', () => {
+    const rows = rootCauseRows([
+      tnode('core', null, 'unreachable'),
+      tnode('a', 'core', 'unreachable'),
+      tnode('b', 'core', 'unreachable'),
     ]);
-    expect(forest.map((r) => r.node.id).sort()).toEqual(['core', 'island']);
-    const core = forest.find((r) => r.node.id === 'core')!;
-    expect(core.children.map((c) => c.node.id)).toEqual(['dist']);
-    expect(core.children[0].children.map((c) => c.node.id)).toEqual(['access']);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].node.id).toBe('core');
+    expect(rows[0].affected.map((n) => n.id).sort()).toEqual(['a', 'b']);
   });
 
-  it('treats a missing parent and a self-parent as roots (no dangling/loop)', () => {
-    const forest = buildForest([tnode('a', 'ghost'), tnode('b', 'b')]);
-    expect(forest.map((r) => r.node.id).sort()).toEqual(['a', 'b']);
+  it('orders by how much each cause explains, then by name', () => {
+    // Stable across refreshes, and the biggest incident first — the widget is small, so what lands
+    // at the top is most of what an operator reads.
+    const rows = rootCauseRows([
+      tnode('small', null, 'unreachable'),
+      tnode('big', null, 'unreachable'),
+      tnode('x', 'big', 'unreachable'),
+      tnode('y', 'big', 'unreachable'),
+      tnode('z', 'small', 'unreachable'),
+    ]);
+    expect(rows.map((r) => r.node.id)).toEqual(['big', 'small']);
+  });
+
+  it('lists an unattributed problem on its own, and never a healthy node', () => {
+    // The state most of a fleet is in while nothing is modelled: a real outage with no dependency
+    // to roll it up under. Dropping those would make the widget look empty during an incident.
+    const rows = rootCauseRows([
+      tnode('lonely', null, 'critical'),
+      tnode('fine', null, 'ok'),
+      tnode('warned', null, 'warning'),
+    ]);
+    expect(rows.map((r) => r.node.id)).toEqual(['lonely']);
+    expect(rows[0].affected).toEqual([]);
+  });
+
+  it('lists a node once, as the cause, when it is both blamed and suppressed', () => {
+    // `root_cause` has already climbed to the top of the down chain, so re-nesting here would
+    // second-guess the engine and show the same node twice.
+    const rows = rootCauseRows([
+      tnode('gp', null, 'unreachable'),
+      tnode('mid', 'gp', 'unreachable'),
+      tnode('leaf', 'mid', 'unreachable'),
+    ]);
+    expect(rows.map((r) => r.node.id).sort()).toEqual(['gp', 'mid']);
+    expect(rows.flatMap((r) => r.affected.map((a) => a.id)).sort()).toEqual(['leaf', 'mid']);
+  });
+
+  it('skips a cause that is not in the payload rather than inventing a row', () => {
+    // A group-scoped caller does not receive an out-of-scope cause. Showing a placeholder would
+    // disclose that it exists.
+    const rows = rootCauseRows([tnode('a', 'invisible', 'unreachable')]);
+    expect(rows).toEqual([]);
+  });
+
+  it('returns nothing for a healthy fleet', () => {
+    expect(rootCauseRows([tnode('a'), tnode('b')])).toEqual([]);
   });
 });
 

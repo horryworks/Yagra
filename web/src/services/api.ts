@@ -116,6 +116,11 @@ import type {
   ThresholdPage,
   RankedNodes,
   TopologyNode,
+  TopologyMode,
+  TopologyShadow,
+  LinkOverrideRow,
+  LinkOverrideAction,
+  LinkDirection,
   TopologyLink,
   TopologyLinkSummary,
   UrlCheckConfig,
@@ -1232,6 +1237,39 @@ export const api = {
     }
     return { links, summary, derivedAt };
   },
+
+  /** Operator decisions that override the derived graph (pin / hide / which end is upstream).
+   *  Not paged — the number of decisions is bounded by what an operator typed in, not by the fleet. */
+  getLinkOverrides: async (): Promise<LinkOverrideRow[]> =>
+    (await apiGet('/api/v1/topology/link-overrides')).overrides,
+
+  /** Record a decision about a link, replacing any previous decision of the same kind for the pair.
+   *  Takes effect on the next derivation cycle. */
+  createLinkOverride: (body: {
+    a_node: string;
+    b_node: string;
+    action: LinkOverrideAction;
+    direction?: LinkDirection | null;
+    note?: string | null;
+  }): Promise<{ id: string }> => apiPost('/api/v1/topology/link-overrides', { body }),
+
+  /** Remove a decision, letting the derivation's own answer stand again. */
+  deleteLinkOverride: (id: string): Promise<void> =>
+    apiDelete('/api/v1/topology/link-overrides/{id}', { path: { id } }),
+
+  /** What the derived dependency graph would do to alerting, against what the manual one does —
+   *  including the alerts that would newly be suppressed, and any pollers with no place in the
+   *  graph yet (which block enabling derived mode). */
+  getTopologyShadow: (): Promise<TopologyShadow> => apiGet('/api/v1/topology/shadow'),
+
+  /** Choose which dependency graph drives suppression. Moving to `derived` is refused while a pool
+   *  that has nodes has an unplaced poller. */
+  setTopologyMode: (mode: TopologyMode): Promise<void> =>
+    apiPut('/api/v1/settings/topology', { body: { mode } }),
+
+  /** Name the node a poller attaches to, rooting the derived graph. `null` clears it. */
+  setPollerAnchor: (id: string, nodeId: string | null): Promise<void> =>
+    apiPut('/api/v1/pollers/{id}/anchor', { path: { id }, body: { node_id: nodeId } }),
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */

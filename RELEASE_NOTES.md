@@ -11,6 +11,46 @@
 ## Unreleased
 
 ### New Features
+- **See what the derived graph would do to your alerts, before it does anything.**
+  **Topology ▸ Dependencies** gained a mode switch with three positions. *The hand-authored graph*
+  is the default and is what every existing deployment stays on. *Comparing* changes nothing about
+  alerting and shows, node by node, where the graph Yagra derived and the one you maintain by hand
+  disagree — plus the two numbers that matter: how many active alerts the derived graph **would
+  newly suppress** (the risky direction — each of those is an alert that would stop being raised)
+  and how many it would stop suppressing. *The derived graph* hands suppression over. Nothing moves
+  between these on its own; an upgrade lands on the mode you were already on.
+- **Dependency suppression can now have more than one upstream per node.** The derived graph gives a
+  node every neighbour that sits one hop closer to a poller, so a server reached through a redundant
+  pair of routers gets both as parents — and its alert keeps standing while either one is alive.
+  This is what `is_suppressed`'s "suppressed only when *every* parent is down" rule was written for;
+  a single hand-typed `parent_id` could never express it.
+- **Correct a wrong link instead of working around it.** New endpoints record operator decisions
+  about a link — `pin` it into existence, `hide` it, or declare which end is upstream — and those
+  always beat what was derived, on every recomputation. `GET`/`POST /api/v1/topology/link-overrides`
+  and `DELETE /api/v1/topology/link-overrides/{id}`. A pinned link never expires the way an
+  unobserved derived link does.
+- **`GET /api/v1/topology/shadow`** returns the whole comparison: edge counts, the differing edges
+  in each direction, the affected active alerts, the nodes acting as graph roots, and any pools
+  whose poller could not be placed.
+- **The MCP `get_topology` tool takes two more `kind` values**: `overrides` and `shadow`. Asked
+  whether derived suppression is safe to enable, an AI client can now answer from the same data an
+  operator sees. Existing calls behave exactly as before.
+- **Pollers report their own interface addresses, and can be given an anchor node.** Direction in
+  the derived graph comes from distance to a poller, so Yagra has to know where each poller sits. It
+  works that out from the addresses the poller reports — but ⚠️ **a poller running in a container
+  reports a container-network address that matches no monitored node**, which is the normal case
+  rather than an unusual one. **Settings ▸ Pollers** gained an *Anchor node* column for naming where
+  such a poller really attaches (`PUT /api/v1/pollers/{id}/anchor`), and `GET /api/v1/pollers` now
+  returns `mgmt_addrs` and `anchor_node_id`. Switching to the derived graph is **refused** while a
+  pool that has nodes has an unplaced poller — such a pool would contribute no roots, so nothing in
+  it would ever be suppressed while the screen showed the feature as on.
+- **`PUT /api/v1/settings/topology`** sets the mode (`manual` / `shadow` / `derived`). There is
+  deliberately no matching `GET`: the current mode is part of the `/topology/shadow` response.
+
+### Improvements
+- The **Dependency / root-cause dashboard widget** now lists each root cause with the alerts rolled
+  up under it, biggest first, instead of an indented parent→child tree. The dependency graph is no
+  longer a tree — a node can have two upstreams — and a tree could only have shown one of them.
 - **The Network map now draws the network, not a list of parent links you typed in.** Yagra derives
   the connectivity graph from what devices report: CDP/LLDP adjacency, and nodes that have an
   interface address in the same IP subnet. Two nodes sharing a subnet are adjacent as a matter of

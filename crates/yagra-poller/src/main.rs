@@ -25,6 +25,7 @@ mod flow;
 mod l3;
 mod limiter;
 mod listeners;
+mod location;
 mod neighbors;
 mod store_forward;
 mod worker;
@@ -242,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
         inflight.clone(),
         listener_labels,
         host_collector,
+        // Read once at startup rather than per beat: enumerating interfaces is a syscall, and an
+        // address change on a poller host is a restart-level event in every deployment shape we
+        // support (a container gets a new address by being recreated).
+        location::local_mgmt_addrs(),
         shutdown.clone(),
     ));
 
@@ -384,6 +389,7 @@ async fn run_heartbeat_loop<B>(
     inflight: Arc<AtomicU64>,
     listeners: Vec<String>,
     host_collector: Arc<yagra_hoststats::HostCollector>,
+    mgmt_addrs: Vec<std::net::IpAddr>,
     shutdown: CancellationToken,
 ) where
     B: SyncBus + 'static,
@@ -429,6 +435,8 @@ async fn run_heartbeat_loop<B>(
             ],
             host: Some(host_collector.sample()),
             leaving,
+            // Where this poller sits, so core can root the derived dependency graph (ADR-043).
+            mgmt_addrs: mgmt_addrs.clone(),
         };
         if let Err(e) = bus.publish_heartbeat(hb).await {
             tracing::warn!(error = %e, "failed to publish heartbeat");

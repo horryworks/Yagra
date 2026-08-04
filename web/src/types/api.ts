@@ -755,6 +755,29 @@ export type TopologyLinkSummary = components['schemas']['TopologyLinkSummary'];
 export const LINK_SOURCES = ['manual', 'lldp', 'cdp', 'l3_subnet'] as const;
 export type LinkSource = (typeof LINK_SOURCES)[number];
 
+/** An operator decision recorded against a link (`GET /api/v1/topology/link-overrides`). */
+export type LinkOverrideRow = components['schemas']['LinkOverrideRow'];
+
+/** What an operator decided about a link. `as const` for the same reason as `LINK_SOURCES`. */
+export const LINK_OVERRIDE_ACTIONS = ['pin', 'hide', 'direction'] as const;
+export type LinkOverrideAction = (typeof LINK_OVERRIDE_ACTIONS)[number];
+
+/** Which end of a link is upstream. Endpoints are stored in a canonical order, so direction cannot
+ *  ride on which column an endpoint landed in — hence an explicit value. */
+export const LINK_DIRECTIONS = ['a_parent', 'b_parent'] as const;
+export type LinkDirection = (typeof LINK_DIRECTIONS)[number];
+
+/** Which dependency graph drives alert suppression (`PUT /api/v1/settings/topology`).
+ *
+ *  `manual` uses each node's hand-authored parent; `shadow` changes nothing about alerting and only
+ *  makes the comparison meaningful; `derived` hands suppression to the derived graph. */
+export const TOPOLOGY_MODES = ['manual', 'shadow', 'derived'] as const;
+export type TopologyMode = (typeof TOPOLOGY_MODES)[number];
+
+/** The manual-vs-derived comparison (`GET /api/v1/topology/shadow`) — the review surface for
+ *  enabling derived suppression. */
+export type TopologyShadow = components['schemas']['TopologyShadow'];
+
 /** The fixed error envelope (ADR-019). */
 export type ApiErrorBody = components['schemas']['ApiErrorBody'];
 

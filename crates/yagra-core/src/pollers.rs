@@ -32,6 +32,14 @@ pub struct PollerRow {
     pub last_version: Option<String>,
     /// Per-process incarnation from its most recent heartbeat, if reported.
     pub last_incarnation: Option<Uuid>,
+    /// Interface addresses the poller reported for itself (ADR-043). Empty from an N-1 poller, and
+    /// empty for a containerized poller whose only address is a bridge address — the two cases are
+    /// answered the same way, by naming `anchor_node_id`.
+    pub mgmt_addrs: Vec<String>,
+    /// The node an operator named as this poller's attachment point, rooting the derived dependency
+    /// graph. `None` means core places the poller from `mgmt_addrs` instead — or, if that matches
+    /// nothing, that the poller is unplaced and derived suppression stays blocked.
+    pub anchor_node_id: Option<Uuid>,
 }
 
 /// One `monitoring_gaps` row (API shape). A gap is one core↔poller **visibility outage**: core
@@ -75,37 +83,64 @@ impl PollerRepo {
     }
 
     /// Record that a poller was seen: insert it (first contact) or refresh `last_seen` and the
-    /// pool/version/incarnation of its latest heartbeat. `first_seen` is preserved on update.
+    /// pool/version/incarnation/addresses of its latest heartbeat. `first_seen` is preserved on
+    /// update, and so is `anchor_node_id` — that column is the operator's, not the poller's, and a
+    /// heartbeat overwriting it would silently undo the fix for an unplaceable poller on the next
+    /// beat.
+    ///
     /// Call-site throttling (so a 10s heartbeat isn't a write per beat) is the coordinator's job.
+    ///
+    /// Addresses travel as text and are cast server-side: `INET` has no `sqlx` codec compiled in
+    /// here (the node table reads its address through `host()` for the same reason), and the cast
+    /// still makes PostgreSQL reject a malformed address rather than storing it.
     pub async fn upsert_seen(
         &self,
         id: &str,
         pool: &str,
         version: &str,
         incarnation: Uuid,
+        mgmt_addrs: &[String],
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT INTO pollers (id, pool, last_version, last_incarnation) \
-             VALUES ($1, $2, $3, $4) \
+            "INSERT INTO pollers (id, pool, last_version, last_incarnation, mgmt_addrs) \
+             VALUES ($1, $2, $3, $4, $5::text[]::inet[]) \
              ON CONFLICT (id) DO UPDATE SET \
                last_seen = now(), \
                pool = EXCLUDED.pool, \
                last_version = EXCLUDED.last_version, \
-               last_incarnation = EXCLUDED.last_incarnation",
+               last_incarnation = EXCLUDED.last_incarnation, \
+               mgmt_addrs = EXCLUDED.mgmt_addrs",
         )
         .bind(id)
         .bind(pool)
         .bind(version)
         .bind(incarnation)
+        .bind(mgmt_addrs)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
+    /// Point a poller at the node it attaches to, or clear it (`None`).
+    ///
+    /// Separate from [`Self::upsert_seen`] on purpose: this column is written by an operator and
+    /// that one by a heartbeat arriving every ten seconds. One statement writing both would make the
+    /// poller the last writer, and the anchor would revive its old value within one beat.
+    pub async fn set_anchor(&self, id: &str, node_id: Option<Uuid>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE pollers SET anchor_node_id = $2 WHERE id = $1")
+            .bind(id)
+            .bind(node_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Every poller in the inventory, ordered by id.
     pub async fn list(&self) -> anyhow::Result<Vec<PollerRow>> {
         let rows = sqlx::query(
-            "SELECT id, pool, first_seen, last_seen, last_version, last_incarnation \
+            "SELECT id, pool, first_seen, last_seen, last_version, last_incarnation, \
+                    anchor_node_id, \
+                    ARRAY(SELECT host(a) FROM unnest(mgmt_addrs) AS a) AS mgmt_addrs \
              FROM pollers ORDER BY id",
         )
         .fetch_all(&self.pool)
@@ -121,6 +156,8 @@ impl PollerRepo {
                     last_seen: last_seen.to_rfc3339(),
                     last_version: row.try_get("last_version")?,
                     last_incarnation: row.try_get("last_incarnation")?,
+                    mgmt_addrs: row.try_get("mgmt_addrs")?,
+                    anchor_node_id: row.try_get("anchor_node_id")?,
                 })
             })
             .collect()
@@ -280,6 +317,45 @@ mod tests {
         let src = production_source();
         assert!(src.contains("ON CONFLICT"));
         assert!(src.contains("last_seen = now()"));
+    }
+
+    /// **The anchor is the operator's column.** A heartbeat arrives every ten seconds; if its
+    /// upsert touched `anchor_node_id`, the fix an operator just applied to an unplaceable poller
+    /// would be reverted within one beat and derived suppression would stay blocked with no
+    /// indication why. The two writers are separate statements, and this pins that.
+    #[test]
+    fn a_heartbeat_upsert_never_writes_the_operator_set_anchor() {
+        let src = production_source();
+        let col = format!("anchor_node{}", "_id");
+        let update = src
+            .split("ON CONFLICT (id) DO UPDATE SET")
+            .nth(1)
+            .expect("the heartbeat upsert's update clause");
+        let clause = update.split("\",").next().unwrap_or(update);
+        assert!(
+            !clause.contains(&col),
+            "the heartbeat is overwriting the anchor: {clause}"
+        );
+        assert!(
+            !update
+                .split("\",")
+                .next()
+                .unwrap_or(update)
+                .contains("first_seen"),
+            "first_seen must survive an upsert too"
+        );
+        // And the operator's writer exists and touches only that column.
+        assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
+    }
+
+    #[test]
+    fn addresses_are_stored_as_inet_so_a_malformed_one_is_rejected_at_write_time() {
+        // Bound as text and cast, because there is no INET codec compiled in — but the cast is what
+        // makes PostgreSQL reject `"not-an-address"` instead of storing it and failing later inside
+        // anchor resolution, where the failure would be silent.
+        let src = production_source();
+        assert!(src.contains("$5::text[]::inet[]"));
+        assert!(src.contains("ARRAY(SELECT host(a) FROM unnest(mgmt_addrs) AS a)"));
     }
 
     #[test]

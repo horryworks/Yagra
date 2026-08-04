@@ -21,3 +21,74 @@
 .dep-none {
   color: var(--text-tertiary);
 }
+
+/* Several derived upstreams is the normal case for a redundant pair, so they wrap rather than
+   truncating — a hidden second parent is the thing an operator most needs to see. */
+.dep-derived {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+/* Comparison verdict. The label carries the meaning; colour only reinforces it (never colour
+   alone), which is why `agree` and `unmodelled` are deliberately unremarkable. */
+.dep-verdict {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.dep-verdict-only_derived {
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
+.dep-verdict-only_manual {
+  border-color: var(--status-unknown);
+  color: var(--text-secondary);
+}
+
+.dep-verdict-unmodelled {
+  color: var(--text-tertiary);
+}
+
+/* Mode banner — which graph drives suppression, and what switching would do. */
+.dep-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dep-mode-state {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dep-mode-label {
+  color: var(--text-secondary);
+}
+
+.dep-mode-value.dep-mode-derived {
+  color: var(--accent-color);
+}
+
+.dep-mode-note,
+.dep-mode-counts {
+  margin: 0;
+}
+
+.dep-mode-blocked {
+  margin: 0;
+  color: var(--status-warning);
+}
+
+.dep-mode-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

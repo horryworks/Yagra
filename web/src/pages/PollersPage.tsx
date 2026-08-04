@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, ApiError } from '../services/api';
+import { api, ApiError, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
   MonitoringGap,
@@ -30,6 +30,8 @@ import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
+import { NodePicker } from '../components/NodePicker/NodePicker';
+import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { dateOnly, formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
 import {
   buildPollerEnv,
@@ -42,7 +44,7 @@ import {
 } from '../lib/pollers';
 import './PollersPage.css';
 
-const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 96px 112px 58px';
+const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 96px 112px 130px 58px';
 const REFRESH_MS = 10_000;
 
 /** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
@@ -104,6 +106,93 @@ function DeletePollerModal({
         components={{ code: <strong className="mono" /> }}
       />
     </ConfirmDeleteModal>
+  );
+}
+
+/** Point a poller at the node it attaches to, or clear it (ADR-043).
+ *
+ *  Why this exists at all: the derived dependency graph gets its direction from distance to a
+ *  poller, so core has to know where each poller sits. It works that out from the addresses the
+ *  poller reports — but a poller running in a container reports a container-network address that
+ *  matches no monitored node, which is the *common* deployment rather than an edge case. Until every
+ *  pool that has nodes has a placed poller, derived suppression stays blocked. */
+function SetAnchorModal({
+  poller,
+  onClose,
+  onDone,
+}: {
+  poller: PollerInfo;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [node, setNode] = useState<{ id: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Resolve the current anchor's name for the picker's trigger. `getNodeNames` is the fleet-wide
+  // resolver (a bounded `listNodes()` would miss an anchor outside the first page).
+  useEffect(() => {
+    let cancelled = false;
+    if (!poller.anchor_node_id) return;
+    api
+      .getNodeNames([poller.anchor_node_id])
+      .then((rows) => {
+        const hit = rows[0];
+        if (!cancelled && hit) setNode({ id: hit.id, name: hit.name });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [poller.anchor_node_id]);
+
+  const save = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .setPollerAnchor(poller.id, node?.id ?? null)
+      .then(onDone)
+      .catch((e: unknown) => {
+        setError(errMsg(e, t('pollers.err.anchor')));
+        setBusy(false);
+      });
+  };
+
+  return (
+    <Modal
+      title={t('pollers.anchor.title', { id: poller.id })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={save} disabled={busy}>
+            {t('common:actions.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          {t('pollers.anchor.field')}
+          <NodePicker
+            value={node?.id ?? null}
+            valueLabel={node?.name}
+            onChange={setNode}
+            placeholder={t('pollers.anchor.none')}
+          />
+        </label>
+        <p className="form-hint">{t('pollers.anchor.hint')}</p>
+        {poller.mgmt_addrs.length > 0 && (
+          <p className="form-hint mono">
+            {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
+          </p>
+        )}
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
   );
 }
 
@@ -355,6 +444,8 @@ export function PollersPage() {
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
+  const [anchoring, setAnchoring] = useState<PollerInfo | null>(null);
+  const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
   const [drill, setDrill] = useState<PollerNodesResponse | null>(null);
@@ -458,6 +549,7 @@ export function PollersPage() {
                 <div className="ytable-h right">{t('pollers.cols.disk')}</div>
                 <div className="ytable-h">{t('pollers.cols.firstSeen')}</div>
                 <div className="ytable-h">{t('pollers.cols.lastSeen')}</div>
+                <div className="ytable-h">{t('pollers.cols.anchor')}</div>
                 <div className="ytable-h right">{t('pollers.cols.actions')}</div>
               </div>
 
@@ -515,6 +607,28 @@ export function PollersPage() {
                         {p.first_seen ? dateOnly(p.first_seen) : '—'}
                       </div>
                       <div className="ytable-cell">{lastSeenLabel(p.last_seen ?? null, online, t)}</div>
+                      <div className="ytable-cell">
+                        {/* Editable even while the poller is online, unlike Remove: this is the
+                            operator's column, not the poller's, and it is what unblocks derived
+                            suppression. */}
+                        {authed ? (
+                          <button
+                            type="button"
+                            className="poller-drill"
+                            onClick={() => setAnchoring(p)}
+                          >
+                            {p.anchor_node_id ? (
+                              <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
+                            ) : (
+                              t('pollers.anchor.set')
+                            )}
+                          </button>
+                        ) : p.anchor_node_id ? (
+                          <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
+                        ) : (
+                          '—'
+                        )}
+                      </div>
                       <div className="ytable-cell right">
                         {authed && !online && (
                           <span className="ytable-actions">
@@ -542,6 +656,16 @@ export function PollersPage() {
       )}
 
       {registering && <RegisterPollerModal onClose={() => setRegistering(false)} />}
+      {anchoring && (
+        <SetAnchorModal
+          poller={anchoring}
+          onClose={() => setAnchoring(null)}
+          onDone={() => {
+            setAnchoring(null);
+            load();
+          }}
+        />
+      )}
       {deleting && (
         <DeletePollerModal
           poller={deleting}

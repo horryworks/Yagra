@@ -37,6 +37,7 @@
       "disk": "Disk",
       "firstSeen": "Registered",
       "lastSeen": "Last seen",
+      "anchor": "Anchor node",
       "actions": "Actions"
     },
     "empty": {
@@ -105,8 +106,17 @@
         }
       }
     },
+    "anchor": {
+      "title": "Anchor node for {{id}}",
+      "field": "This poller attaches behind",
+      "none": "Work it out from the poller's own addresses",
+      "set": "Set…",
+      "hint": "The derived dependency graph takes its direction from how far each node is from a poller, so core needs to know where this poller sits. It normally works that out from the addresses the poller reports — but a poller in a container reports a container-network address that matches no monitored node, and then it has to be named here. Until every pool that has nodes has a placed poller, the derived graph cannot drive alert suppression.",
+      "reported": "Reported by the poller: {{addrs}}"
+    },
     "err": {
-      "remove": "failed to remove poller"
+      "remove": "failed to remove poller",
+      "anchor": "failed to set the anchor node"
     }
   },
   "health": {

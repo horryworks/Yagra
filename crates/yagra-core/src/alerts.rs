@@ -385,7 +385,11 @@ impl AlertManager {
     }
 
     /// The set of nodes currently committed `Unreachable` — the suppression down-set.
-    fn down_set(&self) -> BTreeSet<NodeId> {
+    ///
+    /// Public so ADR-043's shadow preview can ask *this* engine what is down rather than deriving
+    /// its own answer: the preview exists to predict what suppression would do, and a second
+    /// definition of "down" would let it predict something the engine would never actually do.
+    pub fn down_set(&self) -> BTreeSet<NodeId> {
         // Incrementally maintained in `process_check`, so this is O(down) not an O(live) scan.
         self.down.lock().expect("down mutex poisoned").clone()
     }

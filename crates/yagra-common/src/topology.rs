@@ -123,6 +123,128 @@ impl PartialOrd for LinkSource {
     }
 }
 
+/// What an operator has decided about a link, overriding whatever the derivation produces.
+//
+// ⚠️ Published verbatim to API clients (see `LinkSource`). Reasoning goes in `//`.
+//
+// ADR-043 決定 4 — a manual decision always wins a recomputation. Making that a property of one
+// function (`yagra_topology::derive::apply_overrides`) rather than a rule repeated at every call
+// site is the whole reason this type exists separately from `LinkSource`: evidence accumulates,
+// decisions replace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkOverrideAction {
+    /// This link exists, whatever the observations say.
+    Pin,
+    /// This link does not exist, whatever the observations say.
+    Hide,
+    /// This link's upstream end is the one the operator named, whatever the derivation computed.
+    Direction,
+}
+
+impl LinkOverrideAction {
+    /// Every action, for iteration and coverage tests.
+    pub const ALL: [LinkOverrideAction; 3] = [
+        LinkOverrideAction::Pin,
+        LinkOverrideAction::Hide,
+        LinkOverrideAction::Direction,
+    ];
+
+    /// The stable token stored in `link_overrides.action`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LinkOverrideAction::Pin => "pin",
+            LinkOverrideAction::Hide => "hide",
+            LinkOverrideAction::Direction => "direction",
+        }
+    }
+
+    /// Parse a stored or submitted token. `None` for anything else, so a row written by a newer
+    /// core is skipped rather than mis-applied by an older one.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s {
+            "pin" => Some(LinkOverrideAction::Pin),
+            "hide" => Some(LinkOverrideAction::Hide),
+            "direction" => Some(LinkOverrideAction::Direction),
+            _ => None,
+        }
+    }
+}
+
+/// Which end of a link is upstream.
+//
+// ⚠️ Published verbatim to API clients (see `LinkSource`). Reasoning goes in `//`.
+//
+// A link's endpoints are stored in canonical order so the unordered pair has exactly one
+// representation. That is what makes the UNIQUE index mean something — and it is also why direction
+// cannot be carried by which column an endpoint landed in. This enum is that cost, paid explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkDirection {
+    /// The `a` endpoint (the lower-ordered one) is upstream.
+    AParent,
+    /// The `b` endpoint is upstream.
+    BParent,
+}
+
+impl LinkDirection {
+    /// Every direction, for iteration and coverage tests.
+    pub const ALL: [LinkDirection; 2] = [LinkDirection::AParent, LinkDirection::BParent];
+
+    /// The stable token stored in `link_overrides.direction`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LinkDirection::AParent => "a_parent",
+            LinkDirection::BParent => "b_parent",
+        }
+    }
+
+    /// Parse a stored or submitted token.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s {
+            "a_parent" => Some(LinkDirection::AParent),
+            "b_parent" => Some(LinkDirection::BParent),
+            _ => None,
+        }
+    }
+}
+
+/// One operator decision about one node pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkOverride {
+    /// One endpoint. Order does not matter to the derivation — the link is canonicalized before
+    /// comparison — but the *stored* row is normalized to `a_node < b_node` so the UNIQUE index
+    /// holds.
+    pub a_node: NodeId,
+    /// The other endpoint.
+    pub b_node: NodeId,
+    /// What the operator decided.
+    pub action: LinkOverrideAction,
+    /// Which endpoint is upstream. Meaningful only for [`LinkOverrideAction::Direction`]; the API
+    /// edge rejects the two inconsistent combinations, so a stored row never carries a direction it
+    /// does not use or omits one it needs.
+    pub direction: Option<LinkDirection>,
+}
+
+impl LinkOverride {
+    /// The node this override names as upstream, resolved against the endpoints as *given*.
+    ///
+    /// Resolved before canonicalization on purpose: a caller that supplies the pair in the other
+    /// order still gets the endpoint it meant.
+    #[must_use]
+    pub fn forced_parent(&self) -> Option<NodeId> {
+        match (self.action, self.direction) {
+            (LinkOverrideAction::Direction, Some(LinkDirection::AParent)) => Some(self.a_node),
+            (LinkOverrideAction::Direction, Some(LinkDirection::BParent)) => Some(self.b_node),
+            _ => None,
+        }
+    }
+}
+
 /// One undirected link between two inventory nodes, as the derivation produces it.
 ///
 /// Endpoints are strict [`NodeId`]s here on purpose. The *stored columns* and the *API DTO* are
@@ -149,6 +271,12 @@ pub struct DerivedLink {
     /// The subnet that produced an [`LinkSource::L3Subnet`] edge, e.g. `192.168.1.0/24`. Carried so
     /// the operator can answer "why is this edge here" without re-deriving anything.
     pub subnet: Option<String>,
+    /// The endpoint an operator declared upstream, if any.
+    ///
+    /// Set only by [`LinkOverride`]. The projection reads it instead of consulting the override
+    /// table, so "manual always wins" stays the property of the one function that applies overrides
+    /// rather than a rule two subsystems each have to remember.
+    pub forced_parent: Option<NodeId>,
 }
 
 impl DerivedLink {
@@ -168,6 +296,7 @@ impl DerivedLink {
             b_if_name: None,
             sources: vec![source],
             subnet: None,
+            forced_parent: None,
         }
     }
 
@@ -234,6 +363,12 @@ impl DerivedLink {
         }
         if self.subnet.is_none() {
             self.subnet.clone_from(&other.subnet);
+        }
+        // Only an override sets this, and an override is applied once per pair, so there is never a
+        // second one to disagree with. Filling only when empty keeps the merge order-independent
+        // anyway — the property every other field here is written to preserve.
+        if self.forced_parent.is_none() {
+            self.forced_parent = other.forced_parent;
         }
     }
 }
@@ -395,6 +530,80 @@ mod tests {
         lldp.merge(&l3);
         assert_eq!(lldp.a_if_name.as_deref(), Some("Gi0/1"));
         assert_eq!(lldp.sources, vec![LinkSource::Lldp, LinkSource::L3Subnet]);
+    }
+
+    #[test]
+    fn every_override_action_and_direction_round_trips_through_its_token_and_through_serde() {
+        // The DB token and the JSON tag are produced by two different mechanisms (`as_str` and
+        // `#[serde(rename_all)]`). A disagreement means rows the API writes are rows the derivation
+        // cannot read — and it would fail silently, since an unparsed token is skipped.
+        for a in LinkOverrideAction::ALL {
+            assert_eq!(LinkOverrideAction::from_token(a.as_str()), Some(a));
+            assert_eq!(
+                serde_json::to_string(&a).unwrap(),
+                format!("\"{}\"", a.as_str())
+            );
+        }
+        for d in LinkDirection::ALL {
+            assert_eq!(LinkDirection::from_token(d.as_str()), Some(d));
+            assert_eq!(
+                serde_json::to_string(&d).unwrap(),
+                format!("\"{}\"", d.as_str())
+            );
+        }
+        assert_eq!(LinkOverrideAction::from_token("delete"), None);
+        assert_eq!(LinkDirection::from_token("a"), None);
+    }
+
+    #[test]
+    fn a_direction_override_names_the_endpoint_it_was_given_not_the_canonical_one() {
+        // Resolution happens against the pair as supplied, so a caller passing (child, parent) gets
+        // the parent it meant even though the stored row will have the endpoints the other way up.
+        let x = NodeId::new();
+        let y = NodeId::new();
+        let (lo, hi) = if x <= y { (x, y) } else { (y, x) };
+
+        let a_up = LinkOverride {
+            a_node: hi,
+            b_node: lo,
+            action: LinkOverrideAction::Direction,
+            direction: Some(LinkDirection::AParent),
+        };
+        assert_eq!(a_up.forced_parent(), Some(hi));
+
+        let b_up = LinkOverride {
+            direction: Some(LinkDirection::BParent),
+            ..a_up
+        };
+        assert_eq!(b_up.forced_parent(), Some(lo));
+    }
+
+    #[test]
+    fn only_a_direction_override_forces_a_parent() {
+        // A `pin` carrying a stray direction must not silently start steering suppression; the two
+        // decisions are separate rows precisely so one cannot imply the other.
+        let x = NodeId::new();
+        let y = NodeId::new();
+        for action in [LinkOverrideAction::Pin, LinkOverrideAction::Hide] {
+            let ov = LinkOverride {
+                a_node: x,
+                b_node: y,
+                action,
+                direction: Some(LinkDirection::AParent),
+            };
+            assert_eq!(ov.forced_parent(), None, "{action:?}");
+        }
+        // And a direction with no direction set forces nothing rather than guessing.
+        assert_eq!(
+            LinkOverride {
+                a_node: x,
+                b_node: y,
+                action: LinkOverrideAction::Direction,
+                direction: None,
+            }
+            .forced_parent(),
+            None
+        );
     }
 
     #[test]

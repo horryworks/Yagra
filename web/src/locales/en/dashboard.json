@@ -393,7 +393,11 @@
     },
     "dependency": {
       "empty": "No nodes in the inventory.",
-      "depthLimit": "… depth limit reached (possible dependency cycle)"
+      "allClear": "Nothing is down.",
+      "explains_one": "explains {{count}} alert",
+      "explains_other": "explains {{count}} alerts",
+      "andMore_one": "… and {{count}} more",
+      "andMore_other": "… and {{count}} more"
     },
     "eventFeed": {
       "empty": "No events received yet.",

@@ -2372,6 +2372,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pollers/{id}/anchor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Name the node a poller attaches to, rooting the derived dependency graph.
+         * @description Direction in the derived graph comes from distance to a poller, so core has to know where each
+         *     poller sits. It works that out from the addresses the poller reports — but a poller running in a
+         *     container reports a container-network address that matches no monitored node, which is the
+         *     common case rather than the unusual one. This is how an operator says where it really is.
+         *
+         *     Until every pool that has nodes has a placed poller, derived suppression cannot be enabled.
+         */
+        put: operations["set_poller_anchor"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pollers/{id}/nodes": {
         parameters: {
             query?: never;
@@ -2814,6 +2839,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose which dependency graph drives alert suppression.
+         * @description `manual` uses each node's hand-authored parent. `shadow` changes nothing about alerting and only
+         *     makes the comparison at `GET /api/v1/topology/shadow` meaningful. `derived` hands suppression to
+         *     the graph derived from CDP/LLDP adjacency and shared subnets.
+         *
+         *     Moving to `derived` is **refused** while any pool that has nodes has a poller whose location
+         *     could not be resolved: such a pool contributes no roots, so none of its nodes would ever be
+         *     suppressed — the change would look like it worked and quietly do nothing.
+         */
+        put: operations["set_topology_mode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shared-dashboard": {
         parameters: {
             query?: never;
@@ -3039,6 +3090,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/topology/link-overrides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operator decisions that override the derived connectivity graph.
+         * @description A group-scoped caller sees only decisions whose **both** endpoints are visible to them, matching
+         *     how the links themselves are filtered.
+         */
+        get: operations["get_link_overrides"];
+        put?: never;
+        /**
+         * Record a decision about a link, replacing any previous decision of the same kind for that pair.
+         * @description The decision takes effect on the next derivation cycle. A pinned link is re-emitted by every run,
+         *     so it never expires the way an unobserved derived link does.
+         */
+        post: operations["create_link_override"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/topology/link-overrides/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an operator decision, letting the derivation's own answer stand again. */
+        delete: operations["delete_link_override"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/topology/links": {
         parameters: {
             query?: never;
@@ -3054,6 +3148,28 @@ export interface paths {
          *     **both** endpoints are visible to them.
          */
         get: operations["get_topology_links"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/topology/shadow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the derived dependency graph would do to alerting, compared with the hand-authored one.
+         * @description This is the review surface for enabling derived suppression: `would_suppress` lists the active
+         *     alerts that would stop being raised, and `unresolved_pools` lists the pollers that have no place
+         *     in the graph yet. Both are computed on demand and neither affects alerting.
+         */
+        get: operations["get_topology_shadow"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5559,6 +5675,62 @@ export interface components {
             ok: boolean;
         };
         /**
+         * @description Which end of a link is upstream.
+         * @enum {string}
+         */
+        LinkDirection: "a_parent" | "b_parent";
+        /**
+         * @description What an operator has decided about a link, overriding whatever the derivation produces.
+         * @enum {string}
+         */
+        LinkOverrideAction: "pin" | "hide" | "direction";
+        /** @description Every operator decision visible to the caller. */
+        LinkOverrideList: {
+            overrides: components["schemas"]["LinkOverrideRow"][];
+        };
+        /** @description A decision to record about one link. */
+        LinkOverrideRequest: {
+            /**
+             * Format: uuid
+             * @description One endpoint. Order is not significant — the pair is canonicalized before storing, and a
+             *     `direction` is re-expressed to match.
+             */
+            a_node: string;
+            /** @description `pin`, `hide` or `direction`. */
+            action: components["schemas"]["LinkOverrideAction"];
+            /**
+             * Format: uuid
+             * @description The other endpoint.
+             */
+            b_node: string;
+            direction?: null | components["schemas"]["LinkDirection"];
+            /** @description Free-text note for whoever reads this decision later. */
+            note?: string | null;
+        };
+        /** @description One operator decision about one link. */
+        LinkOverrideRow: {
+            /**
+             * Format: uuid
+             * @description The lower-ordered endpoint. Endpoints are stored in a canonical order, so this is not
+             *     necessarily the one that was submitted first.
+             */
+            a_node: string;
+            action: components["schemas"]["LinkOverrideAction"];
+            /**
+             * Format: uuid
+             * @description The higher-ordered endpoint.
+             */
+            b_node: string;
+            /** @description When it was recorded (RFC 3339). */
+            created_at: string;
+            /** @description Who recorded the decision. */
+            created_by?: string | null;
+            direction?: null | components["schemas"]["LinkDirection"];
+            /** Format: uuid */
+            id: string;
+            note?: string | null;
+        };
+        /**
          * @description What kind of evidence produced a link, ordered strongest first.
          * @enum {string}
          */
@@ -6323,11 +6495,26 @@ export interface components {
             /** @description One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`. */
             state: string;
         };
+        /** @description Where a poller attaches to the monitored network. */
+        PollerAnchorRequest: {
+            /**
+             * Format: uuid
+             * @description The node the poller sits behind. `null` clears the anchor, returning the poller to being
+             *     placed by its own reported addresses.
+             */
+            node_id?: string | null;
+        };
         /**
          * @description One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current
          *     status/telemetry) and the durable inventory (so an offline poller still lists). No secrets.
          */
         PollerInfo: {
+            /**
+             * Format: uuid
+             * @description The node this poller attaches to, naming where it sits in the derived dependency graph.
+             *     `null` ⇒ core places it from `mgmt_addrs` instead.
+             */
+            anchor_node_id?: string | null;
             /**
              * Format: double
              * @description Current host CPU utilization % (0–100) from its latest heartbeat; `null` when the poller is
@@ -6353,6 +6540,11 @@ export interface components {
              * @description Current host memory-used % (0–100); `null` when unavailable.
              */
             mem_used_pct?: number | null;
+            /**
+             * @description Interface addresses the poller reported for itself. Empty for an older poller build, and
+             *     empty for a containerized poller whose only address is a container-network one.
+             */
+            mgmt_addrs: string[];
             /** @description Pool it serves (live view wins; else the durable row). */
             pool: string;
             /**
@@ -7100,6 +7292,32 @@ export interface components {
          * @enum {string}
          */
         Severity: "info" | "warning" | "critical";
+        /** @description One node whose suppression would change if the deployment moved to the derived graph. */
+        ShadowAlert: {
+            /**
+             * Format: uuid
+             * @description The node whose active alert is affected.
+             */
+            node_id: string;
+            /**
+             * Format: uuid
+             * @description The node the derived graph blames, when it has one.
+             */
+            root_cause?: string | null;
+        };
+        /** @description One node whose parent set differs between the two graphs. */
+        ShadowEdge: {
+            /**
+             * Format: uuid
+             * @description The downstream node.
+             */
+            child: string;
+            /**
+             * Format: uuid
+             * @description The upstream node.
+             */
+            parent: string;
+        };
         /**
          * @description Which received stream a destination tees. Kept here (rather than in core) so the DB `CHECK`
          *     strings, the API validation and the WebUI all agree on one spelling.
@@ -7397,6 +7615,12 @@ export interface components {
             /** @description When this link was first derived (RFC 3339). */
             first_seen: string;
             /**
+             * Format: uuid
+             * @description The endpoint an operator declared upstream, when one was declared. `null` means the direction
+             *     is worked out from how far each end is from a poller.
+             */
+            forced_parent?: string | null;
+            /**
              * Format: int64
              * @description Stable id, and the keyset cursor.
              */
@@ -7484,6 +7708,16 @@ export interface components {
              */
             unmatched_lldp_rows?: number;
         };
+        /**
+         * @description Which dependency graph the alert engine uses.
+         * @enum {string}
+         */
+        TopologyMode: "manual" | "shadow" | "derived";
+        /** @description The topology mode to move the deployment to. */
+        TopologyModeRequest: {
+            /** @description `manual`, `shadow` or `derived`. */
+            mode: components["schemas"]["TopologyMode"];
+        };
         /** @description One node in the dependency/topology graph. */
         TopologyNode: {
             /** Format: uuid */
@@ -7507,6 +7741,42 @@ export interface components {
             /** @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one. */
             next_cursor?: string | null;
             nodes: components["schemas"]["TopologyNode"][];
+        };
+        /** @description What the derived dependency graph would do, against what the manual one does. */
+        TopologyShadow: {
+            /** @description Nodes the derived graph treats as roots, because a poller sits on their segment. */
+            anchors: string[];
+            /** @description Edges in the derived graph. */
+            derived_edges: number;
+            /** @description Edges in the hand-authored graph. */
+            manual_edges: number;
+            /** @description `manual`, `shadow` or `derived`. */
+            mode: components["schemas"]["TopologyMode"];
+            /** @description Parent edges only the derived graph has. */
+            only_in_derived: components["schemas"]["ShadowEdge"][];
+            /** @description Parent edges only the hand-authored graph has. */
+            only_in_manual: components["schemas"]["ShadowEdge"][];
+            /** @description Poller ids that could not be placed, so an operator knows which to give an anchor. */
+            unresolved_pollers: string[];
+            /**
+             * @description Pools with at least one poller whose location could not be resolved.
+             *
+             *     **Non-empty blocks `derived`.** A pool with no anchor contributes no roots, so none of its
+             *     nodes would ever be suppressed while every screen showed the feature as on.
+             */
+            unresolved_pools: string[];
+            /**
+             * @description Active alerts the derived graph **would suppress** and the manual one does not.
+             *
+             *     The number to review before enabling `derived`: each of these is an alert that would stop
+             *     being raised.
+             */
+            would_suppress: components["schemas"]["ShadowAlert"][];
+            /**
+             * @description Active alerts the manual graph suppresses and the derived one would not — the noise
+             *     direction.
+             */
+            would_unsuppress: components["schemas"]["ShadowAlert"][];
         };
         /**
          * @description A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,
@@ -16924,6 +17194,67 @@ export interface operations {
             };
         };
     };
+    set_poller_anchor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Poller id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollerAnchorRequest"];
+            };
+        };
+        responses: {
+            /** @description The anchor was set or cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageConfig permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such poller, or no such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no durable poller store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     poller_nodes: {
         parameters: {
             query?: {
@@ -19115,6 +19446,64 @@ export interface operations {
             };
         };
     };
+    set_topology_mode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopologyModeRequest"];
+            };
+        };
+        responses: {
+            /** @description The mode was changed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-config permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `derived` was requested while a pool with nodes has an unplaced poller */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     get_shared_dashboard: {
         parameters: {
             query?: never;
@@ -19748,6 +20137,179 @@ export interface operations {
             };
         };
     };
+    get_link_overrides: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every visible link override */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkOverrideList"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_link_override: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description The decision was recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
+            };
+            /** @description The two endpoints are the same node, or `direction` disagrees with `action` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-config permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description One of the endpoints is not a node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_link_override: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The override's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The decision was removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-config permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such override, or its endpoints are not visible to the caller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     get_topology_links: {
         parameters: {
             query?: {
@@ -19790,6 +20352,53 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no inventory to build the graph from */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_topology_shadow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The comparison between the manual and derived dependency graphs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopologyShadow"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no inventory to compare */
             503: {
                 headers: {
                     [name: string]: unknown;
