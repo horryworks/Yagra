@@ -67,6 +67,9 @@ mod routing;
 mod scheduler;
 mod secrets;
 mod seed_ids;
+// The WebUI's own server certificate (ADR-044). Named apart from `tls`, which builds *client*
+// configurations for outbound peers — see that module's doc.
+mod server_cert;
 mod sink;
 mod store;
 mod stored_enum;

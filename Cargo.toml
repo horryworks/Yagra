@@ -124,6 +124,18 @@ rustls-native-certs = "0.8"
 # RSA private-key operations. `jsonwebtoken` is not used either; the assertion is 40 lines of JSON
 # plus one signature, and the crate would add a dependency for it.
 ring = "0.17"
+# Self-signed certificate generation for the WebUI's TLS edge (ADR-044). Core mints one on first
+# start so a fresh deployment is HTTPS without anyone doing anything, renews it before it expires,
+# and regenerates it on demand when an operator gives it the right hostnames.
+#
+# `default-features = false` with `ring` named explicitly is load-bearing, not tidiness: rcgen's
+# default feature set can select `aws_lc_rs`, and this workspace goes out of its way in half a dozen
+# places to keep the crypto provider on `ring` (see the rustls note above — with both enabled rustls
+# installs no process default and panics). Verified with `cargo tree -e features` when this landed.
+#
+# Only *generation* is here. Parsing and validating an operator's imported certificate goes through
+# x509-parser and rustls, which are already in the tree — rcgen is never asked to read anything.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
 # Serialization / types
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
