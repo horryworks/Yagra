@@ -36,8 +36,8 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 
 | ポート（コンテナ/バインド） | ホスト既定 | 環境変数 | 用途 | 公開? |
 |---|---|---|---|---|
-| `8080` | `8080` | `YAGRA_API_ADDR`（ネイティブ）/ `YAGRA_API_PORT`（compose） | core 北向き API + `/metrics` | する |
-| `8080`（web nginx） | `3000` | `YAGRA_WEB_PORT` | WebUI | する |
+| `8080` | `8080` | `YAGRA_API_ADDR`（ネイティブ）/ `YAGRA_API_PORT` + `YAGRA_API_BIND`（compose） | core 北向き API + `/metrics` — **平文** | する |
+| `8080`（web nginx） | **`443`** | `YAGRA_WEB_PORT` | WebUI — **HTTPS**（`YAGRA_WEB_TLS`） | する |
 | `1514/udp` | `514` | `YAGRA_SYSLOG_BIND` / `YAGRA_SYSLOG_PORT` | syslog 受信（poller） | 任意 |
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP トラップ受信（poller） | 任意 |
 | `2055/udp` | `2055` | `YAGRA_FLOW_BIND` / `YAGRA_FLOW_PORT` | NetFlow v5/v9 / IPFIX 受信（poller） | 任意 |
@@ -46,7 +46,20 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 | `4222` | — | `YAGRA_NATS_PORT` | NATS バス | 内部。TLS+auth 時のみ公開（D） |
 | `5432` / `6379` / `8428` / `9428` / `8123` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs / ClickHouse | 内部のみ |
 
-> MCP ツールサーフェス（`/mcp`、`YAGRA_ENABLE_MCP` でオプトイン）は API ポート `8080` 上で提供されます — 別ポートは開きません。
+> MCP ツールサーフェス（`/mcp`、`YAGRA_ENABLE_MCP` でオプトイン）は API ポート `8080` 上で提供されます — 別ポートは開きません。web コンテナも `/mcp` をプロキシするので `https://<host>/mcp` でも到達できます。`YAGRA_MCP_ALLOWED_HOSTS` を設定している場合は web 側のホスト名を追加してください。追加しないとこの経路は拒否されます。
+
+> ### TLS
+>
+> **WebUI は既定で HTTPS であり、平文リスナはありません**（ADR-044）。core は初回起動時に自己署名証明書を生成し、web コンテナが読む場所に書き出すので、まっさらなスタックはブラウザ警告つきで暗号化された状態で立ち上がります。**Settings ▸ TLS** で PEM のチェーンと鍵を貼るかアップロードすれば、何も再起動せずに数秒で切り替わります。
+>
+> 証明書の正本は PostgreSQL の 1 行です — 秘密鍵は KEK で封筒暗号化し、証明書チェーンは平文（証明書は構造上公開物のため）。ボリューム上のファイルはその行の材料化にすぎないので、削除しても安全です。
+>
+> - **平文からのリダイレクトは検討のうえ却下しました。** webhook 送信実装の多くはリダイレクトを追わず、追う実装は `POST` の `301` を `GET` に変えます — 受信イベントが何の痕跡も残さず届かなくなります。接続拒否のほうが正直な失敗です。
+> - **`YAGRA_WEB_TLS=off`** は、外部のリバースプロキシやロードバランサが手前で既に HTTPS を終端している場合にのみ設定してください。
+> - **暗号化された秘密鍵と PKCS#12（`.pfx`）は受け付けません。** 先に変換してください:
+>   `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-plain.pem`、または
+>   `openssl pkcs12 -in cert.pfx -nodes -out bundle.pem`。
+> - **NATS バスの証明書は別物**で、Settings ▸ TLS は管理しません — NATS サーバが起動時に自分で読みます（下記 D）。
 
 > **アウトバウンド（転送）。** Settings ▸ Forwarding は、受信した syslog / SNMP トラップ / フロー
 > エクスポートを外部コレクタへ中継したり、**Google BigQuery** へクエリ可能な行としてストリーム
@@ -89,7 +102,9 @@ cd Yagra
 docker compose up --build          # 単一ノードのフルスタックをビルドして起動
 ```
 
-WebUI は **http://localhost:3000**（API は http://localhost:8080）。
+WebUI は **https://localhost:8443**（API は http://localhost:8080）。
+
+ブラウザは警告を出します — 証明書は core が初回起動時に生成した自己署名のものです。いったん受け入れて、Settings ▸ TLS で正式な証明書を取り込んでください。（この開発用スタックが `443` ではなく `8443` を公開しているのは、ノート PC では `443` が埋まっていることが多く、rootless Docker は 1024 未満をそもそも公開できないためです。下記 **B** は `443` を使います。）
 
 **初回ログイン。** `YAGRA_ADMIN_PASSWORD` は既定で未設定のため、core は一度限りのランダムな `admin` パスワードを生成し、ログに**一度だけ**出力します:
 
@@ -99,7 +114,9 @@ docker compose logs core | grep -i password
 
 `admin` でログインして変更してください。自分で指定したい場合は `docker-compose.yml` の `core` サービスの `YAGRA_ADMIN_PASSWORD` をコメント解除します。
 
-**稼働内容。** web はホスト `:3000`、API は `:8080`。poller は syslog を `:514/udp`、SNMP トラップを `:162/udp` で受信。PostgreSQL/Redis/NATS/VictoriaMetrics は Docker 内部ネットワークに留まります。マイグレーションは core 起動時に自動実行され、手動手順はありません。名前付きボリューム `pgdata` / `vmdata` が `docker compose down`/`up` をまたいでデータを保持します。
+**稼働内容。** web はホスト `:8443`（HTTPS）、API は `:8080`（平文）。poller は syslog を `:514/udp`、SNMP トラップを `:162/udp` で受信。PostgreSQL/Redis/NATS/VictoriaMetrics は Docker 内部ネットワークに留まります。マイグレーションは core 起動時に自動実行され、手動手順はありません。名前付きボリューム `pgdata` / `vmdata` が `docker compose down`/`up` をまたいでデータを保持します。
+
+⚠️ このスタックは **KEK をマウントしません**。保存済みの秘密を暗号化する鍵が再起動のたびに再生成されるため、自己署名証明書は一緒に作り直されるだけですが、**取り込んだ**証明書は再起動後に復号できません。その場合 core はそれを明示したうえで、最後に材料化した証明書を配り続けます（勝手に自己署名へ差し替えることはしません）。正式な証明書の取り込みは、永続 KEK を持つスタック＝ **B** で行ってください。
 
 > この構成は評価・開発には十分です。大切なデータを扱うなら **B**（タグ固定 + 永続 KEK により保存済み資格情報が再起動を越えて維持される）を使ってください。
 
@@ -126,11 +143,19 @@ YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml up -d
 
 ```ini
 POSTGRES_PASSWORD=change-me            # 使い捨てでないマシンでは必ず変更
-YAGRA_API_PORT=8080                    # API のホストポート
-YAGRA_WEB_PORT=3000                    # WebUI のホストポート
+YAGRA_API_PORT=8080                    # API のホストポート（平文）
+YAGRA_WEB_PORT=443                     # WebUI のホストポート（HTTPS）
 # YAGRA_ADMIN_PASSWORD=choose-a-strong-password   # 未設定なら一度限りのランダム値をログ出力
 # YAGRA_PUBLIC_DASHBOARD=false         # true = ログイン不要の読み取り専用ダッシュボード
+# YAGRA_WEB_TLS=off                    # 手前のプロキシが既に HTTPS を終端している場合のみ
+# YAGRA_API_BIND=127.0.0.1             # core の平文ポートを LAN から閉じる — 下記参照
 ```
+
+起動したら **https://\<host\>/** を開きます。証明書は Settings ▸ TLS で自分のものを取り込むまで自己署名です。
+
+**v0.2.0 より前からのアップグレード。** `YAGRA_WEB_PORT` の意味は変わっていませんが、そのポート上のスキームが変わりました。`.env` に `3000` が残っていればポートは 3000 のままで `https://<host>:3000` になります — そこで `http://` はもう応答しません。この行を削除すると `443` に乗ります。
+
+**core の API ポートを閉じるのは 2 番目であって 1 番目ではありません。** `YAGRA_API_BIND=127.0.0.1` は平文 API を LAN から外し、TLS エッジだけを入口にします。ブラウザはどちらでも影響を受けません（web コンテナが `/api/` と `/mcp` を内部でプロキシするため）が、Prometheus の scrape・webhook 送信元・API スクリプトはこのポートを直接使います。**先に**それらを、信頼できる証明書のある `https://<host>/api/v1` へ移してください。同時にやると、全機械クライアントが原因 2 つ重なった状態で一斉に落ちます。
 
 **資格情報の永続化（重要）。** `kek-init` サービスは 32 バイトの KEK を `kekdata` ボリュームへ一度だけ書き込み、以後は上書きしません。core はそれを `YAGRA_KEK_FILE=/kek/key` に読み取り専用でマウントします。永続 KEK が無いと core は再起動のたびに再生成される**一時**鍵にフォールバックし、保存済み資格情報（SNMP コミュニティ、API トークン）が再デプロイ後に復号できなくなります。compose がこれを配線済みなので、`kekdata` ボリュームを削除しないでください。
 
@@ -429,7 +454,8 @@ export RUST_LOG=info
 > **compose 専用の変数**は Docker Compose / NATS 設定が消費するもので、Rust バイナリは読みません — バイナリが見るのは最終的に組み立てられた `YAGRA_BUS_URL` などだけです。`.env.example` を参照:
 >
 > - イメージとストア: `YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`
-> - ホストポートのマッピング: `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
+> - ホストポートのマッピング: `YAGRA_API_PORT`, `YAGRA_API_BIND`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
+> - WebUI の TLS: `YAGRA_WEB_TLS`（compose）、`YAGRA_TLS_DIR`（core — 証明書の材料化先）
 > - バスの TLS + auth（D）: `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`（core も Auth Callout のブートストラップシークレットとして読む）, `YAGRA_NATS_CALLOUT_ISSUER`（NATS サーバが core の callout JWT を検証するアカウント公開鍵）
 > - マウントする鍵ディレクトリ: `YAGRA_SESSION_KEY_DIR`（`YAGRA_SESSION_KEY_FILE` 用の `session.key` を置く）, `YAGRA_CALLOUT_SEED_DIR`（`YAGRA_NATS_CALLOUT_SEED_FILE` 用の `account.seed` を置く）
 > - IP→ASN 更新サイドカー: `YAGRA_IPASN_URL`（データセット URL）, `YAGRA_IPASN_REFRESH_SECS`（取得周期。既定 `604800` = 週次）
@@ -522,18 +548,18 @@ Yagra はバックアップ製品を作りません。PostgreSQL・VictoriaMetri
 書き出し・取り込みとも管理者のみです。
 
 ```bash
-# 移行元から書き出す
+# 移行元から書き出す。自己署名の初期証明書のままなら --cacert <file>（評価中なら -k）を付ける。
 curl -sS -H "Authorization: Bearer $TOKEN" \
-     http://source:3000/api/v1/config/bundle > bundle.json
+     https://source/api/v1/config/bundle > bundle.json
 
 # 移行先で何が起きるか確認する（実際の取り込みを行ってロールバック）
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
      --data-binary @bundle.json \
-     'http://target:3000/api/v1/config/bundle?dry_run=true'
+     'https://target/api/v1/config/bundle?dry_run=true'
 
 # 適用する
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-     --data-binary @bundle.json http://target:3000/api/v1/config/bundle
+     --data-binary @bundle.json https://target/api/v1/config/bundle
 ```
 
 **バンドルはバックアップではありません。** 秘密・メトリクス・イベント・履歴のいずれも含みません。

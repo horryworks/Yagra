@@ -10,7 +10,55 @@
 
 ## Unreleased
 
+### Breaking changes
+- **The WebUI is now HTTPS, on port 443, and there is no plain-HTTP listener.** Everything the UI
+  carries — the login password, bearer tokens, and device credentials on their way to being
+  encrypted — used to cross the network in the clear by default. v0.1.9 shipped instructions for
+  fixing that and a commented-out configuration block; a year later nobody had uncommented it. So
+  the secure shape is now the one you get by doing nothing.
+  - **`http://<host>:3000` no longer answers.** If your `.env` still sets `YAGRA_WEB_PORT=3000` you
+    keep port 3000 and it becomes `https://<host>:3000` — the port stayed, the scheme changed.
+    Delete the line to land on 443.
+  - **A redirect was considered and deliberately rejected.** Most webhook senders do not follow
+    redirects, and those that do turn a `301` on `POST` into a `GET`, so
+    `POST /api/v1/ingest/webhook/:source_id` would have gone on returning success while events
+    stopped arriving. Connection-refused is the failure you can see. **Move webhook senders and any
+    other machine client** to `https://<host>/api/v1/…`, or to core's unchanged plaintext
+    `http://<host>:8080/api/v1/…`.
+  - **Everyone is signed out and loses their saved UI state.** `http://host:3000` and
+    `https://host` are different origins, so the session token, dashboard layouts, theme and table
+    preferences do not carry over. There is no migration for this that would be worth its
+    complexity; sign in again and the layouts are rebuilt as you go.
+  - **SSO stops working until two things are updated.** The stored OIDC redirect URI is an absolute
+    URL and must now use the new scheme and port, and the same value has to be updated at the
+    identity provider. Settings ▸ Auth shows a warning when the stored value no longer matches the
+    address you are browsing from. Yagra will not rewrite it for you — changing where an IdP is
+    permitted to send an authorization code is not something an upgrade should do on your behalf.
+  - **Your browser will warn on first visit.** The certificate is self-signed until you import one,
+    and because Yagra cannot know the hostname you will use, the name usually will not match either.
+    Import a real certificate at **Settings ▸ TLS**, or regenerate the self-signed one with the
+    correct names from the same page.
+  - Set **`YAGRA_WEB_TLS=off`** to keep serving plain HTTP from the container — the supported shape
+    when an external reverse proxy or load balancer already terminates HTTPS in front of it.
+  - **Core's own API port is unchanged**: still plaintext, still published on the LAN. That is
+    deliberate sequencing, not an oversight — closing it in the same upgrade that introduces an
+    untrusted certificate would break every Prometheus scrape and API script at once, with two
+    overlapping causes. Once those clients are on the TLS edge with a certificate they trust, set
+    **`YAGRA_API_BIND=127.0.0.1`** to take it off the network. Settings ▸ TLS shows the current state.
+
 ### New Features
+- **Import your own TLS certificate from the WebUI.** Settings ▸ TLS shows what is being served —
+  subject, issuer, the names it covers, expiry and fingerprint — and takes a PEM certificate chain
+  and private key, either pasted or from a file. The new certificate is live within seconds, with
+  nothing restarted. Yagra will not accept a pair that does not go together, has already expired,
+  or carries no subject alternative name, and says which of those it is rather than failing at the
+  next handshake. Encrypted private keys and `.pfx` bundles are refused with the `openssl` command
+  that converts them. The self-signed certificate can be regenerated with the hostnames and IP
+  addresses you actually use, and renews itself before it expires.
+  - The private key is envelope-encrypted at rest like every other secret and is never returned by
+    the API. The certificate is downloadable, so you can hand it to a Prometheus `ca_file`, a
+    `curl --cacert`, or an operating-system trust store.
+  - This does **not** manage the NATS bus certificate, which the bus reads for itself at startup.
 - **An AI client can now ask whether Yagra itself is healthy.** The MCP surface had no way to see
   the monitoring system's own state, which matters more than it sounds: with no way to tell that a
   poller is offline or a store unreachable, a model reads missing data as a healthy quiet and
@@ -1203,6 +1251,8 @@ sessions, logins, TLS guidance, and metric ingest are hardened.
   password, bearer tokens, and submitted device credentials are not exposed in plaintext beyond a
   trusted network. The default remains plain HTTP for LAN / behind-proxy use; this is guidance and
   configuration only.
+  > **Superseded.** The commented-out block this shipped stayed commented out. TLS is now on by
+  > default and the plain-HTTP listener is gone — see the Breaking changes at the top of this file.
 
 ## v0.1.8
 

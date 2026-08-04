@@ -119,12 +119,19 @@ webhook）、およびトラブルシュート3種 `run_analysis`, `get_analysis
 deploy compose なら `.env` に追記）再起動します。エンドポイントは **API ポート**の `/mcp` に出ます:
 
 ```
-http://<yagra-host>:8080/mcp          # Streamable HTTP トランスポート
+https://<yagra-host>/mcp              # WebUI の TLS エッジ経由（推奨）
+http://<yagra-host>:8080/mcp          # core の API ポート直（平文）
 ```
 
-クライアントは **core の API ポート（`8080`）**に向けてください。**WebUI ポート（`3000`）ではありません** —
-WebUI のリバースプロキシは `/mcp` をルーティングしないため `:3000/mcp` は 405 になります。無効時は未マウント
-（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも **常に認証必須**です。
+どちらでも動きます。推奨は TLS のほう — web コンテナが `/mcp` を core へプロキシするので暗号化されます。
+また、多くのクライアントが受け付けるのはこちらだけです。自己署名の初期証明書のままだと、証明書を信頼させる
+設定ができないクライアントは core の平文ポートに退避するしかありません。Settings ▸ TLS で正式な証明書を
+取り込むことが、1 つめの URL をどこでも使えるようにする条件です。
+
+⚠️ `YAGRA_MCP_ALLOWED_HOSTS` を設定している場合は web 側のホスト名も列挙してください。これは `Host` ヘッダに
+対する照合で、上の 2 つの URL では値が異なります。
+
+無効時は未マウント（404）で従来と byte-identical。MCP は `YAGRA_PUBLIC_DASHBOARD` が ON でも **常に認証必須**です。
 
 ### 2. API トークンを発行
 
@@ -223,8 +230,11 @@ docker compose up --build   # core + poller + web、および PostgreSQL / Redis
                             # VictoriaMetrics / VictoriaLogs / ClickHouse
 ```
 
-WebUI は **http://localhost:3000**、API は **http://localhost:8080**。初回起動時、core は一度限りの
+WebUI は **https://localhost:8443**、API は **http://localhost:8080**。初回起動時、core は一度限りの
 `admin` パスワードをログに出力します（`docker compose logs core`）。
+
+WebUI は既定で HTTPS です。core が初回起動時に自己署名証明書を生成するのでブラウザが一度警告を出しますが、
+**Settings ▸ TLS** で正式な証明書を取り込めば再起動なしで数秒で切り替わります。
 
 それ以外 — 本番イメージ、Docker を使わない**ネイティブ**実行、リモート拠点への**分散ポーラ** — は
 **[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)**（English: [DEPLOYMENT.md](DEPLOYMENT.md)）を参照してください。

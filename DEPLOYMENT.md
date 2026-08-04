@@ -36,8 +36,8 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 
 | Port (container/bind) | Host default | Env | Purpose | Exposed? |
 |---|---|---|---|---|
-| `8080` | `8080` | `YAGRA_API_ADDR` (native) / `YAGRA_API_PORT` (compose) | core northbound API + `/metrics` | yes |
-| `8080` (web nginx) | `3000` | `YAGRA_WEB_PORT` | WebUI | yes |
+| `8080` | `8080` | `YAGRA_API_ADDR` (native) / `YAGRA_API_PORT` + `YAGRA_API_BIND` (compose) | core northbound API + `/metrics` — **plaintext** | yes |
+| `8080` (web nginx) | **`443`** | `YAGRA_WEB_PORT` | WebUI — **HTTPS** (`YAGRA_WEB_TLS`) | yes |
 | `1514/udp` | `514` | `YAGRA_SYSLOG_BIND` / `YAGRA_SYSLOG_PORT` | syslog intake (poller) | opt-in |
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP trap intake (poller) | opt-in |
 | `2055/udp` | `2055` | `YAGRA_FLOW_BIND` / `YAGRA_FLOW_PORT` | NetFlow v5/v9 / IPFIX intake (poller) | opt-in |
@@ -46,7 +46,29 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 | `4222` | — | `YAGRA_NATS_PORT` | NATS bus | internal; published **only** with TLS+auth (D) |
 | `5432` / `6379` / `8428` / `9428` / `8123` | — | — | PostgreSQL / Redis / VictoriaMetrics / VictoriaLogs / ClickHouse | internal only |
 
-> The MCP tool surface (`/mcp`, opt-in via `YAGRA_ENABLE_MCP`) is served on the API port `8080` — it does not open a separate port.
+> The MCP tool surface (`/mcp`, opt-in via `YAGRA_ENABLE_MCP`) is served on the API port `8080` — it does not open a separate port. The web container also proxies it, so it is reachable over TLS at `https://<host>/mcp`. If you have set `YAGRA_MCP_ALLOWED_HOSTS`, add the web host's name to it or that path is refused.
+
+> ### TLS
+>
+> **The WebUI is HTTPS by default and there is no plain-HTTP listener** (ADR-044). Core generates a
+> self-signed certificate on first start and writes it where the web container reads it, so a fresh
+> stack comes up encrypted with a browser warning. Replace it at **Settings ▸ TLS** — paste or upload
+> the PEM chain and key, and the new certificate is live within seconds with nothing restarted.
+>
+> The certificate of record is a row in PostgreSQL: the private key envelope-encrypted with the KEK,
+> the chain in plaintext because a certificate is public by construction. The file on the volume is
+> a materialization of that row, so deleting the volume is safe.
+>
+> - **A redirect from plain HTTP was considered and rejected.** Most webhook senders do not follow
+>   redirects, and those that do turn a `301` on `POST` into a `GET` — inbound events would have
+>   stopped arriving with nothing to show for it. Connection-refused is the honest failure.
+> - **Set `YAGRA_WEB_TLS=off`** only when an external reverse proxy or load balancer already
+>   terminates HTTPS in front of the container.
+> - **Encrypted private keys and PKCS#12 (`.pfx`) are not accepted.** Convert first:
+>   `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-plain.pem`, or
+>   `openssl pkcs12 -in cert.pfx -nodes -out bundle.pem`.
+> - **The NATS bus certificate is a different certificate** and Settings ▸ TLS does not manage it —
+>   the NATS server reads its own at startup (section D below).
 
 > **Outbound (forwarding).** Settings ▸ Forwarding relays received syslog / SNMP traps / flow
 > exports on to external collectors, or streams them into **Google BigQuery** as queryable rows.
@@ -89,7 +111,9 @@ cd Yagra
 docker compose up --build          # build + start the full single-node stack
 ```
 
-Then open the WebUI at **http://localhost:3000** (API at http://localhost:8080).
+Then open the WebUI at **https://localhost:8443** (API at http://localhost:8080).
+
+Your browser will warn: the certificate is the self-signed one core generated on first start. Accept it for now and import a real one at Settings ▸ TLS. (This developer stack publishes `8443` rather than `443` because a laptop usually has `443` taken and rootless Docker cannot bind below 1024 at all; **B** below uses `443`.)
 
 **First login.** `YAGRA_ADMIN_PASSWORD` is unset by default, so core generates a one-time random `admin` password and prints it **once** in its logs:
 
@@ -99,7 +123,9 @@ docker compose logs core | grep -i password
 
 Log in as `admin` with it and change it. To choose your own instead, uncomment `YAGRA_ADMIN_PASSWORD` under the `core` service in `docker-compose.yml`.
 
-**What's running.** Web on host `:3000`, API on `:8080`; the poller listens for syslog on `:514/udp` and SNMP traps on `:162/udp`; PostgreSQL/Redis/NATS/VictoriaMetrics stay on the internal Docker network. Migrations run automatically on core startup — no manual step. Named volumes `pgdata` and `vmdata` persist data across `docker compose down`/`up`.
+**What's running.** Web on host `:8443` (HTTPS), API on `:8080` (plaintext); the poller listens for syslog on `:514/udp` and SNMP traps on `:162/udp`; PostgreSQL/Redis/NATS/VictoriaMetrics stay on the internal Docker network. Migrations run automatically on core startup — no manual step. Named volumes `pgdata` and `vmdata` persist data across `docker compose down`/`up`.
+
+⚠️ This stack mounts **no KEK**, so the key that encrypts stored secrets is regenerated on every restart. A self-signed certificate is simply regenerated with it; an **imported** one cannot be decrypted afterwards, and core will say so and keep serving the last materialized certificate rather than silently replacing yours. Import real certificates only on a stack with a persistent KEK — that is **B**.
 
 > This composition is fine for evaluation and dev. For anything you care about, use **B** (pinned images + a persistent KEK so stored credentials survive restarts).
 
@@ -126,11 +152,19 @@ Want to know what a running container was built from? `docker exec yagra-core-1 
 
 ```ini
 POSTGRES_PASSWORD=change-me            # change for any non-throwaway box
-YAGRA_API_PORT=8080                    # host port for the API
-YAGRA_WEB_PORT=3000                    # host port for the WebUI
+YAGRA_API_PORT=8080                    # host port for the API (plaintext)
+YAGRA_WEB_PORT=443                     # host port for the WebUI (HTTPS)
 # YAGRA_ADMIN_PASSWORD=choose-a-strong-password   # else a one-time random one is logged
 # YAGRA_PUBLIC_DASHBOARD=false         # true = read-only dashboards without login
+# YAGRA_WEB_TLS=off                    # only if a proxy in front already terminates HTTPS
+# YAGRA_API_BIND=127.0.0.1             # close core's plaintext port to the LAN — see below
 ```
+
+Open **https://\<host\>/** once it is up. The certificate is self-signed until you import your own at Settings ▸ TLS.
+
+**Upgrading from before v0.2.0?** `YAGRA_WEB_PORT` did not change meaning, but the scheme on it did. If your `.env` still says `3000` you keep port 3000 and it becomes `https://<host>:3000` — `http://` no longer answers there. Delete the line to land on `443`.
+
+**Closing core's API port — do this second, not first.** `YAGRA_API_BIND=127.0.0.1` takes the plaintext API off the LAN, leaving the TLS edge as the only way in. Browsers are unaffected either way (the web container proxies `/api/` and `/mcp` internally), but Prometheus scrapes, webhook senders and API scripts use that port directly. Move them to `https://<host>/api/v1` with a certificate they trust **first**; doing both at once means every machine client fails simultaneously with two overlapping causes.
 
 **Credential persistence (important).** The `kek-init` service writes a 32-byte KEK into the `kekdata` volume once and never overwrites it; core mounts it read-only at `YAGRA_KEK_FILE=/kek/key`. Without a persistent KEK, core falls back to an **ephemeral** key regenerated on every restart, and all stored credentials (SNMP communities, API tokens) become undecryptable after a redeploy. The compose file wires this up for you — just don't delete the `kekdata` volume.
 
@@ -429,7 +463,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 > **Compose-only vars** are consumed by Docker Compose / the NATS config, never by the Rust binaries — the binaries only ever see the final assembled `YAGRA_BUS_URL` etc. See `.env.example`:
 >
 > - Images & stores: `YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`
-> - Host port mappings: `YAGRA_API_PORT`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
+> - Host port mappings: `YAGRA_API_PORT`, `YAGRA_API_BIND`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
+> - WebUI TLS: `YAGRA_WEB_TLS` (compose), `YAGRA_TLS_DIR` (core — where the certificate is materialized)
 > - Bus TLS + auth (D): `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD` (also read by core as the Auth Callout bootstrap secret), `YAGRA_NATS_CALLOUT_ISSUER` (account public key the NATS server verifies core's callout JWTs against)
 > - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`), `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`)
 > - IP→ASN updater sidecar: `YAGRA_IPASN_URL` (dataset URL), `YAGRA_IPASN_REFRESH_SECS` (fetch cadence; default `604800` = weekly)
@@ -525,18 +560,19 @@ production, or an old server to a new one. **Settings ▸ Configuration bundle**
 `GET`/`POST /api/v1/config/bundle`. Admin only, in both directions.
 
 ```bash
-# Export from the source deployment
+# Export from the source deployment. Add --cacert <file> (or -k while evaluating) if the
+# deployment is still on its self-signed bootstrap certificate.
 curl -sS -H "Authorization: Bearer $TOKEN" \
-     http://source:3000/api/v1/config/bundle > bundle.json
+     https://source/api/v1/config/bundle > bundle.json
 
 # Check what it would do on the target — the real import, rolled back
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
      --data-binary @bundle.json \
-     'http://target:3000/api/v1/config/bundle?dry_run=true'
+     'https://target/api/v1/config/bundle?dry_run=true'
 
 # Apply it
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-     --data-binary @bundle.json http://target:3000/api/v1/config/bundle
+     --data-binary @bundle.json https://target/api/v1/config/bundle
 ```
 
 **A bundle is not a backup.** It carries no secrets, no metrics, no events and no history. Use it to

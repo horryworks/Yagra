@@ -123,12 +123,21 @@ Off by default. Set `YAGRA_ENABLE_MCP=true` for core (uncomment it in `docker-co
 to your `.env` for the deploy compose) and restart. The endpoint is then served **on the API port** at:
 
 ```
-http://<yagra-host>:8080/mcp          # Streamable HTTP transport
+https://<yagra-host>/mcp              # through the WebUI's TLS edge (preferred)
+http://<yagra-host>:8080/mcp          # core's API port directly, plaintext
 ```
 
-Point clients at the **core API port** (`8080`), **not** the WebUI port (`3000`) — the WebUI's reverse
-proxy does not route `/mcp`, so `:3000/mcp` returns 405. When disabled the path is not mounted (404),
-byte-identical to before. MCP always requires authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
+Both work. Prefer the TLS one — the WebUI container proxies `/mcp` to core, so the connection is
+encrypted. It is also the only one most clients will accept: while the deployment is still on its
+self-signed bootstrap certificate, a client that cannot be told to trust it has to fall back to
+core's plaintext port. Importing a real certificate at Settings ▸ TLS is what makes the first URL
+usable everywhere.
+
+⚠️ If you have set `YAGRA_MCP_ALLOWED_HOSTS`, it must name the web host too — it is matched against
+the `Host` header, which differs between the two URLs above.
+
+When MCP is disabled the path is not mounted (404), byte-identical to before. MCP always requires
+authentication, even if `YAGRA_PUBLIC_DASHBOARD` is on.
 
 ### 2. Create an API token
 
@@ -230,8 +239,12 @@ docker compose up --build   # core + poller + web, plus PostgreSQL, Redis, NATS,
                             # VictoriaMetrics, VictoriaLogs and ClickHouse
 ```
 
-WebUI on **http://localhost:3000**, API on **http://localhost:8080**. On first start core prints a
+WebUI on **https://localhost:8443**, API on **http://localhost:8080**. On first start core prints a
 one-time `admin` password in its logs (`docker compose logs core`).
+
+The WebUI is HTTPS by default. Core generates a self-signed certificate on first start, so your
+browser will warn once — import a real one at **Settings ▸ TLS** and it takes effect in seconds
+without a restart.
 
 For everything else — production images, running **natively** without Docker, and **distributed
 pollers** across remote sites — see **[DEPLOYMENT.md](DEPLOYMENT.md)** (日本語:

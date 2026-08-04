@@ -70,8 +70,18 @@ These are known, intentional, and documented so a reviewer does not have to gues
 - **The anonymous read-only dashboard is disabled by default** (`YAGRA_PUBLIC_DASHBOARD`).
 - **The bootstrap admin password is generated randomly and printed once** to the core log on first
   start. There is no built-in default password.
+- **The WebUI is served over HTTPS by default** on host `:443`, terminated in the web container.
+  On first start core generates a **self-signed** certificate, so browsers warn until an operator
+  imports a real one at Settings ▸ TLS. There is no plain-HTTP listener to fall back to.
 - **The single-node `docker-compose.yml` is an evaluation stack.** It uses default database
-  credentials and terminates no TLS. `DEPLOYMENT.md` describes what a real deployment changes.
+  credentials and an ephemeral KEK. `DEPLOYMENT.md` describes what a real deployment changes.
+- **Core's own API port is plaintext and, by default, reachable on the LAN.** Browsers do not use
+  it — the web container proxies `/api/` and `/mcp` to core internally — but it is how machine
+  clients (Prometheus, webhook senders, scripts) keep working before the certificate is trusted.
+  Set `YAGRA_API_BIND=127.0.0.1` once those clients are on the TLS edge; Settings ▸ TLS says so too.
+- **A PostgreSQL dump contains the WebUI's private key**, envelope-encrypted with the KEK like every
+  other secret. Same sensitivity class as the device credentials `scripts/yagra-backup.sh` already
+  captures, so nothing about backup handling changes — but the key is in there.
 - **The poller container is granted `CAP_NET_RAW`** because ICMP needs a raw socket. No other
   container receives it, and containers run as non-root.
 
@@ -98,7 +108,12 @@ redone:
 
 1. Mount a KEK file and set `YAGRA_KEK_FILE`.
 2. Change the PostgreSQL password from the compose default.
-3. Terminate TLS in front of the WebUI/API.
-4. Keep NATS on an internal network, or enable its TLS + authentication configuration.
+3. Import a real TLS certificate at Settings ▸ TLS, replacing the self-signed bootstrap one — then
+   set `YAGRA_API_BIND=127.0.0.1` so core's plaintext API port stops answering on the LAN. Do them
+   in that order: closing the port first breaks every machine client that cannot yet trust the
+   certificate, and two simultaneous causes are hard to tell apart.
+4. Keep NATS on an internal network, or enable its TLS + authentication configuration. This is a
+   **separate certificate** from the WebUI's — the NATS server reads its own from
+   `docker/nats/nats-server.conf` and Settings ▸ TLS does not manage it.
 5. Prefer SNMPv3 over v2c wherever the device supports it.
 6. Rotate the bootstrap admin password after first login, and use OIDC SSO where available.
