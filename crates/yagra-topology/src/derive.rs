@@ -97,6 +97,9 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     // virtual IP or a duplicate-address misconfiguration, and picking a claimant would be the guess
     // 決定 2 forbids.
     let mut claimants: BTreeMap<IpAddr, BTreeSet<NodeId>> = BTreeMap::new();
+    // Addresses that could place a node on a segment if they were not contested. Used only to keep
+    // the `duplicate_addresses` counter meaningful — see below.
+    let mut edge_eligible: BTreeSet<IpAddr> = BTreeSet::new();
     for (id, addr) in input.nodes {
         claimants.entry(*addr).or_default().insert(*id);
     }
@@ -106,6 +109,9 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         }
         for a in &snap.addresses {
             claimants.entry(a.ip).or_default().insert(*id);
+            if a.can_form_subnet_edge() {
+                edge_eligible.insert(a.ip);
+            }
         }
     }
     let contested: BTreeSet<IpAddr> = claimants
@@ -113,7 +119,17 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         .filter(|(_, owners)| owners.len() > 1)
         .map(|(ip, _)| *ip)
         .collect();
-    summary.duplicate_addresses = u32::try_from(contested.len()).unwrap_or(u32::MAX);
+    // Counted only when the contested address could otherwise have formed an edge.
+    //
+    // Counting every contested address makes the number useless in practice, which real data showed
+    // immediately: every URL and DNS monitor carries `0.0.0.0` as a placeholder address, and every
+    // device reports `127.0.0.1`. Both are contested on any real fleet and neither can ever form an
+    // edge, so the raw count reads ≥1 on every deployment forever — and a diagnostic that always
+    // fires is one an operator learns to ignore. What this counter is *for* is the VRRP/HSRP virtual
+    // IP and the genuine duplicate-address misconfiguration, and those are contested addresses that
+    // would otherwise have placed a node on a segment.
+    summary.duplicate_addresses =
+        u32::try_from(contested.intersection(&edge_eligible).count()).unwrap_or(u32::MAX);
     let owner: BTreeMap<IpAddr, NodeId> = claimants
         .iter()
         .filter(|(_, owners)| owners.len() == 1)
@@ -473,6 +489,46 @@ mod tests {
             (n[1], snap(&[("203.0.113.7", 32)])),
         ]);
         assert!(out.links.is_empty());
+    }
+
+    /// Found on the real fleet, not in a fixture: every URL and DNS monitor carries `0.0.0.0` as a
+    /// placeholder address and every device reports `127.0.0.1`, so both are contested on any real
+    /// deployment. Counting them would pin `duplicate_addresses` at ≥1 forever and teach the
+    /// operator to ignore the one number that is supposed to surface a VIP or a duplicate-IP
+    /// misconfiguration.
+    #[test]
+    fn an_address_that_could_never_form_an_edge_is_not_counted_as_a_duplicate() {
+        let n = ids(4);
+        let out = derive_links(DeriveInput {
+            // Three URL/DNS monitors sharing the placeholder address, as the real inventory has.
+            nodes: &[
+                (n[0], ip("0.0.0.0")),
+                (n[1], ip("0.0.0.0")),
+                (n[2], ip("0.0.0.0")),
+            ],
+            // And a device reporting the loopback every device reports, contested with a node whose
+            // inventory address is also 127.0.0.1.
+            l3: &[(n[3], snap(&[("127.0.0.1", 8), ("10.0.0.1", 24)]))],
+            neighbors: &[],
+            overrides: &[],
+        });
+        assert_eq!(
+            out.summary.duplicate_addresses, 0,
+            "neither 0.0.0.0 nor 127.0.0.1 could have formed an edge, so neither is a finding"
+        );
+
+        // A real VIP still counts: two routers sharing a routable address on a real segment.
+        let m = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[],
+            l3: &[
+                (m[0], snap(&[("10.0.0.1", 24), ("10.0.1.1", 24)])),
+                (m[1], snap(&[("10.0.0.1", 24), ("10.0.2.1", 24)])),
+            ],
+            neighbors: &[],
+            overrides: &[],
+        });
+        assert_eq!(out.summary.duplicate_addresses, 1);
     }
 
     #[test]
