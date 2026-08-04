@@ -1,0 +1,108 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Settings ▸ TLS (ADR-044). Every colour is a theme token — the three alert tones reuse the
+   canonical status palette rather than inventing their own, so light and dark stay consistent. */
+
+.tlspage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tls-muted {
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.tls-headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Two columns on desktop, stacked on narrow screens (mobile mode, ADR-027). The label column is
+   sized to the longest label rather than a fraction, so a long subject does not squeeze it. */
+.tls-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 12px 0;
+}
+
+.tls-facts dt {
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base) * 0.9);
+}
+
+.tls-facts dd {
+  margin: 0;
+  color: var(--text-primary);
+  /* Subjects, issuers and SAN lists are device- and CA-supplied and can be long. Wrapping beats a
+     horizontal scrollbar on a definition list. */
+  overflow-wrap: anywhere;
+}
+
+.tls-fingerprint {
+  font-size: calc(var(--font-size-base) * 0.85);
+  letter-spacing: 0.02em;
+}
+
+.tls-label {
+  display: block;
+  margin: 12px 0 4px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tls-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.tls-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tls-alert {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: calc(var(--font-size-base) * 0.95);
+}
+
+.tls-alert p {
+  margin: 4px 0 0;
+}
+
+.tls-alert-warn {
+  border-color: color-mix(in srgb, var(--status-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+}
+
+.tls-alert-error {
+  border-color: color-mix(in srgb, var(--status-critical) 45%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 10%, transparent);
+}
+
+.tls-alert-ok {
+  border-color: color-mix(in srgb, var(--status-up) 45%, transparent);
+  background: color-mix(in srgb, var(--status-up) 10%, transparent);
+}
+
+@media (max-width: 700px) {
+  .tls-facts {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .tls-facts dd {
+    margin-bottom: 8px;
+  }
+}

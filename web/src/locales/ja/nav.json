@@ -48,6 +48,7 @@
     "forwarding": "転送",
     "integrations": "連携",
     "ai": "AI 分析",
+    "tls": "TLS 証明書",
     "credentials": "認証情報とシークレット",
     "users": "ユーザー",
     "roles": "ロールと権限",

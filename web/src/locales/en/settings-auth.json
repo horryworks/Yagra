@@ -102,5 +102,6 @@
       "save": "Could not save the directory settings.",
       "test": "Could not test the directory."
     }
-  }
+  },
+  "redirectUriMismatch": "⚠️ A configured SSO redirect URI does not match the address you are using. Yagra now serves the WebUI over HTTPS, so the stored redirect URI and the one registered at your identity provider both need updating — sign-in will fail at the callback until they do. Yagra will not change it for you: where an identity provider may send an authorization code is not something an upgrade should decide."
 }

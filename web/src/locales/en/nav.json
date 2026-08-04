@@ -48,6 +48,7 @@
     "forwarding": "Forwarding",
     "integrations": "Integrations",
     "ai": "AI analysis",
+    "tls": "TLS certificate",
     "credentials": "Credentials & secrets",
     "users": "Users",
     "roles": "Roles & privileges",

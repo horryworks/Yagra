@@ -137,6 +137,7 @@ import type {
   UserSummary,
   LdapConfigInput,
   LdapConfigView,
+  WebTlsStatus,
   LdapTestResult,
   OidcProviderSummary,
   OidcProviderInput,
@@ -1787,6 +1788,22 @@ export const api = {
    *  cannot push anyone towards their domain's lockout threshold. */
   testLdapConfig: (username?: string): Promise<LdapTestResult> =>
     apiPost('/api/v1/settings/ldap/test', { body: { username: username ?? null } }),
+
+  // ── WebUI TLS certificate (Settings ▸ TLS, ManageConfig) — ADR-044 ─────────────────────────
+  /** What the WebUI is serving, or `{ config: null }` before the first certificate exists.
+   *  Includes the certificate chain — public by construction, and offered as a download — and never
+   *  the private key. */
+  getWebTls: (): Promise<WebTlsStatus> => apiGet('/api/v1/settings/tls'),
+
+  /** Import a certificate and its key, both PEM. Live within seconds, nothing restarts. The server
+   *  validates before it commits, so a rejection means nothing changed. */
+  importWebTls: (certificate: string, privateKey: string): Promise<WebTlsStatus> =>
+    apiPut('/api/v1/settings/tls', { body: { certificate, private_key: privateKey } }),
+
+  /** Generate a new self-signed certificate for `names` (empty = the deployment's defaults).
+   *  Replaces whatever is being served. */
+  regenerateWebTls: (names: string[]): Promise<WebTlsStatus> =>
+    apiPost('/api/v1/settings/tls/regenerate', { body: { names } }),
 
   // ── API tokens (Settings ▸ API tokens, ManageUsers) — the MCP/API client credential (ADR-028) ──
   /** List API tokens (metadata only — never the raw token). */

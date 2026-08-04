@@ -27,6 +27,7 @@ import {
   type LdapFormState,
 } from './ldapConfigForm';
 import { addRoleMapRow, toRoleMapRows, type RoleMapRow } from './roleMapForm';
+import { redirectUriMismatch } from './tlsSettingsForm';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -691,6 +692,17 @@ export function AuthSettingsPage() {
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.auth') }]}
         note={t('note')}
       />
+
+      {/* ADR-044 moved the WebUI to HTTPS on a new port, and a stored redirect URI is an absolute
+          URL that has to agree with what is registered at the IdP. A stale one fails at the token
+          exchange, which reads as "SSO is broken" with nothing pointing at the upgrade. Yagra will
+          not rewrite it — changing where an IdP may send an authorization code is not something an
+          upgrade should do on somebody's behalf — so it says so instead. */}
+      {rows.some((r) => redirectUriMismatch(window.location.origin, r.redirect_uri)) && (
+        <Card>
+          <p className="auth-redirect-warning">{t('redirectUriMismatch')}</p>
+        </Card>
+      )}
 
       {unavailable ? (
         <Card>

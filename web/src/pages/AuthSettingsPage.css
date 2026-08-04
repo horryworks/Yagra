@@ -139,3 +139,9 @@ html[data-viewport='mobile'] .auth-grid {
   grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
+
+/* ADR-044: the stored OIDC redirect URI no longer matches the address this browser is on. */
+.auth-redirect-warning {
+  margin: 0;
+  color: var(--status-warning);
+}

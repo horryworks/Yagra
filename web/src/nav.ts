@@ -261,6 +261,7 @@ export const NAV: NavSection[] = [
             mono: 'Ai',
           },
           { labelKey: 'settings.system', path: '/settings/system', implemented: true, mono: 'Sy' },
+          { labelKey: 'settings.tls', path: '/settings/tls', implemented: true, mono: 'Tl' },
           {
             labelKey: 'settings.configBundle',
             descKey: 'descriptions.settingsConfigBundle',

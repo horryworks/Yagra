@@ -34,6 +34,7 @@ import enSettingsAuth from './locales/en/settings-auth.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import enSettingsAi from './locales/en/settings-ai.json';
+import enSettingsTls from './locales/en/settings-tls.json';
 import enRca from './locales/en/rca.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
@@ -58,6 +59,7 @@ export const NAMESPACES = [
   'settings-tokens',
   'settings-forwarding',
   'settings-ai',
+  'settings-tls',
   'rca',
 ] as const;
 
@@ -100,6 +102,7 @@ void i18n
         'settings-tokens': enSettingsTokens,
         'settings-forwarding': enSettingsForwarding,
         'settings-ai': enSettingsAi,
+        'settings-tls': enSettingsTls,
         rca: enRca,
       },
     },

@@ -37,6 +37,7 @@ import {
   NEIGHBOR_PROTOS,
   LINK_SOURCES,
   TOPOLOGY_MODES,
+  TLS_CERT_SOURCES,
 } from './types/api';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
@@ -58,6 +59,8 @@ import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings'
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
 import jaSettingsTokens from './locales/ja/settings-tokens.json';
+import enSettingsTls from './locales/en/settings-tls.json';
+import jaSettingsTls from './locales/ja/settings-tls.json';
 import jaAccess from './locales/ja/access.json';
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -303,6 +306,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'state.',
       ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'],
     );
+  });
+
+  it('every certificate source has a label and a hint (settings-tls:source*.*)', () => {
+    // The TLS page badges the certificate by where it came from, and the hint beside it is what
+    // says whether Yagra may replace it on its own — the difference between "this renews itself"
+    // and "nothing will touch this but you". Both keys are built from the value at runtime, so a
+    // source added later would render raw in BOTH locales and parity would still pass.
+    const locales = { en: enSettingsTls, ja: jaSettingsTls };
+    expectKeys('certificate source', locales, 'source.', TLS_CERT_SOURCES);
+    expectKeys('certificate source hint', locales, 'sourceHint.', TLS_CERT_SOURCES);
   });
 
   it('every account kind has a label (access:users.kind.*)', () => {

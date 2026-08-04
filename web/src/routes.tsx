@@ -41,6 +41,7 @@ import { AboutPage } from './pages/AboutPage';
 import { UsersPage } from './pages/UsersPage';
 import { RolesPage } from './pages/RolesPage';
 import { AuthSettingsPage } from './pages/AuthSettingsPage';
+import { TlsSettingsPage } from './pages/TlsSettingsPage';
 import { AiSettingsPage } from './pages/AiSettingsPage';
 import { ApiTokensPage } from './pages/ApiTokensPage';
 import { ForwardingPage } from './pages/ForwardingPage';
@@ -132,6 +133,7 @@ export function AppRoutes() {
         <Route path="settings/users" element={<UsersPage />} />
         <Route path="settings/roles" element={<RolesPage />} />
         <Route path="settings/auth" element={<AuthSettingsPage />} />
+        <Route path="settings/tls" element={<TlsSettingsPage />} />
         <Route path="settings/api-tokens" element={<ApiTokensPage />} />
         <Route path="settings/audit" element={<AuditPage />} />
         <Route path="settings/system" element={<SystemSettingsPage />} />

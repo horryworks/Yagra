@@ -1182,3 +1182,20 @@ export const BUNDLE_NOTE_CODES = [
 
 /** A bundle note code (snake_case). Pinned to `schemas.NoteCode`. */
 export type BundleNoteCode = (typeof BUNDLE_NOTE_CODES)[number];
+
+// ── WebUI TLS certificate (ADR-044) ─────────────────────────────────────────────────────────────
+
+/** The certificate the WebUI is serving (`GET /api/v1/settings/tls`). Never carries the key. */
+export type WebTlsView = components['schemas']['WebTlsView'];
+
+/** The response wrapper: the certificate plus whether core's plaintext API port is still open. */
+export type WebTlsStatus = components['schemas']['WebTlsResponse'];
+
+/** Where a certificate came from, which is what decides whether Yagra may replace it on its own.
+ *
+ *  An `as const` array rather than only the generated union, for the reason in `LINK_SOURCES`: the
+ *  settings page builds its label key at runtime (`` t(`source.${source}`) ``), and EN/JA parity
+ *  cannot prove either locale is complete — a variant added later would be missing from both, so
+ *  parity would pass while the page rendered a raw key. `i18nEnumKeys.test.ts` iterates this. */
+export const TLS_CERT_SOURCES = ['self_signed', 'imported', 'unknown'] as const;
+export type TlsCertSource = (typeof TLS_CERT_SOURCES)[number];
